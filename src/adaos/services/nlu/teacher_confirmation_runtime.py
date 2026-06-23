@@ -49,6 +49,7 @@ _SECOND_ANSWERS = {
 }
 _CONSUMED_CONFIRMATION_ANSWERS: dict[tuple[str, str], float] = {}
 _MUTATING_INTENTS_REQUIRING_MUTATION_TEXT = {"desktop.toggle_app_install"}
+_PENDING_ACTION_RESPONSE_TOPIC = "nlp.teacher.candidate.confirmation.response"
 _MUTATION_TEXT_MARKERS = (
     "install",
     "uninstall",
@@ -718,6 +719,118 @@ async def _emit_chat(webspace_id: str, text: str, meta: Mapping[str, Any]) -> No
     )
 
 
+def _pending_action_id_for_confirmation(confirmation: Mapping[str, Any]) -> str:
+    confirmation_id = str(confirmation.get("id") or "").strip()
+    candidate_id = str(confirmation.get("candidate_id") or "").strip()
+    token = confirmation_id or candidate_id or f"confirm.{int(time.time() * 1000)}"
+    token = re.sub(r"[^A-Za-z0-9_.:-]+", ".", token).strip(".") or f"confirm.{int(time.time() * 1000)}"
+    return f"nlu.teacher.{token}"
+
+
+async def _publish_confirmation_pending_action(
+    webspace_id: str,
+    confirmation: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any],
+) -> str:
+    try:
+        from adaos.services.pending_actions import publish_pending_action_async
+
+        confirmation_id = str(confirmation.get("id") or "").strip()
+        candidate_id = str(confirmation.get("candidate_id") or "").strip()
+        request_id = str(confirmation.get("request_id") or "").strip()
+        request_text = str(confirmation.get("request_text") or "").strip()
+        question = str(confirmation.get("question") or "").strip()
+        action = await publish_pending_action_async(
+            ctx=get_ctx(),
+            webspace_id=webspace_id,
+            action_id=_pending_action_id_for_confirmation(confirmation),
+            kind="nlu.teacher.candidate_confirmation",
+            title="Confirm command understanding",
+            title_i18n={"key": "pending_actions.nlu.confirm_title"},
+            summary=question,
+            summary_i18n={
+                "key": "pending_actions.nlu.confirm_summary",
+                "params": {"question": question},
+            },
+            request_text=request_text,
+            request_locale=str(meta.get("locale") or meta.get("request_locale") or "").strip(),
+            producer={"type": "skill", "skill_id": "nlu_teacher"},
+            owner_scope={"webspace_id": webspace_id},
+            domain_ref={
+                "webspace_id": webspace_id,
+                "confirmation_id": confirmation_id,
+                "candidate_id": candidate_id,
+                "request_id": request_id,
+            },
+            allowed_actions=[
+                {"id": "test", "label": "Test", "label_i18n": {"key": "pending_actions.action.test"}, "terminal": False},
+                {"id": "approve", "label": "Approve", "label_i18n": {"key": "pending_actions.action.approve"}, "terminal": True},
+                {"id": "refuse", "label": "Refuse", "label_i18n": {"key": "pending_actions.action.refuse"}, "terminal": True},
+                {"id": "postpone", "label": "Later", "label_i18n": {"key": "pending_actions.action.postpone"}, "terminal": False},
+            ],
+            ttl_s=_CONFIRMATION_TTL_S,
+            default_text_binding=True,
+            response_route={
+                "type": "event",
+                "topic": _PENDING_ACTION_RESPONSE_TOPIC,
+                "target": {"type": "skill", "skill_id": "nlu_teacher"},
+            },
+            metadata={"source": "nlu.teacher.confirmation", "legacy_confirmation": True},
+        )
+        return str(action.get("id") or "").strip()
+    except ValueError as exc:
+        if "already exists" in str(exc):
+            return _pending_action_id_for_confirmation(confirmation)
+        _log.warning("failed to publish NLU Teacher pending action webspace=%s", webspace_id, exc_info=True)
+        return ""
+    except Exception:
+        _log.warning("failed to publish NLU Teacher pending action webspace=%s", webspace_id, exc_info=True)
+        return ""
+
+
+async def _attach_confirmation_pending_action(
+    webspace_id: str,
+    confirmation: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any],
+) -> None:
+    pending_action_id = await _publish_confirmation_pending_action(webspace_id, confirmation, meta=meta)
+    confirmation_id = str(confirmation.get("id") or "").strip()
+    if not pending_action_id or not confirmation_id:
+        return
+    try:
+        await _patch_confirmation(
+            webspace_id,
+            confirmation_id,
+            {"pending_action_id": pending_action_id, "pending_action_status": "pending"},
+        )
+    except Exception:
+        _log.debug("failed to attach pending action id to NLU confirmation webspace=%s", webspace_id, exc_info=True)
+
+
+def _find_confirmation(
+    teacher: Mapping[str, Any],
+    *,
+    confirmation_id: str = "",
+    candidate_id: str = "",
+    include_inactive: bool = False,
+) -> dict[str, Any] | None:
+    def _eligible(item: Mapping[str, Any]) -> bool:
+        return include_inactive or str(item.get("status") or "").strip() == "awaiting_user"
+
+    confirmations = _as_list(teacher.get("pending_confirmations"))
+    if confirmation_id:
+        for item in reversed(confirmations):
+            if _eligible(item) and str(item.get("id") or "").strip() == confirmation_id:
+                return dict(item)
+    if candidate_id:
+        for item in reversed(confirmations):
+            if _eligible(item) and str(item.get("candidate_id") or "").strip() == candidate_id:
+                return dict(item)
+    return None
+
+
 def _clarification_instruction(question: str, allowed_answers: Iterable[Mapping[str, Any]]) -> str:
     labels = [
         str(item.get("label") or item.get("title") or item.get("id") or "").strip()
@@ -1028,6 +1141,204 @@ async def _answer_clarification(
         )
 
 
+async def _handle_confirmation_answer(
+    webspace_id: str,
+    confirmation: Mapping[str, Any],
+    *,
+    answer: str,
+    answer_text: str,
+    meta: Mapping[str, Any],
+) -> None:
+    confirmation_id = str(confirmation.get("id") or "").strip()
+    candidate_id = str(confirmation.get("candidate_id") or "").strip()
+    request_id = str(confirmation.get("request_id") or "").strip()
+    request_text = str(confirmation.get("request_text") or "").strip()
+    try:
+        attempt = int(confirmation.get("attempt") or 0)
+    except Exception:
+        attempt = 0
+    confirmation_meta = coerce_dict(confirmation.get("_meta"))
+    merged_meta = {**confirmation_meta, **dict(meta), "route_id": "voice_chat"}
+    text = str(answer_text or "").strip()
+
+    if answer == "yes":
+        await _patch_confirmation(
+            webspace_id,
+            confirmation_id,
+            {
+                "status": "accepted",
+                "answer": text,
+                "answered_at": time.time(),
+            },
+            candidate_status="apply_requested",
+        )
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=request_text,
+                kind="confirmation.accepted",
+                title="Voice confirmation accepted",
+                subtitle=candidate_id,
+                raw={"confirmation": dict(confirmation), "answer": text},
+                meta=merged_meta,
+            ),
+        )
+        apply_meta = {
+            **merged_meta,
+            "nlu_teacher_confirmation_id": confirmation_id,
+            "nlu_teacher_confirmation_answer": "yes",
+        }
+        await _emit_chat(webspace_id, "Принял. Применяю новое правило NLU.", merged_meta)
+        try:
+            from adaos.services.nlu.candidates_runtime import _on_candidate_apply  # local import to avoid cycles
+
+            await asyncio.wait_for(
+                _on_candidate_apply(
+                    {
+                        "webspace_id": webspace_id,
+                        "candidate_id": candidate_id,
+                        "target": confirmation.get("target") if isinstance(confirmation.get("target"), Mapping) else None,
+                        "_meta": apply_meta,
+                    }
+                ),
+                timeout=_confirm_apply_timeout_s(),
+            )
+            candidate_after = await _read_candidate(webspace_id, candidate_id)
+            status_after = str((candidate_after or {}).get("status") or "").strip()
+            if status_after == "apply_requested":
+                await _reject_candidate_apply(
+                    webspace_id=webspace_id,
+                    candidate_id=candidate_id,
+                    reason="candidate_apply_no_terminal_state",
+                    meta=apply_meta,
+                    request_id=request_id,
+                    request_text=request_text,
+                )
+        except asyncio.TimeoutError:
+            await _reject_candidate_apply(
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="voice_confirmation_apply_timeout",
+                meta=apply_meta,
+                request_id=request_id,
+                request_text=request_text,
+            )
+        except Exception:
+            _log.warning("failed to apply confirmed NLU Teacher candidate webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+            await _reject_candidate_apply(
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="voice_confirmation_apply_error",
+                meta=apply_meta,
+                request_id=request_id,
+                request_text=request_text,
+            )
+        return
+
+    if attempt < 1:
+        negative_feedback = _negative_feedback_evidence(
+            answer_text=text,
+            answer_kind=answer,
+            reason="voice_confirmation_rejected",
+            candidate_ids=[candidate_id],
+        )
+        await _patch_confirmation(
+            webspace_id,
+            confirmation_id,
+            {
+                "status": "rejected",
+                "answer": text,
+                "answered_at": time.time(),
+                "retry_requested_at": time.time(),
+                "negative_feedback": negative_feedback,
+                "rejected_candidates": [candidate_id] if candidate_id else [],
+            },
+            candidate_status="rejected",
+        )
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=request_text,
+                kind="confirmation.rejected",
+                title="Voice confirmation rejected",
+                subtitle="retrying",
+                raw={"confirmation": dict(confirmation), "answer": text, "retry": True, "negative_feedback": negative_feedback},
+                meta=merged_meta,
+            ),
+        )
+        await _emit_chat(webspace_id, "Хорошо, пробую ещё один вариант.", merged_meta)
+        retry_text = _retry_text_from_rejection(text, request_text)
+        retry_id = f"{request_id or 'nlu'}.retry1"
+        bus_emit(
+            get_ctx().bus,
+            "nlp.teacher.request",
+            {
+                "webspace_id": webspace_id,
+                "request": {
+                    "id": f"teach.retry.{int(time.time() * 1000)}",
+                    "ts": time.time(),
+                    "text": retry_text,
+                    "reason": "voice_confirmation_rejected",
+                    "via": "voice_confirmation",
+                    "request_id": retry_id,
+                    "classification": {
+                        "teachable": True,
+                        "class": "nlu_gap_retry",
+                        "reason": "voice_confirmation_rejected",
+                    },
+                    "status": "pending",
+                    "_meta": {
+                        **merged_meta,
+                        "nlu_teacher_confirmation_retry": True,
+                        "nlu_teacher_confirmation_attempt": 1,
+                        "rejected_candidate_id": candidate_id,
+                        "previous_request_id": request_id,
+                        "original_request_text": request_text,
+                    },
+                },
+            },
+            source="nlu.teacher.confirmation",
+        )
+        return
+
+    negative_feedback = _negative_feedback_evidence(
+        answer_text=text,
+        answer_kind=answer,
+        reason="voice_confirmation_needs_clarification",
+        candidate_ids=[candidate_id],
+    )
+    await _patch_confirmation(
+        webspace_id,
+        confirmation_id,
+        {
+            "status": "needs_clarification",
+            "answer": text,
+            "answered_at": time.time(),
+            "negative_feedback": negative_feedback,
+            "rejected_candidates": [candidate_id] if candidate_id else [],
+        },
+        candidate_status="rejected",
+    )
+    await append_event(
+        webspace_id,
+        make_event(
+            webspace_id=webspace_id,
+            request_id=request_id,
+            request_text=request_text,
+            kind="confirmation.needs_clarification",
+            title="Voice confirmation needs clarification",
+            subtitle=candidate_id,
+            raw={"confirmation": dict(confirmation), "answer": text, "negative_feedback": negative_feedback},
+            meta=merged_meta,
+        ),
+    )
+    await _emit_chat(webspace_id, "Тогда уточните, что именно нужно сделать.", merged_meta)
+
+
 async def has_recent_voice_confirmation(webspace_id: str, *, within_s: float = 15.0) -> bool:
     try:
         teacher = await _read_teacher(webspace_id)
@@ -1145,6 +1456,7 @@ async def request_existing_candidate_confirmation(
     }
     try:
         await _append_confirmation(webspace_id, confirmation)
+        await _attach_confirmation_pending_action(webspace_id, confirmation, meta=merged_meta)
         await append_event(
             webspace_id,
             make_event(
@@ -1216,6 +1528,7 @@ async def _on_candidate_proposed(evt: Any) -> None:
     }
     try:
         await _append_confirmation(webspace_id, confirmation)
+        await _attach_confirmation_pending_action(webspace_id, confirmation, meta=meta)
         await append_event(
             webspace_id,
             make_event(
@@ -1236,6 +1549,99 @@ async def _on_candidate_proposed(evt: Any) -> None:
         )
     except Exception:
         _log.warning("failed to request NLU Teacher confirmation webspace=%s", webspace_id, exc_info=True)
+
+
+@subscribe(_PENDING_ACTION_RESPONSE_TOPIC)
+async def _on_pending_action_confirmation_response(evt: Any) -> None:
+    payload = _payload(evt)
+    response = coerce_dict(payload.get("response"))
+    pending_action = coerce_dict(payload.get("pending_action"))
+    domain_ref = coerce_dict(payload.get("domain_ref")) or coerce_dict(pending_action.get("domain_ref"))
+    response_action_id = str(
+        payload.get("response_action_id")
+        or response.get("response_action_id")
+        or response.get("action_id")
+        or ""
+    ).strip()
+    if not response_action_id:
+        return
+    response_payload = coerce_dict(response.get("payload"))
+    if str(response_payload.get("handled_by") or "").strip() == "nlu_teacher.voice_chat":
+        return
+    webspace_id = str(
+        payload.get("webspace_id")
+        or domain_ref.get("webspace_id")
+        or pending_action.get("webspace_id")
+        or ""
+    ).strip() or default_webspace_id()
+    confirmation_id = str(domain_ref.get("confirmation_id") or "").strip()
+    candidate_id = str(domain_ref.get("candidate_id") or "").strip()
+    route_meta = {
+        "webspace_id": webspace_id,
+        "route_id": "pending_actions",
+        "pending_action_id": str(payload.get("pending_action_id") or pending_action.get("id") or "").strip(),
+        "pending_action_response": response_action_id,
+    }
+    try:
+        teacher = await _read_teacher(webspace_id)
+        confirmation = _find_confirmation(teacher, confirmation_id=confirmation_id, candidate_id=candidate_id)
+    except Exception:
+        _log.debug("failed to read NLU confirmation for pending action response webspace=%s", webspace_id, exc_info=True)
+        return
+    if not confirmation:
+        return
+
+    if response_action_id in {"test", "preview"}:
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=str(confirmation.get("request_id") or ""),
+                request_text=str(confirmation.get("request_text") or ""),
+                kind="confirmation.test_requested",
+                title="Voice confirmation test requested",
+                subtitle=str(confirmation.get("candidate_id") or ""),
+                raw={"confirmation": dict(confirmation), "response": response},
+                meta=route_meta,
+            ),
+        )
+        await _emit_chat(webspace_id, "Проверка варианта оставлена активной.", route_meta)
+        return
+
+    if response_action_id == "postpone":
+        await _patch_confirmation(
+            webspace_id,
+            str(confirmation.get("id") or ""),
+            {"postponed_at": time.time(), "pending_action_status": "postponed"},
+        )
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=str(confirmation.get("request_id") or ""),
+                request_text=str(confirmation.get("request_text") or ""),
+                kind="confirmation.postponed",
+                title="Voice confirmation postponed",
+                subtitle=str(confirmation.get("candidate_id") or ""),
+                raw={"confirmation": dict(confirmation), "response": response},
+                meta=route_meta,
+            ),
+        )
+        return
+
+    answer = "yes" if response_action_id in {"approve", "accept", "yes"} else "no" if response_action_id in {"refuse", "reject", "deny", "no"} else ""
+    if not answer:
+        return
+    try:
+        await _handle_confirmation_answer(
+            webspace_id,
+            confirmation,
+            answer=answer,
+            answer_text=response_action_id,
+            meta=route_meta,
+        )
+    except Exception:
+        _log.warning("failed to apply NLU pending action response webspace=%s", webspace_id, exc_info=True)
 
 
 @subscribe("voice.chat.user")
@@ -1272,191 +1678,48 @@ async def _on_voice_chat_user(evt: Any) -> None:
                 _log.warning("failed to answer NLU Teacher clarification webspace=%s", webspace_id, exc_info=True)
         return
 
-    confirmation_id = str(confirmation.get("id") or "").strip()
-    candidate_id = str(confirmation.get("candidate_id") or "").strip()
-    request_id = str(confirmation.get("request_id") or "").strip()
-    request_text = str(confirmation.get("request_text") or "").strip()
-    try:
-        attempt = int(confirmation.get("attempt") or 0)
-    except Exception:
-        attempt = 0
-    confirmation_meta = coerce_dict(confirmation.get("_meta"))
-    merged_meta = {**confirmation_meta, **dict(meta), "route_id": "voice_chat"}
     _remember_consumed_voice_confirmation_answer(webspace_id, text)
-
-    if answer == "yes":
-        await _patch_confirmation(
-            webspace_id,
-            confirmation_id,
-            {
-                "status": "accepted",
-                "answer": text.strip(),
-                "answered_at": time.time(),
-            },
-            candidate_status="apply_requested",
-        )
-        await append_event(
-            webspace_id,
-            make_event(
-                webspace_id=webspace_id,
-                request_id=request_id,
-                request_text=request_text,
-                kind="confirmation.accepted",
-                title="Voice confirmation accepted",
-                subtitle=candidate_id,
-                raw={"confirmation": confirmation, "answer": text.strip()},
-                meta=merged_meta,
-            ),
-        )
-        apply_meta = {
-            **merged_meta,
-            "nlu_teacher_confirmation_id": confirmation_id,
-            "nlu_teacher_confirmation_answer": "yes",
-        }
-        await _emit_chat(webspace_id, "Принял. Применяю новое правило NLU.", merged_meta)
+    pending_action_id = str(confirmation.get("pending_action_id") or "").strip()
+    if pending_action_id and answer in {"yes", "no"}:
         try:
-            from adaos.services.nlu.candidates_runtime import _on_candidate_apply  # local import to avoid cycles
+            from adaos.services.pending_actions import respond_pending_action_async
 
-            await asyncio.wait_for(
-                _on_candidate_apply(
-                    {
-                        "webspace_id": webspace_id,
-                        "candidate_id": candidate_id,
-                        "target": confirmation.get("target") if isinstance(confirmation.get("target"), Mapping) else None,
-                        "_meta": apply_meta,
-                    }
-                ),
-                timeout=_confirm_apply_timeout_s(),
-            )
-            candidate_after = await _read_candidate(webspace_id, candidate_id)
-            status_after = str((candidate_after or {}).get("status") or "").strip()
-            if status_after == "apply_requested":
-                await _reject_candidate_apply(
-                    webspace_id=webspace_id,
-                    candidate_id=candidate_id,
-                    reason="candidate_apply_no_terminal_state",
-                    meta=apply_meta,
-                    request_id=request_id,
-                    request_text=request_text,
-                )
-        except asyncio.TimeoutError:
-            await _reject_candidate_apply(
+            response_action_id = "approve" if answer == "yes" else "refuse"
+            result = await respond_pending_action_async(
+                pending_action_id,
+                response_action_id,
+                ctx=get_ctx(),
                 webspace_id=webspace_id,
-                candidate_id=candidate_id,
-                reason="voice_confirmation_apply_timeout",
-                meta=apply_meta,
-                request_id=request_id,
-                request_text=request_text,
-            )
-        except Exception:
-            _log.warning("failed to apply confirmed NLU Teacher candidate webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
-            await _reject_candidate_apply(
-                webspace_id=webspace_id,
-                candidate_id=candidate_id,
-                reason="voice_confirmation_apply_error",
-                meta=apply_meta,
-                request_id=request_id,
-                request_text=request_text,
-            )
-        return
-
-    if attempt < 1:
-        negative_feedback = _negative_feedback_evidence(
-            answer_text=text,
-            answer_kind=answer,
-            reason="voice_confirmation_rejected",
-            candidate_ids=[candidate_id],
-        )
-        await _patch_confirmation(
-            webspace_id,
-            confirmation_id,
-            {
-                "status": "rejected",
-                "answer": text.strip(),
-                "answered_at": time.time(),
-                "retry_requested_at": time.time(),
-                "negative_feedback": negative_feedback,
-                "rejected_candidates": [candidate_id] if candidate_id else [],
-            },
-            candidate_status="rejected",
-        )
-        await append_event(
-            webspace_id,
-            make_event(
-                webspace_id=webspace_id,
-                request_id=request_id,
-                request_text=request_text,
-                kind="confirmation.rejected",
-                title="Voice confirmation rejected",
-                subtitle="retrying",
-                raw={"confirmation": confirmation, "answer": text.strip(), "retry": True, "negative_feedback": negative_feedback},
-                meta=merged_meta,
-            ),
-        )
-        await _emit_chat(webspace_id, "Хорошо, пробую ещё один вариант.", merged_meta)
-        retry_text = _retry_text_from_rejection(text, request_text)
-        retry_id = f"{request_id or 'nlu'}.retry1"
-        bus_emit(
-            get_ctx().bus,
-            "nlp.teacher.request",
-            {
-                "webspace_id": webspace_id,
-                "request": {
-                    "id": f"teach.retry.{int(time.time() * 1000)}",
-                    "ts": time.time(),
-                    "text": retry_text,
-                    "reason": "voice_confirmation_rejected",
-                    "via": "voice_confirmation",
-                    "request_id": retry_id,
-                    "classification": {
-                        "teachable": True,
-                        "class": "nlu_gap_retry",
-                        "reason": "voice_confirmation_rejected",
-                    },
-                    "status": "pending",
-                    "_meta": {
-                        **merged_meta,
-                        "nlu_teacher_confirmation_retry": True,
-                        "nlu_teacher_confirmation_attempt": 1,
-                        "rejected_candidate_id": candidate_id,
-                        "previous_request_id": request_id,
-                        "original_request_text": request_text,
-                    },
+                responder={"type": "voice", "channel": "voice_chat"},
+                response_payload={
+                    "answer_text": text.strip(),
+                    "source": "voice.chat.user",
+                    "handled_by": "nlu_teacher.voice_chat",
                 },
-            },
-            source="nlu.teacher.confirmation",
+            )
+            if not bool(result.get("duplicate")):
+                await _handle_confirmation_answer(
+                    webspace_id,
+                    confirmation,
+                    answer=answer,
+                    answer_text=text,
+                    meta={
+                        **dict(meta),
+                        "pending_action_id": pending_action_id,
+                        "pending_action_response": response_action_id,
+                    },
+                )
+            return
+        except Exception:
+            _log.debug("failed to route voice confirmation through pending action webspace=%s", webspace_id, exc_info=True)
+    try:
+        await _handle_confirmation_answer(
+            webspace_id,
+            confirmation,
+            answer=answer,
+            answer_text=text,
+            meta=meta,
         )
-        return
-
-    negative_feedback = _negative_feedback_evidence(
-        answer_text=text,
-        answer_kind=answer,
-        reason="voice_confirmation_needs_clarification",
-        candidate_ids=[candidate_id],
-    )
-    await _patch_confirmation(
-        webspace_id,
-        confirmation_id,
-        {
-            "status": "needs_clarification",
-            "answer": text.strip(),
-            "answered_at": time.time(),
-            "negative_feedback": negative_feedback,
-            "rejected_candidates": [candidate_id] if candidate_id else [],
-        },
-        candidate_status="rejected",
-    )
-    await append_event(
-        webspace_id,
-        make_event(
-            webspace_id=webspace_id,
-            request_id=request_id,
-            request_text=request_text,
-            kind="confirmation.needs_clarification",
-            title="Voice confirmation needs clarification",
-            subtitle=candidate_id,
-            raw={"confirmation": confirmation, "answer": text.strip(), "negative_feedback": negative_feedback},
-            meta=merged_meta,
-        ),
-    )
-    await _emit_chat(webspace_id, "Тогда уточните, что именно нужно сделать.", merged_meta)
+    except Exception:
+        _log.warning("failed to handle NLU Teacher confirmation answer webspace=%s", webspace_id, exc_info=True)
+    return

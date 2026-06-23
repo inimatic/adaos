@@ -1,6 +1,7 @@
 # Pending Actions
 
-Status: target architecture with an initial core service and SDK helper slice.
+Status: target architecture with an initial core service, SDK helper slice,
+browser global surface, and NLU Teacher candidate-confirmation migration.
 
 Pending Actions are the AdaOS core mechanism for asking a human to choose an
 action later, possibly through a different channel than the one that created the
@@ -31,10 +32,17 @@ Current implemented slice:
 - [x] Event command subscriptions support bus-based publish/respond/expire.
 - [x] Responses are recorded idempotently and routed through
   `response_route.topic`.
-- [ ] Browser FAB/workbench UI.
-- [ ] NLU Teacher migration from chat-local confirmation to Pending Actions.
+- [x] Browser FAB/global overlay UI shows active actions from
+  `data.pending_actions`, previews the first three entries, expands to the full
+  active list, and sends `pending_actions.respond.request`.
+- [x] NLU Teacher candidate confirmations publish Pending Actions and accept
+  responses from the Pending Actions registry, browser UI, and voice yes/no.
+- [ ] NLU Teacher clarification sessions still use the legacy chat-local flow
+  and should be migrated separately if they need cross-channel response.
 - [ ] Builder, pairing, runtime recovery, capability elevation, and guarded
   skill-action producer migrations.
+- [ ] Full Pending Actions workbench/modal with filtering, history, and direct
+  links to source evidence.
 - [ ] Notification deep links to Pending Actions without making notifications
   the source of truth.
 - [ ] Delegated response-handler subscription handshake.
@@ -206,6 +214,18 @@ Initial system producers should include:
 These are not notifications because each one can change control flow or durable
 state.
 
+Implemented producer slice:
+
+- NLU Teacher voice regex/capability candidate confirmations now create
+  `kind=nlu.teacher.candidate_confirmation` records.
+- Voice `yes/no` first records a Pending Action response and then applies the
+  same confirmation handler synchronously for the current voice request. The
+  routed Pending Action event is marked as already handled by the voice path to
+  avoid double application.
+- Browser responses go through `pending_actions.respond.request`; the core
+  records the response and routes it to
+  `nlp.teacher.candidate.confirmation.response`.
+
 ## Response Routing
 
 The base model is explicit routing:
@@ -301,12 +321,36 @@ ambiguities:
 The browser should provide a global Pending Actions affordance, independent of
 the current modal or scenario.
 
-Target behavior:
+Implemented initial behavior:
 
-- show a floating action button or equivalent global affordance
+- show a floating action button while owner chrome is visible
 - show the count of active pending actions
-- preview up to three latest or highest-priority actions
-- open a modal/workbench for the full queue
+- preview up to three latest/highest-priority actions in a compact overlay
+- expand the overlay to the full active queue and send responses through the
+  event command plane
+- resolve `title_i18n`, `summary_i18n`, and `label_i18n` through the client i18n
+  service with fallback text
+
+Open UI work:
+
+- open a dedicated modal/workbench for filtering, history, source evidence, and
+  long queues
 - keep notifications separate but allow notification entries to deep-link to a
   pending action
+
+## Verification
+
+Automated checks used for the current slice:
+
+- `py -3.11 -m pytest tests/test_pending_actions.py tests/test_nlu_teacher_confirmation_runtime.py`
+- `npx ng test --watch=false --browsers=ChromeHeadless --include=src/app/app.component.spec.ts`
+
+Manual checks:
+
+- Trigger an NLU Teacher candidate from voice, verify the bottom-right Pending
+  Actions affordance appears, and approve/refuse from the browser.
+- Trigger the same flow and answer by voice `да/нет`; verify the Pending Action
+  record moves to responded while the NLU confirmation is accepted/rejected.
+- Open a modal or switch scenario while an action is pending; the global
+  affordance should remain reachable.
 

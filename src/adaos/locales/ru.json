@@ -161,5 +161,15 @@
         "cli.skill.run.tool_help": "Переопределить имя инструмента (по умолчанию из манифеста)",
         "cli.skill.run.payload_cli_help": "JSON-пейлоад для вызова инструмента",
         "cli.skill.run.timeout_help": "Переопределить таймаут выполнения (сек)",
-        "cli.skill.setup.help": "Запустить setup-инструмент навыка (требуется активная версия)"
+        "cli.skill.setup.help": "Запустить setup-инструмент навыка (требуется активная версия)",
+        "pending_actions.ui.title": "Требуемые действия",
+        "pending_actions.ui.active_count": "{count} активно",
+        "pending_actions.ui.more": "Подробнее",
+        "pending_actions.nlu.confirm_title": "Подтвердить понимание команды",
+        "pending_actions.nlu.confirm_summary": "Нужно решение: {question}",
+        "pending_actions.nlu.open_tool_summary": "Открыть {tool}?",
+        "pending_actions.action.test": "Проверить",
+        "pending_actions.action.approve": "Подтвердить",
+        "pending_actions.action.refuse": "Отклонить",
+        "pending_actions.action.postpone": "Позже"
 }

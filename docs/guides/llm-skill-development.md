@@ -737,6 +737,9 @@ Implementation-sensitive rules for generated skills:
   `preview`, or `postpone`; terminal responses close the Pending Action
 - provide `label_i18n`, `title_i18n`, or `summary_i18n` plus fallback text for
   system-authored strings
+- expect browser UI responses to arrive through
+  `pending_actions.respond.request`; voice yes/no may be bound to the latest
+  suitable Pending Action when `default_text_binding=true`
 - keep human-confirmed names and device labels as params or display values, not
   translation keys or storage ids
 - make response handlers idempotent; a repeated or late response must not apply

@@ -2,24 +2,25 @@ from __future__ import annotations
 
 import sys
 import types
+import importlib.util
 from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
 
 import pytest
 
-if "y_py" not in sys.modules:
+if "y_py" not in sys.modules and importlib.util.find_spec("y_py") is None:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         encode_state_vector=lambda *args, **kwargs: b"",
         encode_state_as_update=lambda *args, **kwargs: b"",
         apply_update=lambda *args, **kwargs: None,
     )
-if "ypy_websocket.ystore" not in sys.modules:
+if "ypy_websocket.ystore" not in sys.modules and importlib.util.find_spec("ypy_websocket.ystore") is None:
     ystore_module = types.ModuleType("ypy_websocket.ystore")
     ystore_module.BaseYStore = type("BaseYStore", (), {})
     ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
     sys.modules["ypy_websocket.ystore"] = ystore_module
-if "ypy_websocket" not in sys.modules:
+if "ypy_websocket" not in sys.modules and importlib.util.find_spec("ypy_websocket") is None:
     pkg = types.ModuleType("ypy_websocket")
     pkg.ystore = sys.modules["ypy_websocket.ystore"]
     sys.modules["ypy_websocket"] = pkg

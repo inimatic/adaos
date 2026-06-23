@@ -160,5 +160,15 @@
         "cli.skill.run.tool_help": "Override tool name (defaults to skill manifest value)",
         "cli.skill.run.payload_cli_help": "JSON payload for the tool invocation",
         "cli.skill.run.timeout_help": "Override execution timeout in seconds",
-        "cli.skill.setup.help": "Run the skill setup tool (requires an active version)"
+        "cli.skill.setup.help": "Run the skill setup tool (requires an active version)",
+        "pending_actions.ui.title": "Pending actions",
+        "pending_actions.ui.active_count": "{count} active",
+        "pending_actions.ui.more": "More",
+        "pending_actions.nlu.confirm_title": "Confirm command understanding",
+        "pending_actions.nlu.confirm_summary": "Decision needed: {question}",
+        "pending_actions.nlu.open_tool_summary": "Open {tool}?",
+        "pending_actions.action.test": "Test",
+        "pending_actions.action.approve": "Approve",
+        "pending_actions.action.refuse": "Refuse",
+        "pending_actions.action.postpone": "Later"
 }

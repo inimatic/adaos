@@ -59,7 +59,9 @@ async def test_voice_candidate_proposal_requests_confirmation():
     )
 
     async with async_get_ydoc(webspace_id) as ydoc:
-        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        data_map = ydoc.get_map("data")
+        teacher = data_map.get("nlu_teacher") or {}
+        pending_actions = data_map.get("pending_actions") or {}
         confirmations = list(teacher.get("pending_confirmations") or [])
         clarifications = list(teacher.get("clarification_sessions") or [])
         events = list(teacher.get("events") or [])
@@ -75,8 +77,79 @@ async def test_voice_candidate_proposal_requests_confirmation():
     assert clarifications[-1]["candidate_id"] == candidate["id"]
     assert clarifications[-1]["allowed_answers"][0]["effect"] == "apply_candidate"
     assert events[-1]["kind"] == "confirmation.requested"
+    assert confirmations[-1]["pending_action_id"]
+    assert pending_actions["active"] == [confirmations[-1]["pending_action_id"]]
+    pending_action = pending_actions["by_id"][confirmations[-1]["pending_action_id"]]
+    assert pending_action["kind"] == "nlu.teacher.candidate_confirmation"
+    assert pending_action["domain_ref"]["confirmation_id"] == confirmations[-1]["id"]
+    assert pending_action["response_route"]["topic"] == "nlp.teacher.candidate.confirmation.response"
     assert messages
     assert "Открыть Infrascope?" in messages[-1]["text"]
+
+
+@pytest.mark.anyio
+async def test_pending_action_response_routes_to_matching_confirmation(monkeypatch):
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-confirmation-pending-action-response"
+    confirmation = {
+        "id": "confirm.route.target",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "candidate_id": "cand.route.target",
+        "request_id": "req.route.target",
+        "request_text": "show NLU Teacher",
+        "question": "Open NLU Teacher?",
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"pending_confirmations": [confirmation], "events": []})
+
+    handled: list[dict] = []
+
+    async def _capture(webspace_id_arg, confirmation_arg, *, answer, answer_text, meta):
+        handled.append(
+            {
+                "webspace_id": webspace_id_arg,
+                "confirmation": dict(confirmation_arg),
+                "answer": answer,
+                "answer_text": answer_text,
+                "meta": dict(meta),
+            }
+        )
+
+    monkeypatch.setattr(conf, "_handle_confirmation_answer", _capture)
+
+    await conf._on_pending_action_confirmation_response(
+        {
+            "webspace_id": webspace_id,
+            "pending_action_id": "pa.route.target",
+            "response_action_id": "approve",
+            "response": {"response_action_id": "approve"},
+            "domain_ref": {
+                "webspace_id": webspace_id,
+                "confirmation_id": "confirm.route.target",
+                "candidate_id": "cand.route.target",
+            },
+        }
+    )
+
+    assert handled == [
+        {
+            "webspace_id": webspace_id,
+            "confirmation": confirmation,
+            "answer": "yes",
+            "answer_text": "approve",
+            "meta": {
+                "webspace_id": webspace_id,
+                "route_id": "pending_actions",
+                "pending_action_id": "pa.route.target",
+                "pending_action_response": "approve",
+            },
+        }
+    ]
 
 
 @pytest.mark.anyio
