@@ -348,6 +348,72 @@ def diagnostics_snapshot(state: Mapping[str, Any], endpoint: Mapping[str, Any] |
     }
 
 
+def readiness_report(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    endpoint_data = endpoint or {}
+    policy = policy_report(endpoint_data) if endpoint_data else {}
+    transport: dict[str, Any] = {}
+    if endpoint_data:
+        try:
+            from adaos.sdk.redevice import select_transport
+
+            transport = select_transport(endpoint_data, intent="audio.capture.vad", allow_root_relay=True)
+        except Exception:
+            transport = {}
+
+    vad = _mapping(state.get("vad")) or {"state": "idle"}
+    stt = _mapping(state.get("stt")) or {"state": "not_checked"}
+    retention = _mapping(state.get("retention")) or retention_report()
+    last_segment = _mapping(state.get("last_segment"))
+
+    if not endpoint_data:
+        ready_state = "no_endpoint"
+    elif not policy.get("microphone_allowed"):
+        ready_state = "policy_blocked"
+    elif _text(_mapping(transport.get("control")).get("state") or transport.get("state")) in {"blocked", "unavailable"}:
+        ready_state = "transport_unavailable"
+    elif _text(last_segment.get("state")) in {"invalid_wav", "wav_parse_failed", "segment_file_missing"}:
+        ready_state = "audio_content_degraded"
+    else:
+        ready_state = "ready"
+
+    return {
+        "schema_version": "endpoint-audio-readiness.v1",
+        "ok": ready_state == "ready",
+        "state": ready_state,
+        "mode": _text(vad.get("mode")) or "voice_activity",
+        "vad": {
+            "state": _text(vad.get("state")) or "idle",
+            "action": _text(vad.get("action")),
+            "updated_at": _text(vad.get("updated_at")),
+        },
+        "stt": {
+            "state": _text(stt.get("state")) or "not_checked",
+            "available": bool(stt.get("available") or stt.get("ok")),
+            "target": _text(stt.get("target")),
+        },
+        "policy": {
+            "microphone_allowed": bool(policy.get("microphone_allowed")),
+            "trust_level": _text(policy.get("trust_level")) or "unknown",
+            "capture": _text(policy.get("capture")) or "voice_activity",
+        },
+        "transport": {
+            "selected_transport": _text(transport.get("selected_transport")),
+            "degraded": bool(transport.get("degraded")),
+            "legacy_safe": bool(transport.get("legacy_safe")),
+        },
+        "retention": {
+            "debug_clip_limit": retention.get("debug_clip_limit", MAX_DEBUG_CLIPS),
+            "stored_debug_clips": retention.get("stored_debug_clips", 0),
+        },
+        "last_segment": {
+            "state": _text(last_segment.get("state")) or ("ready" if last_segment.get("ok") else ""),
+            "bytes": last_segment.get("bytes"),
+            "duration_ms": last_segment.get("duration_ms"),
+        },
+        "updated_at": _text(state.get("updated_at")) or _now(),
+    }
+
+
 def compact_endpoint(endpoint: Mapping[str, Any], *, selected_code: str = "") -> dict[str, Any]:
     from adaos.sdk.redevice import compact_endpoint as sdk_compact_endpoint
     from adaos.sdk.redevice import select_transport
@@ -552,6 +618,7 @@ __all__ = [
     "event_id",
     "policy_report",
     "process_endpoint_event",
+    "readiness_report",
     "retention_report",
     "save_audio_segment",
     "state_dir",

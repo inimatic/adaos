@@ -303,6 +303,10 @@ Initial contracts:
 - `endpoint-audio-events.v1`: current MVP wire schema for
   `endpoint.audio.record_button`, `endpoint.audio.voice_activity`,
   `endpoint.audio.segment`, and `endpoint.audio.transcript`.
+- `endpoint-audio-readiness.v1`: compact UI/status projection for microphone
+  policy, VAD state, STT availability, retention counters, and selected
+  transport. It must not include raw audio, base64 payloads, or debug clip
+  inventories.
 - `audio-chunk.v1`: bounded audio frame or segment metadata.
 - `speech-event.v1`: activation, speech start/end, silence, interruption, and
   diagnostics.
@@ -379,6 +383,25 @@ The service state uses `endpoint-audio-diagnostics.v1` as a runtime snapshot:
 }
 ```
 
+Browser-facing skills should prefer `endpoint-audio-readiness.v1` for regular
+status rendering. It is intentionally smaller than the diagnostics snapshot:
+
+```json
+{
+  "schema_version": "endpoint-audio-readiness.v1",
+  "state": "ready",
+  "policy": {"microphone_allowed": true, "trust_level": "limited"},
+  "vad": {"state": "listening"},
+  "stt": {"state": "model_missing", "available": false},
+  "retention": {"debug_clip_limit": 10, "stored_debug_clips": 0},
+  "transport": {"selected_transport": "segment_upload", "degraded": false}
+}
+```
+
+Full diagnostics remain available for explicit refresh/check actions and debug
+views. They should not be used as the only contract for lightweight stream
+updates.
+
 `endpoint-audio-content-check.v1` is the first diagnostic content-verification
 contract. It does not transcribe or dispatch by itself. It verifies the current
 policy projection, selected audio transport, retention settings, and the latest
@@ -417,8 +440,10 @@ Recommended MVP:
    produces text.
 6. `[done]` Verify latest audio-in segment content from a diagnostic skill
    through SDK, without giving the skill ownership of raw transport.
-7. `[next]` Return optional response to display or speaker route.
-8. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
+7. `[done]` Publish compact `endpoint-audio-readiness.v1` through SDK and
+   `redevice_voice` for browser-safe status rendering.
+8. `[next]` Return optional response to display or speaker route.
+9. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
 
 Do not make local STT mandatory for legacy Android 4.1. Treat Vosk and similar
 engines as optional `local_stt` profiles that must pass benchmark gates.

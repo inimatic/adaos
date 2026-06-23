@@ -153,3 +153,50 @@ def test_diagnostics_snapshot_reports_vad_stt_and_retention(tmp_path, monkeypatc
     assert snapshot["stt"]["text"] == "test"
     assert snapshot["retention"]["debug_clip_limit"] == 10
     assert snapshot["policy"]["trust_level"] == "limited"
+
+
+def test_readiness_report_is_compact_and_ready_for_allowed_microphone(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ENDPOINT_AUDIO_STATE_DIR", str(tmp_path))
+    event = {
+        "type": "endpoint.audio.segment",
+        "endpoint_id": "endpoint-1",
+        "session_id": "audio-session",
+        "command_id": "cmd:readiness",
+        "action": "voice_activity.ended",
+        "audio": {
+            "mime": "audio/wav",
+            "data_b64": base64.b64encode(_wav_bytes(9)).decode("ascii"),
+            "bytes": len(_wav_bytes(9)),
+        },
+        "vad": {"duration_ms": 900},
+    }
+    segment = endpoint_audio.save_audio_segment(event)
+    state = {
+        "vad": {"state": "sent", "updated_at": "2026-06-23T10:00:00+00:00"},
+        "last_segment": segment,
+        "retention": endpoint_audio.retention_report(),
+    }
+
+    report = endpoint_audio.readiness_report(
+        state,
+        {"endpoint_manifest": {"services": {"audio_input_endpoint": {"enabled": True}}}},
+    )
+
+    assert report["schema_version"] == "endpoint-audio-readiness.v1"
+    assert report["ok"] is True
+    assert report["state"] == "ready"
+    assert report["policy"]["microphone_allowed"] is True
+    assert report["retention"]["stored_debug_clips"] == 1
+    assert "clips" not in report["retention"]
+    assert "path" not in report["last_segment"]
+
+
+def test_readiness_report_blocks_when_microphone_policy_is_missing() -> None:
+    report = endpoint_audio.readiness_report(
+        {"vad": {"state": "idle"}},
+        {"endpoint_manifest": {"trust_level": "limited"}},
+    )
+
+    assert report["ok"] is False
+    assert report["state"] == "policy_blocked"
+    assert report["policy"]["microphone_allowed"] is False

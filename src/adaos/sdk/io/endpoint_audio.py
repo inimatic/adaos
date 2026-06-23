@@ -40,6 +40,10 @@ def endpoint_audio_diagnostics(state: Mapping[str, Any], endpoint: Mapping[str, 
     return _svc.diagnostics_snapshot(state, endpoint)
 
 
+def endpoint_audio_readiness(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return _svc.readiness_report(state, endpoint)
+
+
 def process_endpoint_audio_event(
     state: dict[str, Any],
     endpoint: Mapping[str, Any],
@@ -70,6 +74,7 @@ __all__ = [
     "compact_audio_endpoint",
     "endpoint_audio_diagnostics",
     "endpoint_audio_policy",
+    "endpoint_audio_readiness",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",
     "verify_audio_input_content",
