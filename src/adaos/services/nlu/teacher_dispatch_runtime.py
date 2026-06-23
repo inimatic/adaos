@@ -97,6 +97,10 @@ def _side_effect_policy(
     approval = str(policy.get("approval") or "").strip()
     if validation and not validation.get("ok"):
         return False, {"reason": "validation_not_passed", "side_effect_class": side_effect, "approval": approval}
+    if not side_effect:
+        action = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+        side_effect = str(action.get("side_effect_class") or "").strip()
+        approval = str(action.get("approval") or approval or "").strip()
     if side_effect in allowed and approval in {"operator_apply_allowed", ""}:
         return True, {"side_effect_class": side_effect, "approval": approval or "operator_apply_allowed"}
     return False, {

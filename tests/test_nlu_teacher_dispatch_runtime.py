@@ -323,6 +323,46 @@ async def test_candidate_test_dispatches_once_for_operator_verification() -> Non
 
 
 @pytest.mark.anyio
+async def test_candidate_test_uses_action_candidate_policy_before_validation() -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_dispatch_runtime as dispatch
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-dispatch-test-action-policy"
+    candidate = _safe_modal_candidate("cand.teacher.dispatch.test.action-policy")
+    candidate.pop("validation", None)
+    candidate["action_candidate"] = {
+        "class": "skill_action",
+        "intent": "desktop.open_modal",
+        "side_effect_class": "skill_action",
+        "slots": {"modal_id": "browsers_modal"},
+    }
+    await _seed_teacher(webspace_id, candidate)
+
+    detected: list[dict] = []
+    ctx.bus.subscribe("nlp.intent.detected", lambda ev: detected.append(dict(getattr(ev, "payload", None) or {})))
+
+    await dispatch._on_candidate_test(
+        {
+            "webspace_id": webspace_id,
+            "candidate_id": candidate["id"],
+            "_meta": {"webspace_id": webspace_id, "source": "api.nlu.teacher"},
+        }
+    )
+
+    assert detected
+    assert detected[-1]["via"] == "nlu_teacher.test"
+
+    teacher = await _read_teacher(webspace_id)
+    saved = list(teacher.get("candidates") or [])[0]
+    assert saved["dispatch_status"] == "requested"
+    assert saved["dispatch"]["side_effect_policy"] == {
+        "side_effect_class": "skill_action",
+        "approval": "operator_apply_allowed",
+    }
+
+
+@pytest.mark.anyio
 async def test_voice_confirmed_unsafe_candidate_dispatch_is_blocked() -> None:
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_dispatch_runtime as dispatch
