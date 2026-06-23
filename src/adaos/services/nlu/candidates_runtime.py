@@ -22,6 +22,7 @@ from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.nlu.teacher.candidates")
+_RECENT_APPLY_REJECTIONS: dict[tuple[str, str, str, str], float] = {}
 
 _LOOKUP_SLOT_NAMES = {
     "modal_id",
@@ -50,6 +51,33 @@ def _float_env(name: str, default: float, *, min_value: float, max_value: float)
 
 def _regex_apply_timeout_s() -> float:
     return _float_env("ADAOS_NLU_TEACHER_REGEX_APPLY_TIMEOUT_S", 8.0, min_value=1.0, max_value=120.0)
+
+
+def _apply_rejection_suppression_window_s() -> float:
+    return _float_env("ADAOS_NLU_TEACHER_APPLY_REJECTION_SUPPRESSION_S", 5.0, min_value=0.0, max_value=300.0)
+
+
+def _should_suppress_recent_apply_rejection(
+    *,
+    webspace_id: str,
+    candidate_id: str,
+    reason: str,
+    meta: Mapping[str, Any],
+) -> bool:
+    window_s = _apply_rejection_suppression_window_s()
+    if window_s <= 0:
+        return False
+    now = time.time()
+    stale = [key for key, ts in _RECENT_APPLY_REJECTIONS.items() if now - ts > window_s]
+    for key in stale:
+        _RECENT_APPLY_REJECTIONS.pop(key, None)
+    route_id = str(meta.get("route_id") or meta.get("route") or "").strip()
+    key = (str(webspace_id or "").strip(), str(candidate_id or "").strip(), str(reason or "").strip(), route_id)
+    if key in _RECENT_APPLY_REJECTIONS:
+        _RECENT_APPLY_REJECTIONS[key] = now
+        return True
+    _RECENT_APPLY_REJECTIONS[key] = now
+    return False
 
 
 def _nlu_candidates_write_meta():
@@ -236,6 +264,19 @@ async def _emit_apply_rejected(
     if _candidate_apply_succeeded(current_candidate):
         _log.info(
             "suppressed stale NLU Teacher apply rejection webspace=%s candidate_id=%s reason=%s",
+            webspace_id,
+            candidate_id,
+            reason,
+        )
+        return
+    if _should_suppress_recent_apply_rejection(
+        webspace_id=webspace_id,
+        candidate_id=candidate_id,
+        reason=reason,
+        meta=meta,
+    ):
+        _log.info(
+            "suppressed duplicate NLU Teacher apply rejection webspace=%s candidate_id=%s reason=%s",
             webspace_id,
             candidate_id,
             reason,

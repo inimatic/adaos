@@ -40,10 +40,14 @@ Current implemented slice:
 - [x] NLU Teacher workbench has a direct candidate Test action for operator
   verification; broader Pending Actions `test` responses stay available for
   cross-channel confirmations.
+- [x] Runtime recovery has the first non-NLU producer slice: service supervisor
+  restart/stop/shutdown failures publish Pending Actions and route
+  `retry/open_diagnostics/postpone/dismiss` responses back to the runtime
+  recovery handler.
 - [ ] NLU Teacher clarification sessions still use the legacy chat-local flow
   and should be migrated separately if they need cross-channel response.
-- [ ] Builder, pairing, runtime recovery, capability elevation, and guarded
-  skill-action producer migrations.
+- [ ] Builder, pairing, broader runtime recovery, capability elevation, and
+  guarded skill-action producer migrations.
 - [ ] Full Pending Actions workbench/modal with filtering, history, and direct
   links to source evidence.
 - [ ] Notification deep links to Pending Actions without making notifications
@@ -228,6 +232,17 @@ Implemented producer slice:
 - Browser responses go through `pending_actions.respond.request`; the core
   records the response and routes it to
   `nlp.teacher.candidate.confirmation.response`.
+- Service supervisor runtime recovery now creates
+  `kind=runtime.recovery.service_supervisor_failure` records when automatic
+  service restart, stop, or shutdown handling fails. Records include a stable
+  `domain_ref` with `operation`, `skill_name`, and `reason`; active duplicate
+  failures are deduplicated by that domain, while a later terminal incident may
+  create a new action.
+- Runtime recovery responses route through
+  `runtime.recovery.service_supervisor.response`. `retry` re-runs the failed
+  operation, `open_diagnostics` emits a diagnostics request with service status
+  and issue history when available, `postpone` keeps the action active, and
+  `dismiss` records the operator decision without mutating runtime state.
 
 ## Response Routing
 
@@ -345,7 +360,8 @@ Open UI work:
 
 Automated checks used for the current slice:
 
-- `py -3.11 -m pytest tests/test_pending_actions.py tests/test_nlu_teacher_confirmation_runtime.py`
+- `PYTHONPATH=src py -3.11 -m pytest tests/test_pending_actions.py tests/test_service_supervisor_runtime.py`
+- `PYTHONPATH=src py -3.11 -m pytest tests/test_nlu_teacher_confirmation_runtime.py tests/test_nlu_teacher_candidate_apply.py`
 - `npx ng test --watch=false --browsers=ChromeHeadless --include=src/app/app.component.spec.ts`
 
 Manual checks:
@@ -356,4 +372,10 @@ Manual checks:
   record moves to responded while the NLU confirmation is accepted/rejected.
 - Open a modal or switch scenario while an action is pending; the global
   affordance should remain reachable.
-
+- Simulate a service supervisor restart failure on a test/dev node and verify a
+  `runtime.recovery.service_supervisor_failure` action appears with
+  `retry/open_diagnostics/postpone/dismiss`.
+- For `Покажи заметки`, verify the NLU Teacher confirmation creates one Pending
+  Action. If M4 rejects the current template with `m4_validation_failed`, the
+  voice surface should report the failure once and the detailed validation
+  should remain in NLU Teacher.

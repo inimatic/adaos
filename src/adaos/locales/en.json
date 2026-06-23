@@ -170,5 +170,10 @@
         "pending_actions.action.test": "Test",
         "pending_actions.action.approve": "Approve",
         "pending_actions.action.refuse": "Refuse",
-        "pending_actions.action.postpone": "Later"
+        "pending_actions.action.postpone": "Later",
+        "pending_actions.action.retry": "Retry",
+        "pending_actions.action.open_diagnostics": "Diagnostics",
+        "pending_actions.action.dismiss": "Dismiss",
+        "pending_actions.runtime.service_recovery_title": "Service recovery needs attention",
+        "pending_actions.runtime.service_recovery_summary": "Failed to {operation} {target}: {error_type}"
 }

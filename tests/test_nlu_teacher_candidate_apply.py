@@ -245,6 +245,53 @@ async def test_candidate_apply_reject_suppresses_stale_failure_after_success():
 
 
 @pytest.mark.anyio
+async def test_candidate_apply_rejection_suppresses_recent_duplicate_voice_message(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import candidates_runtime
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-apply-reject-duplicate-voice"
+    candidate_id = "cand.reject.duplicate.voice"
+    candidates_runtime._RECENT_APPLY_REJECTIONS.clear()
+    monkeypatch.setenv("ADAOS_NLU_TEACHER_APPLY_REJECTION_SUPPRESSION_S", "60")
+
+    rejected: list[dict] = []
+    messages: list[dict] = []
+
+    ctx.bus.subscribe("nlp.teacher.candidate.apply.rejected", lambda ev: rejected.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("io.out.chat.append", lambda ev: messages.append(dict(ev.payload or {})))
+
+    meta = {"route_id": "voice_chat", "webspace_id": webspace_id}
+    await candidates_runtime.reject_candidate_apply(
+        webspace_id=webspace_id,
+        candidate_id=candidate_id,
+        reason="m4_validation_failed",
+        meta=meta,
+        request_id="req.reject.duplicate.voice",
+        request_text="Покажи заметки",
+    )
+    await candidates_runtime.reject_candidate_apply(
+        webspace_id=webspace_id,
+        candidate_id=candidate_id,
+        reason="m4_validation_failed",
+        meta=meta,
+        request_id="req.reject.duplicate.voice",
+        request_text="Покажи заметки",
+    )
+
+    assert [item["reason"] for item in rejected if item.get("candidate_id") == candidate_id] == ["m4_validation_failed"]
+    assert [item for item in messages if item.get("_meta", {}).get("webspace_id") == webspace_id]
+    assert len([item for item in messages if item.get("_meta", {}).get("webspace_id") == webspace_id]) == 1
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        events = list(teacher.get("events") or [])
+
+    assert len([item for item in events if item.get("kind") == "candidate.apply_rejected"]) == 1
+
+
+@pytest.mark.anyio
 async def test_candidate_apply_rejects_duplicate_regex_before_mutation():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.candidates_runtime import _on_candidate_apply

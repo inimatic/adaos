@@ -171,5 +171,10 @@
         "pending_actions.action.test": "Проверить",
         "pending_actions.action.approve": "Подтвердить",
         "pending_actions.action.refuse": "Отклонить",
-        "pending_actions.action.postpone": "Позже"
+        "pending_actions.action.postpone": "Позже",
+        "pending_actions.action.retry": "Повторить",
+        "pending_actions.action.open_diagnostics": "Диагностика",
+        "pending_actions.action.dismiss": "Скрыть",
+        "pending_actions.runtime.service_recovery_title": "Требуется восстановление сервиса",
+        "pending_actions.runtime.service_recovery_summary": "Не удалось выполнить {operation} для {target}: {error_type}"
 }
