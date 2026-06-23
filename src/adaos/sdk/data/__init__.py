@@ -70,6 +70,10 @@ __all__ = [
     "previous_model_info",
     "update_model_if_changed",
     "upload_model",
+    "publish_pending_action",
+    "respond_pending_action",
+    "list_pending_actions",
+    "expire_pending_actions",
     "get_tts_backend",
     "get_stt_backend",
     "get_audio_out_backend",
@@ -139,6 +143,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "previous_model_info": ("adaos.sdk.data.models", "previous_model_info"),
     "update_model_if_changed": ("adaos.sdk.data.models", "update_model_if_changed"),
     "upload_model": ("adaos.sdk.data.models", "upload_model"),
+    "publish_pending_action": ("adaos.sdk.data.pending_actions", "publish_pending_action"),
+    "respond_pending_action": ("adaos.sdk.data.pending_actions", "respond_pending_action"),
+    "list_pending_actions": ("adaos.sdk.data.pending_actions", "list_pending_actions"),
+    "expire_pending_actions": ("adaos.sdk.data.pending_actions", "expire_pending_actions"),
 }
 
 

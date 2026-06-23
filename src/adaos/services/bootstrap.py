@@ -111,6 +111,7 @@ from adaos.services.scenario import workflow_runtime as _scenario_workflow_runti
 from adaos.services import weather as _weather_services  # ensure weather observers
 from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscriptions
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
+from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
 from adaos.services.bounded_io import bounded_text_tail_lines
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
