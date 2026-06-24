@@ -1024,6 +1024,25 @@ def test_canonical_projection_from_reliability_snapshot_maps_actions_and_inciden
                     "route": {"stability": {"state": "down", "score": 15}},
                 },
                 "hub_root_zone": {},
+                "incident_registry": {
+                    "items": [
+                        {
+                            "id": "inc-runtime-timeout",
+                            "class": "runtime_api_timeout",
+                            "signal": "supervisor_preflight_read_timeout",
+                            "severity": "warning",
+                            "domain": "core.runtime",
+                            "component": "runtime_reliability_api",
+                            "summary": "Runtime API request timed out: /api/node/reliability",
+                            "active": True,
+                            "occurrence_count": 3,
+                            "last_seen_at": 123.0,
+                            "tags": ["latency"],
+                        }
+                    ],
+                    "active_total": 1,
+                    "total": 1,
+                },
                 "sidecar_runtime": {
                     "enabled": True,
                     "status": "degraded",
@@ -1074,6 +1093,7 @@ def test_canonical_projection_from_reliability_snapshot_maps_actions_and_inciden
     assert objects["runtime:hub:hub-2/yjs-sync"]["health"]["availability"] == "degraded"
     assert any(item["object_id"] == "connection:hub:hub-2/route" for item in projection["incidents"])
     assert any(item["object_id"] == "runtime:hub:hub-2/sidecar" for item in projection["incidents"])
+    assert any(item["id"] == "incident:registry:inc-runtime-timeout" for item in projection["incidents"])
 
 
 def test_canonical_inventory_projection_counts_objects_and_incidents() -> None:

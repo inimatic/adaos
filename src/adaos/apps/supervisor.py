@@ -4169,10 +4169,27 @@ class SupervisorManager:
                 session.close()
 
     def _runtime_reliability_payload(self, *, timeout: float = 2.0) -> dict[str, Any]:
+        path = "/api/node/reliability"
         try:
-            payload = self._runtime_request_json(path="/api/node/reliability", timeout=timeout)
+            payload = self._runtime_request_json(path=path, timeout=timeout)
         except Exception as exc:
             _LOG.debug("supervisor reliability preflight unavailable: %s: %s", type(exc).__name__, exc)
+            try:
+                from adaos.services.incident_registry import record_runtime_api_timeout
+
+                record_runtime_api_timeout(
+                    source="supervisor.reliability_preflight",
+                    path=path,
+                    timeout_s=float(timeout),
+                    exc=exc,
+                    component="runtime_reliability_api",
+                    evidence={
+                        "runtime_base_url": self.runtime_base_url,
+                        "runtime_port": self.runtime_port,
+                    },
+                )
+            except Exception:
+                pass
             return {}
         runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
         return dict(runtime) if isinstance(runtime, dict) else {}

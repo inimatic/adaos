@@ -104,6 +104,11 @@ transport-only `/ws` and `/yws` handoff as ready.
 - Browser diagnostics now surface degraded seed and stuck bootstrap reasons in
   the YJS signal (`seed=...`, `sync-blocked=...`) so fallback preserves
   manageability without masking the root problem.
+- Incident registry v1 now collects domain-attributed runtime/transport
+  signals (`runtime_api_timeout`, `slow_event_handler`,
+  `event_handler_crash`, and channel transitions), exposes them through
+  `runtime.incident_registry`, and feeds canonical reliability incidents for
+  LLM-oriented planning.
 - Managed autostart generation no longer writes truthy hub sidecar defaults
   into the wrapper as env overrides; old stand wrappers should be refreshed
   after removing legacy `ADAOS_REALTIME_ENABLE=1`/route-proxy exports.

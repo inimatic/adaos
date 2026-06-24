@@ -122,6 +122,37 @@ def _incident_from_object(obj: CanonicalObject) -> dict[str, Any] | None:
     )
 
 
+def _incident_registry_projection(runtime: dict[str, Any]) -> list[dict[str, Any]]:
+    registry = coerce_mapping(runtime.get("incident_registry"))
+    items = registry.get("items") if isinstance(registry.get("items"), list) else []
+    incidents: list[dict[str, Any]] = []
+    for item in items:
+        data = coerce_mapping(item)
+        if not data:
+            continue
+        incident_id = str(data.get("id") or "").strip()
+        domain = str(data.get("domain") or "").strip()
+        component = str(data.get("component") or "").strip()
+        incidents.append(
+            compact_mapping(
+                {
+                    "id": f"incident:registry:{incident_id or domain or data.get('class')}",
+                    "object_id": component or domain or "incident_registry",
+                    "severity": data.get("severity"),
+                    "status": "active" if data.get("active") else "recent",
+                    "title": data.get("signal") or data.get("class"),
+                    "summary": data.get("summary"),
+                    "domain": domain,
+                    "class": data.get("class"),
+                    "occurrence_count": data.get("occurrence_count"),
+                    "last_seen_at": data.get("last_seen_at"),
+                    "tags": data.get("tags"),
+                }
+            )
+        )
+    return incidents
+
+
 def _node_like_object(obj: CanonicalObject) -> bool:
     kind = str(obj.kind or "").strip()
     return kind in {
@@ -589,6 +620,7 @@ def _reliability_focus_context(runtime: dict[str, Any]) -> dict[str, Any]:
     degraded_matrix = coerce_mapping(runtime.get("degraded_matrix"))
     zone = coerce_mapping(runtime.get("hub_root_zone"))
     phase0_communication = coerce_mapping(runtime.get("event_model_phase0_communication"))
+    incident_registry = coerce_mapping(runtime.get("incident_registry"))
     blocked_capabilities = sorted(
         key
         for key, item in degraded_matrix.items()
@@ -606,6 +638,11 @@ def _reliability_focus_context(runtime: dict[str, Any]) -> dict[str, Any]:
             "blocked_capabilities": blocked_capabilities,
             "hub_root_zone": zone,
             "event_model_phase0_communication": phase0_communication,
+            "incident_registry": {
+                "active_total": incident_registry.get("active_total"),
+                "total": incident_registry.get("total"),
+                "counts": incident_registry.get("counts"),
+            },
         }
     )
 
@@ -1412,6 +1449,9 @@ def canonical_projection_from_reliability_snapshot(payload: Any) -> CanonicalPro
         *_integration_quota_objects(subject, runtime),
     ]
     incidents = [item for item in (_incident_from_object(obj) for obj in objects) if item]
+    for item in _incident_registry_projection(runtime):
+        if not any(existing.get("id") == item.get("id") for existing in incidents):
+            incidents.append(item)
     subject.incidents = incidents
     blocked_capabilities = focus_context.get("blocked_capabilities") if isinstance(focus_context.get("blocked_capabilities"), list) else []
     subject.summary = (

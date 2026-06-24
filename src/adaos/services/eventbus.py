@@ -52,6 +52,37 @@ def _handler_label(handler: Handler) -> str:
     return " ".join(parts)
 
 
+def _record_slow_handler_incident(
+    *,
+    handler_label: str,
+    event_type: str,
+    duration_s: float,
+    kind: str,
+    threshold_s: float,
+) -> None:
+    try:
+        from adaos.services.incident_registry import record_slow_event_handler
+
+        record_slow_event_handler(
+            handler_label=handler_label,
+            event_type=event_type,
+            duration_s=duration_s,
+            kind=kind,
+            threshold_s=threshold_s,
+        )
+    except Exception:
+        pass
+
+
+def _record_handler_crash_incident(*, handler_label: str, event_type: str, exc: BaseException) -> None:
+    try:
+        from adaos.services.incident_registry import record_event_handler_crash
+
+        record_event_handler_crash(handler_label=handler_label, event_type=event_type, exc=exc)
+    except Exception:
+        pass
+
+
 def _stable_mapping_key(value: Any) -> str:
     if not isinstance(value, dict):
         return ""
@@ -141,21 +172,34 @@ async def _run_coro_with_timing(coro: Awaitable[Any], handler: Handler, event: E
     started = time.perf_counter()
     try:
         await coro
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
+        handler_label = _handler_label(handler)
+        event_type = getattr(event, "type", "<unknown>")
         _log.warning(
             "event handler crashed handler=%s type=%s",
-            _handler_label(handler),
-            getattr(event, "type", "<unknown>"),
+            handler_label,
+            event_type,
             exc_info=True,
         )
+        _record_handler_crash_incident(handler_label=handler_label, event_type=str(event_type), exc=exc)
     else:
         duration = time.perf_counter() - started
-        if duration >= _slow_handler_threshold_s("async", 0.25):
+        threshold = _slow_handler_threshold_s("async", 0.25)
+        if duration >= threshold:
+            handler_label = _handler_label(handler)
+            event_type = getattr(event, "type", "<unknown>")
             _log.warning(
                 "slow async event handler handler=%s type=%s duration=%.3fs",
-                _handler_label(handler),
-                getattr(event, "type", "<unknown>"),
+                handler_label,
+                event_type,
                 duration,
+            )
+            _record_slow_handler_incident(
+                handler_label=handler_label,
+                event_type=str(event_type),
+                duration_s=duration,
+                kind="async",
+                threshold_s=threshold,
             )
 
 
@@ -832,12 +876,18 @@ class LocalEventBus(EventBus):
                 started = time.perf_counter()
                 try:
                     res = h(event)
-                except Exception:  # pragma: no cover - defensive logging
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    handler_label = _handler_label(h)
                     _log.warning(
                         "event handler crashed handler=%s type=%s",
-                        _handler_label(h),
+                        handler_label,
                         getattr(event, "type", "<unknown>"),
                         exc_info=True,
+                    )
+                    _record_handler_crash_incident(
+                        handler_label=handler_label,
+                        event_type=str(getattr(event, "type", "<unknown>")),
+                        exc=exc,
                     )
                     continue
 
@@ -925,12 +975,21 @@ class LocalEventBus(EventBus):
                                 self._track_task(task, h, event)
                 else:
                     duration = time.perf_counter() - started
-                    if duration >= _slow_handler_threshold_s("sync", 0.1):
+                    threshold = _slow_handler_threshold_s("sync", 0.1)
+                    if duration >= threshold:
+                        handler_label = _handler_label(h)
                         _log.warning(
                             "slow sync event handler handler=%s type=%s duration=%.3fs",
-                            _handler_label(h),
+                            handler_label,
                             getattr(event, "type", "<unknown>"),
                             duration,
+                        )
+                        _record_slow_handler_incident(
+                            handler_label=handler_label,
+                            event_type=str(getattr(event, "type", "<unknown>")),
+                            duration_s=duration,
+                            kind="sync",
+                            threshold_s=threshold,
                         )
 
 

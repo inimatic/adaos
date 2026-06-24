@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.hub_root_protocol_store import protocol_streams_snapshot
+from adaos.services.incident_registry import incident_registry_snapshot, record_channel_incident
 from adaos.services.node_display import node_display_from_config, node_display_payload
 from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
@@ -1003,6 +1004,16 @@ def _record_channel_incident(
             "details": dict(details or {}),
         }
     )
+    try:
+        record_channel_incident(
+            channel=channel,
+            status=status,
+            summary=summary,
+            details=details,
+            previous_status=previous_status,
+        )
+    except Exception:
+        pass
 
 
 def _protocol_class_state(traffic_class: str) -> dict[str, Any]:
@@ -7177,6 +7188,7 @@ def reliability_snapshot(
     yjs_pressure = _yjs_pressure_snapshot(sync_runtime)
     webio_stream_guard = _webio_stream_guard_runtime_snapshot(sync_runtime)
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
+    incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
         sidecar_runtime=sidecar_runtime,
@@ -7221,6 +7233,7 @@ def reliability_snapshot(
             "yjs_pressure": yjs_pressure,
             "webio_stream_guard": webio_stream_guard,
             "eventbus_backlog": eventbus_backlog,
+            "incident_registry": incidents,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,
             "event_model_phase0_communication": event_model_phase0_communication,

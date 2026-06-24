@@ -61,6 +61,36 @@ flag.
 The root route path is allowed to be the default for WAN browsers. Direct WebRTC
 is an upgrade, not a dependency for correctness.
 
+## Production Strategy
+
+The production strategy is baseline-first with parallel upgrade:
+
+1. Bootstrap over HTTP to establish identity, runtime epoch, initial snapshot,
+   and diagnostics.
+2. Attach `/ws` as the baseline command/event/presence path.
+3. Attach `/yws/<webspace>` as the baseline collaborative sync path.
+4. Start WebRTC probing in parallel after baseline correctness is available.
+5. Promote a semantic channel to WebRTC only after the data channel is open,
+   acked, and stable for that channel's stability window.
+6. Demote commands/events to `/ws` and sync to `/yws` quickly on direct-path
+   failure. Demotion must not mark the whole browser offline if the baseline
+   path is still healthy.
+7. Keep HTTP request-scoped actions, snapshots, and diagnostics as the brownout
+   fallback. Long polling may be used for last-resort progress/diagnostics, but
+   it is not the steady-state realtime channel.
+
+WebRTC-first is not the default production policy. ICE and browser lifecycle
+can add seconds of uncertainty, while WS/YWS can already provide correctness.
+Long-polling-first is also not the default policy because it increases latency
+and load. The correct default is a guaranteed baseline plus opportunistic
+quality upgrades.
+
+The strategy has two acceptance implications:
+
+- logical readiness is achieved by the baseline path;
+- quality readiness requires the selected higher-quality path to be stable, or
+  a visible and acceptable fallback reason.
+
 ## Readiness Model
 
 The browser must distinguish logical readiness from quality readiness.
@@ -121,8 +151,11 @@ Required for a reliable hub-browser quality bar:
 - [x] Track recent timeout windows for `hub_open_ack_timeout`,
       `dc_open_timeout`, and repeated Yjs provider closes.
 - [x] Surface the selected transport and fallback reason per semantic channel.
+- [x] Define the production protocol strategy as baseline-first with parallel
+      WebRTC upgrade and explicit demotion.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
 - [ ] Report Yjs first-sync latency and pressure as hub-browser quality gates.
+- [ ] Record browser route/WebRTC/YWS fallback windows in the incident registry.
 - [ ] Verify root-routed browser behavior through runtime restart and A/B slot
       promotion.
 - [ ] Verify WebRTC failure degrades to WS/YWS without command or sync loss.

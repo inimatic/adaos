@@ -29,6 +29,29 @@ This protocol does not define:
 - raw Yjs payload shape
 - browser-local ephemeral presence semantics
 
+## Production Transport Strategy
+
+The production hub-root strategy is protocol-first and transport-flexible:
+
+1. Establish the normal control session through the sidecar/root NATS path.
+2. Keep Class A lifecycle/control reports idempotent, acked, and replayable
+   within a bounded window.
+3. Keep route frames in a separate lower-priority pressure domain. Route
+   backpressure must not starve control reports or heartbeats.
+4. Use HTTP report/pull endpoints as a recovery and brownout path for
+   request-scoped control state, not as the primary route-frame transport.
+5. Preserve the sidecar across runtime restart and A/B slot promotion so root
+   continuity is not tied to the restartable runtime process.
+6. Record transport transitions, route flaps, and local runtime latency as
+   domain-attributed incidents. Operators and LLM tools should see whether the
+   failure belongs to `hub_root`, `hub_root_browser`, `core.sidecar`,
+   `core.runtime`, or a skill/member owner.
+
+This means NATS/sidecar is enough for the current root-hosted topology only if
+the protocol obligations above are visible and tested. Adding another subnet
+broker is not a substitute for Class A replay, resource isolation, and incident
+attribution.
+
 ## Traffic classes
 
 Hub-root traffic must be split into real execution classes, not only names.
@@ -230,6 +253,8 @@ The protocol layer must expose:
 - replay counts
 - reconnect count
 - degraded reason
+- normalized incidents for control, route, local runtime latency, and resource
+  pressure
 
 These metrics are protocol metrics, not transport-only metrics.
 
