@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
 import hashlib
+import os
 import re
 import time
 from collections import Counter, deque
+from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable
 
 
 _SCHEMA = "adaos.incident_registry.v1"
+_PERSIST_SCHEMA = "adaos.incident_registry.persisted.v1"
 _MAX_INCIDENTS = 256
 _MAX_EVIDENCE_SAMPLES = 3
 _ACTIVE_WINDOW_S = 10 * 60
@@ -79,6 +83,36 @@ def _severity_rank(value: Any) -> int:
     return int(order.get(token) or 20)
 
 
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def incident_domain_from_owner(owner: Any, *, fallback: str = "core.runtime") -> str:
+    text = str(owner or "").strip()
+    if not text or text in {"-", "unknown", "none"}:
+        return fallback
+    lowered = text.lower()
+    if lowered.startswith(("skill:", "member:", "browser:", "core.", "hub_root", "channel:")):
+        return text
+    if lowered.startswith("_by_owner/"):
+        token = text.split("/", 1)[1].strip()
+        token_l = token.lower()
+        if token_l in {"core", "runtime", "gateway", "gateway_ws"}:
+            return "core.yjs" if token_l == "gateway_ws" else "core.runtime"
+        if token_l in {"yjs", "sync", "yws"}:
+            return "core.yjs"
+        if token_l.startswith("skill:"):
+            return token
+        if token_l.startswith("skill_"):
+            return f"skill:{token[6:]}"
+        if token_l.endswith("_skill"):
+            return f"skill:{token}"
+        return f"owner:{token}"
+    if lowered.endswith("_skill"):
+        return f"skill:{text}"
+    return fallback
+
+
 def _domain_from_handler_label(label: str) -> str:
     match = re.search(r"\bskill=([A-Za-z0-9_.-]+)", str(label or ""))
     if match:
@@ -137,11 +171,11 @@ def _read_pressure_file(name: str) -> dict[str, Any]:
     return parsed
 
 
-def _process_samples(limit: int = 8) -> dict[str, Any]:
+def _process_rows() -> list[dict[str, Any]]:
     try:
         import psutil  # type: ignore
     except Exception:
-        return {}
+        return []
 
     rows: list[dict[str, Any]] = []
     for proc in psutil.process_iter(["pid", "name", "cmdline", "status", "memory_info"]):
@@ -170,7 +204,13 @@ def _process_samples(limit: int = 8) -> dict[str, Any]:
             )
         except Exception:
             continue
+    return rows
 
+
+def _process_samples(limit: int = 8) -> dict[str, Any]:
+    rows = _process_rows()
+    if not rows:
+        return {}
     top_rss = sorted(rows, key=lambda item: int(item.get("rss_bytes") or 0), reverse=True)[:limit]
     top_write = sorted(rows, key=lambda item: int(item.get("write_bytes") or 0), reverse=True)[:limit]
     return {
@@ -180,7 +220,51 @@ def _process_samples(limit: int = 8) -> dict[str, Any]:
     }
 
 
-def local_blocking_evidence(*, include_processes: bool = True) -> dict[str, Any]:
+def process_io_delta_sample(*, interval_s: float = 0.25, limit: int = 8) -> dict[str, Any]:
+    start_rows = _process_rows()
+    if not start_rows:
+        return {}
+    start = {int(row.get("pid") or 0): row for row in start_rows if int(row.get("pid") or 0) > 0}
+    sleep_s = max(0.0, min(float(interval_s or 0.0), 2.0))
+    if sleep_s:
+        time.sleep(sleep_s)
+    end_rows = _process_rows()
+    rows: list[dict[str, Any]] = []
+    for row in end_rows:
+        pid = int(row.get("pid") or 0)
+        prev = start.get(pid)
+        if not prev:
+            continue
+        read_delta = max(0, int(row.get("read_bytes") or 0) - int(prev.get("read_bytes") or 0))
+        write_delta = max(0, int(row.get("write_bytes") or 0) - int(prev.get("write_bytes") or 0))
+        if read_delta <= 0 and write_delta <= 0:
+            continue
+        rows.append(
+            {
+                "pid": pid,
+                "name": row.get("name"),
+                "status": row.get("status"),
+                "domain": row.get("domain"),
+                "cmdline": row.get("cmdline"),
+                "read_delta_bytes": read_delta,
+                "write_delta_bytes": write_delta,
+                "total_delta_bytes": read_delta + write_delta,
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("total_delta_bytes") or 0), reverse=True)
+    return {
+        "interval_s": round(sleep_s, 3),
+        "process_total": len(end_rows),
+        "top_io_delta": rows[: max(1, min(int(limit or 8), 50))],
+    }
+
+
+def local_blocking_evidence(
+    *,
+    include_processes: bool = True,
+    include_io_delta: bool = False,
+    io_delta_interval_s: float = 0.25,
+) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "pressure": {
             "io": _read_pressure_file("io"),
@@ -192,6 +276,10 @@ def local_blocking_evidence(*, include_processes: bool = True) -> dict[str, Any]
         samples = _process_samples()
         if samples:
             evidence["processes"] = samples
+    if include_io_delta:
+        delta = process_io_delta_sample(interval_s=io_delta_interval_s)
+        if delta:
+            evidence["process_io_delta"] = delta
     return _json_safe(evidence)
 
 
@@ -274,13 +362,17 @@ def record_runtime_api_timeout(
     evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     kind = type(exc).__name__
+    if _env_truthy("ADAOS_INCIDENT_IO_DELTA_ON_TIMEOUT"):
+        blocking = local_blocking_evidence(include_processes=True, include_io_delta=True)
+    else:
+        blocking = local_blocking_evidence(include_processes=True)
     merged = {
         "path": path,
         "timeout_s": float(timeout_s),
         "exception_type": kind,
         "exception": _redact_text(exc, limit=500),
         **(evidence or {}),
-        **local_blocking_evidence(include_processes=True),
+        **blocking,
     }
     signal = "supervisor_preflight_read_timeout" if "ReadTimeout" in kind else "runtime_api_unavailable"
     return record_incident(
@@ -355,7 +447,12 @@ def record_channel_incident(
     previous_status: str | None = None,
 ) -> dict[str, Any]:
     channel_token = _clean_token(channel)
-    domain = "hub_root_browser" if channel_token == "route" else "hub_root" if channel_token == "root_control" else f"channel:{channel_token}"
+    if channel_token == "route":
+        domain = "hub_root_browser"
+    elif channel_token == "root_control":
+        domain = "hub_root"
+    else:
+        domain = f"channel:{channel_token}"
     severity = "degraded" if str(status or "").lower() in {"down", "forced_close_no_upstream"} else "warning"
     return record_incident(
         incident_class="channel_transition",
@@ -373,6 +470,174 @@ def record_channel_incident(
         },
         fingerprint_parts=("channel_transition", channel_token, status, summary),
         tags=("transport", channel_token),
+    )
+
+
+def record_yjs_pressure_incident(
+    *,
+    pressure: dict[str, Any],
+    owner: str | None = None,
+    webspace_id: str | None = None,
+    source: str = "yjs_pressure",
+) -> dict[str, Any] | None:
+    data = dict(pressure or {})
+    policy = str(data.get("policy_state") or "ok").strip().lower()
+    observed = str(data.get("observed_state") or "idle").strip().lower()
+    quarantined = bool(data.get("quarantined") or data.get("active"))
+    blocked_total = int(data.get("blocked_total") or data.get("suppressed_total") or 0)
+    throttled_total = int(data.get("throttled_total") or 0)
+    is_idle_pressure = (
+        not quarantined
+        and not blocked_total
+        and not throttled_total
+        and policy in {"", "ok"}
+        and observed in {"", "idle", "ok"}
+    )
+    if is_idle_pressure:
+        return None
+    if quarantined or policy in {"block", "blocked"} or observed in {"critical", "blocked"}:
+        severity = "critical"
+    elif blocked_total or throttled_total or policy in {"throttle", "throttled"} or observed in {"pressure", "high"}:
+        severity = "degraded"
+    else:
+        severity = "warning"
+    route = data.get("last_route") if isinstance(data.get("last_route"), dict) else {}
+    projection = data.get("last_projection") if isinstance(data.get("last_projection"), dict) else {}
+    path = data.get("last_path") or route.get("path") or projection.get("path") or ""
+    domain = incident_domain_from_owner(owner or data.get("owner"), fallback="core.yjs")
+    webspace = str(webspace_id or data.get("webspace_id") or "").strip()
+    reason = str(data.get("reason") or f"{policy}/{observed}").strip()
+    return record_incident(
+        incident_class="yjs_pressure",
+        signal=f"yjs_pressure_{policy or 'unknown'}_{observed or 'unknown'}",
+        severity=severity,
+        domain=domain,
+        component="yjs",
+        source=source,
+        summary=f"Yjs pressure {policy or '-'} / {observed or '-'}: {reason}",
+        evidence={**data, "webspace_id": webspace or None, "path": path or None},
+        fingerprint_parts=("yjs_pressure", domain, webspace, path, policy, observed),
+        tags=("yjs", "pressure", "state-sync"),
+    )
+
+
+def record_action_timeout(
+    *,
+    action_id: str | None = None,
+    skill: str | None = None,
+    method: str | None = None,
+    scenario_id: str | None = None,
+    webspace_id: str | None = None,
+    route: str | None = None,
+    transport: str | None = None,
+    timeout_s: float | None = None,
+    evidence: dict[str, Any] | None = None,
+    source: str = "action.host",
+) -> dict[str, Any]:
+    method_token = str(method or action_id or "unknown").strip()
+    skill_token = str(skill or "").strip()
+    if not skill_token and "." in method_token:
+        skill_token = method_token.split(".", 1)[0].strip()
+    domain = f"skill:{skill_token}" if skill_token else "core.runtime"
+    label = str(action_id or method_token or "unknown").strip()
+    return record_incident(
+        incident_class="action_timeout",
+        signal="action_command_timeout",
+        severity="degraded",
+        domain=domain,
+        component="action_host",
+        source=source,
+        summary=f"Action timed out: {label}",
+        evidence={
+            **(evidence or {}),
+            "action_id": action_id,
+            "skill": skill_token or None,
+            "method": method_token,
+            "scenario_id": scenario_id,
+            "webspace_id": webspace_id,
+            "route": route,
+            "transport": transport,
+            "timeout_s": timeout_s,
+        },
+        fingerprint_parts=("action_timeout", domain, method_token, scenario_id or "", webspace_id or ""),
+        tags=("action", "timeout", "transport"),
+    )
+
+
+def record_browser_transport_fallback(
+    *,
+    channel: str,
+    from_transport: str | None = None,
+    to_transport: str | None = None,
+    reason: str | None = None,
+    device_id: str | None = None,
+    webspace_id: str | None = None,
+    evidence: dict[str, Any] | None = None,
+    source: str = "browser.diagnostics",
+) -> dict[str, Any]:
+    target = str(to_transport or "").strip().lower()
+    severity = "degraded" if "http" in target or "relay" in target or "root" in target else "warning"
+    domain = f"browser:{device_id}" if str(device_id or "").strip() else "hub_root_browser"
+    channel_token = _clean_token(channel, fallback="browser")
+    return record_incident(
+        incident_class="browser_transport_fallback",
+        signal="browser_transport_fallback",
+        severity=severity,
+        domain=domain,
+        component=channel_token,
+        source=source,
+        summary=(
+            f"Browser {channel_token} fallback "
+            f"{from_transport or '-'} -> {to_transport or '-'}"
+        ),
+        evidence={
+            **(evidence or {}),
+            "channel": channel_token,
+            "from_transport": from_transport,
+            "to_transport": to_transport,
+            "reason": reason,
+            "device_id": device_id,
+            "webspace_id": webspace_id,
+        },
+        fingerprint_parts=(
+            "browser_transport_fallback",
+            channel_token,
+            domain,
+            from_transport or "",
+            to_transport or "",
+            reason or "",
+        ),
+        tags=("browser", "transport", "fallback"),
+    )
+
+
+def record_member_link_stale(
+    *,
+    node_id: str,
+    hostname: str | None = None,
+    last_seen_ago_s: float | None = None,
+    evidence: dict[str, Any] | None = None,
+    source: str = "hub_member_connection_state",
+) -> dict[str, Any]:
+    node = _clean_token(node_id)
+    age = float(last_seen_ago_s or 0.0)
+    severity = "degraded" if age >= 300 else "warning"
+    return record_incident(
+        incident_class="member_link_stale",
+        signal="member_link_stale",
+        severity=severity,
+        domain=f"member:{node}",
+        component="member_link",
+        source=source,
+        summary=f"Member link is stale: {hostname or node}",
+        evidence={
+            **(evidence or {}),
+            "node_id": node,
+            "hostname": hostname,
+            "last_seen_ago_s": age if last_seen_ago_s is not None else None,
+        },
+        fingerprint_parts=("member_link_stale", node),
+        tags=("member", "transport", "stale"),
     )
 
 
@@ -431,6 +696,112 @@ def incident_registry_snapshot(*, limit: int = 50, include_evidence: bool = True
     }
 
 
+def default_incident_registry_path() -> Path:
+    raw = str(os.environ.get("ADAOS_INCIDENT_REGISTRY_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    state_dir = str(os.environ.get("ADAOS_STATE_DIR") or os.environ.get("ADAOS_HOME") or "").strip()
+    if state_dir:
+        return Path(state_dir).expanduser() / "incident_registry.json"
+    return Path(".adaos") / "state" / "incident_registry.json"
+
+
+def persist_incident_registry(*, path: str | Path | None = None, limit: int = 200) -> dict[str, Any]:
+    target = Path(path).expanduser() if path is not None else default_incident_registry_path()
+    snapshot = incident_registry_snapshot(limit=limit, include_evidence=True)
+    written_at = _now()
+    payload = {
+        "schema": _PERSIST_SCHEMA,
+        "written_at": written_at,
+        "snapshot": snapshot,
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.tmp")
+    tmp.write_text(json.dumps(_json_safe(payload), ensure_ascii=True, sort_keys=True), encoding="utf-8")
+    tmp.replace(target)
+    return {
+        "ok": True,
+        "path": str(target),
+        "written_at": written_at,
+        "total": snapshot.get("total"),
+        "returned": snapshot.get("returned"),
+    }
+
+
+def load_incident_registry(
+    *,
+    path: str | Path | None = None,
+    ttl_s: float = 24 * 60 * 60,
+    replace: bool = False,
+    limit: int = 200,
+) -> dict[str, Any]:
+    target = Path(path).expanduser() if path is not None else default_incident_registry_path()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"ok": False, "path": str(target), "loaded": 0, "error": "not_found"}
+    except Exception as exc:
+        return {"ok": False, "path": str(target), "loaded": 0, "error": type(exc).__name__}
+
+    snapshot = payload.get("snapshot") if isinstance(payload, dict) else {}
+    items = snapshot.get("items") if isinstance(snapshot, dict) else []
+    if not isinstance(items, list):
+        return {"ok": False, "path": str(target), "loaded": 0, "error": "invalid_snapshot"}
+
+    now_ts = _now()
+    max_age = max(0.0, float(ttl_s or 0.0))
+    selected: list[dict[str, Any]] = []
+    for raw in items[: max(1, min(int(limit or 200), 200))]:
+        if not isinstance(raw, dict):
+            continue
+        last_seen = float(raw.get("last_seen_at") or 0.0)
+        if max_age and last_seen and now_ts - last_seen > max_age:
+            continue
+        selected.append(raw)
+
+    with _LOCK:
+        if replace:
+            _INCIDENTS.clear()
+            _ORDER.clear()
+        for raw in selected:
+            fingerprint = str(raw.get("fingerprint") or "").strip()
+            if not fingerprint:
+                fingerprint = _fingerprint(
+                    (
+                        raw.get("class") or "unknown",
+                        raw.get("signal") or "unknown",
+                        raw.get("domain") or "core.runtime",
+                        raw.get("component") or "",
+                    )
+                )
+            samples = raw.get("evidence_samples") if isinstance(raw.get("evidence_samples"), list) else []
+            last_seen = float(raw.get("last_seen_at") or now_ts)
+            _INCIDENTS[fingerprint] = {
+                "id": str(raw.get("id") or f"inc-{fingerprint[:12]}"),
+                "fingerprint": fingerprint,
+                "class": _clean_token(raw.get("class"), fallback="unknown"),
+                "signal": _clean_token(raw.get("signal"), fallback="unknown"),
+                "severity": _clean_token(raw.get("severity"), fallback="warning").lower(),
+                "domain": _clean_token(raw.get("domain"), fallback="core.runtime"),
+                "component": str(raw.get("component") or "").strip() or None,
+                "source": str(raw.get("source") or "").strip() or None,
+                "summary": str(raw.get("summary") or raw.get("signal") or "incident").strip(),
+                "first_seen_at": float(raw.get("first_seen_at") or last_seen),
+                "last_seen_at": last_seen,
+                "occurrence_count": max(1, int(raw.get("occurrence_count") or 1)),
+                "tags": [str(item) for item in (raw.get("tags") or []) if str(item or "").strip()],
+                "latest_evidence": _json_safe(raw.get("latest_evidence") or {}),
+                "evidence_samples": deque(samples[-_MAX_EVIDENCE_SAMPLES:], maxlen=_MAX_EVIDENCE_SAMPLES),
+            }
+            if fingerprint not in _ORDER:
+                _ORDER.append(fingerprint)
+        while len(_INCIDENTS) > _MAX_INCIDENTS and _ORDER:
+            old = _ORDER.popleft()
+            _INCIDENTS.pop(old, None)
+
+    return {"ok": True, "path": str(target), "loaded": len(selected), "replace": bool(replace)}
+
+
 def reset_incident_registry() -> None:
     with _LOCK:
         _INCIDENTS.clear()
@@ -438,12 +809,21 @@ def reset_incident_registry() -> None:
 
 
 __all__ = [
+    "default_incident_registry_path",
+    "incident_domain_from_owner",
     "incident_registry_snapshot",
     "local_blocking_evidence",
+    "load_incident_registry",
+    "persist_incident_registry",
+    "process_io_delta_sample",
+    "record_action_timeout",
+    "record_browser_transport_fallback",
     "record_channel_incident",
     "record_event_handler_crash",
     "record_incident",
+    "record_member_link_stale",
     "record_runtime_api_timeout",
     "record_slow_event_handler",
+    "record_yjs_pressure_incident",
     "reset_incident_registry",
 ]

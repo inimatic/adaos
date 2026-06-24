@@ -340,6 +340,50 @@ def test_guard_status_cards_project_runtime_pressure() -> None:
     assert by_id["guard:webio_stream_control"]["guard_ref"]["observed_pressure"]["superseded"] == 6
 
 
+def test_guard_status_cards_project_active_incidents() -> None:
+    cards = guard_status_cards_from_runtime(
+        {
+            "incident_registry": {
+                "items": [
+                    {
+                        "id": "inc-action",
+                        "class": "action_timeout",
+                        "signal": "action_command_timeout",
+                        "severity": "degraded",
+                        "domain": "skill:adaos_connect",
+                        "component": "action_host",
+                        "source": "action.host",
+                        "summary": "Action timed out: adaos_connect.prepare.browser",
+                        "occurrence_count": 3,
+                        "last_seen_ago_s": 2.5,
+                        "active": True,
+                        "tags": ["action", "timeout"],
+                        "fingerprint": "abc123",
+                    },
+                    {
+                        "id": "inc-old",
+                        "class": "channel_transition",
+                        "severity": "warning",
+                        "domain": "hub_root_browser",
+                        "summary": "Old fallback",
+                        "active": False,
+                    },
+                ]
+            }
+        },
+        webspace_id="desktop",
+        updated_at=20.0,
+    )
+    by_id = {card.id: card.to_dict(now_ts=20.0) for card in cards}
+
+    assert "incident:inc-action" in by_id
+    assert "incident:inc-old" not in by_id
+    assert by_id["incident:inc-action"]["owner"] == "skill:adaos_connect"
+    assert by_id["incident:inc-action"]["incident_id"] == "inc-action"
+    assert by_id["incident:inc-action"]["status"] == "degraded"
+    assert by_id["incident:inc-action"]["guard_ref"]["occurrence_count"] == 3
+
+
 def test_hot_event_budget_debounces_and_tracks_window_budget() -> None:
     budget = HotEventBudget(debounce_ms=1000, window_ms=5000, max_events=2)
 

@@ -252,6 +252,83 @@ def _stream_control_card(
     )
 
 
+def _incident_status(severity: str) -> tuple[str, str]:
+    token = str(severity or "").strip().lower()
+    if token == "critical":
+        return "degraded", "critical"
+    if token in {"degraded", "high"}:
+        return "degraded", "high"
+    if token in {"warning", "warn", "medium"}:
+        return "warning", "warning"
+    return "ready", "info"
+
+
+def _incident_registry_cards(
+    registry: Mapping[str, Any],
+    *,
+    webspace_id: str | None,
+    updated_at: float,
+    limit: int = 5,
+) -> list[StatusCard]:
+    items = [_dict(item) for item in _list(registry.get("items"))]
+    cards: list[StatusCard] = []
+    for item in items:
+        if not bool(item.get("active")):
+            continue
+        status, severity = _incident_status(_text(item.get("severity"), "warning"))
+        if severity == "info":
+            continue
+        incident_id = _text(item.get("id"), "unknown")
+        domain = _text(item.get("domain"), "core.runtime")
+        inc_class = _text(item.get("class"), "incident")
+        signal = _text(item.get("signal"), inc_class)
+        component = _text(item.get("component"))
+        source = _text(item.get("source"))
+        cards.append(
+            StatusCard(
+                id=f"incident:{incident_id}",
+                owner=domain,
+                kind="incident",
+                scope=component or inc_class,
+                status=status,
+                severity=severity,
+                summary=_text(item.get("summary"), signal)[:240],
+                webspace_id=webspace_id,
+                updated_at=updated_at,
+                ttl_ms=15000,
+                incident_id=incident_id,
+                details_ref={
+                    "kind": "api",
+                    "path": "/api/node/reliability",
+                    "field": "runtime.incident_registry.items",
+                    "id": incident_id,
+                },
+                route={
+                    "kind": "incident_registry",
+                    "class": inc_class,
+                    "signal": signal,
+                    "component": component or None,
+                    "source": source or None,
+                },
+                guard_ref={
+                    "guard": "incident_registry",
+                    "domain": domain,
+                    "class": inc_class,
+                    "signal": signal,
+                    "occurrence_count": _int(item.get("occurrence_count")),
+                    "last_seen_ago_s": _float(item.get("last_seen_ago_s")),
+                },
+                metadata={
+                    "tags": [str(tag) for tag in _list(item.get("tags"))],
+                    "fingerprint": item.get("fingerprint"),
+                },
+            )
+        )
+        if len(cards) >= max(1, int(limit or 5)):
+            break
+    return cards
+
+
 def guard_status_cards_from_runtime(
     runtime: Mapping[str, Any],
     *,
@@ -264,6 +341,9 @@ def guard_status_cards_from_runtime(
         _stream_guard_card(_dict(runtime.get("webio_stream_guard")), webspace_id=webspace_id, updated_at=ts),
         _stream_control_card(_dict(runtime.get("eventbus_backlog")), webspace_id=webspace_id, updated_at=ts),
     ]
+    cards.extend(
+        _incident_registry_cards(_dict(runtime.get("incident_registry")), webspace_id=webspace_id, updated_at=ts)
+    )
     return [card for card in cards if card is not None]
 
 

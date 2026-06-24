@@ -44,6 +44,16 @@ The first production slice is intentionally small and in-process:
   - `runtime_api_timeout` for runtime reliability preflight failures
 - Reliability channel diagnostics record:
   - `channel_transition` for root-control and root-browser route incidents
+- Helper methods are available for the next source integrations:
+  - `yjs_pressure`
+  - `browser_transport_fallback`
+  - `action_timeout`
+  - `member_link_stale`
+- `node incidents` provides a registry-only CLI view through the existing
+  reliability endpoint.
+- Active high-severity incidents are materialized as derived status cards.
+- Snapshot persistence helpers can save/load recent registry state with TTL and
+  size limits. Automatic runtime lifecycle wiring is still pending.
 
 The v1 registry is volatile across process restart. That is acceptable for the
 first slice because the immediate need is runtime attribution and LLM context,
@@ -111,7 +121,9 @@ For `runtime_api_timeout`, the registry captures local blocking evidence:
 
 This is deliberately diagnostic, not proof. Cumulative process IO is only a
 hint. Production-grade attribution should add short delta sampling around the
-incident window.
+incident window. The registry now includes a bounded `process_io_delta_sample`
+helper; hot-path incident sources should opt into it only when the added sample
+delay is acceptable or when a background sampler owns the measurement.
 
 ## Production Pipeline
 
@@ -141,17 +153,20 @@ Implemented:
 - `event_handler_crash`: eventbus handler raised an exception.
 - `channel_transition`: reliability channel recorded a non-ready or forced
   transition.
+- `yjs_pressure`: helper method for owner guard warning/throttle/block
+  incidents.
+- `browser_transport_fallback`: helper method for browser route/WebRTC/YWS/root
+  relay fallback windows.
+- `action_timeout`: helper method for command/action timeout attribution by
+  skill, scenario, webspace, route, and transport.
+- `member_link_stale`: helper method for stale member directory/link records.
 
 Next:
 
 - `io_pressure`: PSI crosses an explicit budget for a sustained window.
-- `yjs_pressure`: owner guard warning/throttle/block with owner attribution.
-- `browser_transport_fallback`: browser moved from preferred WebRTC path to
-  WS/YWS/root relay.
-- `action_timeout`: command/action timeout with route, skill, and scenario
-  metadata.
-- `member_link_stale`: member advertised in subnet directory but no fresh link
-  exists.
+- Source wiring for Yjs owner guard, browser diagnostics, action host, and
+  member link diagnostics.
+- Automatic persistence lifecycle hooks.
 
 ## Checklist
 
@@ -163,17 +178,23 @@ Implemented:
 - [x] Record root-control/root-browser reliability channel incidents.
 - [x] Expose registry through `runtime.incident_registry`.
 - [x] Include registry incidents in canonical reliability projection.
+- [x] Add helper methods for Yjs pressure, browser fallback, action timeout,
+      and member stale-link incidents.
+- [x] Add snapshot save/load helpers with TTL and size limits.
+- [x] Add delta-based process IO sampling helper.
+- [x] Add CLI view for registry-only inspection.
+- [x] Add status-card materialization for active high-severity incidents.
 
 Required before production acceptance:
 
-- [ ] Persist recent incidents across runtime restart with TTL and size limits.
-- [ ] Add delta-based process IO sampling for blocking-process evidence.
+- [ ] Wire snapshot persistence into runtime lifecycle.
+- [ ] Add sustained `io_pressure` incident emission from PSI/background sampler.
 - [ ] Add Yjs pressure incident emission from owner guard/load-mark policy.
 - [ ] Add browser-side incident submission for route/WebRTC/YWS fallback
       windows.
 - [ ] Add action timeout incidents with skill/scenario/action metadata.
-- [ ] Add CLI/API view for registry-only inspection.
-- [ ] Add status-card materialization for active high-severity incidents.
+- [ ] Add API endpoint for registry-only inspection if CLI/API symmetry becomes
+      necessary.
 - [ ] Add Root MCP aggregation over hub/member/root incidents.
 - [ ] Add post-deploy soak assertions for no repeated `runtime_api_timeout`,
       no route flapping, and no unbounded eventbus backlog.

@@ -1333,6 +1333,40 @@ def _print_reliability_metrics_summary(payload: dict[str, Any]) -> None:
         )
 
 
+def _print_incident_registry_summary(registry: dict[str, Any]) -> None:
+    counts = registry.get("counts") if isinstance(registry.get("counts"), dict) else {}
+    by_class = counts.get("by_class") if isinstance(counts.get("by_class"), dict) else {}
+    by_domain = counts.get("by_domain") if isinstance(counts.get("by_domain"), dict) else {}
+    by_severity = counts.get("by_severity") if isinstance(counts.get("by_severity"), dict) else {}
+    typer.echo(
+        "incident_registry: "
+        f"active={registry.get('active_total') or 0} "
+        f"total={registry.get('total') or 0} "
+        f"returned={registry.get('returned') or 0}"
+    )
+    if by_severity:
+        typer.echo("severity: " + " ".join(f"{key}={value}" for key, value in sorted(by_severity.items())))
+    if by_class:
+        typer.echo("class: " + " ".join(f"{key}={value}" for key, value in sorted(by_class.items())))
+    if by_domain:
+        ranked = sorted(by_domain.items(), key=lambda entry: (-int(entry[1] or 0), str(entry[0])))
+        typer.echo("domain: " + " ".join(f"{key}={value}" for key, value in ranked[:10]))
+    items = registry.get("items") if isinstance(registry.get("items"), list) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        active = "active" if item.get("active") else "inactive"
+        age = item.get("last_seen_ago_s") if item.get("last_seen_ago_s") is not None else "-"
+        typer.echo(
+            f"- {item.get('id') or '-'} {active} "
+            f"{item.get('severity') or '-'} {item.get('class') or '-'} "
+            f"domain={item.get('domain') or '-'} "
+            f"count={item.get('occurrence_count') or 0} "
+            f"age_s={age} "
+            f"{item.get('summary') or item.get('signal') or ''}"
+        )
+
+
 def _print_yjs_runtime_summary(payload: dict[str, Any]) -> None:
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     assessment = runtime.get("assessment") if isinstance(runtime.get("assessment"), dict) else {}
@@ -2727,6 +2761,61 @@ def node_reliability_metrics(
         _print(payload, json_output=True)
     else:
         _print_reliability_metrics_summary(payload)
+
+
+@app.command("incidents")
+def node_incidents(
+    control: str | None = typer.Option(None, "--control", help="Control API base URL (default: active server)"),
+    limit: int = typer.Option(20, "--limit", min=1, max=100, help="Maximum incident rows"),
+    include_evidence: bool = typer.Option(
+        False,
+        "--evidence/--no-evidence",
+        help="Include latest evidence in JSON output",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="JSON output"),
+):
+    cfg = load_config()
+    control0 = _resolve_node_control_base_url(explicit=control)
+    token = _resolved_local_control_token(control0, cfg)
+    selected_control, selected_reason, status_code, payload = _resolve_reliability_control(
+        control=control0,
+        token=token,
+        timeout_sec=5.0,
+    )
+    if status_code is None:
+        typer.secho(_control_error_message("incident registry probe", payload), fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+    if status_code != 200 or not isinstance(payload, dict):
+        typer.secho(f"[AdaOS] incident registry probe failed: HTTP {status_code}", fg=typer.colors.RED)
+        if payload:
+            typer.echo(payload)
+        raise typer.Exit(code=1)
+
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    registry = runtime.get("incident_registry") if isinstance(runtime.get("incident_registry"), dict) else {}
+    registry = dict(registry)
+    items = registry.get("items") if isinstance(registry.get("items"), list) else []
+    selected_items = [dict(item) for item in items if isinstance(item, dict)][: max(1, min(int(limit or 20), 100))]
+    if not include_evidence:
+        for item in selected_items:
+            item.pop("latest_evidence", None)
+            item.pop("evidence_samples", None)
+    registry["items"] = selected_items
+    registry["returned"] = len(selected_items)
+    if selected_reason != "requested":
+        registry["control_resolution"] = {
+            "requested": control0,
+            "selected": selected_control,
+            "reason": selected_reason,
+        }
+    if json_output:
+        _print(registry, json_output=True)
+    else:
+        if selected_reason != "requested":
+            typer.echo(
+                f"incident_registry.control: requested={control0} selected={selected_control} reason={selected_reason}"
+            )
+        _print_incident_registry_summary(registry)
 
 
 @app.command("members")
