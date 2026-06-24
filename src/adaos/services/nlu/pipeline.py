@@ -55,7 +55,7 @@ _WEATHER_CITY_EN_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 _MARKETPLACE_RE = re.compile(
-    r"\b(?:\u043e\u0442\u043a\u0440\u043e\u0439|\u043f\u043e\u043a\u0430\u0436\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|open|show)\s+(?:\u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441|marketplace)\b",
+    r"\b(?:\u043e\u0442\u043a\u0440\u043e\u0439|\u043f\u043e\u043a\u0430\u0436\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|open|show)\s+(?:\u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b(?:\u0435\u0439\u0441|\u0430\u0441\u0435)|marketplace)\b",
     re.IGNORECASE | re.UNICODE,
 )
 _OPEN_MODAL_ENTITY_RE = re.compile(

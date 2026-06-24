@@ -60,6 +60,7 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
             "scope": "scenario",
             "examples": [
                 "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441",
+                "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0430\u0441\u0435",
                 "\u043f\u043e\u043a\u0430\u0436\u0438 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441",
                 "open marketplace",
                 "show marketplace",
@@ -69,7 +70,7 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
                     "type": "callHost",
                     "target": "desktop.modal.open",
                     "params": {
-                        "modal_id": "apps_catalog",
+                        "modal_id": "marketplace_modal",
                         "webspace_id": "$ctx.webspace_id",
                     },
                 }

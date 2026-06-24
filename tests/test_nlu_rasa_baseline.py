@@ -44,6 +44,7 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
     assert "[nlu_teacher_modal](modal_id)" in open_modal_examples
     assert "[member-1](node_ref)" in open_node_modal_examples
     assert "open marketplace" in _examples_for(dataset, "desktop.open_marketplace")
+    assert "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0430\u0441\u0435" in _examples_for(dataset, "desktop.open_marketplace")
     assert "weather in [Berlin](city)" in _examples_for(dataset, "weather.show")
     assert "set timer for [10 minutes](duration)" in _examples_for(dataset, "voice.timer.start")
     assert "reload desktop" in _examples_for(dataset, "desktop.reload_webspace")
@@ -194,7 +195,7 @@ async def test_default_desktop_nlu_dispatches_marketplace_open(monkeypatch) -> N
 
     assert emitted == [
         {
-            "modal_id": "apps_catalog",
+            "modal_id": "marketplace_modal",
             "webspace_id": "desktop",
             "text": "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441",
             "_meta": {"route_id": "voice_chat", "webspace_id": "desktop", "scenario_id": "web_desktop"},
