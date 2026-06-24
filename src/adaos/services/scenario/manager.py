@@ -525,6 +525,7 @@ class ScenarioManager:
             "items": [],
             "succeeded": [],
             "failed": [],
+            "skipped": [],
         }
         manifest = read_manifest(scenario_id)
         bindings = parse_scenario_skill_bindings(manifest if isinstance(manifest, dict) else {})
@@ -564,8 +565,31 @@ class ScenarioManager:
                 "installed": False,
                 "prepared": False,
                 "activated": False,
+                "skipped": False,
                 "ok": False,
             }
+            try:
+                runtime_state = skill_mgr.runtime_status(dep)
+            except Exception:
+                runtime_state = {}
+            if bool(runtime_state.get("deactivated")):
+                deactivation = runtime_state.get("deactivation") if isinstance(runtime_state.get("deactivation"), dict) else {}
+                item["phase"] = "skipped"
+                item["skipped"] = True
+                item["deactivated"] = True
+                item["ok"] = True
+                item["reason"] = str((deactivation or {}).get("reason") or "deactivated")
+                item["deactivation"] = deactivation
+                result["skipped"].append(dep)
+                result["items"].append(item)
+                _log.info(
+                    "scenario dependency bootstrap skipped deactivated skill scenario=%s skill=%s webspace_id=%s reason=%s",
+                    scenario_id,
+                    dep,
+                    target_webspace,
+                    item["reason"],
+                )
+                continue
             phase = "install"
             try:
                 # Ensure installed in monorepo and then activate runtime.

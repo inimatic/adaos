@@ -1801,6 +1801,7 @@ class SkillManager:
         version_override: str | None = None,
         run_tests: bool = False,
         preferred_slot: str | None = None,
+        allow_deactivated: bool = False,
     ) -> RuntimeInstallResult:
         skills_root = self.ctx.paths.skills_dir()
         skill_dir = Path(path).resolve() if path is not None else (skills_root / name)
@@ -1812,6 +1813,10 @@ class SkillManager:
         version = version_override or str(manifest.get("version") or "0.0.0")
 
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
+        deactivation = env.read_deactivation()
+        if bool(deactivation.get("deactivated")) and not allow_deactivated:
+            reason = str(deactivation.get("reason") or "deactivated").strip() or "deactivated"
+            raise RuntimeError(f"skill '{name}' is deactivated; runtime prepare skipped ({reason})")
         env.prepare_version(version)
 
         slot_name = preferred_slot or env.select_inactive_slot(version)

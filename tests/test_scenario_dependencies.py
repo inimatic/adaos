@@ -165,6 +165,66 @@ def test_bootstrap_dependencies_reports_structured_lifecycle_results(monkeypatch
     assert events[-1].payload["failed"] == ["install_bad", "prepare_bad", "activate_bad"]
 
 
+def test_bootstrap_dependencies_skips_deactivated_skill(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def runtime_status(self, name: str) -> dict[str, Any]:
+            calls.append(f"runtime_status:{name}")
+            return {
+                "deactivated": True,
+                "deactivation": {
+                    "reason": "post_commit_checks_failed",
+                    "failure_kind": "prepare",
+                    "failed_stage": "prepare",
+                },
+            }
+
+        def install(self, name: str) -> None:
+            calls.append(f"install:{name}")
+            raise AssertionError("deactivated dependency must not be installed")
+
+        def prepare_runtime(self, name: str, run_tests: bool = False):
+            calls.append(f"prepare_runtime:{name}:{int(run_tests)}")
+            raise AssertionError("deactivated dependency must not be prepared")
+
+        def activate_for_space(self, *_args: Any, **_kwargs: Any) -> None:
+            calls.append("activate_for_space")
+            raise AssertionError("deactivated dependency must not be activated")
+
+    monkeypatch.setattr(
+        scenario_manager,
+        "get_ctx",
+        lambda: SimpleNamespace(sql=object(), skills_repo=object(), git=object(), paths=object(), caps=object()),
+    )
+    monkeypatch.setattr(scenario_manager, "read_manifest", lambda scenario_id: {"depends": ["new_face_vision_skill"]})
+    monkeypatch.setattr(scenario_manager, "SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr(scenario_manager, "SkillManager", _FakeSkillManager)
+
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=object(),
+        git=object(),
+        paths=object(),
+        bus=None,
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+
+    result = mgr.bootstrap_dependencies("demo_scene", webspace_id="desktop")
+
+    assert result["ok"] is True
+    assert result["failed"] == []
+    assert result["succeeded"] == []
+    assert result["skipped"] == ["new_face_vision_skill"]
+    assert result["items"][0]["name"] == "new_face_vision_skill"
+    assert result["items"][0]["skipped"] is True
+    assert result["items"][0]["deactivated"] is True
+    assert calls == ["runtime_status:new_face_vision_skill"]
+
+
 def test_install_with_deps_pulls_dependency_forward_before_projection(monkeypatch) -> None:
     calls: list[str] = []
     workspace_versions = {"media_skill": "1.0.0"}

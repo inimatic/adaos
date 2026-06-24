@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.sdk.data.skill_memory import get as skill_memory_get, set as skill_memory_set
 from adaos.sdk.skill_env import get_env, read_env, set_env, skill_env_path
 from adaos.services.agent_context import get_ctx
@@ -918,6 +920,30 @@ def test_deactivate_runtime_blocks_execution_until_reactivated(monkeypatch) -> N
     status_after = mgr.runtime_status(skill_name)
     assert status_after["deactivated"] is False
     assert status_after["active"] is True
+
+
+def test_prepare_runtime_skips_deactivated_skill_before_dependency_install(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "deactivated_prepare_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text(
+        "name: deactivated_prepare_skill\nversion: '1.0.0'\ndependencies:\n  - torch>=2.2.0\n",
+        encoding="utf-8",
+    )
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+    env.deactivation_marker().parent.mkdir(parents=True, exist_ok=True)
+    env.write_deactivation({"deactivated": True, "reason": "post_commit_checks_failed"})
+
+    def _should_not_prepare(**_kwargs):
+        raise AssertionError("dependency preparation must not run for deactivated skills")
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", _should_not_prepare)
+
+    with pytest.raises(RuntimeError, match="deactivated"):
+        mgr.prepare_runtime(skill_name, run_tests=False)
 
 
 def test_activate_runtime_does_not_switch_slot_before_smoke_import(monkeypatch) -> None:
