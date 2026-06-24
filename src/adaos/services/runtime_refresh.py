@@ -104,6 +104,26 @@ def refresh_skill_runtime(
     runtime_version_before = str(runtime_status_before.get("version") or "").strip()
     payload["active_version_before"] = runtime_version_before
     payload["active_slot_before"] = str(runtime_status_before.get("active_slot") or "").strip()
+    if bool(runtime_status_before.get("deactivated")):
+        deactivation = runtime_status_before.get("deactivation") if isinstance(runtime_status_before.get("deactivation"), dict) else {}
+        payload["ok"] = True
+        payload["skipped"] = True
+        payload["deactivated"] = True
+        payload["deactivation"] = deactivation
+        payload["active_version_after"] = runtime_version_before
+        payload["active_slot_after"] = str(runtime_status_before.get("active_slot") or "").strip()
+        payload["active_converged"] = True
+        _record_stage(
+            payload,
+            "runtime_update",
+            ok=True,
+            skipped=True,
+            reason=str((deactivation or {}).get("reason") or "deactivated"),
+        )
+        _record_stage(payload, "prepare", ok=True, skipped=True, reason="deactivated")
+        _record_stage(payload, "activate", ok=True, skipped=True, reason="deactivated")
+        _record_stage(payload, "converge", ok=True, skipped=True, active_version=runtime_version_before)
+        return payload
     try:
         runtime_result = mgr.runtime_update(skill_name, space="workspace")
         payload["runtime_updated"] = True
