@@ -1352,7 +1352,7 @@ def _compact_hub_browser_quality(
             str(item).strip()
             for gate in gates.values()
             for item in _coerce_list(gate.get("blockers"))
-            if str(item).strip()
+            if str(item).strip() and str(item).strip() not in {"bounded_sync_runtime_observed"}
         }
     )
     warnings = [

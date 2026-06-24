@@ -2809,7 +2809,7 @@ def test_hub_browser_quality_treats_bounded_sync_observed_as_informational() -> 
     assert quality["qualityState"] == "fallback"
     assert quality["activeTransports"]["sync"] == "yws"
     assert quality["gates"]["stateSync"]["state"] == "ready"
-    assert quality["blockers"] == ["bounded_sync_runtime_observed"]
+    assert quality["blockers"] == []
 
 
 def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) -> None:
