@@ -13,12 +13,13 @@ import tracemalloc
 import uuid
 from collections import Counter
 from functools import partial
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import anyio
 import requests
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from adaos.domain import Event, client_subscription_contract_snapshot, event_envelope_contract_snapshot
@@ -44,6 +45,10 @@ from adaos.services.media_library import (
     media_capabilities,
     media_file_path,
     media_snapshot,
+)
+from adaos.services.media_indexer_library import (
+    guess_indexer_media_type,
+    resolve_media_indexer_content,
 )
 from adaos.services.node_config import set_node_names as save_node_names_config
 from adaos.services.reliability import (
@@ -5056,6 +5061,95 @@ async def node_yjs_restore(webspace_id: str) -> dict[str, Any]:
         result=result,
     )
     return result
+
+
+def _parse_media_indexer_range(raw: str | None, *, size: int) -> tuple[int, int] | None:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return None
+    if not value.startswith("bytes=") or "," in value:
+        raise ValueError("unsupported_range")
+    spec = value[6:].strip()
+    start_raw, sep, end_raw = spec.partition("-")
+    if not sep:
+        raise ValueError("invalid_range")
+    if start_raw == "":
+        suffix = int(end_raw)
+        if suffix <= 0:
+            raise ValueError("invalid_range")
+        start = max(0, size - suffix)
+        end = size - 1
+    else:
+        start = int(start_raw)
+        end = int(end_raw) if end_raw else size - 1
+    if size <= 0 or start < 0 or end < start or start >= size:
+        raise ValueError("invalid_range")
+    return start, min(end, size - 1)
+
+
+def _file_range_iter(path: Path, *, start: int, end: int, chunk_size: int = 256 * 1024):
+    with path.open("rb") as handle:
+        handle.seek(start)
+        remaining = max(0, end - start + 1)
+        while remaining > 0:
+            chunk = handle.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+@router.get("/media-indexer/content/{playback_id}")
+async def media_indexer_file_content(
+    playback_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_adaos_token: str | None = Header(default=None),
+):
+    await _require_request_token(
+        request,
+        authorization=authorization,
+        x_adaos_token=x_adaos_token,
+    )
+    try:
+        target, payload = resolve_media_indexer_content(playback_id)
+    except ValueError as exc:
+        _raise_400(str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    size = int(target.stat().st_size)
+    try:
+        byte_range = _parse_media_indexer_range(request.headers.get("range"), size=size)
+    except Exception:
+        return Response(
+            status_code=416,
+            content=b"range_not_satisfiable",
+            headers={"Content-Range": f"bytes */{size}"},
+            media_type="text/plain",
+        )
+    start = 0
+    end = max(0, size - 1)
+    status_code = 200
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=3600",
+        "Content-Disposition": f'inline; filename="{target.name}"',
+    }
+    if byte_range is not None:
+        start, end = byte_range
+        status_code = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(max(0, end - start + 1) if size > 0 else 0)
+    media_type = str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name)
+    return StreamingResponse(
+        _file_range_iter(target, start=start, end=end),
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 @router.get("/media/files", dependencies=[Depends(require_token)])

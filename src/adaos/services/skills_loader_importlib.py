@@ -171,9 +171,11 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             src_root = slot_dir / "src"
             if not src_root.exists():
                 continue
-            # Skip service skills (they are started by ServiceSkillSupervisor).
+            # Skip service skills by default; a service may explicitly expose
+            # lightweight in-process event handlers while keeping heavy work in
+            # its service runtime.
             manifest_path = slot_dir / "resolved.manifest.json"
-            if self._is_service_manifest(manifest_path):
+            if self._is_service_manifest(manifest_path) and not self._service_allows_in_process_events(manifest_path):
                 continue
             for handler in src_root.rglob("handlers/main.py"):
                 handlers.append((handler, skill_name))
@@ -188,8 +190,9 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 continue
             if skill_dir.name.startswith((".", "_")):
                 continue
-            # Skip service skills (they are started by ServiceSkillSupervisor).
-            if self._is_service_manifest(skill_dir / "skill.yaml"):
+            # Skip service skills by default; see runtime.in_process_events.
+            manifest_path = skill_dir / "skill.yaml"
+            if self._is_service_manifest(manifest_path) and not self._service_allows_in_process_events(manifest_path):
                 continue
             # Skip runtime-bundled skills.
             if skill_dir.name in loaded:
@@ -222,7 +225,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             # A real node-local workspace copy takes precedence over repo fallback.
             if (ws_root / skill_dir.name).exists():
                 continue
-            if self._is_service_manifest(skill_dir / "skill.yaml"):
+            manifest_path = skill_dir / "skill.yaml"
+            if self._is_service_manifest(manifest_path) and not self._service_allows_in_process_events(manifest_path):
                 continue
             handler = skill_dir / "handlers" / "main.py"
             if handler.exists():
@@ -230,17 +234,28 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         return handlers
 
     @staticmethod
-    def _is_service_manifest(path: Path) -> bool:
+    def _read_manifest(path: Path) -> dict[str, Any]:
         if not path.exists():
-            return False
+            return {}
         try:
             content = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
-            return False
+            return {}
+        return content if isinstance(content, dict) else {}
+
+    @staticmethod
+    def _is_service_manifest(path: Path) -> bool:
+        content = ImportlibSkillsLoader._read_manifest(path)
         runtime = content.get("runtime") or {}
         if isinstance(runtime, dict) and runtime.get("kind") == "service":
             return True
         return False
+
+    @staticmethod
+    def _service_allows_in_process_events(path: Path) -> bool:
+        content = ImportlibSkillsLoader._read_manifest(path)
+        runtime = content.get("runtime") or {}
+        return bool(isinstance(runtime, dict) and runtime.get("in_process_events") is True)
 
     @staticmethod
     def _resolve_slot(version_dir: Path) -> Optional[Path]:
