@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,8 @@ from adaos.services.agent_context import get_ctx
 
 
 MEDIA_INDEXER_SKILL_NAME = "media_indexer_skill"
-MEDIA_INDEXER_METADATA_REL = Path("data") / "internal" / "media_indexer" / "faiss" / "metadata.json"
+MEDIA_INDEXER_STATE_METADATA_REL = Path("internal") / "faiss" / "metadata.json"
+MEDIA_INDEXER_WORKSPACE_METADATA_REL = Path("data") / "internal" / "media_indexer" / "faiss" / "metadata.json"
 SUPPORTED_INDEXER_MEDIA_EXTENSIONS = {
     ".mp4",
     ".webm",
@@ -104,13 +106,23 @@ def _latest_index_metadata() -> dict[str, Any]:
 
 def _metadata_candidates() -> list[Path]:
     paths: list[Path] = []
+    env_data_dir = str(os.getenv("MEDIA_INDEXER_DATA_DIR") or "").strip()
+    if env_data_dir:
+        paths.append(Path(env_data_dir).expanduser() / MEDIA_INDEXER_STATE_METADATA_REL)
+    try:
+        base_dir_raw = get_ctx().paths.base_dir()
+        base_dir = Path(base_dir_raw() if callable(base_dir_raw) else base_dir_raw)
+        paths.append(base_dir / "state" / MEDIA_INDEXER_SKILL_NAME / MEDIA_INDEXER_STATE_METADATA_REL)
+    except Exception:
+        pass
     try:
         skills_root_raw = get_ctx().paths.skills_workspace_dir()
         skills_root = Path(skills_root_raw() if callable(skills_root_raw) else skills_root_raw)
         runtime_root = skills_root / ".runtime" / MEDIA_INDEXER_SKILL_NAME
         if runtime_root.exists():
-            paths.extend(runtime_root.glob(f"*/{MEDIA_INDEXER_METADATA_REL.as_posix()}"))
-        workspace_data = skills_root / MEDIA_INDEXER_SKILL_NAME / "data" / "internal" / "media_indexer" / "faiss" / "metadata.json"
+            paths.extend(runtime_root.glob(f"*/{MEDIA_INDEXER_WORKSPACE_METADATA_REL.as_posix()}"))
+            paths.extend(runtime_root.glob(f"*/{MEDIA_INDEXER_STATE_METADATA_REL.as_posix()}"))
+        workspace_data = skills_root / MEDIA_INDEXER_SKILL_NAME / MEDIA_INDEXER_WORKSPACE_METADATA_REL
         paths.append(workspace_data)
     except Exception:
         pass
