@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import yaml
+
+
+SKILL_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "skills_templates" / "ConversationCompanions"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("conversation_companions_under_test", SKILL_ROOT / "handlers" / "main.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_manifest_declares_tools_and_nlu_actions() -> None:
+    manifest = yaml.safe_load((SKILL_ROOT / "skill.yaml").read_text(encoding="utf-8"))
+
+    tools = {item["name"] for item in manifest["tools"]}
+    assert {"start", "talk", "switch_character", "update_profile", "capture_feedback"}.issubset(tools)
+    assert manifest["default_tool"] == "talk"
+    assert "conversation.start" in manifest["nlu"]["intents"]
+    assert manifest["nlu"]["intents"]["conversation.talk"]["actions"][0]["tool"] == "talk"
+
+
+def test_start_is_deterministic_and_lists_characters() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-start")
+
+    result = skill.start(profile_hint="хочу советника", webspace_id="test-start")
+
+    assert result["ok"] is True
+    assert result["active_character"] == "arseni"
+    assert "Арсений" in result["message"]
+    assert len(result["characters"]) >= 3
+    assert result["next_actions"]
+
+
+def test_switch_character_accepts_russian_alias() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-switch")
+
+    result = skill.switch_character("скептик", webspace_id="test-switch")
+    listing = skill.list_characters(webspace_id="test-switch")
+
+    assert result["ok"] is True
+    assert result["selected_character"] == "nika"
+    assert listing["active_character"] == "nika"
+
+
+def test_update_profile_applies_bounded_style_patch() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-profile")
+
+    result = skill.update_profile("говори короче и теплее, не задавай вопрос в конце", webspace_id="test-profile")
+
+    assert result["ok"] is True
+    assert result["patch"]["verbosity"] == "коротко, одна-две главные мысли"
+    assert "теплее" in result["profile"]["tone"]
+    assert any("Не заканчивает ответ вопросом" in rule for rule in result["profile"]["style_rules"])
+
+
+def test_talk_preview_uses_local_fallback_without_llm() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-talk")
+
+    result = skill.talk("дай совет, как тестировать первого персонажа", preview=True, webspace_id="test-talk")
+
+    assert result["ok"] is True
+    assert result["selected_character"] == "arseni"
+    assert "Арсений" in result["message"]
+
+
+def test_capture_feedback_stores_trial_observation() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-feedback")
+
+    result = skill.capture_feedback(
+        rating=4,
+        expectation="хотелось быстро понять, кто говорит",
+        observation="старт понятный",
+        webspace_id="test-feedback",
+    )
+
+    assert result["ok"] is True
+    assert result["feedback_count"] == 1
