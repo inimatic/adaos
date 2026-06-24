@@ -348,6 +348,14 @@ _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_
 _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", True)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
+
+
+def _yws_single_client_reconnect_escalation_limit() -> int:
+    return max(_YWS_GUARD_CLIENT_OPEN_15S + 1, _YWS_GUARD_CLIENT_OPEN_15S * 2)
+
+
+def _yws_single_client_short_session_escalation_limit() -> int:
+    return max(_YWS_GUARD_SHORT_SESSION_LIMIT + 1, _YWS_GUARD_SHORT_SESSION_LIMIT * 2)
 _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_STRICT_FULL_CHECKS", False)
 _YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES = _env_int(
     "ADAOS_YJS_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES",
@@ -3531,9 +3539,10 @@ def _yws_guard_reject_reason(
             quarantine_ttl_s = max(0.0, client_quarantine_until - now)
             reason = "client_reconnect_backoff"
         elif webspace_quarantine_until > now:
-            reason = "webspace_reconnect_backoff"
-            quarantine_until = webspace_quarantine_until
-            quarantine_ttl_s = max(0.0, webspace_quarantine_until - now)
+            if active_total > 0:
+                reason = "webspace_reconnect_backoff"
+                quarantine_until = webspace_quarantine_until
+                quarantine_ttl_s = max(0.0, webspace_quarantine_until - now)
         elif active_total >= _YWS_MAX_ACTIVE_PER_WEBSPACE:
             reason = "active_limit"
         else:
@@ -3551,7 +3560,10 @@ def _yws_guard_reject_reason(
                     webspace_recent_10s=recent_10s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
                 )
-                if webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S:
+                if (
+                    webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
+                    and client_15s < _yws_single_client_reconnect_escalation_limit()
+                ):
                     dependency_recovery_allowed = True
                     dependency_recovery_reason = "single_client_reconnect_storm_replacement"
                     _record_dependency_recovery()
@@ -3569,11 +3581,17 @@ def _yws_guard_reject_reason(
                     dependency_recovery_allowed = True
                     dependency_recovery_reason = "client_short_session_storm_no_active_yws"
                     _record_dependency_recovery()
-                elif webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S:
+                elif (
+                    webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
+                    and client_short_sessions < _yws_single_client_short_session_escalation_limit()
+                ):
                     dependency_recovery_allowed = True
                     dependency_recovery_reason = "single_client_short_session_replacement"
                     _record_dependency_recovery()
-                elif not webspace_reconnect_storm:
+                elif (
+                    not webspace_reconnect_storm
+                    and client_short_sessions < _yws_single_client_short_session_escalation_limit()
+                ):
                     dependency_recovery_allowed = True
                     dependency_recovery_reason = "client_short_session_storm_without_webspace_pressure"
                     _record_dependency_recovery()
@@ -3623,6 +3641,8 @@ def _yws_guard_reject_reason(
         "client_reconnect_storm": client_reconnect_storm,
         "client_short_session_storm": client_short_session_storm,
         "webspace_reconnect_storm": webspace_reconnect_storm,
+        "single_client_reconnect_escalate_at": _yws_single_client_reconnect_escalation_limit(),
+        "single_client_short_session_escalate_at": _yws_single_client_short_session_escalation_limit(),
         "client_quarantine_cleared": cleared_client_quarantine,
         "webspace_quarantine_cleared": cleared_webspace_quarantine,
         "quarantine_until": quarantine_until,
@@ -3701,6 +3721,8 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
             "recent_open_10s_limit": _YWS_GUARD_RECENT_OPEN_10S,
             "client_open_15s_limit": _YWS_GUARD_CLIENT_OPEN_15S,
             "short_session_limit": _YWS_GUARD_SHORT_SESSION_LIMIT,
+            "single_client_reconnect_escalate_at": _yws_single_client_reconnect_escalation_limit(),
+            "single_client_short_session_escalate_at": _yws_single_client_short_session_escalation_limit(),
             "short_session_window_s": _YWS_GUARD_SHORT_SESSION_WINDOW_S,
             "min_stable_session_s": _YWS_GUARD_MIN_STABLE_SESSION_S,
             "webspace_min_clients_10s": _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S,

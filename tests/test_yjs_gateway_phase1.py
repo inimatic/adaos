@@ -2215,6 +2215,38 @@ def test_yws_guard_allows_single_hot_reconnecting_client_replacement(monkeypatch
     _clear_yws_guard_state()
 
 
+def test_yws_guard_rejects_sustained_single_client_reconnect_loop(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 10)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 10.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 40.0)
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
+
+    for _idx in range(6):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    assert reason == "client_reconnect_storm"
+    assert diag["client_open_15s"] == 6
+    assert diag["client_reconnect_storm"] is True
+    assert diag["webspace_distinct_clients_10s"] == 1
+    assert diag["dependency_recovery_allowed"] is False
+    assert diag["single_client_reconnect_escalate_at"] == 6
+    assert diag["quarantine_ttl_s"] == 10.0
+    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    assert gateway_module._YWS_GUARD_DIAG["last_reject_reason"] == "client_reconnect_storm"
+
+    reason_again, diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    assert reason_again == "client_reconnect_backoff"
+    assert diag_again["quarantine_ttl_s"] is not None
+    _clear_yws_guard_state()
+
+
 def test_yws_guard_rejects_multi_client_reconnect_storm(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
@@ -2315,6 +2347,43 @@ def test_yws_guard_allows_single_client_short_session_recovery(monkeypatch) -> N
 
     reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
     assert reason_again == ""
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_rejects_sustained_single_client_short_session_loop(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 100)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_LIMIT", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 100)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda *, now_ts=None: {"ready": False, "reason": "route_signal_not_ready"},
+    )
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
+
+    for _idx in range(6):
+        gateway_module._record_yws_short_session("desktop", "dev-hot", lifetime_s=6.0)
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+
+    assert reason == "client_short_session_storm"
+    assert diag["client_short_sessions"] == 6
+    assert diag["client_short_session_storm"] is True
+    assert diag["dependency_recovery_allowed"] is False
+    assert diag["single_client_short_session_escalate_at"] == 6
+    assert diag["quarantine_ttl_s"] == 30.0
+    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    assert gateway_module._YWS_GUARD_DIAG["last_reject_reason"] == "client_short_session_storm"
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     _clear_yws_guard_state()
 
