@@ -1179,7 +1179,11 @@ def _compact_hub_browser_quality(
         first_sync = _camel_or_snake(sync, "firstSyncState", "first_sync_state").strip().lower()
         semantic = _camel_or_snake(sync, "semanticState", "semantic_state").strip().lower()
         freshness = _camel_or_snake(sync, "freshnessState", "freshness_state").strip().lower()
-        blockers = _coerce_list(sync.get("blockers"))
+        blockers = [
+            item
+            for item in _coerce_list(sync.get("blockers"))
+            if str(item).strip() not in {"bounded_sync_runtime_observed"}
+        ]
         if blockers or transport in {"degraded", "failed", "offline", "down", "error"}:
             return "degraded"
         if first_sync in {"timeout", "failed", "blocked"} or semantic in {"degraded", "blocked", "failed"}:

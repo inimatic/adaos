@@ -2775,6 +2775,43 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert full_payload["hubRootHardening"]["coveredFlows"] == 6
 
 
+def test_hub_browser_quality_treats_bounded_sync_observed_as_informational() -> None:
+    from adaos.apps.api import node_api
+
+    quality = node_api._compact_hub_browser_quality(
+        connectivity={
+            "requiredUpstreamLink": {"kind": "hub_root"},
+            "browserControlRoute": {
+                "transportState": "ready",
+                "transitionState": "ready",
+                "reason": "stable",
+                "blockers": [],
+                "servedBy": "runtime",
+            },
+        },
+        state_sync={
+            "transportState": "attached",
+            "firstSyncState": "complete",
+            "semanticState": "ready",
+            "freshnessState": "fresh",
+            "fallbackMode": "off",
+            "blockers": ["bounded_sync_runtime_observed"],
+        },
+        webrtc_yjs={
+            "enabled": True,
+            "state": "standby",
+            "reason": "relay_active_no_yjs_datachannel",
+            "activeYwsConnections": 2,
+        },
+    )
+
+    assert quality["logicalState"] == "ready"
+    assert quality["qualityState"] == "fallback"
+    assert quality["activeTransports"]["sync"] == "yws"
+    assert quality["gates"]["stateSync"]["state"] == "ready"
+    assert quality["blockers"] == ["bounded_sync_runtime_observed"]
+
+
 def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router
