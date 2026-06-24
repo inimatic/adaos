@@ -117,6 +117,19 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
             "rollback_performed": False,
             "deactivated": False,
         }
+        if bool(candidate.get("deactivated")) or bool(before.get("deactivated")):
+            deactivation = candidate.get("deactivation") if isinstance(candidate.get("deactivation"), dict) else {}
+            if not deactivation and isinstance(before.get("deactivation"), dict):
+                deactivation = dict(before.get("deactivation") or {})
+            entry["stage"] = "skipped"
+            entry["skipped"] = True
+            entry["reason"] = str(deactivation.get("reason") or "already deactivated")
+            entry["deactivated"] = True
+            entry["deactivation"] = deactivation
+            entry["failure_kind"] = str(deactivation.get("failure_kind") or "")
+            entry["failed_stage"] = str(deactivation.get("failed_stage") or "")
+            items.append(entry)
+            continue
         activated = False
         try:
             entry["stage"] = "disable"
@@ -202,6 +215,7 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
     failed = [item for item in items if not bool(item.get("ok"))]
     rollback_total = sum(1 for item in items if bool(item.get("rollback_performed")))
     deactivated_total = sum(1 for item in items if bool(item.get("deactivated")))
+    skipped_total = sum(1 for item in items if bool(item.get("skipped")))
     lifecycle_failed_total = sum(1 for item in items if str(item.get("failure_kind") or "") == "lifecycle")
     tests_failed_total = sum(1 for item in items if str(item.get("failure_kind") or "") == "tests")
     return {
@@ -210,6 +224,7 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
         "failed_total": len(failed),
         "rollback_total": rollback_total,
         "deactivated_total": deactivated_total,
+        "skipped_total": skipped_total,
         "lifecycle_failed_total": lifecycle_failed_total,
         "tests_failed_total": tests_failed_total,
         "run_tests": bool(run_tests),

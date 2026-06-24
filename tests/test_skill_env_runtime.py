@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -413,6 +414,75 @@ def test_run_dev_tool_respects_timeout(monkeypatch, tmp_path: Path) -> None:
         assert "timed out" in str(exc)
     else:  # pragma: no cover - regression guard
         raise AssertionError("expected run_dev_tool() to respect timeout_seconds")
+
+
+def test_run_tool_resolves_async_tool_before_context_cleanup(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "async_tool_skill"
+    manifest_path = tmp_path / "manifest.json"
+    skill_dir = tmp_path / "src" / "skills" / skill_name
+    skill_dir.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "name": skill_name,
+                "version": "1.0.0",
+                "slot": "A",
+                "source": str(skill_dir),
+                "runtime": {},
+                "tools": {"prepare": {"module": "handlers.main", "callable": "prepare"}},
+                "default_tool": "prepare",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeEnv:
+        def __init__(self, root: Path) -> None:
+            self._root = root
+
+        def data_root(self) -> Path:
+            return self._root / "data"
+
+        def build_slot_paths(self, _version: str | None, slot_name: str | None) -> SimpleNamespace:
+            runtime_root = self._root / "runtime" / str(slot_name or "A")
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            return SimpleNamespace(
+                skill_env_path=runtime_root / "skill_env.json",
+                skill_memory_path=runtime_root / "skill_memory.json",
+                data_root=self._root / "data",
+            )
+
+    async def _async_result() -> dict[str, object]:
+        current = ctx.skill_ctx.get()
+        return {
+            "ok": True,
+            "skill": current.name if current else None,
+            "env_active": bool(os.environ.get("ADAOS_SKILL_ENV_PATH")),
+        }
+
+    def _fake_execute_tool(*_args, **_kwargs):
+        return _async_result()
+
+    monkeypatch.setattr(
+        mgr,
+        "runtime_status",
+        lambda _name: {
+            "version": "1.0.0",
+            "active_slot": "A",
+            "resolved_manifest": str(manifest_path),
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(mgr, "_runtime_env", lambda _name: _FakeEnv(tmp_path))
+    monkeypatch.setattr(mgr, "_persist_skill_env", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(skill_manager_module, "_admit_skill_tool_yjs_work", lambda *_args, **_kwargs: {"allowed": True})
+    monkeypatch.setattr(skill_manager_module, "execute_tool", _fake_execute_tool)
+
+    result = mgr.run_tool(skill_name, "prepare", {})
+
+    assert result == {"ok": True, "skill": skill_name, "env_active": True}
 
 
 def test_prepare_runtime_keeps_patch_data_shared_without_copy(monkeypatch) -> None:

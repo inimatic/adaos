@@ -485,6 +485,66 @@ def test_yws_denies_env_revoked_browser_before_guard(monkeypatch) -> None:
     ]
 
 
+def test_yws_rejects_old_client_with_reload_compatible_reason(monkeypatch) -> None:
+    touched: list[dict[str, object]] = []
+
+    class FakeWebSocket:
+        query_params = {
+            "dev": "dev_old_client",
+            "browser_session_id": "bs-old",
+            "client_build_id": "old-build",
+            "client_build_version": "0.0.61+old-build",
+        }
+
+        def __init__(self) -> None:
+            self.accepted = False
+            self.closed: dict[str, object] | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed = {"code": code, "reason": reason}
+
+    from adaos.services import access_links
+
+    monkeypatch.setenv("ADAOS_BROWSER_MIN_CLIENT_BUILD_VERSION", "0.0.62")
+    monkeypatch.setattr(
+        access_links,
+        "authorize_link",
+        lambda kind, entry_id: (_ for _ in ()).throw(AssertionError("policy lookup should not run")),
+    )
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "_record_yws_guard_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("guard should not run")),
+    )
+
+    websocket = FakeWebSocket()
+    asyncio.run(gateway_module._yws_impl(websocket, room="desktop"))
+
+    assert websocket.accepted is True
+    assert websocket.closed == {
+        "code": 1013,
+        "reason": "inbound_yws_update_payload_blocked:client_version_unsupported",
+    }
+    assert touched == [
+        {
+            "device_id": "dev_old_client",
+            "webspace_id": "desktop",
+            "connection_state": "client_version_unsupported",
+            "online": False,
+            "client_build_id": "old-build",
+            "client_build_version": "0.0.61+old-build",
+        }
+    ]
+
+
 def test_yws_direct_disabled_rejects_before_room_acquire(monkeypatch) -> None:
     _clear_yws_guard_state()
     touched: list[dict[str, object]] = []

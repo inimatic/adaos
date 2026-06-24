@@ -220,6 +220,16 @@ def _browser_env_rejected_reason(dev_id: str, browser_metadata: dict[str, Any]) 
     return None
 
 
+def _browser_env_rejected_yws_close(reason: str | None) -> tuple[int, str]:
+    reason_token = str(reason or "denied").strip().lower() or "denied"
+    if reason_token == "client_version_unsupported":
+        # This is not an auth failure: the browser must reload its frontend bundle.
+        # Older clients already hard-reset on inbound_yws_update_payload_blocked,
+        # so keep that token for backward-compatible upgrade recovery.
+        return 1013, "inbound_yws_update_payload_blocked:client_version_unsupported"
+    return 1008, f"device_{reason_token}"
+
+
 def _yws_direct_transport_enabled() -> bool:
     return _env_flag("ADAOS_YWS_DIRECT_TRANSPORT_ENABLED", True)
 
@@ -5455,8 +5465,9 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             # in Chrome/WebView, which lets y-websocket keep reconnecting.
             if await _accept_websocket(websocket, channel="yws.auth_denied"):
                 try:
-                    await websocket.close(code=1008, reason=f"device_{reason_token}")
-                    _remember_yws_attempt(attempt_id, "closed", close_code=1008, close_reason=f"device_{reason_token}")
+                    close_code, close_reason = _browser_env_rejected_yws_close(reason_token)
+                    await websocket.close(code=close_code, reason=close_reason)
+                    _remember_yws_attempt(attempt_id, "closed", close_code=close_code, close_reason=close_reason)
                 except Exception:
                     pass
             return

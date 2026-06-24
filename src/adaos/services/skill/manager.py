@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib
+import asyncio
+from inspect import isawaitable
 import json
 import logging
 import os
@@ -57,6 +59,19 @@ import ast
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.skill.manager")
 _SKILL_MANIFEST_NAMES = ("skill.yaml", "manifest.yaml", "adaos.skill.yaml")
+
+
+def _resolve_sync_tool_result(result: Any) -> Any:
+    if not isawaitable(result):
+        return result
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(result)
+    close = getattr(result, "close", None)
+    if callable(close):
+        close()
+    raise RuntimeError("async skill tool returned awaitable inside an active event loop")
 
 
 def _env_type() -> str:
@@ -2755,13 +2770,14 @@ class SkillManager:
 
         def _call_tool() -> Any:
             with use_ctx(ctx):
-                return execute_tool(
+                result = execute_tool(
                     skill_dir,
                     module=module,
                     attr=attr,
                     payload=payload,
                     extra_paths=extra_paths,
                 )
+                return _resolve_sync_tool_result(result)
 
         try:
             if not ctx.skill_ctx.set(name, skill_dir):
@@ -2927,13 +2943,14 @@ class SkillManager:
 
         def _call_tool() -> Any:
             with use_ctx(ctx):
-                return execute_tool(
+                result = execute_tool(
                     skill_dir,
                     module=module,
                     attr=attr,
                     payload=payload,
                     extra_paths=extra_paths,
                 )
+                return _resolve_sync_tool_result(result)
 
         try:
             if not ctx.skill_ctx.set(name, skill_dir):
