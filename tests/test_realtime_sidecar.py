@@ -369,11 +369,20 @@ def test_realtime_sidecar_media_proxy_serves_token_protected_content(
     monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_PORT", str(media_port))
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(_free_port()))
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
-    monkeypatch.setattr(realtime_sidecar_mod, "_media_proxy_file_path", lambda filename: media_file)
+    def _media_proxy_path(filename: str) -> Path:
+        if filename == "song.mp3":
+            raise ValueError("unsupported_extension:.mp3")
+        return media_file
+
+    monkeypatch.setattr(realtime_sidecar_mod, "_media_proxy_file_path", _media_proxy_path)
     monkeypatch.setattr(realtime_sidecar_mod, "_media_proxy_guess_media_type", lambda filename: "image/jpeg")
     monkeypatch.setattr(
         "adaos.services.media_indexer_library.resolve_media_indexer_content",
         lambda playback_id: (media_file, {"mime_type": "audio/mpeg"}),
+    )
+    monkeypatch.setattr(
+        "adaos.services.media_indexer_library.resolve_media_indexer_content_by_name",
+        lambda filename: (media_file, {"mime_type": "audio/mpeg"}),
     )
 
     async def _request(raw: bytes) -> bytes:
@@ -422,6 +431,14 @@ def test_realtime_sidecar_media_proxy_serves_token_protected_content(
             assert b"Content-Type: audio/mpeg" in indexer_media
             assert b"Content-Range: bytes 2-5/6" in indexer_media
             assert indexer_media.endswith(b"cdef")
+
+            indexer_compat = await _request(
+                b"GET /media/files/content/song.mp3?token=dev-token HTTP/1.1\r\n"
+                b"Host: local\r\nRange: bytes=0-2\r\n\r\n"
+            )
+            assert b"HTTP/1.1 206 Partial Content" in indexer_compat
+            assert b"Content-Type: audio/mpeg" in indexer_compat
+            assert indexer_compat.endswith(b"abc")
 
             denied = await _request(
                 b"GET /media/files/content/frame.jpg?token=bad HTTP/1.1\r\nHost: local\r\n\r\n"

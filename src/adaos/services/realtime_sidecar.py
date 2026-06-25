@@ -1950,23 +1950,73 @@ class RealtimeSidecarServer:
             try:
                 target = _media_proxy_file_path(filename)
             except ValueError:
-                await self._media_proxy_response(
-                    writer,
-                    status=400,
-                    reason="Bad Request",
-                    body=b"invalid_filename",
-                    method=method,
-                )
-                return
+                try:
+                    from adaos.services.media_indexer_library import guess_indexer_media_type, resolve_media_indexer_content_by_name
+
+                    target, payload = resolve_media_indexer_content_by_name(filename)
+                    mime_type = str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name)
+                except ValueError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=400,
+                        reason="Bad Request",
+                        body=b"invalid_filename",
+                        method=method,
+                    )
+                    return
+                except PermissionError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=403,
+                        reason="Forbidden",
+                        body=b"path_outside_indexed_directory",
+                        method=method,
+                    )
+                    return
+                except FileNotFoundError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=400,
+                        reason="Bad Request",
+                        body=b"invalid_filename",
+                        method=method,
+                    )
+                    return
+            else:
+                mime_type = _media_proxy_guess_media_type(target.name)
             if not target.exists() or not target.is_file():
-                await self._media_proxy_response(
-                    writer,
-                    status=404,
-                    reason="Not Found",
-                    body=b"media_file_not_found",
-                    method=method,
-                )
-                return
+                try:
+                    from adaos.services.media_indexer_library import guess_indexer_media_type, resolve_media_indexer_content_by_name
+
+                    target, payload = resolve_media_indexer_content_by_name(filename)
+                    mime_type = str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name)
+                except ValueError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=400,
+                        reason="Bad Request",
+                        body=b"invalid_filename",
+                        method=method,
+                    )
+                    return
+                except PermissionError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=403,
+                        reason="Forbidden",
+                        body=b"path_outside_indexed_directory",
+                        method=method,
+                    )
+                    return
+                except FileNotFoundError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=404,
+                        reason="Not Found",
+                        body=b"media_file_not_found",
+                        method=method,
+                    )
+                    return
             try:
                 byte_range = self._media_proxy_parse_range(headers.get("range"), size=int(target.stat().st_size))
             except Exception:
@@ -1982,7 +2032,7 @@ class RealtimeSidecarServer:
             await self._stream_media_proxy_file(
                 writer,
                 target=target,
-                mime_type=_media_proxy_guess_media_type(target.name),
+                mime_type=mime_type,
                 method=method,
                 byte_range=byte_range,
             )

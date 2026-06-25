@@ -8400,21 +8400,63 @@ class BootstrapService:
                                             try:
                                                 target = media_file_path(filename)
                                             except ValueError as exc:
-                                                await _route_media_reply_json(
-                                                    key,
-                                                    status=400,
-                                                    payload={"ok": False, "detail": str(exc)},
-                                                )
-                                                route_outcome = "media_content_bad_request"
-                                                return
+                                                try:
+                                                    from adaos.services.media_indexer_library import resolve_media_indexer_content_by_name
+
+                                                    target, _payload = resolve_media_indexer_content_by_name(filename)
+                                                except ValueError:
+                                                    await _route_media_reply_json(
+                                                        key,
+                                                        status=400,
+                                                        payload={"ok": False, "detail": str(exc)},
+                                                    )
+                                                    route_outcome = "media_content_bad_request"
+                                                    return
+                                                except PermissionError as idx_exc:
+                                                    await _route_media_reply_json(
+                                                        key,
+                                                        status=403,
+                                                        payload={"ok": False, "detail": str(idx_exc)},
+                                                    )
+                                                    route_outcome = "media_indexer_content_forbidden"
+                                                    return
+                                                except FileNotFoundError:
+                                                    await _route_media_reply_json(
+                                                        key,
+                                                        status=400,
+                                                        payload={"ok": False, "detail": str(exc)},
+                                                    )
+                                                    route_outcome = "media_content_bad_request"
+                                                    return
                                             if not target.exists() or not target.is_file():
-                                                await _route_media_reply_json(
-                                                    key,
-                                                    status=404,
-                                                    payload={"ok": False, "detail": "media_file_not_found"},
-                                                )
-                                                route_outcome = "media_content_missing"
-                                                return
+                                                try:
+                                                    from adaos.services.media_indexer_library import resolve_media_indexer_content_by_name
+
+                                                    target, _payload = resolve_media_indexer_content_by_name(filename)
+                                                except ValueError as exc:
+                                                    await _route_media_reply_json(
+                                                        key,
+                                                        status=400,
+                                                        payload={"ok": False, "detail": str(exc)},
+                                                    )
+                                                    route_outcome = "media_content_bad_request"
+                                                    return
+                                                except PermissionError as exc:
+                                                    await _route_media_reply_json(
+                                                        key,
+                                                        status=403,
+                                                        payload={"ok": False, "detail": str(exc)},
+                                                    )
+                                                    route_outcome = "media_indexer_content_forbidden"
+                                                    return
+                                                except FileNotFoundError:
+                                                    await _route_media_reply_json(
+                                                        key,
+                                                        status=404,
+                                                        payload={"ok": False, "detail": "media_file_not_found"},
+                                                    )
+                                                    route_outcome = "media_content_missing"
+                                                    return
                                             await _route_media_reply_file(
                                                 key,
                                                 target=target,

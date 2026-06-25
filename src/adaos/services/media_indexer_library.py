@@ -74,19 +74,51 @@ def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any
     for payload in _iter_payloads(metadata):
         if str(payload.get("playback_id") or "").strip().lower() != normalized:
             continue
-        raw_path = str(payload.get("full_path") or "").strip()
-        if not raw_path:
-            continue
-        target = Path(raw_path).expanduser().resolve()
-        if target.suffix.lower() not in SUPPORTED_INDEXER_MEDIA_EXTENSIONS:
-            raise ValueError("unsupported_extension")
-        if not _is_relative_to(target, indexed_root):
-            raise PermissionError("path_outside_indexed_directory")
-        if not target.exists() or not target.is_file():
-            raise FileNotFoundError("media_file_not_found")
-        return target, payload
+        return _resolve_payload_target(payload, indexed_root)
 
     raise FileNotFoundError("media_indexer_item_not_found")
+
+
+def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str, Any]]:
+    raw = str(filename or "").strip()
+    name = Path(raw).name
+    if not name or name != raw or name in {".", ".."} or "\x00" in name or "/" in raw or "\\" in raw:
+        raise ValueError("invalid_filename")
+
+    metadata = _latest_index_metadata()
+    if not metadata:
+        raise FileNotFoundError("media_indexer_index_missing")
+
+    indexed_root = Path(str(metadata.get("indexed_directory") or "")).expanduser()
+    if not indexed_root.exists() or not indexed_root.is_dir():
+        raise FileNotFoundError("media_indexer_directory_missing")
+    indexed_root = indexed_root.resolve()
+
+    for payload in _iter_payloads(metadata):
+        raw_path = str(payload.get("full_path") or "").strip()
+        payload_names = {
+            str(payload.get("real_file_name") or "").strip(),
+            Path(raw_path).name if raw_path else "",
+        }
+        if name not in payload_names:
+            continue
+        return _resolve_payload_target(payload, indexed_root)
+
+    raise FileNotFoundError("media_indexer_item_not_found")
+
+
+def _resolve_payload_target(payload: dict[str, Any], indexed_root: Path) -> tuple[Path, dict[str, Any]]:
+    raw_path = str(payload.get("full_path") or "").strip()
+    if not raw_path:
+        raise FileNotFoundError("media_indexer_item_missing_path")
+    target = Path(raw_path).expanduser().resolve()
+    if target.suffix.lower() not in SUPPORTED_INDEXER_MEDIA_EXTENSIONS:
+        raise ValueError("unsupported_extension")
+    if not _is_relative_to(target, indexed_root):
+        raise PermissionError("path_outside_indexed_directory")
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError("media_file_not_found")
+    return target, payload
 
 
 def _latest_index_metadata() -> dict[str, Any]:

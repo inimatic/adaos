@@ -49,6 +49,7 @@ from adaos.services.media_library import (
 from adaos.services.media_indexer_library import (
     guess_indexer_media_type,
     resolve_media_indexer_content,
+    resolve_media_indexer_content_by_name,
 )
 from adaos.services.node_config import set_node_names as save_node_names_config
 from adaos.services.reliability import (
@@ -5277,9 +5278,33 @@ async def media_file_content(
     try:
         target = media_file_path(filename)
     except ValueError as exc:
-        _raise_400(str(exc))
+        try:
+            target, payload = resolve_media_indexer_content_by_name(filename)
+        except ValueError:
+            _raise_400(str(exc))
+        except PermissionError as idx_exc:
+            raise HTTPException(status_code=403, detail=str(idx_exc))
+        except FileNotFoundError:
+            _raise_400(str(exc))
+        return FileResponse(
+            path=target,
+            media_type=str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name),
+            filename=target.name,
+        )
     if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="media_file_not_found")
+        try:
+            target, payload = resolve_media_indexer_content_by_name(filename)
+        except ValueError as exc:
+            _raise_400(str(exc))
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="media_file_not_found")
+        return FileResponse(
+            path=target,
+            media_type=str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name),
+            filename=target.name,
+        )
     return FileResponse(
         path=target,
         media_type=guess_media_type(target.name),
