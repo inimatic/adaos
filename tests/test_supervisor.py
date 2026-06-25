@@ -806,6 +806,34 @@ def test_hub_root_watchdog_uses_fresh_root_perspective_probe(monkeypatch) -> Non
     assert "fresh hub control report" in str(manager._hub_root_watchdog_last_reason)
 
 
+def test_hub_root_watchdog_ignores_fresh_root_probe_when_report_route_is_down(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    manager._hub_root_root_probe_last_result = {
+        "ok": True,
+        "state": "ready",
+        "age_sec": 1.0,
+        "target_id": "hub:sn_test",
+        "root_control_status": "down",
+        "route_status": "degraded",
+    }
+
+    decision = manager._hub_root_watchdog_decision(
+        {
+            "readiness_tree": {"root_control": {"status": "down"}},
+            "channel_overview": {"hub_root": {"effective_status": "down"}},
+        },
+        now=100.0,
+    )
+
+    assert decision is not None
+    assert decision["action"] == "sidecar_restart"
+    assert decision["root_perspective_probe"]["root_control_status"] == "down"
+    assert decision["root_perspective_probe"]["route_status"] == "degraded"
+    assert manager._hub_root_watchdog_last_state != "root_perspective_ready"
+
+
 def test_hub_root_root_probe_reads_fresh_control_report(monkeypatch) -> None:
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
 

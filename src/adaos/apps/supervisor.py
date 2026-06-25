@@ -4806,6 +4806,21 @@ class SupervisorManager:
             for key in ("route_status", "hub_root_browser_status", "hub_root_browser_state")
         )
 
+    @staticmethod
+    def _root_probe_reports_hub_root_unready(state: dict[str, Any]) -> bool:
+        degraded_states = {"down", "degraded", "unstable", "flapping"}
+        return any(
+            str(state.get(key) or "").strip().lower() in degraded_states
+            for key in (
+                "root_control_status",
+                "route_status",
+                "hub_root_status",
+                "hub_root_state",
+                "hub_root_browser_status",
+                "hub_root_browser_state",
+            )
+        )
+
     def _append_hub_root_watchdog_event(self, payload: dict[str, Any]) -> None:
         event = {
             "ts": time.time(),
@@ -5046,7 +5061,11 @@ class SupervisorManager:
             else ("runtime_reconnect" if root_down else "runtime_route_reset")
         )
 
-        if root_down and root_probe_state == "ready":
+        if (
+            root_down
+            and root_probe_state == "ready"
+            and not self._root_probe_reports_hub_root_unready(root_probe)
+        ):
             age = root_probe.get("age_sec")
             age_text = f"{float(age):.1f}s" if isinstance(age, (int, float)) else "-"
             self._hub_root_watchdog_last_state = "root_perspective_ready"
