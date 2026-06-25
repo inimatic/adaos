@@ -2013,6 +2013,27 @@ def _attach_runtime_and_rebuild(
     return result
 
 
+def _clear_reload_yws_guard_state(webspace_id: str, *, reason: str) -> dict[str, Any]:
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    try:
+        from adaos.services.yjs.gateway import clear_yws_guard_state_for_webspace
+
+        return clear_yws_guard_state_for_webspace(target_webspace_id, reason=reason)
+    except Exception as exc:
+        _log.debug(
+            "failed to clear YWS guard recovery state webspace=%s reason=%s",
+            target_webspace_id,
+            reason,
+            exc_info=True,
+        )
+        return {
+            "ok": False,
+            "webspace_id": target_webspace_id,
+            "reason": str(reason or "").strip() or "manual_webspace_recovery",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _attach_wait_for_rebuild_guard(
     result: dict[str, Any],
     *,
@@ -4600,6 +4621,10 @@ async def node_yjs_reload(webspace_id: str, payload: WebspaceYjsActionRequest, r
         action=requested_action,
         event_payload=event_payload,
     )
+    result["yws_guard_reset"] = _clear_reload_yws_guard_state(
+        target_webspace_id,
+        reason=f"node_yjs_reload:{requested_action}",
+    )
     result = _attach_runtime_and_rebuild(
         result,
         role=conf.role,
@@ -5015,6 +5040,10 @@ async def node_yjs_reset(webspace_id: str, payload: WebspaceYjsActionRequest, re
         scenario_id=str(payload.scenario_id or "").strip() or None,
         action="reset",
         event_payload=event_payload,
+    )
+    result["yws_guard_reset"] = _clear_reload_yws_guard_state(
+        target_webspace_id,
+        reason="node_yjs_reset",
     )
     result = _attach_runtime_and_rebuild(
         result,

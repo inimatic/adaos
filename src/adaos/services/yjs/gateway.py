@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .gateway_ws import (
     WorkspaceWebsocketServer,
+    clear_yws_guard_state_for_webspace,
     close_webspace_yws_connections,
     refresh_live_webspace_effective_branches,
     reset_live_webspace_room,
@@ -14,6 +15,7 @@ from .gateway_ws import (
 
 __all__ = [
     "WorkspaceWebsocketServer",
+    "clear_yws_guard_state_for_webspace",
     "close_webspace_yws_connections",
     "refresh_live_webspace_effective_branches",
     "reset_live_webspace_room",

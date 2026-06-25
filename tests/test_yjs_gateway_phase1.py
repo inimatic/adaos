@@ -1390,6 +1390,7 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
     responses: list[dict[str, object]] = []
 
     monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))))
+    _clear_yws_guard_state()
     gateway_module._COMMAND_TRACE_HISTORY.clear()
     gateway_module._COMMAND_TRACE_STATS.update(
         {
@@ -1419,7 +1420,33 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
     snapshot = gateway_module.gateway_transport_snapshot()
     commands = snapshot["commands"]
 
-    assert published == [("desktop.webspace.reload", {"webspace_id": "default", "scenario_id": "web_desktop", "_meta": {"cmd_id": "cmd-reload-1", "gateway_client": "events_ws:127.0.0.1:12345", "gateway_command_seq": 1, "gateway_command_fingerprint": commands["last_reload"]["fingerprint"]}})]
+    assert len(published) == 1
+    topic, payload = published[0]
+    assert topic == "desktop.webspace.reload"
+    assert payload is not None
+    assert payload["webspace_id"] == "default"
+    assert payload["scenario_id"] == "web_desktop"
+    meta = dict(payload["_meta"])  # type: ignore[index]
+    guard_reset = meta.pop("yws_guard_reset")
+    assert guard_reset == {
+        "ok": True,
+        "webspace_id": "default",
+        "reason": "desktop.webspace.reload",
+        "cleared_total": 0,
+        "client_open_history_cleared": 0,
+        "client_attempt_history_cleared": 0,
+        "client_short_session_history_cleared": 0,
+        "quarantine_cleared": 0,
+        "incident_cleared": 0,
+        "log_cleared": 0,
+        "notify_cleared": 0,
+    }
+    assert meta == {
+        "cmd_id": "cmd-reload-1",
+        "gateway_client": "events_ws:127.0.0.1:12345",
+        "gateway_command_seq": 1,
+        "gateway_command_fingerprint": commands["last_reload"]["fingerprint"],
+    }
     assert responses[-1]["ok"] is True
     assert commands["reload_total"] == 1
     assert commands["reload_recent_60s"] == 1
@@ -1434,6 +1461,48 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
             "reset_duplicate_total": 0,
         }
     )
+
+
+def test_yws_guard_manual_reset_clears_only_target_webspace(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 10)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 10.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 40.0)
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
+    gateway_module._ACTIVE_YWS_CONNECTIONS["lab"] = [object()]
+
+    for _idx in range(6):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
+        gateway_module._record_yws_guard_attempt("lab", "dev-hot")
+
+    reason_desktop, _diag_desktop = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    reason_lab, _diag_lab = gateway_module._yws_guard_reject_reason("lab", "dev-hot")
+    assert reason_desktop == "client_reconnect_storm"
+    assert reason_lab == "client_reconnect_storm"
+
+    reset = gateway_module.clear_yws_guard_state_for_webspace("desktop", reason="test_reload")
+
+    assert reset["ok"] is True
+    assert reset["webspace_id"] == "desktop"
+    assert reset["client_attempt_history_cleared"] == 1
+    assert reset["quarantine_cleared"] == 1
+    assert reset["incident_cleared"] == 1
+    assert gateway_module._YWS_GUARD_DIAG["last_manual_reset_webspace_id"] == "desktop"
+    assert gateway_module._YWS_GUARD_DIAG["last_manual_reset_reason"] == "test_reload"
+
+    reason_after_desktop, diag_after_desktop = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    reason_after_lab, _diag_after_lab = gateway_module._yws_guard_reject_reason("lab", "dev-hot")
+
+    assert reason_after_desktop == ""
+    assert diag_after_desktop["client_open_15s"] == 0
+    assert reason_after_lab == "client_reconnect_backoff"
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    _clear_yws_guard_state()
 
 
 def test_process_events_command_preserves_target_node_for_voice_chat(monkeypatch) -> None:

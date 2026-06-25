@@ -276,6 +276,68 @@ def test_node_yjs_switch_scenario_endpoint_propagates_skip_metadata(monkeypatch)
     ]
 
 
+def test_node_yjs_reload_clears_yws_guard_backoff_before_runtime_snapshot(monkeypatch) -> None:
+    captured_reload: list[tuple[str, str | None, str]] = []
+    guard_resets: list[tuple[str, str]] = []
+    published: list[tuple[str, str, bool]] = []
+
+    async def _fake_reload(
+        webspace_id: str,
+        *,
+        scenario_id: str | None = None,
+        action: str = "reload",
+        event_payload=None,
+    ) -> dict[str, object]:
+        captured_reload.append((webspace_id, scenario_id, action))
+        return {"ok": True, "accepted": True, "webspace_id": webspace_id, "action": action}
+
+    def _fake_clear(webspace_id: str, *, reason: str) -> dict[str, object]:
+        guard_resets.append((webspace_id, reason))
+        return {"ok": True, "webspace_id": webspace_id, "reason": reason, "cleared_total": 2}
+
+    request = SimpleNamespace(
+        url=SimpleNamespace(path="/api/node/yjs/webspaces/default/reload"),
+        headers={},
+        client=SimpleNamespace(host="127.0.0.1", port=8778),
+    )
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(node_api_module, "reload_webspace_from_scenario", _fake_reload)
+    monkeypatch.setattr(node_api_module, "_clear_reload_yws_guard_state", _fake_clear)
+    monkeypatch.setattr(node_api_module, "yjs_sync_runtime_snapshot", lambda **kwargs: {"webspace_id": kwargs.get("webspace_id")})
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {"webspace_id": webspace_id, "status": "ready"},
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_publish_yjs_control_event",
+        lambda action, webspace_id, result, scenario_id=None: published.append(
+            (action, webspace_id, bool(result.get("yws_guard_reset")))
+        ),
+    )
+
+    result = asyncio.run(
+        node_api_module.node_yjs_reload(
+            "default",
+            node_api_module.WebspaceYjsActionRequest(scenario_id="web_desktop", recreate_room=True),
+            request,
+        )
+    )
+
+    assert captured_reload == [("desktop", "web_desktop", "reset")]
+    assert guard_resets == [("desktop", "node_yjs_reload:reset")]
+    assert result["yws_guard_reset"] == {
+        "ok": True,
+        "webspace_id": "desktop",
+        "reason": "node_yjs_reload:reset",
+        "cleared_total": 2,
+    }
+    assert result["runtime"]["webspace_id"] == "desktop"
+    assert published == [("reload", "desktop", True)]
+
+
 def test_node_yjs_go_home_endpoint_uses_helper(monkeypatch) -> None:
     captured: list[str] = []
     published: list[tuple[str, str, str | None]] = []

@@ -3027,6 +3027,82 @@ def _yws_guard_client_history_key(
     return f"{webspace_key}::{client_key}"
 
 
+def clear_yws_guard_state_for_webspace(
+    webspace_id: str,
+    *,
+    reason: str = "manual_webspace_recovery",
+) -> dict[str, Any]:
+    """Clear reconnect-storm backoff for an operator-triggered webspace recovery."""
+
+    key = str(webspace_id or "").strip() or "default"
+    now = time.time()
+    history_prefix = f"{key}::"
+    log_prefix = f"{key}:"
+
+    def _drop_prefixed(mapping: dict[str, Any], prefix: str) -> int:
+        removed = 0
+        for item_key in list(mapping.keys()):
+            if str(item_key or "").startswith(prefix):
+                mapping.pop(item_key, None)
+                removed += 1
+        return removed
+
+    with _YWS_STORM_LOCK:
+        client_open_history_cleared = _drop_prefixed(_YWS_CLIENT_OPEN_HISTORY, history_prefix)
+        client_attempt_history_cleared = _drop_prefixed(_YWS_CLIENT_ATTEMPT_HISTORY, history_prefix)
+        client_short_session_history_cleared = _drop_prefixed(_YWS_CLIENT_SHORT_SESSION_HISTORY, history_prefix)
+        quarantine_cleared = _drop_prefixed(_YWS_GUARD_QUARANTINE_UNTIL, history_prefix)
+        incident_cleared = _drop_prefixed(_YWS_GUARD_INCIDENTS, history_prefix)
+        log_cleared = _drop_prefixed(_YWS_GUARD_LAST_LOG_AT, log_prefix)
+        notify_cleared = _drop_prefixed(_YWS_GUARD_LAST_NOTIFY_AT, log_prefix)
+        cleared_total = (
+            client_open_history_cleared
+            + client_attempt_history_cleared
+            + client_short_session_history_cleared
+            + quarantine_cleared
+            + incident_cleared
+            + log_cleared
+            + notify_cleared
+        )
+        _YWS_GUARD_DIAG["manual_reset_total"] = int(_YWS_GUARD_DIAG.get("manual_reset_total") or 0) + 1
+        _YWS_GUARD_DIAG["last_manual_reset_at"] = now
+        _YWS_GUARD_DIAG["last_manual_reset_webspace_id"] = key
+        _YWS_GUARD_DIAG["last_manual_reset_reason"] = str(reason or "").strip() or "manual_webspace_recovery"
+        _YWS_GUARD_DIAG["last_manual_reset_cleared_total"] = cleared_total
+        _YWS_GUARD_DIAG["last_manual_reset_quarantine_cleared"] = quarantine_cleared
+
+    result = {
+        "ok": True,
+        "webspace_id": key,
+        "reason": str(reason or "").strip() or "manual_webspace_recovery",
+        "cleared_total": cleared_total,
+        "client_open_history_cleared": client_open_history_cleared,
+        "client_attempt_history_cleared": client_attempt_history_cleared,
+        "client_short_session_history_cleared": client_short_session_history_cleared,
+        "quarantine_cleared": quarantine_cleared,
+        "incident_cleared": incident_cleared,
+        "log_cleared": log_cleared,
+        "notify_cleared": notify_cleared,
+    }
+    if cleared_total:
+        _ylog.warning(
+            "cleared YWS guard recovery state webspace=%s reason=%s cleared_total=%s quarantine=%s attempts=%s short_sessions=%s",
+            key,
+            result["reason"],
+            cleared_total,
+            quarantine_cleared,
+            client_attempt_history_cleared,
+            client_short_session_history_cleared,
+        )
+    else:
+        _ylog.info(
+            "YWS guard recovery state already clear webspace=%s reason=%s",
+            key,
+            result["reason"],
+        )
+    return result
+
+
 def _set_yws_guard_quarantine_locked(key: str, now: float) -> tuple[float, float, int]:
     incident = _YWS_GUARD_INCIDENTS.get(key) or {}
     last_at = float(incident.get("last_at") or 0.0)
@@ -6169,6 +6245,11 @@ async def process_events_command(
                 }
             )
             return None
+        guard_reset = clear_yws_guard_state_for_webspace(
+            str(trace.get("webspace_id") or webspace_id or "default"),
+            reason="desktop.webspace.reload",
+        )
+        payload["_meta"]["yws_guard_reset"] = guard_reset
         _publish_bus("desktop.webspace.reload", payload)
         await _ack()
         return None
@@ -6201,6 +6282,11 @@ async def process_events_command(
             trace.get("duplicate_count_10s") or 0,
             trace.get("fingerprint") or "-",
         )
+        guard_reset = clear_yws_guard_state_for_webspace(
+            str(trace.get("webspace_id") or webspace_id or "default"),
+            reason="desktop.webspace.reset",
+        )
+        payload["_meta"]["yws_guard_reset"] = guard_reset
         _publish_bus("desktop.webspace.reset", payload)
         await _ack()
         return None
