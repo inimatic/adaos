@@ -330,6 +330,7 @@ def test_realtime_sidecar_media_proxy_contract_reflects_explicit_listener(
     assert contract["listener"]["host"] == "0.0.0.0"
     assert contract["listener"]["port"] == media_port
     assert contract["public_bases"] == [f"http://192.0.2.10:{media_port}"]
+    assert "/media/media-indexer/content/{playback_id}" in contract["route_paths"]
     assert contract["range_requests"] is True
 
 
@@ -370,6 +371,10 @@ def test_realtime_sidecar_media_proxy_serves_token_protected_content(
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
     monkeypatch.setattr(realtime_sidecar_mod, "_media_proxy_file_path", lambda filename: media_file)
     monkeypatch.setattr(realtime_sidecar_mod, "_media_proxy_guess_media_type", lambda filename: "image/jpeg")
+    monkeypatch.setattr(
+        "adaos.services.media_indexer_library.resolve_media_indexer_content",
+        lambda playback_id: (media_file, {"mime_type": "audio/mpeg"}),
+    )
 
     async def _request(raw: bytes) -> bytes:
         reader, writer = await asyncio.open_connection("127.0.0.1", media_port)
@@ -408,6 +413,15 @@ def test_realtime_sidecar_media_proxy_serves_token_protected_content(
             assert b"HTTP/1.1 206 Partial Content" in ranged
             assert b"Content-Range: bytes 1-3/6" in ranged
             assert ranged.endswith(b"bcd")
+
+            indexer_media = await _request(
+                b"GET /media/media-indexer/content/abc123?token=dev-token HTTP/1.1\r\n"
+                b"Host: local\r\nRange: bytes=2-5\r\n\r\n"
+            )
+            assert b"HTTP/1.1 206 Partial Content" in indexer_media
+            assert b"Content-Type: audio/mpeg" in indexer_media
+            assert b"Content-Range: bytes 2-5/6" in indexer_media
+            assert indexer_media.endswith(b"cdef")
 
             denied = await _request(
                 b"GET /media/files/content/frame.jpg?token=bad HTTP/1.1\r\nHost: local\r\n\r\n"

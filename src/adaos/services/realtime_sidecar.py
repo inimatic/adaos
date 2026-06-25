@@ -733,6 +733,8 @@ def realtime_sidecar_media_proxy_contract(*, role: str | None = None) -> dict[st
         "route_paths": [
             "/api/node/media/files/content/{filename}",
             "/media/files/content/{filename}",
+            "/api/node/media-indexer/content/{playback_id}",
+            "/media/media-indexer/content/{playback_id}",
         ],
         "auth": {
             "query_token": True,
@@ -1870,6 +1872,69 @@ class RealtimeSidecarServer:
                 )
                 return
             path = unquote(str(parsed.path or ""))
+            indexer_prefixes = (
+                "/api/node/media-indexer/content/",
+                "/media/media-indexer/content/",
+            )
+            playback_id = ""
+            for prefix in indexer_prefixes:
+                if path.startswith(prefix):
+                    playback_id = path[len(prefix):]
+                    break
+            if playback_id:
+                try:
+                    from adaos.services.media_indexer_library import guess_indexer_media_type, resolve_media_indexer_content
+
+                    target, payload = resolve_media_indexer_content(playback_id)
+                    mime_type = str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name)
+                except ValueError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=400,
+                        reason="Bad Request",
+                        body=b"invalid_playback_id",
+                        method=method,
+                    )
+                    return
+                except PermissionError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=403,
+                        reason="Forbidden",
+                        body=b"path_outside_indexed_directory",
+                        method=method,
+                    )
+                    return
+                except FileNotFoundError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=404,
+                        reason="Not Found",
+                        body=b"media_indexer_item_not_found",
+                        method=method,
+                    )
+                    return
+                try:
+                    byte_range = self._media_proxy_parse_range(headers.get("range"), size=int(target.stat().st_size))
+                except Exception:
+                    await self._media_proxy_response(
+                        writer,
+                        status=416,
+                        reason="Range Not Satisfiable",
+                        headers={"Content-Range": f"bytes */{int(target.stat().st_size)}"},
+                        body=b"range_not_satisfiable",
+                        method=method,
+                    )
+                    return
+                await self._stream_media_proxy_file(
+                    writer,
+                    target=target,
+                    mime_type=mime_type,
+                    method=method,
+                    byte_range=byte_range,
+                )
+                return
+
             prefixes = (
                 "/api/node/media/files/content/",
                 "/media/files/content/",

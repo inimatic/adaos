@@ -8307,7 +8307,7 @@ class BootstrapService:
                                         from urllib.parse import unquote
 
                                         from adaos.services.media_library import (
-                                            ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
+                                            ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES as MEDIA_RELAY_MAX_UPLOAD_BYTES,
                                             ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
                                             guess_media_type,
                                             list_media_files,
@@ -8327,7 +8327,7 @@ class BootstrapService:
                                             payload0 = media_snapshot()
                                             payload0["proxy_limits"] = {
                                                 "root_routed_response_limit_bytes": ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
-                                                "root_media_relay_max_upload_bytes": ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
+                                                "root_media_relay_max_upload_bytes": MEDIA_RELAY_MAX_UPLOAD_BYTES,
                                             }
                                             await _route_media_reply_json(key, status=200, payload=payload0)
                                             route_outcome = "media_files_replied"
@@ -8338,7 +8338,7 @@ class BootstrapService:
                                             runtime0["ok"] = True
                                             runtime0["proxy_limits"] = {
                                                 "root_routed_response_limit_bytes": ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
-                                                "root_media_relay_max_upload_bytes": ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
+                                                "root_media_relay_max_upload_bytes": MEDIA_RELAY_MAX_UPLOAD_BYTES,
                                             }
                                             runtime0["capabilities"] = media_capabilities()
                                             runtime0["files"] = {
@@ -8346,6 +8346,53 @@ class BootstrapService:
                                             }
                                             await _route_media_reply_json(key, status=200, payload=runtime0)
                                             route_outcome = "media_runtime_replied"
+                                            return
+
+                                        media_indexer_content_prefixes = (
+                                            "/media/media-indexer/content/",
+                                            "/api/node/media-indexer/content/",
+                                        )
+                                        media_indexer_playback_id = ""
+                                        for _prefix in media_indexer_content_prefixes:
+                                            if method in ("GET", "HEAD") and path_norm.startswith(_prefix):
+                                                media_indexer_playback_id = unquote(path_norm[len(_prefix):])
+                                                break
+                                        if media_indexer_playback_id:
+                                            try:
+                                                from adaos.services.media_indexer_library import resolve_media_indexer_content
+
+                                                target, _payload = resolve_media_indexer_content(media_indexer_playback_id)
+                                            except ValueError as exc:
+                                                await _route_media_reply_json(
+                                                    key,
+                                                    status=400,
+                                                    payload={"ok": False, "detail": str(exc)},
+                                                )
+                                                route_outcome = "media_indexer_content_bad_request"
+                                                return
+                                            except PermissionError as exc:
+                                                await _route_media_reply_json(
+                                                    key,
+                                                    status=403,
+                                                    payload={"ok": False, "detail": str(exc)},
+                                                )
+                                                route_outcome = "media_indexer_content_forbidden"
+                                                return
+                                            except FileNotFoundError as exc:
+                                                await _route_media_reply_json(
+                                                    key,
+                                                    status=404,
+                                                    payload={"ok": False, "detail": str(exc)},
+                                                )
+                                                route_outcome = "media_indexer_content_missing"
+                                                return
+                                            await _route_media_reply_file(
+                                                key,
+                                                target=target,
+                                                method=method,
+                                                request_headers=headers,
+                                            )
+                                            route_outcome = "media_indexer_content_replied"
                                             return
 
                                         if method in ("GET", "HEAD") and path_norm.startswith("/media/files/content/"):
@@ -8417,14 +8464,14 @@ class BootstrapService:
                                                 )
                                                 route_outcome = "media_upload_bad_request"
                                                 return
-                                            if content_length > int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES):
+                                            if content_length > int(MEDIA_RELAY_MAX_UPLOAD_BYTES):
                                                 await _route_media_reply_json(
                                                     key,
                                                     status=413,
                                                     payload={
                                                         "ok": False,
                                                         "detail": "media_upload_too_large",
-                                                        "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                                        "max_upload_bytes": int(MEDIA_RELAY_MAX_UPLOAD_BYTES),
                                                     },
                                                 )
                                                 route_outcome = "media_upload_too_large"
@@ -8441,7 +8488,7 @@ class BootstrapService:
                                                 "size_bytes": 0,
                                                 "replaced": target.exists(),
                                                 "mime_type": guess_media_type(target.name),
-                                                "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                                "max_upload_bytes": int(MEDIA_RELAY_MAX_UPLOAD_BYTES),
                                             }
                                             route_outcome = "media_upload_open"
                                             return
@@ -8558,12 +8605,17 @@ class BootstrapService:
 
                                 if t == "http_req_open":
                                     try:
+                                        from adaos.services.media_library import (
+                                            ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES as HTTP_RELAY_MAX_UPLOAD_BYTES,
+                                        )
+
                                         method = str((data or {}).get("method") or "GET").upper()
                                         path = str((data or {}).get("path") or "/api/ping")
                                         search = str((data or {}).get("search") or "")
                                         headers = (data or {}).get("headers") or {}
                                         content_length = int((data or {}).get("content_length") or 0)
-                                        if content_length > int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES):
+                                        max_upload_bytes = int(HTTP_RELAY_MAX_UPLOAD_BYTES)
+                                        if content_length > max_upload_bytes:
                                             await _route_reply(
                                                 key,
                                                 {
@@ -8575,7 +8627,7 @@ class BootstrapService:
                                                             {
                                                                 "ok": False,
                                                                 "detail": "http_upload_too_large",
-                                                                "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                                                "max_upload_bytes": max_upload_bytes,
                                                             },
                                                             ensure_ascii=False,
                                                         ).encode("utf-8")
@@ -8598,7 +8650,7 @@ class BootstrapService:
                                             "tmp_path": tmp_path,
                                             "handle": handle,
                                             "size_bytes": 0,
-                                            "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                            "max_upload_bytes": max_upload_bytes,
                                         }
                                         route_outcome = "http_req_open"
                                     except Exception as e:
@@ -8642,7 +8694,7 @@ class BootstrapService:
                                                             {
                                                                 "ok": False,
                                                                 "detail": "http_upload_too_large",
-                                                                "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                                                "max_upload_bytes": int(session.get("max_upload_bytes") or 0),
                                                             },
                                                             ensure_ascii=False,
                                                         ).encode("utf-8")
