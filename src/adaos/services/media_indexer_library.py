@@ -141,6 +141,9 @@ def _metadata_candidates() -> list[Path]:
     env_data_dir = str(os.getenv("MEDIA_INDEXER_DATA_DIR") or "").strip()
     if env_data_dir:
         paths.append(Path(env_data_dir).expanduser() / MEDIA_INDEXER_STATE_METADATA_REL)
+    base_dir_env = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
+    if base_dir_env:
+        paths.append(Path(base_dir_env).expanduser() / "state" / MEDIA_INDEXER_SKILL_NAME / MEDIA_INDEXER_STATE_METADATA_REL)
     try:
         base_dir_raw = get_ctx().paths.base_dir()
         base_dir = Path(base_dir_raw() if callable(base_dir_raw) else base_dir_raw)
