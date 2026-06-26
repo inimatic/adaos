@@ -32,6 +32,7 @@ from adaos.services.reliability import (
     _connectivity_snapshot,
     _enrich_required_upstream_link_with_sidecar,
     _request_yjs_replay_pressure_compaction,
+    _yjs_projection_guard_runtime_snapshot,
     _state_sync_snapshot,
     assess_transport_diagnostics,
     effective_channel_view,
@@ -2518,6 +2519,73 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
     assert "top_webio_stream_controls" in payload["runtime"]["eventbus_backlog"]
 
 
+def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypatch) -> None:
+    def _guard_snapshot(**kwargs):
+        assert kwargs["webspace_id"] == "desktop"
+        assert kwargs["limit"] == 20
+        return {
+            "schema": "adaos.yjs_projection_guard.v1",
+            "enabled": True,
+            "webspace_id": "desktop",
+            "total": 1,
+            "totals": {"guarded": 2},
+            "items": [
+                {
+                    "owner": "skill:mediaserver",
+                    "slot": "mediaserver.library_summary",
+                    "path": "data/nodes/hub/media/library_summary",
+                    "reason": "yjs_projection_write_amplification",
+                    "update_bytes": 57344,
+                    "amplification_ratio": 36.2,
+                    "last_at": 12.5,
+                    "guarded_total": 2,
+                    "recovery": {
+                        "action": "ystore_runtime_compaction",
+                        "requested": True,
+                        "reason": "projection_write_amplification",
+                        "mode": "inline_after_detached_write",
+                        "deferred_until": "detached_writer_flush_complete",
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr("adaos.services.scenario.projection_service.yjs_projection_guard_snapshot", _guard_snapshot)
+
+    snapshot = _yjs_projection_guard_runtime_snapshot(
+        {
+            "selected_webspace_id": "desktop",
+            "webspaces": {
+                "desktop": {
+                    "log_mode": "snapshot_plus_diff",
+                    "runtime_compaction_eligible": True,
+                    "update_log_entries": 2,
+                    "update_log_bytes": 600000,
+                    "replay_window_entries": 1,
+                    "replay_window_bytes": 57344,
+                    "snapshot_file_exists": True,
+                    "snapshot_file_size": 3162716,
+                    "persisted_up_to_date": False,
+                    "compact_total": 3,
+                    "backup_total": 4,
+                    "auto_backup_total": 4,
+                    "last_auto_backup_reason": "projection_write_amplification",
+                    "last_compact_reason": "backup_compaction",
+                }
+            },
+        }
+    )
+
+    assert snapshot["available"] is True
+    assert snapshot["recovery"]["requested_total"] == 1
+    assert snapshot["recovery"]["inline_total"] == 1
+    assert snapshot["recovery"]["background_total"] == 0
+    assert snapshot["recovery"]["items"][0]["deferred_until"] == "detached_writer_flush_complete"
+    assert snapshot["recovery"]["ystore"]["runtime_compaction_eligible"] is True
+    assert snapshot["recovery"]["ystore"]["replay_window_bytes"] == 57344
+    assert snapshot["recovery"]["ystore"]["last_auto_backup_reason"] == "projection_write_amplification"
+
+
 def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router
@@ -3662,8 +3730,28 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                                 "max_list_path": "items",
                                 "list_item_total": 1520,
                                 "guarded_total": 1,
+                                "recovery": {
+                                    "action": "ystore_runtime_compaction",
+                                    "requested": True,
+                                    "mode": "inline_after_detached_write",
+                                    "reason": "projection_write_amplification",
+                                    "deferred_until": "detached_writer_flush_complete",
+                                },
                             }
                         ],
+                        "recovery": {
+                            "total": 1,
+                            "requested_total": 1,
+                            "inline_total": 1,
+                            "background_total": 0,
+                            "disabled_total": 0,
+                            "items": [],
+                            "ystore": {
+                                "runtime_compaction_eligible": True,
+                                "replay_window_bytes": 57344,
+                                "last_auto_backup_reason": "projection_write_amplification",
+                            },
+                        },
                     },
                     "webio_stream_guard": {
                         "available": True,
@@ -3731,6 +3819,8 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "yjs_projection_guard: webspace=desktop enabled=yes total=1 guarded=1" in result.output
     assert "yjs_projection_guard.top: owner=skill:mediaserver slot=library path=data/nodes/hub-1/media/library" in result.output
     assert "payload=409600 update=88900 ratio=12.5 degraded=1536 max_payload=262144 max_items=1000 max_list=1520" in result.output
+    assert "recovery=inline_after_detached_write" in result.output
+    assert "yjs_projection_guard.recovery: requested=1 inline=1 background=0 disabled=0 ystore_replay_bytes=57344 eligible=yes last_auto=projection_write_amplification" in result.output
     assert "webio_stream_guard: webspace=desktop total=1 attempted=6 published=3 suppressed=2 throttled=1 fanout=3" in result.output
     assert "webio_stream_guard.top: receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output
     assert "eventbus: pending=1 bounded_queue=2 peak=4 active=1" in result.output

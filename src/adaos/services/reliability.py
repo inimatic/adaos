@@ -6262,6 +6262,89 @@ def _webio_stream_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) ->
 def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
     selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
+    webspaces = runtime.get("webspaces") if isinstance(runtime.get("webspaces"), dict) else {}
+    selected_entry = (
+        webspaces.get(selected_webspace_id)
+        if selected_webspace_id and isinstance(webspaces.get(selected_webspace_id), dict)
+        else {}
+    )
+
+    def _nonnegative_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except Exception:
+            return 0
+
+    def _ystore_recovery_context() -> dict[str, Any]:
+        entry = selected_entry if isinstance(selected_entry, dict) else {}
+        return {
+            "webspace_id": selected_webspace_id,
+            "log_mode": str(entry.get("log_mode") or "").strip() or None,
+            "runtime_compaction_eligible": bool(entry.get("runtime_compaction_eligible")),
+            "update_log_entries": _nonnegative_int(entry.get("update_log_entries")),
+            "update_log_bytes": _nonnegative_int(entry.get("update_log_bytes")),
+            "replay_window_entries": _nonnegative_int(entry.get("replay_window_entries")),
+            "replay_window_bytes": _nonnegative_int(entry.get("replay_window_bytes")),
+            "snapshot_file_exists": bool(entry.get("snapshot_file_exists")),
+            "snapshot_file_size": _nonnegative_int(entry.get("snapshot_file_size")),
+            "persisted_up_to_date": bool(entry.get("persisted_up_to_date")),
+            "compact_total": _nonnegative_int(entry.get("compact_total")),
+            "backup_total": _nonnegative_int(entry.get("backup_total")),
+            "auto_backup_total": _nonnegative_int(entry.get("auto_backup_total")),
+            "last_auto_backup_reason": str(entry.get("last_auto_backup_reason") or "").strip() or None,
+            "last_auto_backup_ago_s": entry.get("last_auto_backup_ago_s"),
+            "last_compact_reason": str(entry.get("last_compact_reason") or "").strip() or None,
+            "last_compact_ago_s": entry.get("last_compact_ago_s"),
+        }
+
+    def _recovery_summary(items: list[Any]) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        requested_total = 0
+        inline_total = 0
+        background_total = 0
+        disabled_total = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            recovery = item.get("recovery") if isinstance(item.get("recovery"), dict) else {}
+            if not recovery:
+                continue
+            requested = bool(recovery.get("requested"))
+            mode = str(recovery.get("mode") or "").strip() or None
+            if requested:
+                requested_total += 1
+            if mode == "inline_after_detached_write":
+                inline_total += 1
+            elif mode == "background":
+                background_total += 1
+            if bool(recovery.get("disabled")):
+                disabled_total += 1
+            rows.append(
+                {
+                    "owner": item.get("owner"),
+                    "slot": item.get("slot"),
+                    "path": item.get("path"),
+                    "reason": recovery.get("reason") or item.get("reason"),
+                    "action": recovery.get("action"),
+                    "requested": requested,
+                    "mode": mode,
+                    "deferred_until": recovery.get("deferred_until"),
+                    "disabled": bool(recovery.get("disabled")),
+                    "update_bytes": _nonnegative_int(item.get("update_bytes")),
+                    "amplification_ratio": item.get("amplification_ratio"),
+                    "last_at": item.get("last_at"),
+                }
+            )
+        return {
+            "total": len(rows),
+            "requested_total": requested_total,
+            "inline_total": inline_total,
+            "background_total": background_total,
+            "disabled_total": disabled_total,
+            "items": rows[:10],
+            "ystore": _ystore_recovery_context(),
+        }
+
     try:
         from adaos.services.scenario.projection_service import yjs_projection_guard_snapshot
 
@@ -6279,6 +6362,7 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
                     "guarded": sum(int(item.get("guarded_total") or 0) for item in items if isinstance(item, dict)),
                 },
             )
+            result["recovery"] = _recovery_summary(items)
             return result
     except Exception:
         pass
@@ -6290,6 +6374,15 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
         "items": [],
         "total": 0,
         "totals": {"guarded": 0},
+        "recovery": {
+            "total": 0,
+            "requested_total": 0,
+            "inline_total": 0,
+            "background_total": 0,
+            "disabled_total": 0,
+            "items": [],
+            "ystore": _ystore_recovery_context(),
+        },
     }
 
 

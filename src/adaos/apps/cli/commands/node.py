@@ -796,6 +796,11 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             else {}
         )
         if projection_guard_top:
+            projection_guard_recovery = (
+                projection_guard_top.get("recovery")
+                if isinstance(projection_guard_top.get("recovery"), dict)
+                else {}
+            )
             typer.echo(
                 "yjs_projection_guard.top: "
                 f"owner={projection_guard_top.get('owner') or '-'} "
@@ -808,7 +813,29 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"max_payload={projection_guard_top.get('max_payload_bytes') or '-'} "
                 f"max_items={projection_guard_top.get('max_items') or '-'} "
                 f"max_list={projection_guard_top.get('max_list_items') or 0} "
-                f"reason={projection_guard_top.get('reason') or '-'}"
+                f"reason={projection_guard_top.get('reason') or '-'} "
+                f"recovery={projection_guard_recovery.get('mode') or '-'}"
+            )
+        projection_guard_recovery = (
+            yjs_projection_guard.get("recovery")
+            if isinstance(yjs_projection_guard.get("recovery"), dict)
+            else {}
+        )
+        if projection_guard_recovery:
+            ystore_recovery = (
+                projection_guard_recovery.get("ystore")
+                if isinstance(projection_guard_recovery.get("ystore"), dict)
+                else {}
+            )
+            typer.echo(
+                "yjs_projection_guard.recovery: "
+                f"requested={projection_guard_recovery.get('requested_total') or 0} "
+                f"inline={projection_guard_recovery.get('inline_total') or 0} "
+                f"background={projection_guard_recovery.get('background_total') or 0} "
+                f"disabled={projection_guard_recovery.get('disabled_total') or 0} "
+                f"ystore_replay_bytes={ystore_recovery.get('replay_window_bytes') or 0} "
+                f"eligible={'yes' if ystore_recovery.get('runtime_compaction_eligible') else 'no'} "
+                f"last_auto={ystore_recovery.get('last_auto_backup_reason') or '-'}"
             )
     if webio_stream_guard:
         guard_totals = webio_stream_guard.get("totals") if isinstance(webio_stream_guard.get("totals"), dict) else {}
