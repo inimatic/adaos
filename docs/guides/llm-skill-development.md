@@ -360,6 +360,19 @@ Use this split:
 - Stream receiver: only active progress, tail, or replace-mode current state
   that is subscribed and bounded.
 
+Treat these as hard collection gates for generated skills:
+
+- If a collection can plausibly exceed 100 rows, Yjs may contain only aggregate
+  counters, freshness, small capability metadata, and route references.
+- A page/search tool must default to a small page size and cap `limit` at 100
+  unless a tighter domain budget is declared.
+- Cursor pagination is preferred for large collections; offsets are acceptable
+  only for small diagnostic jumps or when the backing store can seek cheaply.
+- Refresh actions must return compact acknowledgements. They must not return the
+  just-published collection or page payload.
+- Tests must include a synthetic large-library/table case. The Yjs summary size
+  should be effectively constant at 10k, 100k, and the skill's stress envelope.
+
 Example for a media library:
 
 ```yaml
@@ -405,9 +418,9 @@ not the page data:
 {"ok": true, "accepted": true, "status": "refresh_scheduled", "count": 125000}
 ```
 
-For household media, design the normal route for at least 100k rows and stress
-with a safety margin toward 500k synthetic metadata rows. The Yjs summary must
-stay effectively constant size across that range.
+For household media, design the normal route for at least 25k-100k rows and
+stress with a safety margin toward 500k synthetic metadata rows. The Yjs
+summary must stay effectively constant size across that range.
 
 ## Stream data
 
@@ -909,7 +922,12 @@ When a guard or migration quarantine appears, collect this packet before
 editing the skill:
 
 - `runtime.yjs_projection_guard`: owner, slot, path, payload bytes, item count,
-  degraded bytes, and route budget
+  degraded bytes, route budget, encoded Yjs update bytes, amplification ratio,
+  recovery mode, and selected-webspace YStore replay-tail context
+- `runtime.yjs_projection_guard.builder_repair_packets`: the machine-readable
+  repair packet for LLM Builder. Prefer it when present; it names the skill,
+  route, evidence, recovery state, and recommended bounded-route/compaction
+  actions.
 - `runtime.yjs_pressure`: current writer, affected roots, and
   `last_write_amplification_suspects` when a sibling branch caused the large
   update domain
@@ -999,6 +1017,8 @@ Before publishing:
   states, and skill UI resources instead of hiding these rules in widget
   special cases
 - verify no handler rewrites broad Yjs roots
+- verify collection routes keep Yjs summaries constant-size under synthetic
+  large-row tests
 - verify hot events have debounce/budget tests
 - verify SDK projection diagnostics show the expected `by_event` pressure
   counters for dirty refresh paths before optimizing a noisy event source
@@ -1013,6 +1033,9 @@ Before publishing:
 - verify actions that publish streams return only compact acks and do not
   include `state`, `items`, `sections`, logs, diagnostics, or full snapshots
 - verify Yjs and stream guard errors are visible to the UI
+- verify any `runtime.yjs_projection_guard.builder_repair_packets` entry is
+  either absent after the fix or explains the remaining bounded-route/compaction
+  work before increasing budgets
 - import and smoke-validate handlers repeatedly with no import-time workers,
   model loads, bus mutations, or persistent writes
 - reload/reactivate the same skill repeatedly and verify subscription counts,
