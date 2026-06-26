@@ -89,6 +89,45 @@ For every widget, modal section, status row, and detail view, answer:
 
 If a route cannot answer these questions, do not add it yet.
 
+## Machine-checkable route contract
+
+Builder-authored browser surfaces must leave a contract that a reviewer or
+future validator can check without reading every handler. Treat this as a hard
+gate for generated skills, not prose-only guidance.
+
+For every `data_routes` entry:
+
+- `surface` must identify one widget, modal section, status card, table,
+  stream receiver, or details action.
+- `route` must be one of `yjs`, `stream`, `tool/details`, `skill-local`, or
+  `disk/360log`; do not use vague values such as `mixed`, `auto`, or `status`.
+- `budget.max_payload_bytes` is required for `yjs`, `stream`, and
+  `tool/details` routes.
+- `budget.max_items` is required for any route that can return a collection.
+- `budget.max_publish_hz` or an equivalent debounce/coalescing statement is
+  required for event-driven routes.
+- `guard_visibility` must name the degraded state or repair evidence that the
+  Builder can inspect when the route is guarded, throttled, blocked, or
+  quarantined.
+- `projection_slot`, `receiver`, or `tool` must point to the actual
+  `data_projections`, `webui.receivers`, or `tools` entry used by the route.
+
+For every `data_projections` entry:
+
+- the slot must map to exactly one reviewable `data_routes` entry
+- the target path must not be a broad root such as `data`, `data/nodes`,
+  `ui`, or `registry`
+- the route budget should default to `max_payload_bytes <= 65536` and
+  `max_items <= 100` unless the skill explains a tighter reconnect-stable
+  reason
+- any budget above `262144` bytes or `1000` items requires an explicit
+  migration plan to stream/page/details before publish
+
+Generated code should fail review when a browser-facing skill has
+`data_projections` without a matching bounded `data_routes` contract, or when a
+tool response is the real data transport but the route plan claims Yjs or
+stream ownership.
+
 ## Memory and reload safety
 
 Process memory is a data plane too. Browser-facing skills run inside long-lived
@@ -304,6 +343,71 @@ Yjs payloads should be small enough to inspect in logs and reason about in code
 review. If a projection is hard to summarize in one short schema paragraph, it
 is probably too large for Yjs and should be split into stream variables or
 details.
+
+### Large list and table pattern
+
+Never publish a full library, inventory, search result, history, log, or
+diagnostic table into Yjs. This rule applies even when the current test data is
+small. Design for the plausible upper bound of the domain.
+
+Use this split:
+
+- Yjs summary: `ok`, `state`, `count`, aggregate bytes, freshness,
+  capabilities, degraded/quarantined marker, and route references.
+- Page/search route: bounded rows with `limit`, `cursor` or `offset`, filters,
+  stable sort, and a response budget.
+- Details route: one object or one small batch by id.
+- Stream receiver: only active progress, tail, or replace-mode current state
+  that is subscribed and bounded.
+
+Example for a media library:
+
+```yaml
+data_routes:
+- surface: widget:media_summary
+  route: yjs
+  projection_slot: mediaserver.library
+  first_paint: compact media count and scan state
+  recovery: Yjs replay restores only summary and route refs
+  budget:
+    max_payload_bytes: 8192
+    max_items: 16
+    max_publish_hz: 0.1
+  guard_visibility:
+    degraded_state: media widget shows library summary unavailable
+    repair_evidence: runtime.yjs_projection_guard
+- surface: modal:media_library
+  route: tool/details
+  tool: list_media_page
+  first_paint: empty table with loading state
+  recovery: request first page after modal open or reconnect
+  budget:
+    max_payload_bytes: 65536
+    max_items: 100
+    max_publish_hz: 0.0
+
+data_projections:
+- scope: subnet
+  slot: mediaserver.library
+  targets:
+  - backend: yjs
+    path: data/media/library
+
+tools:
+- name: list_media_page
+  description: Return one bounded media table page.
+```
+
+`refresh_snapshot` and similar commands must return a compact acknowledgement,
+not the page data:
+
+```json
+{"ok": true, "accepted": true, "status": "refresh_scheduled", "count": 125000}
+```
+
+For household media, design the normal route for at least 100k rows and stress
+with a safety margin toward 500k synthetic metadata rows. The Yjs summary must
+stay effectively constant size across that range.
 
 ## Stream data
 
@@ -799,6 +903,28 @@ Guard responsibilities:
   snapshot request storms, and publish loops.
 - Both guards should produce bounded logs and operator-visible degraded state.
 - Neither guard decides the normal data route for the skill.
+
+Builder repair evidence must include the guard source, not just a symptom.
+When a guard or migration quarantine appears, collect this packet before
+editing the skill:
+
+- `runtime.yjs_projection_guard`: owner, slot, path, payload bytes, item count,
+  degraded bytes, and route budget
+- `runtime.yjs_pressure`: current writer, affected roots, and
+  `last_write_amplification_suspects` when a sibling branch caused the large
+  update domain
+- `runtime.webio_stream_guard`: receiver, owner, payload bytes, fanout, and
+  suppression/throttle counters
+- `runtime.skill_runtime_migration.diagnostics`: current skill/stage, stale
+  age, suspected blocker, host disk/PSI hints, and recommended operator checks
+- skill-local incident log or 360log reference when the payload or traceback is
+  too large for browser state
+
+The repair output should say which route changes: keep compact Yjs summary,
+move full data to page/search/details, add stream snapshot-on-subscribe,
+tighten budgets, or add cleanup/dispose. A repair that only raises the guard
+budget is incomplete unless the data is genuinely reconnect-stable and bounded
+by domain rules.
 
 ## Observability rules
 
