@@ -1172,6 +1172,36 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             f"surface={surface.get('state') or '-'} "
             f"served_by={supervisor_runtime.get('_served_by') or '-'}"
         )
+        self_heal = (
+            runtime_state.get("runtime_self_heal")
+            if isinstance(runtime_state.get("runtime_self_heal"), dict)
+            else {}
+        )
+        self_heal_decision = (
+            self_heal.get("last_decision")
+            if isinstance(self_heal.get("last_decision"), dict)
+            else {}
+        )
+        self_heal_evidence = {}
+        if isinstance(self_heal_decision.get("pre_restart_evidence"), dict):
+            self_heal_evidence = self_heal_decision.get("pre_restart_evidence") or {}
+        elif isinstance(self_heal.get("last_evidence"), dict):
+            self_heal_evidence = self_heal.get("last_evidence") or {}
+        self_heal_process = (
+            self_heal_evidence.get("process")
+            if isinstance(self_heal_evidence.get("process"), dict)
+            else {}
+        )
+        if self_heal_decision:
+            typer.echo(
+                "supervisor_runtime.self_heal: "
+                f"reason={self_heal_decision.get('reason') or '-'} "
+                f"timeout={self_heal_decision.get('timeout_sec') or '-'} "
+                f"pid={self_heal_evidence.get('pid') or '-'} "
+                f"state={self_heal_process.get('state') or '-'} "
+                f"wchan={self_heal_process.get('wchan') or '-'} "
+                f"evidence={self_heal_evidence.get('evidence_path') or '-'}"
+            )
         surface_blockers = [
             str(item).strip()
             for item in (surface.get("blockers") or [])

@@ -1822,6 +1822,22 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
                     "warm_switch_supported": True,
                     "warm_switch_allowed": True,
                     "warm_switch_reason": "warm switch admitted",
+                    "runtime_self_heal": {
+                        "last_decision": {
+                            "reason": "supervisor.runtime.api_unready",
+                            "recorded_at": 123.0,
+                            "pre_restart_evidence": {
+                                "pid": 32123,
+                                "evidence_path": "/root/.adaos/state/supervisor/evidence/self-heal.json",
+                                "process": {"state": "D (disk sleep)", "wchan": "jbd2_log_wait_commit"},
+                            },
+                        },
+                        "last_evidence": {
+                            "pid": 32123,
+                            "evidence_path": "/root/.adaos/state/supervisor/evidence/self-heal.json",
+                            "process": {"state": "D (disk sleep)", "wchan": "jbd2_log_wait_commit"},
+                        },
+                    },
                     "member_hub_watchdog": {
                         "last_state": "ready",
                         "last_reason": "member-hub link is connected",
@@ -1894,6 +1910,8 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
     assert snapshot["required_upstream_link"]["current_owner"] == "runtime"
     assert snapshot["required_upstream_link"]["future_owner"] == "sidecar"
     assert snapshot["required_upstream_link"]["reconnect_total"] == 2
+    assert snapshot["runtime"]["runtime_self_heal"]["last_decision"]["reason"] == "supervisor.runtime.api_unready"
+    assert snapshot["runtime"]["runtime_self_heal"]["last_evidence"]["process"]["wchan"] == "jbd2_log_wait_commit"
 
 
 def test_required_upstream_link_is_enriched_with_sidecar_handoff_contract() -> None:
@@ -4072,6 +4090,28 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
                             "transition_mode": "warm_switch",
                             "candidate_runtime_state": "ready",
                             "warm_switch_reason": "warm switch admitted",
+                            "runtime_self_heal": {
+                                "last_decision": {
+                                    "reason": "supervisor.runtime.api_unready",
+                                    "timeout_sec": 60.0,
+                                    "pre_restart_evidence": {
+                                        "pid": 32123,
+                                        "evidence_path": "/root/.adaos/state/supervisor/evidence/self-heal.json",
+                                        "process": {
+                                            "state": "D (disk sleep)",
+                                            "wchan": "jbd2_log_wait_commit",
+                                        },
+                                    },
+                                },
+                                "last_evidence": {
+                                    "pid": 32123,
+                                    "evidence_path": "/root/.adaos/state/supervisor/evidence/self-heal.json",
+                                    "process": {
+                                        "state": "D (disk sleep)",
+                                        "wchan": "jbd2_log_wait_commit",
+                                    },
+                                },
+                            },
                         },
                         "_served_by": "supervisor_fallback",
                         "browser_safe_surface": {
@@ -4294,6 +4334,7 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
     assert "event_model.phase0.runtime_comm_ready: status=in_progress class_a=complete:6/6 ws=planned yws=ready continuity=planned supervisor=ready route-supervisor=ready:supervisor_public_status" in result.output
     assert "event_model.phase0.runtime_comm_ready.blockers: browser route websocket still terminates in the runtime FastAPI app" in result.output
     assert "supervisor_runtime: available=True state=countdown phase=scheduled mode=warm_switch candidate=ready warm_switch=warm switch admitted surface=ready served_by=supervisor_fallback" in result.output
+    assert "supervisor_runtime.self_heal: reason=supervisor.runtime.api_unready timeout=60.0 pid=32123 state=D (disk sleep) wchan=jbd2_log_wait_commit evidence=/root/.adaos/state/supervisor/evidence/self-heal.json" in result.output
     assert "supervisor_runtime.upstream_link: kind=member_hub owner=supervisor state=ready desired=connected current_owner=runtime planned_owner=sidecar continuity=handoff_planned support=planned handoff=planned restart_policy=runtime_reconnect ready=True reconnects=2 served_by=supervisor_fallback" in result.output
     assert "media.update_guard: live=yes" in result.output
     assert "member=defer hub=preserve_sidecar" in result.output

@@ -1933,11 +1933,40 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _compact_public_runtime_self_heal(value: dict[str, Any] | None) -> dict[str, Any]:
+    state = value if isinstance(value, dict) else {}
+    decision = state.get("last_decision") if isinstance(state.get("last_decision"), dict) else {}
+    last_evidence = state.get("last_evidence") if isinstance(state.get("last_evidence"), dict) else {}
+    pre_restart_evidence = (
+        decision.get("pre_restart_evidence")
+        if isinstance(decision.get("pre_restart_evidence"), dict)
+        else last_evidence
+    )
+    evidence = _compact_runtime_stop_evidence(pre_restart_evidence)
+    return {
+        "unhealthy_since": state.get("unhealthy_since"),
+        "unhealthy_kind": str(state.get("unhealthy_kind") or "").strip() or None,
+        "last_decision": {
+            "recorded_at": decision.get("recorded_at"),
+            "reason": str(decision.get("reason") or "").strip() or None,
+            "message": str(decision.get("message") or "").strip() or None,
+            "runtime_port": decision.get("runtime_port"),
+            "runtime_url": str(decision.get("runtime_url") or "").strip() or None,
+            "listener_running": decision.get("listener_running"),
+            "runtime_api_ready": decision.get("runtime_api_ready"),
+            "timeout_sec": decision.get("timeout_sec"),
+            "pre_restart_evidence": evidence,
+        },
+        "last_evidence": evidence,
+    }
+
+
 def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     source = dict(payload or {})
     status = source.get("status") if isinstance(source.get("status"), dict) else {}
     runtime = source.get("runtime") if isinstance(source.get("runtime"), dict) else {}
     attempt = source.get("attempt") if isinstance(source.get("attempt"), dict) else {}
+    runtime_self_heal = runtime.get("runtime_self_heal") if isinstance(runtime.get("runtime_self_heal"), dict) else {}
     sidecar = runtime.get("sidecar") if isinstance(runtime.get("sidecar"), dict) else {}
     sidecar_process = sidecar.get("process") if isinstance(sidecar.get("process"), dict) else {}
     sidecar_health = sidecar.get("health") if isinstance(sidecar.get("health"), dict) else {}
@@ -2006,6 +2035,7 @@ def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, A
             "slot_ports": runtime.get("slot_ports") if isinstance(runtime.get("slot_ports"), dict) else {},
             "required_upstream_link": _compact_watchdog_required_link(runtime.get("required_upstream_link")),
             "root_promotion_required": bool(runtime.get("root_promotion_required")),
+            "runtime_self_heal": _compact_public_runtime_self_heal(runtime_self_heal),
             "sidecar": {
                 "enabled": bool(sidecar.get("enabled")),
                 "role": str(sidecar.get("role") or "").strip() or None,

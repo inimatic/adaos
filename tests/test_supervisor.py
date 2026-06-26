@@ -4993,6 +4993,36 @@ def test_public_update_status_payload_is_browser_safe() -> None:
                 },
                 "root_promotion_required": True,
                 "bootstrap_update": {"required": True, "changed_paths": ["src/adaos/apps/supervisor.py"]},
+                "runtime_self_heal": {
+                    "unhealthy_since": None,
+                    "unhealthy_kind": None,
+                    "last_decision": {
+                        "recorded_at": 111.0,
+                        "reason": "supervisor.runtime.api_unready",
+                        "message": "active runtime stayed api unready for 60s",
+                        "runtime_port": 8777,
+                        "runtime_url": "http://127.0.0.1:8777",
+                        "listener_running": True,
+                        "runtime_api_ready": False,
+                        "timeout_sec": 60.0,
+                        "pre_restart_evidence": {
+                            "captured_at": 110.0,
+                            "reason": "supervisor.runtime.api_unready",
+                            "stage": "runtime_self_heal_restart",
+                            "pid": 32123,
+                            "runtime_instance_id": "rt-a-a1b2c3d4",
+                            "evidence_path": "/root/.adaos/state/supervisor/evidence/self-heal.json",
+                            "memory": {"family_rss_bytes": 123456},
+                            "process": {
+                                "available": True,
+                                "state": "D (disk sleep)",
+                                "wchan": "jbd2_log_wait_commit",
+                                "threads": [{"tid": 32123, "state": "D (disk sleep)", "wchan": "jbd2_log_wait_commit"}],
+                            },
+                        },
+                    },
+                    "last_evidence": {"evidence_path": "stale.json"},
+                },
                 "managed_cmdline": ["hidden"],
             },
             "attempt": {
@@ -5051,6 +5081,9 @@ def test_public_update_status_payload_is_browser_safe() -> None:
     assert payload["runtime"]["required_upstream_link"]["current_owner"] == "sidecar"
     assert "watchdog" not in payload["runtime"]["required_upstream_link"]
     assert payload["runtime"]["root_promotion_required"] is True
+    assert payload["runtime"]["runtime_self_heal"]["last_decision"]["reason"] == "supervisor.runtime.api_unready"
+    assert payload["runtime"]["runtime_self_heal"]["last_evidence"]["pid"] == 32123
+    assert payload["runtime"]["runtime_self_heal"]["last_evidence"]["process"]["wchan"] == "jbd2_log_wait_commit"
     assert payload["_served_by"] == "supervisor_fallback"
     assert "managed_cmdline" not in payload["runtime"]
     assert "error" not in payload["status"]
