@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +22,17 @@ from adaos.services.workspace_registry import build_registry_entry, list_workspa
 _LOG = logging.getLogger("adaos.skill.runtime_migration")
 _TASK: asyncio.Task[Any] | None = None
 _LOCK = asyncio.Lock()
+_DEFAULT_STALE_AFTER_S = 300.0
+_STAGE_STALE_AFTER_S: dict[str, float] = {
+    "schedule": 60.0,
+    "sync": 180.0,
+    "select": 60.0,
+    "migrate": 300.0,
+    "disable": 60.0,
+    "refresh_runtime": 600.0,
+    "tests": 600.0,
+    "background": 120.0,
+}
 
 
 def _status_dir(ctx: AgentContext) -> Path:
@@ -55,29 +67,193 @@ def _write_status(ctx: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _round_age(now: float, ts: Any) -> float | None:
+    stamp = _float_or_none(ts)
+    if stamp is None or stamp <= 0:
+        return None
+    return round(max(0.0, now - stamp), 3)
+
+
+def _current_candidate(payload: dict[str, Any]) -> dict[str, Any]:
+    current = payload.get("current") if isinstance(payload.get("current"), dict) else {}
+    current_skill = _clean_text(current.get("skill")) if current else ""
+    for item in list(payload.get("skills") or []):
+        if not isinstance(item, dict):
+            continue
+        if current_skill and _clean_text(item.get("skill")) == current_skill:
+            return dict(item)
+    return {}
+
+
+def _io_pressure_snapshot(ctx: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
+    disks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for getter_name in ("base_dir", "workspace_dir"):
+        try:
+            getter = getattr(ctx.paths, getter_name)
+            raw = getter() if callable(getter) else getter
+            path = Path(raw).expanduser().resolve()
+        except Exception:
+            continue
+        token = str(path)
+        if token in seen:
+            continue
+        seen.add(token)
+        try:
+            usage = shutil.disk_usage(path)
+            total = max(1, int(usage.total))
+            disks.append(
+                {
+                    "path": token,
+                    "total_bytes": int(usage.total),
+                    "used_bytes": int(usage.used),
+                    "free_bytes": int(usage.free),
+                    "used_pct": round((int(usage.used) / total) * 100.0, 3),
+                }
+            )
+        except Exception:
+            continue
+    psi: dict[str, Any] = {"available": False}
+    try:
+        raw = Path("/proc/pressure/io").read_text(encoding="utf-8").splitlines()
+        parsed: dict[str, dict[str, float]] = {}
+        for line in raw:
+            parts = [part for part in line.split() if part]
+            if not parts:
+                continue
+            row: dict[str, float] = {}
+            for part in parts[1:]:
+                key, _, value = part.partition("=")
+                if key and value:
+                    with contextlib.suppress(Exception):
+                        row[key] = float(value)
+            parsed[parts[0]] = row
+        psi = {"available": bool(parsed), **parsed}
+    except Exception:
+        pass
+    pressure = any(float(item.get("used_pct") or 0.0) >= 95.0 for item in disks)
+    try:
+        pressure = pressure or float(((psi.get("full") or {}) if isinstance(psi.get("full"), dict) else {}).get("avg10") or 0.0) >= 10.0
+    except Exception:
+        pass
+    return {
+        "available": bool(disks) or bool(psi.get("available")),
+        "pressure": bool(pressure),
+        "disks": disks,
+        "psi_io": psi,
+    }
+
+
+def _classify_status_blocker(payload: dict[str, Any], *, stale: bool, stage: str, candidate: dict[str, Any]) -> str | None:
+    text_parts: list[str] = []
+    for key in ("message", "error", "reason"):
+        value = payload.get(key)
+        if value:
+            text_parts.append(str(value))
+    for key in ("error", "disable_error"):
+        value = candidate.get(key)
+        if value:
+            text_parts.append(str(value))
+    deactivation = candidate.get("deactivation") if isinstance(candidate.get("deactivation"), dict) else {}
+    if deactivation:
+        text_parts.append(str(deactivation.get("comment") or ""))
+        text_parts.append(str(deactivation.get("reason") or ""))
+    text = " ".join(text_parts).lower()
+    if "database is locked" in text or ("sqlite" in text and "locked" in text):
+        return "sqlite_lock"
+    if "no space left" in text or "disk full" in text:
+        return "disk_full"
+    if "pip" in text or "dependency" in text or "install" in text or "torch" in text:
+        return "dependency_install_failed"
+    if stale:
+        if stage in {"refresh_runtime", "prepare", "install"}:
+            return "dependency_install_or_runtime_prepare_stalled"
+        if stage == "tests":
+            return "skill_tests_stalled"
+        if stage == "sync":
+            return "workspace_sync_or_git_stalled"
+        if stage in {"disable", "migrate"}:
+            return "skill_runtime_migration_stalled"
+        return "skill_runtime_migration_status_stale"
+    return None
+
+
+def _status_diagnostics(ctx: AgentContext, payload: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+    ts = _now() if now is None else float(now)
+    state = _clean_text(payload.get("state")) or "unknown"
+    phase = _clean_text(payload.get("phase")) or state
+    current = payload.get("current") if isinstance(payload.get("current"), dict) else {}
+    stage = _clean_text(current.get("stage") if current else "") or phase
+    candidate = _current_candidate(payload)
+    updated_age_s = _round_age(ts, payload.get("updated_at"))
+    elapsed_s = _round_age(ts, payload.get("started_at") or payload.get("scheduled_at"))
+    stale_after_s = float(_STAGE_STALE_AFTER_S.get(stage, _STAGE_STALE_AFTER_S.get(phase, _DEFAULT_STALE_AFTER_S)))
+    pending = bool(payload.get("pending"))
+    stale = bool(pending and updated_age_s is not None and updated_age_s >= stale_after_s)
+    host_pressure = _io_pressure_snapshot(ctx, payload)
+    suspected_blocker = _classify_status_blocker(payload, stale=stale, stage=stage, candidate=candidate)
+    if suspected_blocker is None and stale and bool(host_pressure.get("pressure")):
+        suspected_blocker = "host_io_or_disk_pressure"
+    recommendations: list[str] = []
+    if suspected_blocker in {"dependency_install_or_runtime_prepare_stalled", "dependency_install_failed"}:
+        recommendations.append("inspect runtime prepare/install logs for the current skill")
+    if suspected_blocker in {"sqlite_lock", "host_io_or_disk_pressure", "disk_full"}:
+        recommendations.append("inspect disk usage, /proc/pressure/io, and SQLite lock holders on the stand")
+    if stale:
+        recommendations.append("inspect state/skill_runtime_migration/status.json and running migration process wait channels")
+    return {
+        "schema": "adaos.skill_runtime_migration.diagnostics.v1",
+        "state": "stalled" if stale else ("failed" if state == "failed" else "ok"),
+        "pending": pending,
+        "stale": stale,
+        "stale_after_s": stale_after_s if pending else None,
+        "updated_age_s": updated_age_s,
+        "elapsed_s": elapsed_s,
+        "current_skill": _clean_text(current.get("skill") if current else "") or None,
+        "current_stage": stage or None,
+        "current_index": current.get("index") if current else None,
+        "suspected_blocker": suspected_blocker,
+        "host_pressure": host_pressure,
+        "recommendations": recommendations,
+    }
+
+
+def _with_diagnostics(ctx: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    result["diagnostics"] = _status_diagnostics(ctx, result)
+    return result
+
+
 def read_status(ctx: AgentContext) -> dict[str, Any]:
     path = status_path(ctx)
     if not path.exists():
-        return {
+        return _with_diagnostics(ctx, {
             "ok": True,
             "state": "idle",
             "phase": "idle",
             "message": "no active skill runtime migration",
             "pending": False,
             "updated_at": None,
-        }
+        })
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {
+        return _with_diagnostics(ctx, {
             "ok": False,
             "state": "unknown",
             "phase": "read_status",
             "message": "skill runtime migration status is unreadable",
             "pending": False,
             "status_path": str(path),
-        }
-    return payload if isinstance(payload, dict) else {"ok": False, "state": "unknown", "pending": False}
+        })
+    return _with_diagnostics(ctx, payload if isinstance(payload, dict) else {"ok": False, "state": "unknown", "pending": False})
 
 
 def _version(value: Any) -> Version | None:

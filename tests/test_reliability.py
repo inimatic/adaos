@@ -2514,6 +2514,7 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
     assert payload["runtime"]["yjs_pressure"]["target"] == "primary_shared_doc"
     assert payload["runtime"]["yjs_projection_guard"]["schema"] == "adaos.yjs_projection_guard.v1"
     assert payload["runtime"]["webio_stream_guard"]["schema"] == "adaos.webio_stream_guard.v1"
+    assert payload["runtime"]["skill_runtime_migration"]["diagnostics"]["schema"] == "adaos.skill_runtime_migration.diagnostics.v1"
     assert "top_webio_stream_controls" in payload["runtime"]["eventbus_backlog"]
 
 

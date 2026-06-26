@@ -6318,6 +6318,33 @@ def _eventbus_backlog_runtime_snapshot() -> dict[str, Any]:
     }
 
 
+def _skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from adaos.services.skill.runtime_migration_worker import read_status
+
+        payload = read_status(get_ctx())
+        if isinstance(payload, dict):
+            result = dict(payload)
+            result["available"] = True
+            result.setdefault("diagnostics", {})
+            return result
+    except Exception:
+        pass
+    return {
+        "available": False,
+        "ok": False,
+        "state": "unknown",
+        "phase": "read_status",
+        "pending": False,
+        "diagnostics": {
+            "schema": "adaos.skill_runtime_migration.diagnostics.v1",
+            "state": "unknown",
+            "stale": False,
+            "suspected_blocker": "status_unavailable",
+        },
+    }
+
+
 def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
@@ -7270,6 +7297,7 @@ def reliability_snapshot(
     webio_stream_guard = _webio_stream_guard_runtime_snapshot(sync_runtime)
     yjs_projection_guard = _yjs_projection_guard_runtime_snapshot(sync_runtime)
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
+    skill_runtime_migration = _skill_runtime_migration_runtime_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
@@ -7316,6 +7344,7 @@ def reliability_snapshot(
             "webio_stream_guard": webio_stream_guard,
             "yjs_projection_guard": yjs_projection_guard,
             "eventbus_backlog": eventbus_backlog,
+            "skill_runtime_migration": skill_runtime_migration,
             "incident_registry": incidents,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,
