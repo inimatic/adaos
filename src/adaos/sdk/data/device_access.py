@@ -108,12 +108,11 @@ def _normalize_redevice_ref(device_ref: str | None = None, code: str | None = No
 
 
 def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None = None) -> tuple[dict[str, Any] | None, str]:
-    """Resolve a ReDevice device ref to a pair code for legacy command delivery.
+    """Resolve a current ReDevice endpoint identity to its active pair code.
 
-    This is a transition helper. The target architecture routes all endpoint
-    commands through EndpointRouter. The current ReDevice root API still uses
-    the short pair code as its command target, so SDK consumers should call this
-    helper surface instead of importing the ReDevice bridge directly.
+    Revoked or superseded admission/session history is intentionally ignored.
+    Skills should fail with endpoint_not_found instead of silently delivering
+    commands to an old pair code.
     """
 
     target = _normalize_redevice_ref(device_ref, code)
@@ -127,7 +126,6 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
         if not isinstance(raw, Mapping):
             continue
         compact = compact_endpoint(raw)
-        history_codes = {_text(item.get("code")) for item in list(raw.get("admission_history") or []) if isinstance(item, Mapping)}
         candidates = {
             _text(raw.get("code")),
             _text(raw.get("pair_code")),
@@ -137,19 +135,10 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
             _text(compact.get("endpoint_id")),
             _text(compact.get("id")),
         }
-        candidates.update(history_codes)
         if target in candidates:
             pair_code = _text(compact.get("code")) or _text(raw.get("code")) or target
-            resolved = dict(raw)
-            if target in history_codes and target != pair_code:
-                resolved["_resolution"] = {
-                    "schema_version": "endpoint-resolution.v1",
-                    "matched_historical_code": target,
-                    "current_code": pair_code,
-                    "history_resolved": True,
-                }
-            return resolved, pair_code
-    return None, target
+            return dict(raw), pair_code
+    return None, ""
 
 
 def resolve_endpoint_device(

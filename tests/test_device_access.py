@@ -111,7 +111,7 @@ def test_sdk_device_access_prefers_live_root_redevice_snapshot(monkeypatch) -> N
     assert devices[0]["online_state"] in {"online", "stale"}
 
 
-def test_sdk_device_access_resolves_old_pair_code_from_admission_history(monkeypatch) -> None:
+def test_sdk_device_access_does_not_resolve_revoked_pair_code_from_admission_history(monkeypatch) -> None:
     from adaos.sdk import redevice as sdk_redevice
     from adaos.sdk.data import device_access as sdk_device_access
 
@@ -131,13 +131,8 @@ def test_sdk_device_access_resolves_old_pair_code_from_admission_history(monkeyp
 
     endpoint, pair_code = sdk_device_access._resolve_redevice_endpoint(code="FMRS7WTB")
 
-    assert pair_code == "SNX68P2A"
-    assert endpoint["_resolution"] == {
-        "schema_version": "endpoint-resolution.v1",
-        "matched_historical_code": "FMRS7WTB",
-        "current_code": "SNX68P2A",
-        "history_resolved": True,
-    }
+    assert endpoint is None
+    assert pair_code == ""
 
 
 def test_sdk_device_access_assign_endpoint_records_owner(monkeypatch) -> None:

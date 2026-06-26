@@ -637,7 +637,9 @@ Recommended order:
    full runtime API.
 4. `http_chunked`, `mjpeg`, or `segment_upload`: legacy-compatible streaming
    modes for old Android and constrained devices.
-5. `redevice_poll`: legacy command/event polling through the root API.
+5. `redevice_poll`: legacy command/event polling. The target endpoint for this
+   adapter is hub-local HTTP, with root API only as bootstrap or emergency
+   fallback.
 6. `root_relay` or `root_relay_inline`: bounded emergency fallback when direct
    paths are unavailable. It must be policy-limited and observable.
 
@@ -728,6 +730,21 @@ from explicit environment override such as `ADAOS_REDEVICE_MEDIA_BASES` or from
 slot-aware sidecar runtime state, not from a hard-coded `localhost` browser URL.
 The sidecar media proxy is deliberately read-only and path-bounded to published
 media file content; it is not a LAN exposure of the full hub API.
+
+### Current Transport Finding
+
+The Android 4.1 tablet test on `2026-06-26` showed that the agent can run and
+stay in `ACTIVE_ENDPOINT`, but command polling against
+`https://ru.api.inimatic.com/v1/redevice/.../commands/next` can fail with
+`SSL23_GET_SERVER_HELLO:unsupported protocol`. This is not a reliable runtime
+transport for legacy ReDevice endpoints.
+
+The same test confirmed that the hub-local Python API on `.30` does not expose
+`/v1/redevice/*` yet. Therefore the next transport slice must add a hub-local
+ReDevice command/event queue and advertise it to the agent through endpoint
+policy or reconnect metadata. Root remains useful for QR admission and as a
+bounded fallback, but ordinary endpoint commands and events should not depend on
+public root TLS.
 
 ## Policy And Trust
 
@@ -842,12 +859,14 @@ Current M2:
 
 1. Promote ReDevice display/media/audio commands from compatibility bridge to
    generic `EndpointRouter` APIs.
-2. `[partial]` Store assignments in structured `endpoint_assignment`
+2. `[must]` Add hub-local ReDevice command/event polling routes and have
+   Android prefer them over public root polling after admission.
+3. `[partial]` Store assignments in structured `endpoint_assignment`
    projections with node-qualified owner `node_id:skill_id`; remaining work is
    durable `EndpointAssignment` records with audit and conflict handling.
-3. Define router-owned media session lifecycle for local HTTP/WebRTC routes,
+4. Define router-owned media session lifecycle for local HTTP/WebRTC routes,
    including restart policy and fallback to bounded relay only when required.
-4. Close response routing from Voice/NLU/dialog results to endpoint speaker,
+5. Close response routing from Voice/NLU/dialog results to endpoint speaker,
    endpoint display, browser UI, notification, or text buffer.
-5. Add endpoint audio arbitration so several endpoints do not dispatch the same
+6. Add endpoint audio arbitration so several endpoints do not dispatch the same
    mutating command independently.
