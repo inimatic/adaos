@@ -192,10 +192,16 @@ def yjs_projection_guard_snapshot(
     if token_owner:
         rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
     rows.sort(key=lambda row: float(row.get("last_at") or 0.0), reverse=True)
+    guarded_total = sum(int(row.get("guarded_total") or 0) for row in rows)
     return {
         "schema": "adaos.yjs_projection_guard.v1",
         "enabled": bool(_YJS_PROJECTION_GUARD_ENABLED),
+        "webspace_id": token_ws or None,
+        "owner": token_owner or None,
         "total": len(rows),
+        "totals": {
+            "guarded": guarded_total,
+        },
         "items": rows[:max_items],
     }
 

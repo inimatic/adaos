@@ -419,6 +419,7 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
 
 
 def test_projection_service_degrades_oversized_yjs_projection_before_write(monkeypatch) -> None:
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
     fake_state = {"data": _FakeMap()}
     target = SimpleNamespace(
         backend="yjs",
@@ -467,6 +468,16 @@ def test_projection_service_degrades_oversized_yjs_projection_before_write(monke
     assert projected["guard"]["slot"] == "mediaserver.library"
     assert projected["guard"]["max_list_items"] == 40
     assert projected["preserved"]["count"] == 40
+
+    snapshot = projection_service_module.yjs_projection_guard_snapshot(
+        webspace_id="desktop",
+        owner="skill:mediaserver",
+    )
+    assert snapshot["webspace_id"] == "desktop"
+    assert snapshot["owner"] == "skill:mediaserver"
+    assert snapshot["total"] == 1
+    assert snapshot["totals"]["guarded"] == 1
+    assert snapshot["items"][0]["slot"] == "mediaserver.library"
 
 
 def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:
