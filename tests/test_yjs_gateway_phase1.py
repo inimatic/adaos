@@ -115,9 +115,14 @@ class _FakeYStore:
 class _FakeWriteYStore:
     def __init__(self) -> None:
         self.writes: list[bytes] = []
+        self.compaction_requests: list[dict[str, object]] = []
 
     async def write(self, update: bytes) -> None:
         self.writes.append(update)
+
+    async def request_runtime_compaction(self, **kwargs) -> bool:
+        self.compaction_requests.append(dict(kwargs))
+        return True
 
 
 class _FakeBus:
@@ -628,6 +633,32 @@ def test_diagnostic_room_persists_unmarked_browser_update() -> None:
     asyncio.run(room._tracked_ystore_write(b"browser-update"))
 
     assert ystore.writes == [b"browser-update"]
+    assert ystore.compaction_requests == []
+
+
+def test_diagnostic_room_requests_compaction_after_large_gateway_persist(monkeypatch) -> None:
+    reset_backend_room_update_markers()
+    ystore = _FakeWriteYStore()
+    room = gateway_module.DiagnosticYRoom(ystore=ystore, log=_fake_log())
+    room._webspace_id = "desktop"
+
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_BYTES", 4)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC", 0.0)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC", 0.0)
+
+    async def _exercise() -> None:
+        await room._tracked_ystore_write(b"large-gateway-update")
+        await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+    assert ystore.writes == [b"large-gateway-update"]
+    assert ystore.compaction_requests == [
+        {
+            "reason": "gateway_live_room_persist",
+            "min_quiet_sec": 0.0,
+        }
+    ]
 
 
 def test_request_webio_stream_snapshots_extracts_node_qualified_receiver() -> None:

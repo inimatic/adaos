@@ -323,6 +323,21 @@ _YWS_ROOM_READY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_READY_TIMEOUT_S", 12.0, m
 _YWS_ROOM_READY_MAX_S = _env_float("ADAOS_YWS_ROOM_READY_MAX_S", 45.0, minimum=0.0)
 _YWS_ROOM_READY_POLL_S = _env_float("ADAOS_YWS_ROOM_READY_POLL_S", 1.0, minimum=0.25)
 _YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S", 20.0, minimum=0.0)
+_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_BYTES = _env_int(
+    "ADAOS_YSTORE_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_BYTES",
+    256 * 1024,
+    minimum=0,
+)
+_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC = _env_float(
+    "ADAOS_YSTORE_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC",
+    1.5,
+    minimum=0.0,
+)
+_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC = _env_float(
+    "ADAOS_YSTORE_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC",
+    1.0,
+    minimum=0.0,
+)
 _YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S", 3.0, minimum=0.25)
 _YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS = _env_int("ADAOS_YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS", 3, minimum=1)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
@@ -556,6 +571,52 @@ def yjs_pressure_snapshot(webspace_id: str | None = None) -> dict[str, Any]:
     raw["age_s"] = round(max(0.0, now - since_at), 3) if bool(raw.get("active")) and since_at > 0.0 else 0.0
     raw["webspace_id"] = key
     return raw
+
+
+def _request_gateway_live_persist_compaction(
+    ystore: Any,
+    webspace_id: str,
+    *,
+    update_bytes: int,
+    source: str,
+    channel: str,
+) -> bool:
+    threshold = int(_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_BYTES)
+    observed = max(0, int(update_bytes or 0))
+    if threshold <= 0 or observed < threshold:
+        return False
+    requester = getattr(ystore, "request_runtime_compaction", None)
+    if not callable(requester):
+        return False
+    key = str(webspace_id or "").strip() or "default"
+    delay = float(_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC)
+    quiet = float(_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC)
+
+    async def _runner() -> None:
+        try:
+            if delay > 0.0:
+                await asyncio.sleep(delay)
+            await requester(reason="gateway_live_room_persist", min_quiet_sec=quiet)
+            _ylog.warning(
+                "YStore compaction requested after large gateway live-room persist webspace=%s bytes=%s source=%s channel=%s",
+                key,
+                observed,
+                source,
+                channel,
+            )
+        except Exception:
+            _ylog.debug(
+                "failed to request YStore compaction after gateway live-room persist webspace=%s",
+                key,
+                exc_info=True,
+            )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    loop.create_task(_runner())
+    return True
 
 
 class DiagnosticYRoom(YRoom):
@@ -918,6 +979,13 @@ class DiagnosticYRoom(YRoom):
                     governed=bool(persisted.get("governed", False)),
                 ):
                     await ystore.write(update)
+                _request_gateway_live_persist_compaction(
+                    ystore,
+                    self._diag_room_id(),
+                    update_bytes=update_len,
+                    source=source,
+                    channel=channel,
+                )
                 return
             self._diag_log_pressure("ystore.write.scheduled", update_bytes=len(update))
             async with ystore_write_metadata(
@@ -926,6 +994,13 @@ class DiagnosticYRoom(YRoom):
                 channel="core.yjs.gateway.live_room.persist",
             ):
                 await ystore.write(update)
+            _request_gateway_live_persist_compaction(
+                ystore,
+                self._diag_room_id(),
+                update_bytes=len(update or b""),
+                source="yjs.gateway_ws",
+                channel="core.yjs.gateway.live_room.persist",
+            )
         finally:
             self._diag_pending_store_tasks = max(0, int(self._diag_pending_store_tasks) - 1)
 
