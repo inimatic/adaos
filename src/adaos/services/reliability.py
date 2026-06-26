@@ -6293,6 +6293,7 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
             "backup_gc_total": _nonnegative_int(entry.get("backup_gc_total")),
             "backup_malloc_trim_total": _nonnegative_int(entry.get("backup_malloc_trim_total")),
             "auto_backup_total": _nonnegative_int(entry.get("auto_backup_total")),
+            "auto_backup_large_update_bytes": _nonnegative_int(entry.get("auto_backup_large_update_bytes")),
             "last_backup_gc_collected": _nonnegative_int(entry.get("last_backup_gc_collected")),
             "last_backup_malloc_trimmed": bool(entry.get("last_backup_malloc_trimmed")),
             "last_auto_backup_reason": str(entry.get("last_auto_backup_reason") or "").strip() or None,

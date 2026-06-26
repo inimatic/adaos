@@ -474,6 +474,7 @@ def _projection_compaction_runtime_summary(snapshot: Mapping[str, Any]) -> dict[
         "backup_gc_total": max(0, _int_or_zero(snapshot.get("backup_gc_total"))),
         "backup_malloc_trim_total": max(0, _int_or_zero(snapshot.get("backup_malloc_trim_total"))),
         "auto_backup_total": max(0, _int_or_zero(snapshot.get("auto_backup_total"))),
+        "auto_backup_large_update_bytes": max(0, _int_or_zero(snapshot.get("auto_backup_large_update_bytes"))),
         "last_backup_gc_collected": max(0, _int_or_zero(snapshot.get("last_backup_gc_collected"))),
         "last_backup_malloc_trimmed": bool(snapshot.get("last_backup_malloc_trimmed")),
     }

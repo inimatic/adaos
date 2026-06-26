@@ -387,6 +387,37 @@ async def test_ystore_auto_backup_after_pressure_compaction(monkeypatch) -> None
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_auto_backup_after_large_update(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "1")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", "0.05")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_LARGE_UPDATE_BYTES", "4")
+    webspace_id = _webspace_id("large-update-auto-backup")
+    store = get_ystore_for_webspace(webspace_id)
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("data").set(txn, "blob", "x" * 1024)
+    update = Y.encode_state_as_update(ydoc)
+    try:
+        await store.write_update(update, update_kind="diff")
+
+        for _ in range(20):
+            snapshot = store.runtime_snapshot()
+            if int(snapshot.get("auto_backup_total") or 0) >= 1:
+                break
+            await asyncio.sleep(0.05)
+
+        snapshot = store.runtime_snapshot()
+        assert snapshot["auto_backup_total"] >= 1
+        assert snapshot["last_auto_backup_reason"] == "large_update"
+        assert snapshot["snapshot_file_exists"] is True
+        assert snapshot["base_snapshot_present"] is True
+        assert snapshot["update_log_entries"] == 1
+        assert snapshot["runtime_compaction_eligible"] is False
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_request_runtime_compaction_collapses_runtime_log(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "1")
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", "0")

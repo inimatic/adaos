@@ -350,6 +350,11 @@ class AdaosMemoryYStore(BaseYStore):
         self.auto_backup_after_compact = _env_flag("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", True)
         self.auto_backup_cooldown_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", 30.0, minimum=0.0)
         self.auto_backup_debounce_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", 0.5, minimum=0.0)
+        self.auto_backup_large_update_bytes = _env_int(
+            "ADAOS_YSTORE_AUTOBACKUP_LARGE_UPDATE_BYTES",
+            256 * 1024,
+            minimum=0,
+        )
         self._lock = threading.RLock()
         self._updates: List[Tuple[bytes, bytes, float]] = []
         self._base_snapshot_present = False
@@ -534,6 +539,16 @@ class AdaosMemoryYStore(BaseYStore):
                 ):
                     self._auto_backup_inflight = True
                     auto_backup_reason = compact_reason
+            if (
+                auto_backup_reason is None
+                and self.auto_backup_after_compact
+                and self.auto_backup_large_update_bytes > 0
+                and len(payload) >= int(self.auto_backup_large_update_bytes)
+                and not self._auto_backup_inflight
+                and (self._last_auto_backup_at <= 0.0 or now - self._last_auto_backup_at >= self.auto_backup_cooldown_sec)
+            ):
+                self._auto_backup_inflight = True
+                auto_backup_reason = "large_update"
             self._generation += 1
         if notify:
             try:
@@ -1027,6 +1042,7 @@ class AdaosMemoryYStore(BaseYStore):
             "auto_backup_after_compact": bool(self.auto_backup_after_compact),
             "auto_backup_cooldown_sec": float(self.auto_backup_cooldown_sec),
             "auto_backup_debounce_sec": float(self.auto_backup_debounce_sec),
+            "auto_backup_large_update_bytes": int(self.auto_backup_large_update_bytes),
             "auto_backup_inflight": bool(self._auto_backup_inflight),
             "snapshot_file_exists": bool(snapshot_exists),
             "snapshot_file_size": int(snapshot_size),
