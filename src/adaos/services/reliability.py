@@ -5623,6 +5623,17 @@ def _planned_transition_snapshot_from_supervisor_status(
     return "ready", {"active": False, "reason": None}
 
 
+def _supervisor_update_status_is_terminal(status: dict[str, Any] | None) -> bool:
+    data = status if isinstance(status, dict) else {}
+    state = str(data.get("state") or "").strip().lower()
+    phase = str(data.get("phase") or "").strip().lower()
+    if state in {"failed", "rolled_back", "expired", "cancelled", "idle"}:
+        return True
+    if state == "succeeded" and phase in {"", "validate"}:
+        return True
+    return state == "validated" and phase not in {"root_promotion_pending"}
+
+
 def _map_connectivity_transport_state(value: Any) -> str:
     token = str(value or "").strip().lower()
     if token in {"ready", "reachable", "connected", "nominal", "stable", "attached", "active"}:
@@ -5643,6 +5654,30 @@ def _connectivity_transition_state_for_link(
 ) -> tuple[str, dict[str, Any]]:
     data = link if isinstance(link, dict) else {}
     raw_state = str(data.get("state") or "").strip().lower()
+    raw_transition = str(data.get("transition_state") or "").strip().lower()
+    transport_state = _map_connectivity_transport_state(raw_state)
+    if raw_transition in {"waiting_restart", "restarting", "paused_for_update"}:
+        if (
+            _supervisor_update_status_is_terminal(supervisor_status)
+            and (
+                bool(data.get("ready"))
+                or transport_state == "ready"
+                or str(data.get("handoff_state") or "").strip().lower() == "ready"
+            )
+        ):
+            return "ready", {"active": False, "reason": "supervisor_update_terminal"}
+        reason = str(data.get("transition_reason") or data.get("reason") or "").strip() or None
+        return raw_transition, {"active": True, "reason": reason}
+    if (
+        raw_state in {"waiting_restart", "restarting", "paused_for_update"}
+        and _supervisor_update_status_is_terminal(supervisor_status)
+        and (
+            bool(data.get("ready"))
+            or transport_state == "ready"
+            or str(data.get("handoff_state") or "").strip().lower() == "ready"
+        )
+    ):
+        return "ready", {"active": False, "reason": "supervisor_update_terminal"}
     if raw_state in {"waiting_restart", "restarting", "paused_for_update", "disabled", "not_applicable"}:
         active = raw_state in {"waiting_restart", "restarting", "paused_for_update"}
         reason = str(data.get("reason") or "").strip() or None
@@ -5653,7 +5688,6 @@ def _connectivity_transition_state_for_link(
     derived_state, planned = _planned_transition_snapshot_from_supervisor_status(supervisor_status)
     if planned.get("active"):
         return derived_state, planned
-    transport_state = _map_connectivity_transport_state(raw_state)
     if transport_state == "ready":
         return "ready", {"active": False, "reason": None}
     if transport_state == "disconnected":

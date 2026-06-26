@@ -26,3 +26,5 @@ src/adaos/integrations/rasa-backup/
 tmp/
 example
 example2
+example3
+.ssh

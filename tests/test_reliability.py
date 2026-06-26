@@ -514,6 +514,47 @@ def test_connectivity_snapshot_overrides_stale_supervisor_browser_route_degradat
     assert required["blockers"] == []
 
 
+def test_connectivity_snapshot_clears_stale_waiting_restart_after_terminal_update() -> None:
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+            "hub_root_browser": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+        },
+        supervisor_runtime={
+            "available": True,
+            "status": {
+                "state": "succeeded",
+                "phase": "validate",
+                "message": "core update target already active; request deduplicated",
+            },
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "ready",
+                "transition_state": "waiting_restart",
+                "ready": True,
+                "reason": "root_promotion_pending",
+                "served_by": "supervisor_runtime",
+                "blockers": [],
+            },
+        },
+    )
+
+    required = snapshot["required_upstream_link"]
+    assert required["transport_state"] == "ready"
+    assert required["transition_state"] == "ready"
+    assert required["planned_transition"] == {
+        "active": False,
+        "reason": "supervisor_update_terminal",
+    }
+
+
 def test_connectivity_snapshot_keeps_degraded_upstream_link_distinct_from_reconnect() -> None:
     snapshot = _connectivity_snapshot(
         node_id="node-1",
