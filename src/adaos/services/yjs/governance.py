@@ -131,6 +131,9 @@ def _record_event(
         current["last_projection"] = (
             dict(policy.get("projection")) if isinstance(policy.get("projection"), dict) else {}
         )
+        current["last_recovery"] = (
+            dict(policy.get("recovery")) if isinstance(policy.get("recovery"), dict) else {}
+        )
         current["last_guard_visibility"] = (
             dict(policy.get("guard_visibility")) if isinstance(policy.get("guard_visibility"), dict) else {}
         )
@@ -446,6 +449,11 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
             dict(selected.get("last_projection"))
             if isinstance(selected.get("last_projection"), dict) and selected.get("last_projection")
             else dict(owner_guard_projection)
+        ),
+        "last_recovery": (
+            dict(selected.get("last_recovery"))
+            if isinstance(selected.get("last_recovery"), dict) and selected.get("last_recovery")
+            else {}
         ),
         "last_guard_visibility": (
             dict(selected.get("last_guard_visibility"))

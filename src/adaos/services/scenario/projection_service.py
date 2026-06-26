@@ -76,6 +76,22 @@ _YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO = _int_env(
     8,
     2,
 )
+_YJS_PROJECTION_AUTOCOMPACT_ON_WRITE_AMPLIFICATION = str(
+    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_ON_WRITE_AMPLIFICATION") or "1"
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC = max(
+    0.0,
+    float(os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC") or "0.5"),
+)
+_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC = max(
+    0.0,
+    float(os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC") or "0.0"),
+)
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
@@ -311,6 +327,7 @@ def _aggregate_yjs_projection_guard_events(events: list[Mapping[str, Any]]) -> d
                     "list_item_total": _int_or_zero(event.get("list_item_total")),
                     "mapping_key_total": _int_or_zero(event.get("mapping_key_total")),
                     "route": dict(event.get("route") or {}) if isinstance(event.get("route"), dict) else {},
+                    "recovery": dict(event.get("recovery") or {}) if isinstance(event.get("recovery"), dict) else {},
                     "last_at": last_at,
                     "last_pid": _int_or_zero(event.get("pid")) or None,
                 }
@@ -360,6 +377,7 @@ def _record_yjs_projection_guard_event(
     route: Mapping[str, Any] | None,
     update_bytes: int | None = None,
     amplification_ratio: float | None = None,
+    recovery: Mapping[str, Any] | None = None,
 ) -> None:
     key = _projection_guard_key(webspace_id, owner, path)
     persisted_row: dict[str, Any] | None = None
@@ -384,11 +402,55 @@ def _record_yjs_projection_guard_event(
         current["list_item_total"] = int(collection_metrics.get("list_item_total") or 0)
         current["mapping_key_total"] = int(collection_metrics.get("mapping_key_total") or 0)
         current["route"] = dict(route or {})
+        current["recovery"] = dict(recovery or {})
         current["last_at"] = time.time()
         current["guarded_total"] = int(current.get("guarded_total") or 0) + 1
         _YJS_PROJECTION_GUARD_STATS[key] = current
         persisted_row = dict(current)
     _append_yjs_projection_guard_event(persisted_row)
+
+
+def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, Any]:
+    key = str(webspace_id or "").strip() or "default"
+    result = {
+        "action": "ystore_runtime_compaction",
+        "requested": False,
+        "reason": "projection_write_amplification",
+        "webspace_id": key,
+        "delay_sec": float(_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC),
+        "min_quiet_sec": float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC),
+    }
+    if not _YJS_PROJECTION_AUTOCOMPACT_ON_WRITE_AMPLIFICATION:
+        result["disabled"] = True
+        return result
+
+    async def _runner() -> None:
+        try:
+            if _YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC > 0.0:
+                await asyncio.sleep(float(_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC))
+            from adaos.services.yjs.store import get_ystore_for_webspace
+
+            store = get_ystore_for_webspace(key)
+            await store.request_runtime_compaction(
+                reason="projection_write_amplification",
+                min_quiet_sec=float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC),
+            )
+        except Exception:
+            _log.debug("failed to request YStore compaction after projection amplification webspace=%s", key, exc_info=True)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        thread = threading.Thread(
+            target=lambda: asyncio.run(_runner()),
+            name=f"adaos-yjs-projection-compact-{key}",
+            daemon=True,
+        )
+        thread.start()
+    else:
+        loop.create_task(_runner())
+    result["requested"] = True
+    return result
 
 
 def yjs_projection_guard_snapshot(
@@ -445,6 +507,7 @@ def _record_yjs_projection_write_amplification(
         return
     if ratio < float(_YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO):
         return
+    recovery = _request_projection_amplification_compaction(webspace_id)
     _record_yjs_projection_guard_event(
         webspace_id=webspace_id,
         owner=owner,
@@ -462,6 +525,7 @@ def _record_yjs_projection_write_amplification(
         route=route,
         update_bytes=observed_update_bytes,
         amplification_ratio=ratio,
+        recovery=recovery,
     )
     policy = {
         "policy_state": "warn",
@@ -478,6 +542,7 @@ def _record_yjs_projection_write_amplification(
             "update_bytes": observed_update_bytes,
             "amplification_ratio": round(ratio, 3),
         },
+        "recovery": dict(recovery),
     }
     try:
         from adaos.services.yjs.governance import govern_primary_doc_write_sync
@@ -896,6 +961,82 @@ def _merge_nested_path(existing: Any, segments: List[str], payload: Any) -> tupl
     return True, merged
 
 
+def _yjs_map_class() -> Any | None:
+    try:
+        import y_py as Y  # pylint: disable=import-outside-toplevel
+
+        cls = getattr(Y, "YMap", None)
+        return cls if callable(cls) else None
+    except Exception:
+        return None
+
+
+def _is_mutable_y_map(value: Any) -> bool:
+    return callable(getattr(value, "get", None)) and callable(getattr(value, "set", None))
+
+
+def _to_nested_y_map(value: Any, txn: Any, ymap_cls: Any) -> Any:
+    items = _mapping_items(value)
+    if items is None:
+        return _clone_json_like(value)
+    result = ymap_cls({})
+    for key, child in items:
+        result.set(txn, key, _to_nested_y_map(child, txn, ymap_cls))
+    return result
+
+
+def _ensure_nested_y_map(parent: Any, txn: Any, key: str, ymap_cls: Any) -> Any | None:
+    try:
+        current = parent.get(key)
+    except Exception:
+        current = None
+    if _is_mutable_y_map(current):
+        return current
+    items = _mapping_items(current)
+    try:
+        child = _to_nested_y_map(current, txn, ymap_cls) if items is not None else ymap_cls({})
+        parent.set(txn, key, child)
+        return child
+    except Exception:
+        return None
+
+
+def _set_nested_y_map_path(root: Any, txn: Any, segments: List[str], payload: Any) -> bool | None:
+    """
+    Mutate long Yjs projection paths in-place when the backing values are YMaps.
+
+    The legacy fallback rewrites the top-level branch, for example
+    ``data["nodes"]``. On a large shared document that makes a tiny leaf update
+    encode the whole branch. This helper converts plain mapping ancestors into
+    nested YMaps once, then future writes touch only the leaf key.
+    """
+
+    if len(segments) < 2 or not _is_mutable_y_map(root):
+        return None
+    ymap_cls = _yjs_map_class()
+    if ymap_cls is None:
+        return None
+    parent = root
+    for raw_key in segments[:-1]:
+        key = str(raw_key or "").strip()
+        if not key:
+            return None
+        parent = _ensure_nested_y_map(parent, txn, key, ymap_cls)
+        if parent is None or not _is_mutable_y_map(parent):
+            return None
+    leaf_key = str(segments[-1] or "").strip()
+    if not leaf_key:
+        return None
+    try:
+        current = parent.get(leaf_key)
+        if _json_like_equal(current, payload):
+            return False
+        parent.set(txn, leaf_key, _clone_json_like(payload))
+        return True
+    except Exception:
+        return None
+
+
 @dataclass(slots=True)
 class ProjectionService:
     """
@@ -1079,6 +1220,10 @@ class ProjectionService:
                 if _json_like_equal(current, projected_value):
                     return
                 root.set(txn, key, _clone_json_like(projected_value))
+                return
+
+            changed_y_map = _set_nested_y_map_path(root, txn, segments[1:], projected_value)
+            if changed_y_map is not None:
                 return
 
             top_key = segments[1]

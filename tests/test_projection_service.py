@@ -232,6 +232,56 @@ def test_merge_nested_path_clones_y_like_arrays_before_rewriting_node_scoped_roo
     assert merged["member-1"]["voice_chat"] == {"messages": [{"text": "hello"}]}
 
 
+def test_nested_y_map_projection_updates_leaf_after_legacy_branch_conversion(monkeypatch) -> None:
+    class _FakeYMap(dict):
+        def __init__(self, initial=None) -> None:
+            super().__init__(initial or {})
+            self.set_calls: list[tuple[str, object]] = []
+
+        def set(self, txn, key: str, value: object) -> None:  # noqa: ARG002
+            self.set_calls.append((key, value))
+            self[key] = value
+
+    monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: _FakeYMap)
+
+    root = _FakeYMap(
+        {
+            "nodes": {
+                "hub": {
+                    "media": {"library": {"count": 1520}},
+                    "infrastate": {"summary": {"ok": True}},
+                }
+            }
+        }
+    )
+
+    changed = projection_service_module._set_nested_y_map_path(
+        root,
+        _FakeTxn(),
+        ["nodes", "hub", "media", "library_summary"],
+        {"count": 1534, "items": []},
+    )
+
+    assert changed is True
+    assert isinstance(root["nodes"], _FakeYMap)
+    assert isinstance(root["nodes"]["hub"], _FakeYMap)
+    assert isinstance(root["nodes"]["hub"]["media"], _FakeYMap)
+    assert root["nodes"]["hub"]["media"]["library"]["count"] == 1520
+    assert root["nodes"]["hub"]["infrastate"]["summary"]["ok"] is True
+    root_set_calls = len(root.set_calls)
+
+    changed = projection_service_module._set_nested_y_map_path(
+        root,
+        _FakeTxn(),
+        ["nodes", "hub", "media", "library_summary"],
+        {"count": 1535, "items": []},
+    )
+
+    assert changed is True
+    assert len(root.set_calls) == root_set_calls
+    assert root["nodes"]["hub"]["media"]["library_summary"]["count"] == 1535
+
+
 def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> None:
     fake_state = {"data": _FakeMap()}
     metadata_calls: list[dict[str, object]] = []
@@ -565,6 +615,16 @@ def test_projection_service_records_post_write_yjs_amplification(monkeypatch, tm
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(projection_service_module, "mutate_live_room", _mutate_live_room)
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(
+        projection_service_module,
+        "_request_projection_amplification_compaction",
+        lambda webspace_id: {
+            "action": "ystore_runtime_compaction",
+            "requested": True,
+            "reason": "projection_write_amplification",
+            "webspace_id": webspace_id,
+        },
+    )
     monkeypatch.setattr(owner_guard, "admit_owner_work", lambda **_kwargs: {"allowed": True})
     monkeypatch.setattr(
         projection_service_module,
@@ -593,6 +653,8 @@ def test_projection_service_records_post_write_yjs_amplification(monkeypatch, tm
     assert item["payload_bytes"] < 2048
     assert item["update_bytes"] == 88_900
     assert item["amplification_ratio"] >= 8.0
+    assert item["recovery"]["requested"] is True
+    assert item["recovery"]["reason"] == "projection_write_amplification"
 
     governance = projection_service_module.primary_doc_governance_snapshot(
         webspace_id="desktop",
@@ -603,6 +665,7 @@ def test_projection_service_records_post_write_yjs_amplification(monkeypatch, tm
     assert governance["last_update_bytes"] == 88_900
     assert governance["last_route"]["kind"] == "yjs_projection"
     assert governance["last_projection"]["update_bytes"] == 88_900
+    assert governance["last_recovery"]["requested"] is True
 
 
 def test_projection_governance_attributes_sibling_write_amplification_suspect(monkeypatch, tmp_path) -> None:
