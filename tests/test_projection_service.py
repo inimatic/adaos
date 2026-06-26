@@ -197,7 +197,10 @@ def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) ->
 
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
 
-    assert calls == [{"load_mark_roots": ["data"], "governed": True}]
+    assert len(calls) == 1
+    assert calls[0]["load_mark_roots"] == ["data"]
+    assert calls[0]["governed"] is True
+    assert callable(calls[0]["write_update_callback"])
 
 
 def test_merge_nested_path_clones_y_like_arrays_before_rewriting_node_scoped_roots() -> None:
@@ -520,6 +523,86 @@ def test_projection_guard_snapshot_reads_persisted_cli_process_events(monkeypatc
     assert item["payload_bytes"] == 402482
     assert item["max_list_items"] == 1520
     assert item["last_at"] == 1778055331.0
+
+
+def test_projection_service_records_post_write_yjs_amplification(monkeypatch, tmp_path) -> None:
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
+    from adaos.services.yjs import governance as yjs_governance
+    from adaos.services.yjs import owner_guard
+
+    with yjs_governance._LOCK:
+        yjs_governance._STATS.clear()
+    with owner_guard._LOCK:
+        owner_guard._DECISIONS.clear()
+        owner_guard._QUARANTINES.clear()
+        owner_guard._QUARANTINE_INCIDENTS.clear()
+        owner_guard._QUARANTINE_TOTAL = 0
+        owner_guard._DENIED_TOTAL = 0
+
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/media/library",
+        webspace_id=None,
+    )
+    registry = SimpleNamespace(
+        resolve_rule=lambda scope, slot: SimpleNamespace(targets=[target], budget={}, route={}),  # noqa: ARG005
+        resolve=lambda scope, slot: [target],  # noqa: ARG005
+    )
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    def _mutate_live_room(_ws: str, mutator, **kwargs) -> bool:
+        mutator(_FakeDoc(fake_state), _FakeTxn())
+        callback = kwargs.get("update_callback")
+        assert callable(callback)
+        callback({"update_bytes": 88_900})
+        return True
+
+    monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", _mutate_live_room)
+    monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(owner_guard, "admit_owner_work", lambda **_kwargs: {"allowed": True})
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="mediaserver"),
+    )
+
+    asyncio.run(
+        service.apply(
+            "runtime",
+            "mediaserver.library",
+            {"ok": True, "count": 1527, "items": []},
+            webspace_id="desktop",
+        )
+    )
+
+    snapshot = projection_service_module.yjs_projection_guard_snapshot(
+        webspace_id="desktop",
+        owner="skill:mediaserver",
+    )
+
+    assert snapshot["total"] == 1
+    item = snapshot["items"][0]
+    assert item["reason"] == "yjs_projection_write_amplification"
+    assert item["path"] == "data/media/library"
+    assert item["payload_bytes"] < 2048
+    assert item["update_bytes"] == 88_900
+    assert item["amplification_ratio"] >= 8.0
+
+    governance = projection_service_module.primary_doc_governance_snapshot(
+        webspace_id="desktop",
+        owner="skill:mediaserver",
+    )
+    assert governance["last_policy_state"] == "warn"
+    assert governance["last_reason"] == "yjs_projection_write_amplification"
+    assert governance["last_update_bytes"] == 88_900
+    assert governance["last_route"]["kind"] == "yjs_projection"
+    assert governance["last_projection"]["update_bytes"] == 88_900
 
 
 def test_projection_governance_attributes_sibling_write_amplification_suspect(monkeypatch, tmp_path) -> None:

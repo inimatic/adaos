@@ -66,6 +66,16 @@ _YJS_PROJECTION_GUARD_EVENT_TAIL_BYTES = _int_env(
     4 * 1024 * 1024,
     64 * 1024,
 )
+_YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES = _int_env(
+    "ADAOS_YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES",
+    64 * 1024,
+    1024,
+)
+_YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO = _int_env(
+    "ADAOS_YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO",
+    8,
+    2,
+)
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
@@ -292,6 +302,8 @@ def _aggregate_yjs_projection_guard_events(events: list[Mapping[str, Any]]) -> d
                     "payload_bytes": max(0, _int_or_zero(event.get("payload_bytes"))),
                     "projected_bytes": max(0, _int_or_zero(event.get("projected_bytes"))),
                     "degraded_bytes": max(0, _int_or_zero(event.get("degraded_bytes"))),
+                    "update_bytes": max(0, _int_or_zero(event.get("update_bytes"))),
+                    "amplification_ratio": round(max(0.0, _float_or_zero(event.get("amplification_ratio"))), 3),
                     "max_payload_bytes": event.get("max_payload_bytes"),
                     "max_items": event.get("max_items"),
                     "max_list_items": _int_or_zero(event.get("max_list_items")),
@@ -346,6 +358,8 @@ def _record_yjs_projection_guard_event(
     max_items: int | None,
     collection_metrics: Mapping[str, Any],
     route: Mapping[str, Any] | None,
+    update_bytes: int | None = None,
+    amplification_ratio: float | None = None,
 ) -> None:
     key = _projection_guard_key(webspace_id, owner, path)
     persisted_row: dict[str, Any] | None = None
@@ -361,6 +375,8 @@ def _record_yjs_projection_guard_event(
         current["payload_bytes"] = max(0, int(payload_bytes or 0))
         current["projected_bytes"] = max(0, int(projected_bytes or 0))
         current["degraded_bytes"] = max(0, int(degraded_bytes or 0))
+        current["update_bytes"] = max(0, int(update_bytes or 0))
+        current["amplification_ratio"] = round(float(amplification_ratio or 0.0), 3)
         current["max_payload_bytes"] = max_payload_bytes
         current["max_items"] = max_items
         current["max_list_items"] = int(collection_metrics.get("max_list_items") or 0)
@@ -402,6 +418,98 @@ def yjs_projection_guard_snapshot(
         },
         "items": rows[:max_items],
     }
+
+
+def _record_yjs_projection_write_amplification(
+    *,
+    webspace_id: str,
+    owner: str,
+    scope: str,
+    slot: str,
+    path: str,
+    root_name: str,
+    payload_bytes: int,
+    projected_bytes: int,
+    update_bytes: int,
+    max_payload_bytes: int | None,
+    max_items: int | None,
+    collection_metrics: Mapping[str, Any],
+    route: Mapping[str, Any] | None,
+) -> None:
+    if not _YJS_PROJECTION_GUARD_ENABLED:
+        return
+    observed_update_bytes = max(0, int(update_bytes or 0))
+    observed_payload_bytes = max(1, int(projected_bytes or payload_bytes or 1))
+    ratio = float(observed_update_bytes) / float(observed_payload_bytes)
+    if observed_update_bytes < int(_YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES):
+        return
+    if ratio < float(_YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO):
+        return
+    _record_yjs_projection_guard_event(
+        webspace_id=webspace_id,
+        owner=owner,
+        scope=scope,
+        slot=slot,
+        path=path,
+        root_name=root_name,
+        reason="yjs_projection_write_amplification",
+        payload_bytes=max(0, int(payload_bytes or 0)),
+        projected_bytes=max(0, int(projected_bytes or 0)),
+        degraded_bytes=max(0, int(projected_bytes or payload_bytes or 0)),
+        max_payload_bytes=max_payload_bytes,
+        max_items=max_items,
+        collection_metrics=collection_metrics,
+        route=route,
+        update_bytes=observed_update_bytes,
+        amplification_ratio=ratio,
+    )
+    policy = {
+        "policy_state": "warn",
+        "reason": "yjs_projection_write_amplification",
+        "observed_state": "high",
+        "route": dict(route or {}),
+        "projection": {
+            "scope": str(scope or "").strip() or None,
+            "slot": str(slot or "").strip() or None,
+            "root": str(root_name or "").strip() or None,
+            "path": str(path or "").strip() or None,
+            "payload_bytes": max(0, int(payload_bytes or 0)),
+            "projected_bytes": max(0, int(projected_bytes or 0)),
+            "update_bytes": observed_update_bytes,
+            "amplification_ratio": round(ratio, 3),
+        },
+    }
+    try:
+        from adaos.services.yjs.governance import govern_primary_doc_write_sync
+
+        govern_primary_doc_write_sync(
+            webspace_id=webspace_id,
+            owner=owner,
+            root_names=[root_name] if root_name else [],
+            path=path,
+            source="projection_service.post_write",
+            channel="projection.yjs.amplification",
+            policy=policy,
+            update_bytes=observed_update_bytes,
+        )
+    except Exception:
+        _log.debug(
+            "failed to record post-write YJS projection amplification webspace=%s owner=%s path=%s",
+            webspace_id,
+            owner,
+            path,
+            exc_info=True,
+        )
+    _log.warning(
+        "YJS projection write amplification webspace=%s owner=%s slot=%s path=%s payload_bytes=%s update_bytes=%s ratio=%.3f",
+        webspace_id,
+        owner,
+        slot,
+        path,
+        max(0, int(projected_bytes or payload_bytes or 0)),
+        observed_update_bytes,
+        ratio,
+    )
 
 
 def _yjs_primary_doc_policy_state(*, webspace_id: str, owner: str, root_name: str) -> dict[str, Any]:
@@ -928,6 +1036,35 @@ class ProjectionService:
                 guard.get("reason") or "yjs_projection_payload_guarded",
             )
 
+        write_payload_bytes = int(guard.get("payload_bytes") or 0) if isinstance(guard, dict) else _json_payload_bytes(projected_value)
+        write_projected_bytes = _json_payload_bytes(projected_value)
+        write_collection_metrics = (
+            dict(guard.get("collection_metrics"))
+            if isinstance(guard, dict) and isinstance(guard.get("collection_metrics"), dict)
+            else _projection_collection_metrics(projected_value)
+        )
+        write_max_payload_bytes = _positive_int(budget.get("max_payload_bytes")) or int(_YJS_PROJECTION_DEFAULT_MAX_PAYLOAD_BYTES)
+        write_max_items = _positive_int(budget.get("max_items")) or int(_YJS_PROJECTION_DEFAULT_MAX_ITEMS)
+        policy_route = policy.get("route") if isinstance(policy.get("route"), dict) else {}
+        write_route = dict(route or policy_route or {})
+
+        def _on_yjs_update(update_meta: Mapping[str, Any]) -> None:
+            _record_yjs_projection_write_amplification(
+                webspace_id=ws_id,
+                owner=owner,
+                scope=scope,
+                slot=slot,
+                path=path,
+                root_name=root_name,
+                payload_bytes=write_payload_bytes,
+                projected_bytes=write_projected_bytes,
+                update_bytes=_int_or_zero(update_meta.get("update_bytes")),
+                max_payload_bytes=write_max_payload_bytes,
+                max_items=write_max_items,
+                collection_metrics=write_collection_metrics,
+                route=write_route,
+            )
+
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)
 
@@ -959,19 +1096,25 @@ class ProjectionService:
             owner=owner,
             channel=f"projection.{str(target.backend or 'yjs')}.live_room",
             governed=True,
+            update_callback=_on_yjs_update,
         ):
             return
         try:
-                async with ystore_write_metadata(
-                    root_names=[root_name],
-                    source="projection_service",
-                    owner=owner,
-                    channel=f"projection.{str(target.backend or 'yjs')}",
+            async with ystore_write_metadata(
+                root_names=[root_name],
+                source="projection_service",
+                owner=owner,
+                channel=f"projection.{str(target.backend or 'yjs')}",
+                governed=True,
+            ):
+                async with async_get_ydoc(
+                    ws_id,
+                    load_mark_roots=[root_name],
                     governed=True,
-                ):
-                    async with async_get_ydoc(ws_id, load_mark_roots=[root_name], governed=True) as ydoc:
-                        with ydoc.begin_transaction() as txn:
-                            _mutator(ydoc, txn)
+                    write_update_callback=_on_yjs_update,
+                ) as ydoc:
+                    with ydoc.begin_transaction() as txn:
+                        _mutator(ydoc, txn)
         except Exception:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)
 

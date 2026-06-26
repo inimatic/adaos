@@ -2691,6 +2691,8 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                             "root": "data",
                             "reason": "yjs_projection_payload_budget_exceeded",
                             "payload_bytes": 409600,
+                            "update_bytes": 88900,
+                            "amplification_ratio": 12.5,
                             "degraded_bytes": 1536,
                             "max_payload_bytes": 262144,
                             "max_items": 1000,
@@ -2830,6 +2832,8 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["yjsProjectionGuard"]["top"]["owner"] == "skill:mediaserver"
     assert payload["yjsProjectionGuard"]["top"]["slot"] == "library"
     assert payload["yjsProjectionGuard"]["top"]["payloadBytes"] == 409600
+    assert payload["yjsProjectionGuard"]["top"]["updateBytes"] == 88900
+    assert payload["yjsProjectionGuard"]["top"]["amplificationRatio"] == 12.5
     assert payload["webioStreamGuard"]["totals"]["attempted"] == 4
     assert payload["webioStreamGuard"]["top"]["receiver"] == "infrastate.realtime"
     assert payload["eventbusBacklog"]["boundedQueueTotal"] == 2
@@ -3649,6 +3653,8 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                                 "root": "data",
                                 "reason": "yjs_projection_payload_budget_exceeded",
                                 "payload_bytes": 409600,
+                                "update_bytes": 88900,
+                                "amplification_ratio": 12.5,
                                 "degraded_bytes": 1536,
                                 "max_payload_bytes": 262144,
                                 "max_items": 1000,
@@ -3724,7 +3730,7 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "yjs_pressure.last: policy=block reason=write_amplification_blocked path=data/infrastate" in result.output
     assert "yjs_projection_guard: webspace=desktop enabled=yes total=1 guarded=1" in result.output
     assert "yjs_projection_guard.top: owner=skill:mediaserver slot=library path=data/nodes/hub-1/media/library" in result.output
-    assert "payload=409600 degraded=1536 max_payload=262144 max_items=1000 max_list=1520" in result.output
+    assert "payload=409600 update=88900 ratio=12.5 degraded=1536 max_payload=262144 max_items=1000 max_list=1520" in result.output
     assert "webio_stream_guard: webspace=desktop total=1 attempted=6 published=3 suppressed=2 throttled=1 fanout=3" in result.output
     assert "webio_stream_guard.top: receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output
     assert "eventbus: pending=1 bounded_queue=2 peak=4 active=1" in result.output

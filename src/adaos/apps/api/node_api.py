@@ -1774,6 +1774,8 @@ def _compact_runtime_reliability_payload(
                 "root": str(yjs_projection_guard_top.get("root") or "").strip() or None,
                 "reason": str(yjs_projection_guard_top.get("reason") or "").strip() or None,
                 "payloadBytes": int(yjs_projection_guard_top.get("payload_bytes") or 0),
+                "updateBytes": int(yjs_projection_guard_top.get("update_bytes") or 0),
+                "amplificationRatio": float(yjs_projection_guard_top.get("amplification_ratio") or 0.0),
                 "degradedBytes": int(yjs_projection_guard_top.get("degraded_bytes") or 0),
                 "maxPayloadBytes": _coerce_optional_int(yjs_projection_guard_top.get("max_payload_bytes")),
                 "maxItems": _coerce_optional_int(yjs_projection_guard_top.get("max_items")),

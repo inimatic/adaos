@@ -522,6 +522,7 @@ async def async_get_ydoc(
     write_source: str | None = None,
     write_owner: str | None = None,
     write_channel: str | None = None,
+    write_update_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> AsyncIterator[Y.YDoc]:
     """
     Async counterpart of :func:`get_ydoc` for use inside running event loops.
@@ -634,6 +635,21 @@ async def async_get_ydoc(
                             already_persisted=False,
                             governed=True,
                         )
+                        if write_update_callback is not None:
+                            try:
+                                write_update_callback(
+                                    {
+                                        "webspace_id": webspace_id,
+                                        "update_bytes": len(update or b""),
+                                        "source": live_source_for_session,
+                                        "owner": owner_for_session or _resolve_yjs_write_owner(),
+                                        "channel": live_channel_for_session,
+                                        "root_names": tracked_load_mark_roots,
+                                        "live_room": True,
+                                    }
+                                )
+                            except Exception:
+                                _log.debug("async_get_ydoc write update callback failed", exc_info=True)
                     _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
                     _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
                 else:
@@ -677,6 +693,22 @@ async def async_get_ydoc(
                     except Exception as exc:
                         _record_doc_timing(timings, "ystore_write_update", stage_started, prefix=timing_prefix)
                         _log.warning("async_get_ydoc write_update failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
+                    if update and write_update_callback is not None:
+                        try:
+                            write_update_callback(
+                                {
+                                    "webspace_id": webspace_id,
+                                    "update_bytes": len(update or b""),
+                                    "source": source_for_session,
+                                    "owner": owner,
+                                    "channel": channel_for_session,
+                                    "root_names": tracked_load_mark_roots,
+                                    "live_room": False,
+                                    "persisted": persisted,
+                                }
+                            )
+                        except Exception:
+                            _log.debug("async_get_ydoc write update callback failed", exc_info=True)
                     if publish_live_room:
                         stage_started = time.perf_counter()
                         _schedule_room_update(
@@ -734,6 +766,7 @@ def mutate_live_room(
     owner: str | None = None,
     channel: str = "core.yjs.live_room.sync",
     governed: bool = False,
+    update_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> bool:
     """
     Attempt to mutate the active YDoc directly so connected clients receive the change.
@@ -776,6 +809,21 @@ def mutate_live_room(
                     mutator(room.ydoc, txn)
             update = _encode_diff(room.ydoc, before)
             if update:
+                if update_callback is not None:
+                    try:
+                        update_callback(
+                            {
+                                "webspace_id": webspace_id,
+                                "update_bytes": len(update or b""),
+                                "source": source,
+                                "owner": owner_token,
+                                "channel": channel,
+                                "root_names": list(root_names or []),
+                                "live_room": True,
+                            }
+                        )
+                    except Exception:
+                        _log.debug("mutate_live_room update callback failed", exc_info=True)
                 mark_backend_room_update(
                     webspace_id,
                     update,

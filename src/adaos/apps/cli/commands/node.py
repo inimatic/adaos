@@ -802,6 +802,8 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"slot={projection_guard_top.get('slot') or '-'} "
                 f"path={projection_guard_top.get('path') or '-'} "
                 f"payload={projection_guard_top.get('payload_bytes') or 0} "
+                f"update={projection_guard_top.get('update_bytes') or 0} "
+                f"ratio={projection_guard_top.get('amplification_ratio') or 0} "
                 f"degraded={projection_guard_top.get('degraded_bytes') or 0} "
                 f"max_payload={projection_guard_top.get('max_payload_bytes') or '-'} "
                 f"max_items={projection_guard_top.get('max_items') or '-'} "

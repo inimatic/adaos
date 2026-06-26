@@ -153,12 +153,16 @@ def _yjs_projection_guard_card(
     slot = _text(top.get("slot"))
     path = _text(top.get("path"))
     payload_bytes = _int(top.get("payload_bytes"))
+    update_bytes = _int(top.get("update_bytes"))
+    amplification_ratio = _float(top.get("amplification_ratio"))
     max_payload_bytes = _int(top.get("max_payload_bytes"))
     summary = f"Yjs projection guard {reason}: guarded={_int(totals.get('guarded'))}"
     if slot:
         summary += f" slot={slot}"
     if payload_bytes:
         summary += f" bytes={payload_bytes}/{max_payload_bytes or '-'}"
+    if update_bytes:
+        summary += f" update={update_bytes} ratio={amplification_ratio:.1f}"
     return StatusCard(
         id="guard:yjs_projection",
         owner="core:yjs",
@@ -192,6 +196,8 @@ def _yjs_projection_guard_card(
             },
             "observed_pressure": {
                 "payload_bytes": payload_bytes,
+                "update_bytes": update_bytes,
+                "amplification_ratio": amplification_ratio,
                 "degraded_bytes": _int(top.get("degraded_bytes")),
                 "max_list_items": _int(top.get("max_list_items")),
                 "max_list_path": top.get("max_list_path"),
