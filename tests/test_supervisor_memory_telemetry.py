@@ -9,6 +9,11 @@ def test_memory_telemetry_preserves_process_family_and_cgroup_breakdown() -> Non
         "managed_pid": 123,
         "process_rss_bytes": 10,
         "family_rss_bytes": 20,
+        "process_tree": {
+            "available": True,
+            "children": [{"pid": 124, "rss_bytes": 9, "skill_runtime": "demo_skill"}],
+            "children_total": 1,
+        },
         "cgroup_memory_current_bytes": 30,
         "cgroup_anon_bytes": 11,
         "cgroup_file_bytes": 12,
@@ -31,6 +36,7 @@ def test_memory_telemetry_preserves_process_family_and_cgroup_breakdown() -> Non
 
     assert roundtrip["process_rss_bytes"] == 10
     assert roundtrip["family_rss_bytes"] == 20
+    assert roundtrip["process_tree"]["children"][0]["skill_runtime"] == "demo_skill"
     assert roundtrip["cgroup_memory_current_bytes"] == 30
     assert roundtrip["cgroup_anon_bytes"] == 11
     assert roundtrip["cgroup_file_bytes"] == 12

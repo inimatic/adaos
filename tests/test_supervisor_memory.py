@@ -552,6 +552,30 @@ def test_supervisor_manager_samples_memory_telemetry_and_marks_suspicion(monkeyp
     monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
     monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
     monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: next(samples))
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_memory_snapshot",
+        lambda pid: {
+            "available": True,
+            "pid": pid,
+            "root": {"pid": pid, "rss_bytes": 100 * 1024 * 1024},
+            "children": [
+                {
+                    "pid": 4322,
+                    "ppid": pid,
+                    "name": "python",
+                    "rss_bytes": 60 * 1024 * 1024,
+                    "skill_runtime": "demo_skill",
+                    "cmdline_label": "python -m handlers.main",
+                }
+            ],
+            "children_total": 1,
+            "children_returned": 1,
+            "children_omitted": 0,
+            "children_rss_bytes": 60 * 1024 * 1024,
+            "family_rss_bytes": 160 * 1024 * 1024,
+        },
+    )
     monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
     monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
@@ -568,6 +592,7 @@ def test_supervisor_manager_samples_memory_telemetry_and_marks_suspicion(monkeyp
 
     assert first is not None
     assert second is not None
+    assert second["process_tree"]["children"][0]["skill_runtime"] == "demo_skill"
     assert status["telemetry_samples_total"] == 2
     assert status["baseline_family_rss_bytes"] == 100 * 1024 * 1024
     assert status["rss_growth_bytes"] == 60 * 1024 * 1024

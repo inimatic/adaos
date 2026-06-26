@@ -3886,6 +3886,7 @@ class SupervisorManager:
                 "suspicion_reason": suspicion_reason,
                 "process_rss_bytes": process_rss_bytes,
                 "family_rss_bytes": family_rss_bytes,
+                "process_tree": attribution.get("process_tree") if isinstance(attribution.get("process_tree"), dict) else {},
                 "cgroup_memory_current_bytes": attribution.get("cgroup_memory_current_bytes"),
                 "cgroup_anon_bytes": attribution.get("cgroup_anon_bytes"),
                 "cgroup_file_bytes": attribution.get("cgroup_file_bytes"),

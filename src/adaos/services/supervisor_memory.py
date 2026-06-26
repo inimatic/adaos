@@ -326,6 +326,7 @@ class MemoryTelemetrySample:
     suspicion_reason: str | None = None
     process_rss_bytes: int | None = None
     family_rss_bytes: int | None = None
+    process_tree: dict[str, Any] = field(default_factory=dict)
     cgroup_memory_current_bytes: int | None = None
     cgroup_anon_bytes: int | None = None
     cgroup_file_bytes: int | None = None
@@ -364,6 +365,7 @@ class MemoryTelemetrySample:
             suspicion_reason=_optional_string(source.get("suspicion_reason")),
             process_rss_bytes=_int(source.get("process_rss_bytes")),
             family_rss_bytes=_int(source.get("family_rss_bytes")),
+            process_tree=_mapping(source.get("process_tree")),
             cgroup_memory_current_bytes=_int(source.get("cgroup_memory_current_bytes")),
             cgroup_anon_bytes=_int(source.get("cgroup_anon_bytes")),
             cgroup_file_bytes=_int(source.get("cgroup_file_bytes")),
@@ -407,6 +409,7 @@ class MemoryTelemetrySample:
             "suspicion_reason": self.suspicion_reason,
             "process_rss_bytes": self.process_rss_bytes,
             "family_rss_bytes": self.family_rss_bytes,
+            "process_tree": dict(self.process_tree),
             "cgroup_memory_current_bytes": self.cgroup_memory_current_bytes,
             "cgroup_anon_bytes": self.cgroup_anon_bytes,
             "cgroup_file_bytes": self.cgroup_file_bytes,
