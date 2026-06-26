@@ -6345,6 +6345,66 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
             "ystore": _ystore_recovery_context(),
         }
 
+    def _builder_repair_packets(items: list[Any]) -> list[dict[str, Any]]:
+        packets: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            owner = str(item.get("owner") or "").strip()
+            recovery = item.get("recovery") if isinstance(item.get("recovery"), dict) else {}
+            route = item.get("route") if isinstance(item.get("route"), dict) else {}
+            packet = {
+                "schema": "adaos.llm_builder.yjs_projection_repair.v1",
+                "owner": owner or None,
+                "skill": owner.removeprefix("skill:") if owner.startswith("skill:") else None,
+                "slot": item.get("slot"),
+                "scope": item.get("scope"),
+                "path": item.get("path"),
+                "root": item.get("root"),
+                "reason": item.get("reason"),
+                "route": {
+                    "kind": route.get("kind"),
+                    "surface": route.get("surface"),
+                    "backend": route.get("backend"),
+                },
+                "evidence": {
+                    "payload_bytes": _nonnegative_int(item.get("payload_bytes")),
+                    "projected_bytes": _nonnegative_int(item.get("projected_bytes")),
+                    "degraded_bytes": _nonnegative_int(item.get("degraded_bytes")),
+                    "update_bytes": _nonnegative_int(item.get("update_bytes")),
+                    "amplification_ratio": item.get("amplification_ratio"),
+                    "max_payload_bytes": item.get("max_payload_bytes"),
+                    "max_items": item.get("max_items"),
+                    "max_list_items": _nonnegative_int(item.get("max_list_items")),
+                    "max_list_path": item.get("max_list_path"),
+                    "list_item_total": _nonnegative_int(item.get("list_item_total")),
+                    "mapping_key_total": _nonnegative_int(item.get("mapping_key_total")),
+                    "last_at": item.get("last_at"),
+                },
+                "recovery": {
+                    "action": recovery.get("action"),
+                    "requested": bool(recovery.get("requested")),
+                    "mode": str(recovery.get("mode") or "").strip() or None,
+                    "deferred_until": recovery.get("deferred_until"),
+                    "disabled": bool(recovery.get("disabled")),
+                },
+                "recommended_actions": [
+                    "keep_yjs_projection_constant_size_summary",
+                    "move_rows_logs_and_large_artifacts_to_bounded_routes",
+                    "declare_projection_budget_and_page_size_limits",
+                    "migrate_amplified_yjs_branch_or_rely_on_core_compaction_before_retest",
+                ],
+            }
+            packets.append(packet)
+        packets.sort(
+            key=lambda row: (
+                -_nonnegative_int((row.get("evidence") or {}).get("update_bytes")),
+                str(row.get("owner") or ""),
+                str(row.get("path") or ""),
+            )
+        )
+        return packets[:10]
+
     try:
         from adaos.services.scenario.projection_service import yjs_projection_guard_snapshot
 
@@ -6363,6 +6423,7 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
                 },
             )
             result["recovery"] = _recovery_summary(items)
+            result["builder_repair_packets"] = _builder_repair_packets(items)
             return result
     except Exception:
         pass
@@ -6383,6 +6444,7 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
             "items": [],
             "ystore": _ystore_recovery_context(),
         },
+        "builder_repair_packets": [],
     }
 
 

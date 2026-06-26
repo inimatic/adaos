@@ -837,6 +837,35 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"eligible={'yes' if ystore_recovery.get('runtime_compaction_eligible') else 'no'} "
                 f"last_auto={ystore_recovery.get('last_auto_backup_reason') or '-'}"
             )
+        projection_guard_repairs = (
+            yjs_projection_guard.get("builder_repair_packets")
+            if isinstance(yjs_projection_guard.get("builder_repair_packets"), list)
+            else []
+        )
+        projection_guard_repair_top = (
+            projection_guard_repairs[0]
+            if projection_guard_repairs and isinstance(projection_guard_repairs[0], dict)
+            else {}
+        )
+        if projection_guard_repair_top:
+            evidence = (
+                projection_guard_repair_top.get("evidence")
+                if isinstance(projection_guard_repair_top.get("evidence"), dict)
+                else {}
+            )
+            actions = (
+                projection_guard_repair_top.get("recommended_actions")
+                if isinstance(projection_guard_repair_top.get("recommended_actions"), list)
+                else []
+            )
+            typer.echo(
+                "yjs_projection_guard.repair.top: "
+                f"skill={projection_guard_repair_top.get('skill') or '-'} "
+                f"slot={projection_guard_repair_top.get('slot') or '-'} "
+                f"update={evidence.get('update_bytes') or 0} "
+                f"ratio={evidence.get('amplification_ratio') or 0} "
+                f"action={actions[0] if actions else '-'}"
+            )
     if webio_stream_guard:
         guard_totals = webio_stream_guard.get("totals") if isinstance(webio_stream_guard.get("totals"), dict) else {}
         typer.echo(

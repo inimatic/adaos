@@ -2584,6 +2584,12 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
     assert snapshot["recovery"]["ystore"]["runtime_compaction_eligible"] is True
     assert snapshot["recovery"]["ystore"]["replay_window_bytes"] == 57344
     assert snapshot["recovery"]["ystore"]["last_auto_backup_reason"] == "projection_write_amplification"
+    repair = snapshot["builder_repair_packets"][0]
+    assert repair["schema"] == "adaos.llm_builder.yjs_projection_repair.v1"
+    assert repair["skill"] == "mediaserver"
+    assert repair["evidence"]["update_bytes"] == 57344
+    assert repair["recovery"]["mode"] == "inline_after_detached_write"
+    assert "move_rows_logs_and_large_artifacts_to_bounded_routes" in repair["recommended_actions"]
 
 
 def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monkeypatch) -> None:
@@ -3752,6 +3758,21 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                                 "last_auto_backup_reason": "projection_write_amplification",
                             },
                         },
+                        "builder_repair_packets": [
+                            {
+                                "schema": "adaos.llm_builder.yjs_projection_repair.v1",
+                                "skill": "mediaserver",
+                                "slot": "library",
+                                "evidence": {
+                                    "update_bytes": 88900,
+                                    "amplification_ratio": 12.5,
+                                },
+                                "recommended_actions": [
+                                    "keep_yjs_projection_constant_size_summary",
+                                    "move_rows_logs_and_large_artifacts_to_bounded_routes",
+                                ],
+                            }
+                        ],
                     },
                     "webio_stream_guard": {
                         "available": True,
@@ -3821,6 +3842,7 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "payload=409600 update=88900 ratio=12.5 degraded=1536 max_payload=262144 max_items=1000 max_list=1520" in result.output
     assert "recovery=inline_after_detached_write" in result.output
     assert "yjs_projection_guard.recovery: requested=1 inline=1 background=0 disabled=0 ystore_replay_bytes=57344 eligible=yes last_auto=projection_write_amplification" in result.output
+    assert "yjs_projection_guard.repair.top: skill=mediaserver slot=library update=88900 ratio=12.5 action=keep_yjs_projection_constant_size_summary" in result.output
     assert "webio_stream_guard: webspace=desktop total=1 attempted=6 published=3 suppressed=2 throttled=1 fanout=3" in result.output
     assert "webio_stream_guard.top: receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output
     assert "eventbus: pending=1 bounded_queue=2 peak=4 active=1" in result.output
