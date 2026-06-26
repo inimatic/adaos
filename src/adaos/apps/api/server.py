@@ -193,7 +193,7 @@ from adaos.services.realtime_sidecar import (
     start_realtime_sidecar_subprocess,
     stop_realtime_sidecar_subprocess,
 )
-from adaos.services.reliability import ReadinessStatus, set_integration_readiness
+from adaos.services.reliability import ReadinessStatus, record_runtime_event_loop_lag_sample, set_integration_readiness
 from adaos.services.skill.service_supervisor import get_service_supervisor
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.agent_context import get_ctx as _get_ctx
@@ -227,6 +227,59 @@ def _background_boot_enabled() -> bool:
     if raw is not None:
         return _truthy_value(raw)
     return _truthy_value(os.getenv("ADAOS_SUPERVISOR_ENABLED")) or _truthy_value(os.getenv("ADAOS_AUTOSTART_MODE"))
+
+
+def _runtime_event_loop_lag_monitor_enabled() -> bool:
+    raw = os.getenv("ADAOS_RUNTIME_EVENT_LOOP_LAG_MONITOR")
+    if raw is None:
+        return True
+    return _truthy_value(raw)
+
+
+def _runtime_event_loop_lag_interval_sec() -> float:
+    try:
+        return min(30.0, max(0.1, float(str(os.getenv("ADAOS_RUNTIME_EVENT_LOOP_LAG_INTERVAL_SEC") or "1.0").strip())))
+    except Exception:
+        return 1.0
+
+
+def _runtime_event_loop_lag_threshold_ms() -> float:
+    try:
+        return min(60_000.0, max(10.0, float(str(os.getenv("ADAOS_RUNTIME_EVENT_LOOP_LAG_THRESHOLD_MS") or "250").strip())))
+    except Exception:
+        return 250.0
+
+
+async def _runtime_event_loop_lag_monitor() -> None:
+    interval_sec = _runtime_event_loop_lag_interval_sec()
+    threshold_ms = _runtime_event_loop_lag_threshold_ms()
+    loop = asyncio.get_running_loop()
+    monitor_started_at = time.time()
+    next_tick = loop.time() + interval_sec
+    last_warning_at = 0.0
+    while True:
+        await asyncio.sleep(max(0.0, next_tick - loop.time()))
+        observed = loop.time()
+        lag_ms = max(0.0, (observed - next_tick) * 1000.0)
+        record_runtime_event_loop_lag_sample(
+            lag_ms=lag_ms,
+            interval_sec=interval_sec,
+            threshold_ms=threshold_ms,
+            monitor_started_at=monitor_started_at,
+        )
+        now = time.time()
+        if lag_ms >= threshold_ms and now - last_warning_at >= 30.0:
+            last_warning_at = now
+            _runtime_log.warning(
+                "runtime event loop lag exceeded threshold lag_ms=%.1f threshold_ms=%.1f interval_sec=%.3f",
+                lag_ms,
+                threshold_ms,
+                interval_sec,
+            )
+        if observed - next_tick > interval_sec:
+            next_tick = observed + interval_sec
+        else:
+            next_tick += interval_sec
 
 
 async def _run_boot_sequence_logged(app: FastAPI) -> None:
@@ -692,6 +745,13 @@ async def lifespan(app: FastAPI):
     app.state.router_service = router_service
     # Periodic liveness staler (hub only)
     staler_task = None
+    event_loop_lag_task: asyncio.Task[Any] | None = None
+    if _runtime_event_loop_lag_monitor_enabled():
+        event_loop_lag_task = asyncio.create_task(
+            _runtime_event_loop_lag_monitor(),
+            name="runtime-event-loop-lag-monitor",
+        )
+    app.state.runtime_event_loop_lag_task = event_loop_lag_task
 
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
     await start_observer()
@@ -1018,6 +1078,10 @@ async def lifespan(app: FastAPI):
             await _cancel_background_task(getattr(app.state, "runtime_boot_task", None))
         finally:
             app.state.runtime_boot_task = None
+        try:
+            await _cancel_background_task(getattr(app.state, "runtime_event_loop_lag_task", None))
+        finally:
+            app.state.runtime_event_loop_lag_task = None
         try:
             conf = get_ctx().config
             if not getattr(app.state, "shutdown_stopping_emitted", False):

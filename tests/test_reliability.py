@@ -46,8 +46,10 @@ from adaos.services.reliability import (
     mark_route_ready,
     note_root_control_reconnect,
     note_route_incident,
+    record_runtime_event_loop_lag_sample,
     reliability_snapshot,
     reset_reliability_runtime_state,
+    runtime_event_loop_lag_snapshot,
     set_integration_readiness,
     sidecar_runtime_snapshot,
     supervisor_transition_runtime_snapshot,
@@ -59,6 +61,41 @@ from adaos.services.runtime_lifecycle import reset_runtime_lifecycle
 def _reset_state() -> None:
     reset_runtime_lifecycle()
     reset_reliability_runtime_state()
+
+
+def test_runtime_event_loop_lag_snapshot_records_blocked_samples(monkeypatch) -> None:
+    reliability = importlib.import_module("adaos.services.reliability")
+    _reset_state()
+    clock = {"now": 100.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    record_runtime_event_loop_lag_sample(
+        lag_ms=12.25,
+        interval_sec=1.0,
+        threshold_ms=250.0,
+        monitor_started_at=90.0,
+    )
+
+    nominal = runtime_event_loop_lag_snapshot()
+    assert nominal["status"] == "nominal"
+    assert nominal["last_lag_ms"] == 12.25
+    assert nominal["breach_total"] == 0
+
+    clock["now"] = 101.5
+    record_runtime_event_loop_lag_sample(
+        lag_ms=301.2345,
+        interval_sec=1.0,
+        threshold_ms=250.0,
+        monitor_started_at=90.0,
+    )
+
+    blocked = runtime_event_loop_lag_snapshot()
+    assert blocked["status"] == "blocked"
+    assert blocked["last_lag_ms"] == 301.235
+    assert blocked["max_lag_ms"] == 301.235
+    assert blocked["breach_total"] == 1
+    assert blocked["last_breach_ago_s"] == 0.0
+    assert blocked["monitor_uptime_s"] == 11.5
 
 
 def test_hub_reliability_snapshot_exposes_taxonomy_and_disables_root_bound_capabilities_until_ready() -> None:
@@ -4019,6 +4056,16 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
             {
                 "node": {"node_id": "node-1", "role": "hub", "ready": True, "node_state": "ready"},
                 "runtime": {
+                    "signals": {
+                        "event_loop": {
+                            "status": "blocked",
+                            "last_lag_ms": 301.234,
+                            "max_lag_ms": 750.0,
+                            "breach_total": 2,
+                            "threshold_ms": 250.0,
+                            "last_breach_ago_s": 1.5,
+                        },
+                    },
                     "readiness_tree": {},
                     "sidecar_runtime": {
                         "phase": "nats_transport_sidecar",
@@ -4310,6 +4357,7 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
 
     assert result.exit_code == 0
     assert "owner=sidecar manager=supervisor" in result.output
+    assert "runtime.event_loop: status=blocked last_lag_ms=301.234 max_lag_ms=750.0 breaches=2 threshold_ms=250.0 last_breach_ago_s=1.5" in result.output
     assert "continuity=planned:preserve_sidecar" in result.output
     assert "next=browser_events_ws,browser_yjs_ws" in result.output
     assert "sidecar.progress: target=first_browser_realtime_tunnel state=in_progress done=2/4 percent=50 current=browser_events_ws_handoff" in result.output

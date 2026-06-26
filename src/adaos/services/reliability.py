@@ -412,6 +412,26 @@ _INTEGRATIONS: dict[str, RuntimeSignal] = {name: RuntimeSignal() for name in _IN
 _CHANNEL_HISTORY: dict[str, deque[dict[str, Any]]] = {
     name: deque(maxlen=_CHANNEL_HISTORY_LIMIT) for name in _CHANNEL_NAMES
 }
+
+
+def _new_event_loop_lag_runtime() -> dict[str, Any]:
+    return {
+        "schema": "adaos.runtime.event_loop_lag.v1",
+        "monitor_started_at": None,
+        "last_sample_at": None,
+        "last_lag_ms": None,
+        "max_lag_ms": 0.0,
+        "interval_sec": None,
+        "threshold_ms": None,
+        "sample_total": 0,
+        "breach_total": 0,
+        "last_breach_at": None,
+        "last_breach_ms": None,
+        "status": "unknown",
+    }
+
+
+_EVENT_LOOP_LAG_RUNTIME: dict[str, Any] = _new_event_loop_lag_runtime()
 _HUB_ROOT_TRANSPORT_STATE: dict[str, Any] = {
     "requested_transport": None,
     "effective_transport": None,
@@ -1353,6 +1373,57 @@ def reset_reliability_runtime_state() -> None:
         _HUB_ROOT_TRANSPORT_HISTORY.clear()
         _HUB_ROOT_PROTOCOL_RUNTIME.clear()
         _HUB_ROOT_PROTOCOL_RUNTIME.update(_new_protocol_runtime())
+        _EVENT_LOOP_LAG_RUNTIME.clear()
+        _EVENT_LOOP_LAG_RUNTIME.update(_new_event_loop_lag_runtime())
+
+
+def record_runtime_event_loop_lag_sample(
+    *,
+    lag_ms: float,
+    interval_sec: float,
+    threshold_ms: float,
+    monitor_started_at: float | None = None,
+) -> dict[str, Any]:
+    now = time.time()
+    try:
+        normalized_lag_ms = round(max(0.0, float(lag_ms)), 3)
+    except Exception:
+        normalized_lag_ms = 0.0
+    try:
+        normalized_interval_sec = round(max(0.01, float(interval_sec)), 3)
+    except Exception:
+        normalized_interval_sec = 1.0
+    try:
+        normalized_threshold_ms = round(max(1.0, float(threshold_ms)), 3)
+    except Exception:
+        normalized_threshold_ms = 250.0
+    breached = normalized_lag_ms >= normalized_threshold_ms
+    with _LOCK:
+        state = _EVENT_LOOP_LAG_RUNTIME
+        if monitor_started_at is not None and not state.get("monitor_started_at"):
+            state["monitor_started_at"] = float(monitor_started_at)
+        state["last_sample_at"] = now
+        state["last_lag_ms"] = normalized_lag_ms
+        state["max_lag_ms"] = max(float(state.get("max_lag_ms") or 0.0), normalized_lag_ms)
+        state["interval_sec"] = normalized_interval_sec
+        state["threshold_ms"] = normalized_threshold_ms
+        state["sample_total"] = int(state.get("sample_total") or 0) + 1
+        if breached:
+            state["breach_total"] = int(state.get("breach_total") or 0) + 1
+            state["last_breach_at"] = now
+            state["last_breach_ms"] = normalized_lag_ms
+        state["status"] = "blocked" if breached else "nominal"
+        return dict(state)
+
+
+def runtime_event_loop_lag_snapshot() -> dict[str, Any]:
+    now = time.time()
+    with _LOCK:
+        state = dict(_EVENT_LOOP_LAG_RUNTIME)
+    state["last_sample_ago_s"] = _round_age(now, state.get("last_sample_at"))
+    state["last_breach_ago_s"] = _round_age(now, state.get("last_breach_at"))
+    state["monitor_uptime_s"] = _round_age(now, state.get("monitor_started_at"))
+    return state
 
 
 def mark_root_control_up(*, summary: str = "hub-root control session established", details: dict[str, Any] | None = None) -> None:
@@ -1513,6 +1584,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "root_control": _ROOT_CONTROL.to_dict(),
             "route": _ROUTE.to_dict(),
             "integrations": {name: signal.to_dict() for name, signal in sorted(_INTEGRATIONS.items())},
+            "event_loop": runtime_event_loop_lag_snapshot(),
         }
 
 
