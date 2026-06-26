@@ -598,6 +598,64 @@ def test_supervisor_manager_ignores_zero_memory_baseline(monkeypatch, tmp_path) 
     assert manager._memory_baseline_family_rss_bytes == 160
 
 
+def test_supervisor_resets_memory_baseline_for_new_runtime_instance(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC", "60")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES", str(32 * 1024 * 1024))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN", str(8 * 1024 * 1024))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        @staticmethod
+        def poll():
+            return None
+
+    samples = iter(
+        [
+            (100 * 1024 * 1024, 100 * 1024 * 1024),
+            (100 * 1024 * 1024, 180 * 1024 * 1024),
+            (140 * 1024 * 1024, 140 * 1024 * 1024),
+        ]
+    )
+    times = iter([10.0, 70.0, 130.0])
+    manager._proc = _Proc(4321)
+    manager._managed_runtime_instance_id = "rt-old"
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": proc.pid})
+    monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: next(samples))
+    monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
+    monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    manager._sample_memory_telemetry()
+    suspected = manager._sample_memory_telemetry()
+    assert suspected is not None
+    assert suspected["suspicion_state"] == "suspected"
+    assert suspected["rss_growth_bytes"] == 80 * 1024 * 1024
+
+    manager._proc = _Proc(9876)
+    manager._managed_runtime_instance_id = "rt-new"
+    recovered = manager._sample_memory_telemetry()
+
+    assert recovered is not None
+    assert recovered["baseline_scope_key"] == "runtime:rt-new"
+    assert recovered["baseline_pid"] == 9876
+    assert recovered["baseline_rss_bytes"] == 140 * 1024 * 1024
+    assert recovered["rss_growth_bytes"] == 0
+    assert recovered["suspicion_state"] == "stable"
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_rss_bytes",
+        lambda pid: (140 * 1024 * 1024, 140 * 1024 * 1024),
+    )
+    assert manager.memory_status()["baseline_scope_key"] == "runtime:rt-new"
+
+
 def test_spawn_runtime_locked_sets_profile_launch_env_for_requested_session(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -819,18 +877,16 @@ def test_supervisor_profile_mode_shutdown_uses_extended_grace(monkeypatch, tmp_p
 
     class _Proc:
         pid = 123
+        terminated = False
 
-        @staticmethod
-        def poll():
-            return None
+        def poll(self):
+            return 0 if self.terminated else None
 
-        @staticmethod
-        def terminate():
-            return None
+        def terminate(self):
+            self.terminated = True
 
-        @staticmethod
-        def kill():
-            return None
+        def kill(self):
+            self.terminated = True
 
     captured: dict[str, object] = {}
     sleeps: list[float] = []

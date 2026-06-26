@@ -334,6 +334,8 @@ class MemoryTelemetrySample:
     cgroup_memory_stat: dict[str, int] = field(default_factory=dict)
     available_memory_bytes: int | None = None
     available_memory_percent: float | None = None
+    baseline_scope_key: str | None = None
+    baseline_pid: int | None = None
     baseline_rss_bytes: int | None = None
     rss_growth_bytes: int | None = None
     rss_growth_bytes_per_min: float | None = None
@@ -365,6 +367,8 @@ class MemoryTelemetrySample:
             },
             available_memory_bytes=_int(source.get("available_memory_bytes")),
             available_memory_percent=_float(source.get("available_memory_percent")),
+            baseline_scope_key=_optional_string(source.get("baseline_scope_key")),
+            baseline_pid=_int(source.get("baseline_pid")),
             baseline_rss_bytes=_positive_int(source.get("baseline_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
@@ -391,6 +395,8 @@ class MemoryTelemetrySample:
             "cgroup_memory_stat": dict(self.cgroup_memory_stat),
             "available_memory_bytes": self.available_memory_bytes,
             "available_memory_percent": self.available_memory_percent,
+            "baseline_scope_key": self.baseline_scope_key,
+            "baseline_pid": self.baseline_pid,
             "baseline_rss_bytes": self.baseline_rss_bytes,
             "rss_growth_bytes": self.rss_growth_bytes,
             "rss_growth_bytes_per_min": self.rss_growth_bytes_per_min,

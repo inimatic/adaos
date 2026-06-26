@@ -17,6 +17,8 @@ def test_memory_telemetry_preserves_process_family_and_cgroup_breakdown() -> Non
         "cgroup_memory_stat": {"anon": 11, "file": 12, "kernel": 13, "slab": 14},
         "available_memory_bytes": 40,
         "available_memory_percent": 50.5,
+        "baseline_scope_key": "runtime:rt-a-1",
+        "baseline_pid": 123,
     }
 
     roundtrip = MemoryTelemetrySample.from_dict(payload).to_dict()
@@ -30,3 +32,5 @@ def test_memory_telemetry_preserves_process_family_and_cgroup_breakdown() -> Non
     assert roundtrip["cgroup_slab_bytes"] == 14
     assert roundtrip["cgroup_memory_stat"] == {"anon": 11, "file": 12, "kernel": 13, "slab": 14}
     assert roundtrip["available_memory_percent"] == 50.5
+    assert roundtrip["baseline_scope_key"] == "runtime:rt-a-1"
+    assert roundtrip["baseline_pid"] == 123

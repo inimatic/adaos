@@ -2414,6 +2414,8 @@ class SupervisorManager:
         self._memory_active_session_id: str | None = None
         self._memory_profile_finalizing_session_id: str | None = None
         self._memory_last_session_id: str | None = None
+        self._memory_baseline_scope_key: str | None = None
+        self._memory_baseline_pid: int | None = None
         self._memory_baseline_family_rss_bytes: int | None = None
         self._memory_last_growth_bytes: int | None = None
         self._memory_last_growth_bytes_per_min: float | None = None
@@ -2780,6 +2782,47 @@ class SupervisorManager:
                 continue
             window.append(item)
         return window[-max(1, int(limit or 1)) :]
+
+    def _memory_scope_key(self, managed_pid: Any) -> str | None:
+        runtime_instance_id = str(self._managed_runtime_instance_id or "").strip()
+        if runtime_instance_id:
+            return f"runtime:{runtime_instance_id}"
+        try:
+            pid = int(managed_pid or 0)
+        except Exception:
+            pid = 0
+        return f"pid:{pid}" if pid > 0 else None
+
+    def _reset_memory_baseline_scope(self, *, managed_pid: Any = None) -> None:
+        try:
+            pid = int(managed_pid or 0) or None
+        except Exception:
+            pid = None
+        self._memory_baseline_scope_key = self._memory_scope_key(pid)
+        self._memory_baseline_pid = pid
+        self._memory_baseline_family_rss_bytes = None
+        self._memory_last_growth_bytes = 0
+        self._memory_last_growth_bytes_per_min = 0.0
+        self._memory_suspicion_state = "stable"
+        self._memory_suspicion_reason = None
+        self._memory_suspicion_since = None
+
+    def _ensure_memory_baseline_scope(self, *, managed_pid: Any = None) -> None:
+        scope_key = self._memory_scope_key(managed_pid)
+        try:
+            pid = int(managed_pid or 0) or None
+        except Exception:
+            pid = None
+        if not scope_key:
+            return
+        previous_scope = str(self._memory_baseline_scope_key or "").strip() or None
+        previous_pid = self._memory_baseline_pid
+        if previous_scope is None:
+            self._memory_baseline_scope_key = scope_key
+            self._memory_baseline_pid = pid
+            return
+        if previous_scope != scope_key or (pid is not None and previous_pid is not None and previous_pid != pid):
+            self._reset_memory_baseline_scope(managed_pid=pid)
 
     def _memory_profile_request_timeout_sec(self) -> float:
         try:
@@ -3478,6 +3521,7 @@ class SupervisorManager:
         managed_pid = managed.get("managed_pid")
         if not managed_pid:
             return None
+        self._ensure_memory_baseline_scope(managed_pid=managed_pid)
         process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
         if family_rss_bytes is None:
             return None
@@ -3561,6 +3605,8 @@ class SupervisorManager:
                 "available_memory_bytes": self._memory_last_available_bytes,
                 "available_memory_percent": self._memory_last_available_percent,
                 "baseline_rss_bytes": self._memory_baseline_family_rss_bytes,
+                "baseline_scope_key": self._memory_baseline_scope_key,
+                "baseline_pid": self._memory_baseline_pid,
                 "rss_growth_bytes": growth_bytes,
                 "rss_growth_bytes_per_min": slope,
                 "sample_source": "supervisor",
@@ -5968,6 +6014,7 @@ class SupervisorManager:
         current_slot = str(active_slot() or "").strip().upper() or None
         managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
         managed_pid = managed.get("managed_pid")
+        self._ensure_memory_baseline_scope(managed_pid=managed_pid)
         process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
         attribution = _runtime_memory_attribution_snapshot(
             managed_pid,
@@ -6020,6 +6067,8 @@ class SupervisorManager:
             "telemetry_interval_sec": _memory_telemetry_interval_sec(),
             "telemetry_window_sec": _memory_telemetry_window_sec(),
             "telemetry_samples_total": len(telemetry_tail),
+            "baseline_scope_key": self._memory_baseline_scope_key,
+            "baseline_pid": self._memory_baseline_pid,
             "baseline_family_rss_bytes": self._memory_baseline_family_rss_bytes,
             "rss_growth_bytes": self._memory_last_growth_bytes,
             "rss_growth_bytes_per_min": self._memory_last_growth_bytes_per_min,
@@ -6743,6 +6792,7 @@ class SupervisorManager:
         self._managed_start_reason = str(reason or "supervisor.start")
         self._memory_profile_mode = profile_mode
         self._memory_profile_current_trigger_source = str(profile_trigger_source or "").strip().lower() or None
+        self._reset_memory_baseline_scope(managed_pid=getattr(proc, "pid", None))
         self._last_start_at = time.time()
         self._last_error = None
         self._runtime_unhealthy_since = None
@@ -7708,6 +7758,8 @@ class SupervisorManager:
                 "publish_request_session_id": str(runtime.get("publish_request_session_id") or "").strip() or None,
                 "suspicion_state": str(runtime.get("suspicion_state") or "idle"),
                 "suspicion_reason": str(runtime.get("suspicion_reason") or "").strip() or None,
+                "baseline_scope_key": str(runtime.get("baseline_scope_key") or "").strip() or None,
+                "baseline_pid": runtime.get("baseline_pid"),
                 "baseline_family_rss_bytes": runtime.get("baseline_family_rss_bytes"),
                 "rss_growth_bytes": runtime.get("rss_growth_bytes"),
                 "rss_growth_bytes_per_min": runtime.get("rss_growth_bytes_per_min"),
