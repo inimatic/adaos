@@ -36,6 +36,10 @@ def endpoint_audio_policy(endpoint: Mapping[str, Any]) -> dict[str, Any]:
     return _svc.policy_report(endpoint)
 
 
+def endpoint_audio_response_route(endpoint: Mapping[str, Any], requested: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return _svc.response_route_report(endpoint, requested)
+
+
 def endpoint_audio_diagnostics(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return _svc.diagnostics_snapshot(state, endpoint)
 
@@ -105,6 +109,7 @@ __all__ = [
     "endpoint_audio_diagnostics",
     "endpoint_audio_policy",
     "endpoint_audio_readiness",
+    "endpoint_audio_response_route",
     "endpoint_audio_session",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",

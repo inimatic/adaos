@@ -22,7 +22,11 @@ def test_build_capture_command_defaults_to_vad_without_local_stt() -> None:
         "code": "ABC123",
         "endpoint_manifest": {
             "endpoint_id": "endpoint-1",
-            "services": {"audio_input_endpoint": {"enabled": True}},
+            "services": {
+                "audio_input_endpoint": {"enabled": True},
+                "audio_output_endpoint": {"enabled": True},
+                "display_endpoint": {"enabled": True},
+            },
         },
     }
 
@@ -42,7 +46,11 @@ def test_build_capture_command_accepts_vad_activation_overrides() -> None:
         "code": "ABC123",
         "endpoint_manifest": {
             "endpoint_id": "endpoint-1",
-            "services": {"audio_input_endpoint": {"enabled": True}},
+            "services": {
+                "audio_input_endpoint": {"enabled": True},
+                "audio_output_endpoint": {"enabled": True},
+                "display_endpoint": {"enabled": True},
+            },
         },
     }
 
@@ -209,7 +217,11 @@ def test_audio_session_facade_creates_and_stops_command_session() -> None:
         "endpoint_id": "endpoint-1",
         "endpoint_manifest": {
             "endpoint_id": "endpoint-1",
-            "services": {"audio_input_endpoint": {"enabled": True}},
+            "services": {
+                "audio_input_endpoint": {"enabled": True},
+                "audio_output_endpoint": {"enabled": True},
+                "display_endpoint": {"enabled": True},
+            },
         },
     }
 
@@ -220,7 +232,7 @@ def test_audio_session_facade_creates_and_stops_command_session() -> None:
         owner_node_id="hub-1",
         owner_skill_id="redevice_voice",
         lang="ru",
-        response_route={"display_endpoint": True},
+        response_route={"audio_output_endpoint": True, "display_endpoint": True},
     )
 
     assert session["schema_version"] == "audio-session.v1"
@@ -229,6 +241,7 @@ def test_audio_session_facade_creates_and_stops_command_session() -> None:
     assert session["owner"] == {"node_id": "hub-1", "skill_id": "redevice_voice"}
     assert session["endpoint"]["endpoint_id"] == "endpoint-1"
     assert session["policy"]["microphone_allowed"] is True
+    assert session["response_route"]["selected"] == ["endpoint_speaker", "endpoint_display"]
     assert endpoint_audio.session_report(state)["session_id"] == session["session_id"]
 
     stopped = endpoint_audio.stop_session(state, reason="test_done")
@@ -236,3 +249,18 @@ def test_audio_session_facade_creates_and_stops_command_session() -> None:
     assert stopped["state"] == "stopped"
     assert stopped["events"][-1]["type"] == "audio_session.stopped"
     assert stopped["events"][-1]["reason"] == "test_done"
+
+
+def test_response_route_report_blocks_missing_endpoint_speaker_and_unconfigured_telegram() -> None:
+    report = endpoint_audio.response_route_report(
+        {"endpoint_manifest": {"services": {"display_endpoint": {"enabled": True}}}},
+        {"endpoint_speaker": True, "endpoint_display": True, "telegram": True},
+    )
+
+    assert report["schema_version"] == "audio-response-route.v1"
+    assert report["ok"] is False
+    assert report["selected"] == ["endpoint_display"]
+    assert report["blocked"] == {
+        "endpoint_speaker": "route_unavailable",
+        "telegram": "route_unavailable",
+    }

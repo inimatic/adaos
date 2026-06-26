@@ -319,6 +319,64 @@ def policy_report(endpoint: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def response_route_report(endpoint: Mapping[str, Any], requested: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    manifest = _mapping(endpoint.get("endpoint_manifest"))
+    services = _mapping(manifest.get("services"))
+    requested_map = _mapping(requested)
+    display = _mapping(services.get("display_endpoint"))
+    audio_output = _mapping(services.get("audio_output_endpoint"))
+    routes = {
+        "endpoint_speaker": {
+            "requested": bool(requested_map.get("endpoint_speaker") or requested_map.get("audio_output_endpoint")),
+            "available": bool(audio_output.get("enabled") or audio_output.get("state") in {"ready", "active"}),
+            "service": "audio_output_endpoint",
+        },
+        "endpoint_display": {
+            "requested": bool(requested_map.get("endpoint_display") or requested_map.get("display_endpoint")),
+            "available": bool(display.get("enabled") or display.get("state") in {"ready", "active"}),
+            "service": "display_endpoint",
+        },
+        "browser": {
+            "requested": bool(requested_map.get("browser")),
+            "available": True,
+            "service": "browser_ui",
+        },
+        "notification": {
+            "requested": bool(requested_map.get("notification")),
+            "available": True,
+            "service": "notification",
+        },
+        "telegram": {
+            "requested": bool(requested_map.get("telegram")),
+            "available": bool(requested_map.get("telegram_configured")),
+            "service": "telegram",
+        },
+        "text_buffer": {
+            "requested": bool(requested_map.get("text_buffer")),
+            "available": True,
+            "service": "text_buffer",
+        },
+    }
+    selected = [
+        key
+        for key, value in routes.items()
+        if bool(value.get("requested")) and bool(value.get("available"))
+    ]
+    blocked = {
+        key: "route_unavailable"
+        for key, value in routes.items()
+        if bool(value.get("requested")) and not bool(value.get("available"))
+    }
+    return {
+        "schema_version": "audio-response-route.v1",
+        "ok": not blocked,
+        "selected": selected,
+        "blocked": blocked,
+        "routes": routes,
+        "updated_at": _now(),
+    }
+
+
 def diagnostics_snapshot(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
     endpoint_data = endpoint or {}
     transport: dict[str, Any] = {}
@@ -343,6 +401,7 @@ def diagnostics_snapshot(state: Mapping[str, Any], endpoint: Mapping[str, Any] |
         "retention": _mapping(state.get("retention")) or retention_report(),
         "transport": transport,
         "policy": policy,
+        "response_route": response_route_report(endpoint_data, _mapping(state.get("response_route"))) if endpoint_data else {},
         "events_count": len(list(state.get("events") or [])),
         "updated_at": _text(state.get("updated_at")) or _now(),
     }
@@ -478,7 +537,7 @@ def create_session(
         "lang": _target_lang(lang),
         "policy": policy_report(endpoint),
         "transport": select_transport(endpoint, intent="audio.capture.vad", allow_root_relay=True),
-        "response_route": dict(response_route or {}),
+        "response_route": response_route_report(endpoint, response_route),
         "started_at": _now(),
         "events": [
             {
@@ -489,6 +548,7 @@ def create_session(
         ],
     }
     state["session"] = session
+    state["response_route"] = dict(response_route or {})
     state["updated_at"] = session["started_at"]
     return session
 
@@ -720,6 +780,7 @@ __all__ = [
     "policy_report",
     "process_endpoint_event",
     "readiness_report",
+    "response_route_report",
     "retention_report",
     "save_audio_segment",
     "session_report",
