@@ -438,6 +438,106 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_code: str = "") ->
     }
 
 
+def _endpoint_ref(endpoint: Mapping[str, Any]) -> dict[str, Any]:
+    from adaos.sdk.redevice import compact_endpoint as sdk_compact_endpoint
+
+    compact = sdk_compact_endpoint(endpoint)
+    return {
+        "kind": "redevice",
+        "endpoint_id": _text(compact.get("endpoint_id")) or None,
+        "code": _text(compact.get("code")) or None,
+        "display_name": _text(compact.get("display_name") or compact.get("title")) or None,
+    }
+
+
+def create_session(
+    state: dict[str, Any],
+    endpoint: Mapping[str, Any],
+    *,
+    mode: str = "command",
+    owner_node_id: str = "member",
+    owner_skill_id: str = "redevice_voice",
+    lang: str | None = "ru",
+    response_route: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    from adaos.sdk.redevice import select_transport
+
+    mode_token = _text(mode).lower() or "command"
+    if mode_token not in {"command", "dialog", "dictation", "audio_debug"}:
+        mode_token = "command"
+    endpoint_ref = {key: value for key, value in _endpoint_ref(endpoint).items() if value not in ("", None)}
+    seed = f"{endpoint_ref.get('endpoint_id') or endpoint_ref.get('code')}:{mode_token}:{owner_node_id}:{owner_skill_id}:{time.time()}"
+    session_id = "audio:" + hashlib.sha256(seed.encode("utf-8", errors="replace")).hexdigest()[:16]
+    session = {
+        "schema_version": "audio-session.v1",
+        "session_id": session_id,
+        "mode": mode_token,
+        "state": "active",
+        "owner": {"node_id": owner_node_id, "skill_id": owner_skill_id},
+        "endpoint": endpoint_ref,
+        "lang": _target_lang(lang),
+        "policy": policy_report(endpoint),
+        "transport": select_transport(endpoint, intent="audio.capture.vad", allow_root_relay=True),
+        "response_route": dict(response_route or {}),
+        "started_at": _now(),
+        "events": [
+            {
+                "type": "audio_session.started",
+                "state": "active",
+                "updated_at": _now(),
+            }
+        ],
+    }
+    state["session"] = session
+    state["updated_at"] = session["started_at"]
+    return session
+
+
+def stop_session(state: dict[str, Any], *, reason: str | None = None) -> dict[str, Any]:
+    session = _mapping(state.get("session"))
+    if not session:
+        session = {
+            "schema_version": "audio-session.v1",
+            "session_id": "",
+            "mode": "command",
+            "state": "idle",
+            "events": [],
+        }
+    now = _now()
+    events = list(session.get("events") or [])
+    events.append(
+        {
+            "type": "audio_session.stopped",
+            "state": "stopped",
+            "reason": _text(reason) or "operator",
+            "updated_at": now,
+        }
+    )
+    session.update({"state": "stopped", "ended_at": now, "events": events[-24:]})
+    state["session"] = session
+    state["updated_at"] = now
+    return session
+
+
+def session_report(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    session = _mapping(state.get("session"))
+    if session:
+        return {
+            **session,
+            "events": list(session.get("events") or [])[-8:],
+        }
+    endpoint_ref = _endpoint_ref(endpoint or {}) if endpoint else {}
+    return {
+        "schema_version": "audio-session.v1",
+        "session_id": "",
+        "mode": "command",
+        "state": "idle",
+        "endpoint": {key: value for key, value in endpoint_ref.items() if value not in ("", None)},
+        "events": [],
+        "updated_at": _now(),
+    }
+
+
 def process_endpoint_event(
     state: dict[str, Any],
     endpoint: Mapping[str, Any],
@@ -613,6 +713,7 @@ __all__ = [
     "MAX_DEBUG_CLIPS",
     "build_capture_command",
     "compact_endpoint",
+    "create_session",
     "diagnostics_snapshot",
     "dispatch_transcript",
     "event_id",
@@ -621,7 +722,9 @@ __all__ = [
     "readiness_report",
     "retention_report",
     "save_audio_segment",
+    "session_report",
     "state_dir",
+    "stop_session",
     "stt_status",
     "transcribe_wav",
     "verify_audio_input_content",

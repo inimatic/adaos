@@ -65,6 +65,35 @@ def endpoint_audio_stt_status(lang: str | None = None) -> dict[str, Any]:
     return _svc.stt_status(lang)
 
 
+def create_endpoint_audio_session(
+    state: dict[str, Any],
+    endpoint: Mapping[str, Any],
+    *,
+    mode: str = "command",
+    owner_node_id: str = "member",
+    owner_skill_id: str = "redevice_voice",
+    lang: str | None = "ru",
+    response_route: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _svc.create_session(
+        state,
+        endpoint,
+        mode=mode,
+        owner_node_id=owner_node_id,
+        owner_skill_id=owner_skill_id,
+        lang=lang,
+        response_route=response_route,
+    )
+
+
+def stop_endpoint_audio_session(state: dict[str, Any], *, reason: str | None = None) -> dict[str, Any]:
+    return _svc.stop_session(state, reason=reason)
+
+
+def endpoint_audio_session(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return _svc.session_report(state, endpoint)
+
+
 def verify_audio_input_content(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return _svc.verify_audio_input_content(state, endpoint)
 
@@ -72,10 +101,13 @@ def verify_audio_input_content(state: Mapping[str, Any], endpoint: Mapping[str, 
 __all__ = [
     "build_capture_command",
     "compact_audio_endpoint",
+    "create_endpoint_audio_session",
     "endpoint_audio_diagnostics",
     "endpoint_audio_policy",
     "endpoint_audio_readiness",
+    "endpoint_audio_session",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",
+    "stop_endpoint_audio_session",
     "verify_audio_input_content",
 ]

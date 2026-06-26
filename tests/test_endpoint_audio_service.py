@@ -200,3 +200,39 @@ def test_readiness_report_blocks_when_microphone_policy_is_missing() -> None:
     assert report["ok"] is False
     assert report["state"] == "policy_blocked"
     assert report["policy"]["microphone_allowed"] is False
+
+
+def test_audio_session_facade_creates_and_stops_command_session() -> None:
+    state: dict[str, object] = {}
+    endpoint = {
+        "code": "ABC123",
+        "endpoint_id": "endpoint-1",
+        "endpoint_manifest": {
+            "endpoint_id": "endpoint-1",
+            "services": {"audio_input_endpoint": {"enabled": True}},
+        },
+    }
+
+    session = endpoint_audio.create_session(
+        state,
+        endpoint,
+        mode="command",
+        owner_node_id="hub-1",
+        owner_skill_id="redevice_voice",
+        lang="ru",
+        response_route={"display_endpoint": True},
+    )
+
+    assert session["schema_version"] == "audio-session.v1"
+    assert session["state"] == "active"
+    assert session["mode"] == "command"
+    assert session["owner"] == {"node_id": "hub-1", "skill_id": "redevice_voice"}
+    assert session["endpoint"]["endpoint_id"] == "endpoint-1"
+    assert session["policy"]["microphone_allowed"] is True
+    assert endpoint_audio.session_report(state)["session_id"] == session["session_id"]
+
+    stopped = endpoint_audio.stop_session(state, reason="test_done")
+
+    assert stopped["state"] == "stopped"
+    assert stopped["events"][-1]["type"] == "audio_session.stopped"
+    assert stopped["events"][-1]["reason"] == "test_done"

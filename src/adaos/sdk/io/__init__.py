@@ -22,11 +22,14 @@ __all__ = [
     "tts_speak",
     "build_capture_command",
     "compact_audio_endpoint",
+    "create_endpoint_audio_session",
     "endpoint_audio_diagnostics",
     "endpoint_audio_policy",
     "endpoint_audio_readiness",
+    "endpoint_audio_session",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",
+    "stop_endpoint_audio_session",
     "verify_audio_input_content",
 ]
 
@@ -37,11 +40,14 @@ if TYPE_CHECKING:
     from .endpoint_audio import (
         build_capture_command,
         compact_audio_endpoint,
+        create_endpoint_audio_session,
         endpoint_audio_diagnostics,
         endpoint_audio_policy,
         endpoint_audio_readiness,
+        endpoint_audio_session,
         endpoint_audio_stt_status,
         process_endpoint_audio_event,
+        stop_endpoint_audio_session,
         verify_audio_input_content,
     )
 
@@ -73,32 +79,41 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
     if name in (
         "build_capture_command",
         "compact_audio_endpoint",
+        "create_endpoint_audio_session",
         "endpoint_audio_diagnostics",
         "endpoint_audio_policy",
         "endpoint_audio_readiness",
+        "endpoint_audio_session",
         "endpoint_audio_stt_status",
         "process_endpoint_audio_event",
+        "stop_endpoint_audio_session",
         "verify_audio_input_content",
     ):
         from .endpoint_audio import (
             build_capture_command,
             compact_audio_endpoint,
+            create_endpoint_audio_session,
             endpoint_audio_diagnostics,
             endpoint_audio_policy,
             endpoint_audio_readiness,
+            endpoint_audio_session,
             endpoint_audio_stt_status,
             process_endpoint_audio_event,
+            stop_endpoint_audio_session,
             verify_audio_input_content,
         )
 
         return {
             "build_capture_command": build_capture_command,
             "compact_audio_endpoint": compact_audio_endpoint,
+            "create_endpoint_audio_session": create_endpoint_audio_session,
             "endpoint_audio_diagnostics": endpoint_audio_diagnostics,
             "endpoint_audio_policy": endpoint_audio_policy,
             "endpoint_audio_readiness": endpoint_audio_readiness,
+            "endpoint_audio_session": endpoint_audio_session,
             "endpoint_audio_stt_status": endpoint_audio_stt_status,
             "process_endpoint_audio_event": process_endpoint_audio_event,
+            "stop_endpoint_audio_session": stop_endpoint_audio_session,
             "verify_audio_input_content": verify_audio_input_content,
         }[name]
     raise AttributeError(name)
