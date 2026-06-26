@@ -722,9 +722,10 @@ below remain useful for tracking existing implementation work.
   dispatcher. Partial transcripts are UI/debug signals and must not dispatch
   mutating actions.
 - [~] `[must]` Model session modes explicitly: `command`, `dialog`,
-  `dictation`, and `audio_debug`. Current implementation covers bounded
-  command/audio-debug events and owner-aware skill calls; full dialog and
-  dictation session state is still open.
+  `dictation`, and `audio_debug`. Current implementation has an
+  `audio-session.v1` facade for command/audio-debug sessions with owner,
+  endpoint, policy, transport, response-route evidence, and start/stop events;
+  durable dialog and dictation session state is still open.
 - [~] `[must]` Define STT routing policy: endpoint-local STT only when installed
   and benchmarked, member-local STT when available, cloud Whisper or equivalent
   only when policy allows, otherwise visible degraded failure. Current MVP
@@ -735,9 +736,11 @@ below remain useful for tracking existing implementation work.
   evidence. The current ReDevice slice retains only the last 10 debug clips and
   keeps raw audio out of browser streams; cloud retention/export policy remains
   part of the broader dialog/dictation milestone.
-- [ ] `[must]` Add response routing after NLU/LLM result: endpoint speaker,
+- [~] `[must]` Add response routing after NLU/LLM result: endpoint speaker,
   endpoint display, browser, notification, or text buffer. The audio service
-  does not bypass normal AdaOS action governance.
+  does not bypass normal AdaOS action governance. Current implementation has
+  `audio-response-route.v1` availability/blocked-route evidence; actual
+  response playback/render dispatch is still open.
 - [~] `[should]` Add Bluetooth profile diagnostics and assisted management:
   A2DP, HFP, SCO, built-in mic plus Bluetooth speaker, preferred route, native
   settings launch, and speaker/microphone tests. Current ReDevice Settings can

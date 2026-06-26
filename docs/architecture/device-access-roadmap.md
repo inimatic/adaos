@@ -70,6 +70,15 @@ slice. The current baseline is:
   revoke, and retire.
 - [x] `sdk.redevice` owns the compatibility transport ladder and compact
   endpoint projection used by scenario skills.
+- [x] `sdk.data.device_access` wraps ReDevice commands in
+  `endpoint-command.v1` envelopes before passing a legacy-compatible payload
+  to the current ReDevice root command bridge.
+- [x] Endpoint resolution returns `endpoint-resolution.v1` evidence with
+  matched names, assignment, active app/surface, online state, and historical
+  admission-code healing details.
+- [x] ReDevice assignments have a structured `endpoint_assignment` projection
+  with role, owner, source, reason, and updated timestamp while preserving the
+  legacy `assignment` field for existing skills.
 - [x] `redevice_settings`, `redevice_voice`, `slideshow_skill`, and
   `redevice_list` are consumers of core registry/SDK state. They are not
   independent registries or transport owners.
@@ -86,7 +95,7 @@ settings". It is:
 
 - [ ] Promote command-scoped ReDevice media routes to router-owned direct media
   sessions when LAN/WebRTC evidence is stable.
-- [ ] Move endpoint assignments fully into a first-class core
+- [~] Move endpoint assignments fully into a first-class core
   `EndpointAssignment` model with audit and conflict handling.
 - [ ] Replace remaining compatibility bridge calls with generic
   `EndpointRouter` APIs.
@@ -180,7 +189,10 @@ settings". It is:
   `webio.stream.subscription.changed` handlers restore the last cached stream
   snapshot instead of performing live Endpoint Registry or ReDevice bridge
   refreshes.
-- [~] Move scenario assignment into core `EndpointAssignment`.
+- [~] Move scenario assignment into core `EndpointAssignment`. A structured
+  `endpoint_assignment` object is now projected by access links, device
+  inventory, and SDK; the remaining work is durable conflict/audit semantics
+  and generic router ownership.
 - [x] Add native ReDevice Agent support for Wi-Fi/Bluetooth settings intents,
   speaker test, volume, diagnostics, logout, and active-app controls.
 - [x] Keep the browser client generic: it renders `webui.json` and does not
@@ -200,5 +212,5 @@ settings". It is:
 - [~] Phase 10: system-model, voice, and automation integration.
 - [~] Phase 11: ReDevice User Face scenario and Endpoint Registry-backed
   endpoint settings surfaces.
-- [ ] Phase 12: router-owned endpoint media sessions, endpoint audio response
+- [~] Phase 12: router-owned endpoint media sessions, endpoint audio response
   routes, and restart-safe active endpoint sessions.

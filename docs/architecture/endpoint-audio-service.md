@@ -375,6 +375,12 @@ transport stack:
 - ReDevice slideshow and voice controls can be driven by published skill
   surfaces and active endpoint assignments. This proves endpoint-originated and
   endpoint-directed commands without requiring raw audio or media bytes in Yjs.
+- `audio-session.v1` now has an MVP session facade for command/audio-debug
+  sessions. It records owner, endpoint, mode, policy, transport, response-route
+  evidence, started/stopped events, and current state in skill/service state.
+- `audio-response-route.v1` reports whether endpoint speaker, endpoint display,
+  browser, notification, Telegram, or text-buffer response routes are requested,
+  selected, or blocked.
 
 The service state uses `endpoint-audio-diagnostics.v1` as a runtime snapshot:
 
@@ -451,7 +457,9 @@ Recommended MVP:
    through SDK, without giving the skill ownership of raw transport.
 7. `[done]` Publish compact `endpoint-audio-readiness.v1` through SDK and
    `redevice_voice` for browser-safe status rendering.
-8. `[next]` Return optional response to display or speaker route.
+8. `[partial]` Return optional response to display or speaker route.
+   `audio-response-route.v1` now validates route availability; actual playback
+   or rendered response dispatch remains next.
 9. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
 
 Do not make local STT mandatory for legacy Android 4.1. Treat Vosk and similar
@@ -464,10 +472,10 @@ router hardening:
 
 - promote command-scoped ReDevice media routes to router-owned direct media
   sessions with explicit restart and fallback policy;
-- make `audio-session.v1` a durable runtime object for command, dialog,
-  dictation, and audio-debug sessions;
-- add response routing from Voice/NLU/dialog results to endpoint speaker,
-  endpoint display, browser, notification, Telegram, or text buffer;
+- make `audio-session.v1` durable beyond current skill/service state and extend
+  it from command/audio-debug into dialog and dictation sessions;
+- connect `audio-response-route.v1` to actual response dispatch for endpoint
+  speaker, endpoint display, browser, notification, Telegram, or text buffer;
 - add cloud STT/LLM policy evidence before enabling broad dialog and dictation
   flows;
 - add multi-endpoint arbitration so simultaneous VAD captures do not dispatch

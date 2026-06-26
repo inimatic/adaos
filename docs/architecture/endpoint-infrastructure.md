@@ -98,6 +98,15 @@ The current ReDevice implementation already covers the core endpoint model:
   build/version data, `active_app`, `active_surface`, and assignment.
 - `sdk.data.device_access` is the skill-facing surface for endpoint lookup,
   command send, profile update, assignment, revoke, and retire.
+- Endpoint lookup now returns `endpoint-resolution.v1` evidence so operator
+  skills can explain alias/assignment/active-app/online-state matches and
+  historical admission-code healing.
+- ReDevice commands sent through the compatibility bridge are wrapped in
+  `endpoint-command.v1` envelopes. The endpoint still receives a
+  legacy-compatible payload, but command id, target, requested_by, constraints,
+  and transport evidence are now explicit.
+- ReDevice assignment is projected as structured `endpoint_assignment` while
+  preserving the legacy string `assignment`.
 - `sdk.redevice` remains a compatibility layer for ReDevice transport
   selection, compact endpoint projection, and legacy command delivery while
   the generic `EndpointRouter` is being built.
@@ -833,8 +842,9 @@ Current M2:
 
 1. Promote ReDevice display/media/audio commands from compatibility bridge to
    generic `EndpointRouter` APIs.
-2. Store assignments in core `EndpointAssignment` records, with audit,
-   conflict handling, and node-qualified owner `node_id:skill_id`.
+2. `[partial]` Store assignments in structured `endpoint_assignment`
+   projections with node-qualified owner `node_id:skill_id`; remaining work is
+   durable `EndpointAssignment` records with audit and conflict handling.
 3. Define router-owned media session lifecycle for local HTTP/WebRTC routes,
    including restart policy and fallback to bounded relay only when required.
 4. Close response routing from Voice/NLU/dialog results to endpoint speaker,

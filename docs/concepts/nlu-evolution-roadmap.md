@@ -560,8 +560,9 @@ Acceptance checklist:
   strategies per endpoint.
 - [~] `[must]` `EndpointAudioService` can create, stop, recover, and audit
   `command`, `dialog`, `dictation`, and `audio_debug` sessions. Current code
-  covers bounded command/audio-debug events and diagnostics; durable dialog and
-  dictation sessions are still open.
+  has an `audio-session.v1` facade for command/audio-debug sessions and
+  response-route evidence; durable dialog and dictation sessions are still
+  open.
 - [x] `[must]` Push-to-talk and VAD work on legacy ReDevice without local STT;
   audio is segmented, bounded, and routed to the member-hosted audio pipeline.
 - [x] `[must]` Final transcript dispatch reuses the normal AdaOS Voice/NLU path,
