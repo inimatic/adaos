@@ -48,7 +48,11 @@ def test_sdk_device_access_resolves_redevice_by_alias_and_assignment(monkeypatch
                 "labels": [{"text": "Планшет", "role": "alias", "locale": "ru"}],
             },
             "observation": {"online": True},
-            "runtime": {"assignment": "slideshow"},
+            "runtime": {
+                "assignment": "slideshow",
+                "endpoint_assignment": {"role": "slideshow", "owner": {"skill_id": "slideshow_skill"}},
+                "active_app": {"app_id": "slideshow_skill"},
+            },
         }
     ]
 
@@ -59,6 +63,10 @@ def test_sdk_device_access_resolves_redevice_by_alias_and_assignment(monkeypatch
     assert resolved["ok"] is True
     assert resolved["device_ref"] == "redevice:endpoint-1"
     assert resolved["code"] == "ABCD1234"
+    assert resolved["resolution"]["schema_version"] == "endpoint-resolution.v1"
+    assert resolved["resolution"]["assignment"] == "slideshow"
+    assert resolved["resolution"]["active_app"] == {"app_id": "slideshow_skill"}
+    assert resolved["resolution"]["online"] is True
 
 
 def test_sdk_device_access_prefers_live_root_redevice_snapshot(monkeypatch) -> None:
@@ -121,9 +129,15 @@ def test_sdk_device_access_resolves_old_pair_code_from_admission_history(monkeyp
         ],
     )
 
-    _endpoint, pair_code = sdk_device_access._resolve_redevice_endpoint(code="FMRS7WTB")
+    endpoint, pair_code = sdk_device_access._resolve_redevice_endpoint(code="FMRS7WTB")
 
     assert pair_code == "SNX68P2A"
+    assert endpoint["_resolution"] == {
+        "schema_version": "endpoint-resolution.v1",
+        "matched_historical_code": "FMRS7WTB",
+        "current_code": "SNX68P2A",
+        "history_resolved": True,
+    }
 
 
 def test_sdk_device_access_assign_endpoint_records_owner(monkeypatch) -> None:

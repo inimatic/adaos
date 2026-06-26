@@ -70,6 +70,33 @@ def _match_score(query: str, device: Mapping[str, Any]) -> int:
     return best
 
 
+def _resolution_evidence(
+    device: Mapping[str, Any],
+    *,
+    query: str | None = None,
+    score: int | None = None,
+    assignment: str | None = None,
+    require_online: bool = False,
+) -> dict[str, Any]:
+    runtime = _mapping(device.get("runtime"))
+    observation = _mapping(device.get("observation"))
+    endpoint_assignment = _mapping(runtime.get("endpoint_assignment"))
+    return {
+        "schema_version": "endpoint-resolution.v1",
+        "query": _text(query) or None,
+        "score": int(score or 0),
+        "assignment_filter": _text(assignment) or None,
+        "require_online": bool(require_online),
+        "matched_names": _device_names(device),
+        "assignment": _text(runtime.get("assignment") or endpoint_assignment.get("role")) or None,
+        "endpoint_assignment": endpoint_assignment or None,
+        "active_app": _mapping(runtime.get("active_app")) or None,
+        "active_surface": _mapping(runtime.get("active_surface")) or None,
+        "online": bool(observation.get("online")),
+        "online_state": _text(observation.get("connection_state") or runtime.get("snapshot_state")) or None,
+    }
+
+
 def _normalize_redevice_ref(device_ref: str | None = None, code: str | None = None) -> str:
     token = _text(code)
     if token:
@@ -113,7 +140,15 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
         candidates.update(history_codes)
         if target in candidates:
             pair_code = _text(compact.get("code")) or _text(raw.get("code")) or target
-            return dict(raw), pair_code
+            resolved = dict(raw)
+            if target in history_codes and target != pair_code:
+                resolved["_resolution"] = {
+                    "schema_version": "endpoint-resolution.v1",
+                    "matched_historical_code": target,
+                    "current_code": pair_code,
+                    "history_resolved": True,
+                }
+            return resolved, pair_code
     return None, target
 
 
@@ -158,6 +193,9 @@ def resolve_endpoint_device(
         scored = [(item, score) for item, score in scored if score > 0]
         scored.sort(key=lambda pair: pair[1], reverse=True)
         candidates = [item for item, _score in scored]
+        scores = {id(item): score for item, score in scored}
+    else:
+        scores = {id(item): _match_score(query_token, item) for item in candidates}
     if not candidates:
         return {
             "ok": False,
@@ -178,6 +216,13 @@ def resolve_endpoint_device(
         "endpoint_id": endpoint_id,
         "code": pair_code,
         "matched_names": _device_names(device),
+        "resolution": _resolution_evidence(
+            device,
+            query=query_token,
+            score=scores.get(id(device), 0),
+            assignment=assignment_token,
+            require_online=require_online,
+        ),
     }
 
 
