@@ -555,24 +555,30 @@ Required model:
 
 Acceptance checklist:
 
-- [ ] `[must]` Endpoint Registry exposes audio input/output capabilities,
+- [x] `[must]` Endpoint Registry exposes audio input/output capabilities,
   Bluetooth route state, local STT benchmark state, and allowed activation
   strategies per endpoint.
-- [ ] `[must]` `EndpointAudioService` can create, stop, recover, and audit
-  `command`, `dialog`, `dictation`, and `audio_debug` sessions.
-- [ ] `[must]` Push-to-talk and VAD work on legacy ReDevice without local STT;
+- [~] `[must]` `EndpointAudioService` can create, stop, recover, and audit
+  `command`, `dialog`, `dictation`, and `audio_debug` sessions. Current code
+  covers bounded command/audio-debug events and diagnostics; durable dialog and
+  dictation sessions are still open.
+- [x] `[must]` Push-to-talk and VAD work on legacy ReDevice without local STT;
   audio is segmented, bounded, and routed to the member-hosted audio pipeline.
-- [ ] `[must]` Final transcript dispatch reuses the normal AdaOS Voice/NLU path,
+- [x] `[must]` Final transcript dispatch reuses the normal AdaOS Voice/NLU path,
   including Teacher sessions, confirmations, action governance, and published
   voice capability bindings.
 - [ ] `[must]` Dialog and dictation sessions produce durable text-buffer events
   that can be reviewed, edited, sent to a skill, added to notes, or discarded.
-- [ ] `[must]` Cloud STT/LLM usage is policy-gated and visible in evidence:
+- [~] `[must]` Cloud STT/LLM usage is policy-gated and visible in evidence:
   provider, cost class, retention mode, fallback route, and terminal outcome.
-- [ ] `[must]` Audio/video/media payloads do not travel through Yjs; the client
+  The local/member STT path has visible degraded states; broad cloud evidence is
+  part of the dialog/dictation milestone.
+- [x] `[must]` Audio/video/media payloads do not travel through Yjs; the client
   receives only references, state summaries, and UI-safe events.
-- [ ] `[should]` Bluetooth speaker/headset setup is supported through assisted
+- [~] `[should]` Bluetooth speaker/headset setup is supported through assisted
   native settings, route tests, profile diagnostics, and preferred route memory.
+  ReDevice Settings can assist native settings and tests; profile diagnostics
+  and preferred route memory need hardening.
 - [ ] `[should]` Wake-word or endpoint-name activation is available only after
   VAD/PTT reliability, false-positive rate, and battery impact are measured.
 - [ ] `[should]` Multi-endpoint arbitration suppresses duplicate commands and

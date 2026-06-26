@@ -1,6 +1,7 @@
 # Endpoint Infrastructure
 
-Status: target architecture and first implementation slice.
+Status: target architecture, current MVP baseline, and remaining hardening
+work.
 
 This document defines how AdaOS should model ReDevice agents, browser surfaces,
 and future device agents as managed endpoints. It complements
@@ -83,6 +84,35 @@ responsible for:
 ReDevice admission must default to endpoint-only. An unreliable old phone,
 tablet, or damaged device must not be promoted into an AdaOS hub. The hub owns
 subnet admission decisions, endpoint policy issuance, and routing authority.
+
+## Current Implementation Baseline
+
+The current ReDevice implementation already covers the core endpoint model:
+
+- ReDevice admissions are persisted through `access_links` and projected by
+  `DeviceInventoryService` as endpoint device records.
+- Current endpoint identity is separated from historical admission/session
+  evidence. Revoked or superseded pair codes are not treated as second live
+  devices.
+- Endpoint records carry manifest, policy, health, diagnostics, service state,
+  build/version data, `active_app`, `active_surface`, and assignment.
+- `sdk.data.device_access` is the skill-facing surface for endpoint lookup,
+  command send, profile update, assignment, revoke, and retire.
+- `sdk.redevice` remains a compatibility layer for ReDevice transport
+  selection, compact endpoint projection, and legacy command delivery while
+  the generic `EndpointRouter` is being built.
+- ReDevice scenario skills (`redevice_settings`, `slideshow_skill`,
+  `redevice_voice`, and `redevice_list`) consume these registry and SDK
+  surfaces instead of owning private endpoint registries.
+- Android ReDevice Agent supports active endpoint mode, command polling,
+  display/slideshow surfaces, native settings intents, logout/re-admission,
+  active-app reporting, VAD/PTT audio capture, bounded audio segment upload,
+  and degraded-friendly diagnostics.
+
+The main gap is no longer endpoint visibility or a settings dashboard. The
+remaining infrastructure work is to promote command-scoped compatibility routes
+into generic router-owned sessions, make assignments first-class core records,
+and define restart-safe media/audio session continuity.
 
 ## Registry Model
 
@@ -772,26 +802,42 @@ as:
 - `best_effort`: try a native command and fall back to assisted flow;
 - `privileged`: require system/root-installed endpoint capabilities.
 
-The current MVP may keep scenario assignment in skill memory, but the target
-owner is `EndpointAssignment` in Endpoint Registry.
+The current MVP exposes scenario assignment through SDK/core-backed endpoint
+profile updates. The target owner remains a first-class `EndpointAssignment`
+record in Endpoint Registry with audit, conflict resolution, and
+node-qualified owner `node_id:skill_id`.
 
 Audio-specific user-facing controls should use the shared
 `EndpointAudioService` model. `redevice_voice` is a pilot/debug skill over that
 service, not the owner of microphone transport, STT policy, dialog routing, or
 dictation buffers.
 
-## First Vertical Slice
+## Vertical Slices
 
-Recommended M1:
+Completed M1:
 
-1. Persist ReDevice endpoints in EndpointRegistry after admission.
-2. Add `display_endpoint` command polling to the Android ReDevice agent.
-3. Add one assignment role: `demo_display`.
-4. Add EndpointRouter API for `display.show_text`.
-5. Extend Connected Devices skill to assign `demo_display` and send a test
-   display command.
-6. Add NLU examples for endpoint command preview and dispatch:
-   "show status on old tablet".
+1. `[done]` Persist ReDevice endpoints after admission and expose them through
+   the access-link registry plus `DeviceInventoryService`.
+2. `[done]` Add `display_endpoint` command polling and active endpoint mode to
+   the Android ReDevice agent.
+3. `[done]` Add first endpoint assignments for slideshow and voice scenarios.
+4. `[done]` Expose compatibility command APIs through `sdk.data.device_access`
+   and `sdk.redevice`.
+5. `[done]` Add `redevice_settings`, `redevice_list`, `slideshow_skill`, and
+   `redevice_voice` as first consumers.
+6. `[done]` Add bounded voice control for slideshow commands such as start,
+   stop, next, previous, favorite, and Telegram send through published skill
+   voice surfaces.
 
-This proves the architecture without starting with high-bandwidth media,
-microphone, GPS, or generic fleet management.
+Current M2:
+
+1. Promote ReDevice display/media/audio commands from compatibility bridge to
+   generic `EndpointRouter` APIs.
+2. Store assignments in core `EndpointAssignment` records, with audit,
+   conflict handling, and node-qualified owner `node_id:skill_id`.
+3. Define router-owned media session lifecycle for local HTTP/WebRTC routes,
+   including restart policy and fallback to bounded relay only when required.
+4. Close response routing from Voice/NLU/dialog results to endpoint speaker,
+   endpoint display, browser UI, notification, or text buffer.
+5. Add endpoint audio arbitration so several endpoints do not dispatch the same
+   mutating command independently.

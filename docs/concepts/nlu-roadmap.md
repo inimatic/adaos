@@ -696,45 +696,58 @@ below remain useful for tracking existing implementation work.
 
 ### L. Endpoint Audio, Voice Activation, and Dialog Sessions
 
-- [ ] `[must]` Define `EndpointAudioService` as shared subnet
+- [x] `[must]` Define `EndpointAudioService` as shared subnet
   infrastructure, not as ReDevice-specific skill code. ReDevice Voice should be
   a debug/user-facing consumer of this service.
-- [ ] `[must]` Define endpoint audio contracts:
+- [x] `[must]` Define endpoint audio contracts:
   `endpoint-audio-profile.v1`, `audio-session.v1`, `audio-chunk.v1`,
   `speech-event.v1`, `transcript.v1`, `dialog-session.v1`, and
-  `text-buffer.v1`.
-- [ ] `[must]` Extend Endpoint Registry and endpoint policy with
+  `text-buffer.v1`. The current MVP also defines
+  `endpoint-audio-events.v1`, `endpoint-audio-readiness.v1`, and
+  `endpoint-audio-content-check.v1`.
+- [x] `[must]` Extend Endpoint Registry and endpoint policy with
   `audio_input_endpoint`, `audio_output_endpoint`, `bluetooth_audio_endpoint`,
   activation strategies, local STT benchmark status, cloud STT allowance,
   retention policy, and visible microphone state.
-- [ ] `[must]` Keep audio, video, and image payload streams outside Yjs. Route
+- [x] `[must]` Keep audio, video, and image payload streams outside Yjs. Route
   media through Endpoint Router and EndpointAudioService with transport
-  evidence, bounded payloads, and explicit degradation reasons.
-- [ ] `[must]` Implement a legacy-safe ReDevice capture path with push-to-talk
+  evidence, bounded payloads, and explicit degradation reasons. Current media
+  paths still include compatibility bridges and command-scoped local routes;
+  router-owned durable media sessions remain in the realtime reliability
+  roadmap.
+- [x] `[must]` Implement a legacy-safe ReDevice capture path with push-to-talk
   and VAD: pre-roll buffer, maximum segment duration, silence stop, segment
   upload, and retention of only the last debug clips when policy allows.
-- [ ] `[must]` Route final transcripts into the normal AdaOS Voice/NLU
+- [x] `[must]` Route final transcripts into the normal AdaOS Voice/NLU
   dispatcher. Partial transcripts are UI/debug signals and must not dispatch
   mutating actions.
-- [ ] `[must]` Model session modes explicitly: `command`, `dialog`,
-  `dictation`, and `audio_debug`. Each session has an owner
-  `node_id:skill_id`, policy scope, transport selection, terminal state, and
-  audit trail.
-- [ ] `[must]` Define STT routing policy: endpoint-local STT only when installed
+- [~] `[must]` Model session modes explicitly: `command`, `dialog`,
+  `dictation`, and `audio_debug`. Current implementation covers bounded
+  command/audio-debug events and owner-aware skill calls; full dialog and
+  dictation session state is still open.
+- [~] `[must]` Define STT routing policy: endpoint-local STT only when installed
   and benchmarked, member-local STT when available, cloud Whisper or equivalent
-  only when policy allows, otherwise visible degraded failure.
-- [ ] `[must]` Add audio privacy and retention gates: cloud allowed or denied,
+  only when policy allows, otherwise visible degraded failure. Current MVP
+  supports optional local/member Vosk and visible degraded states; cloud STT
+  policy evidence is not complete.
+- [x] `[must]` Add audio privacy and retention gates: cloud allowed or denied,
   default no retention, bounded debug retention, delete/export hooks, and audit
-  evidence.
+  evidence. The current ReDevice slice retains only the last 10 debug clips and
+  keeps raw audio out of browser streams; cloud retention/export policy remains
+  part of the broader dialog/dictation milestone.
 - [ ] `[must]` Add response routing after NLU/LLM result: endpoint speaker,
   endpoint display, browser, notification, or text buffer. The audio service
   does not bypass normal AdaOS action governance.
-- [ ] `[should]` Add Bluetooth profile diagnostics and assisted management:
+- [~] `[should]` Add Bluetooth profile diagnostics and assisted management:
   A2DP, HFP, SCO, built-in mic plus Bluetooth speaker, preferred route, native
-  settings launch, and speaker/microphone tests.
-- [ ] `[should]` Add audio front-end diagnostics: signal level, clipping, noise
+  settings launch, and speaker/microphone tests. Current ReDevice Settings can
+  open/assist native Bluetooth settings and show route-oriented state; profile
+  diagnostics and preferred route memory still need hardening.
+- [x] `[should]` Add audio front-end diagnostics: signal level, clipping, noise
   floor, SNR estimate, gain profile, latency, echo risk, battery, and thermal
-  status.
+  status. The current implementation records the simplified legacy metrics
+  needed for VAD/debug; richer AGC/echo/jitter evidence remains a future
+  quality pass.
 - [ ] `[should]` Add multi-endpoint arbitration and duplicate suppression when
   several endpoints hear the same activation phrase.
 - [ ] `[should]` Feed named entities, endpoint aliases, skill names, scenario
@@ -744,7 +757,7 @@ below remain useful for tracking existing implementation work.
   for dialog sessions when the endpoint and transport can do it reliably.
 - [ ] `[could]` Add wake-word or endpoint-name activation after push-to-talk and
   VAD are stable on legacy Android and native iOS agents.
-- [ ] `[could]` Add a ReDevice Voice debug UI over EndpointAudioService showing
+- [x] `[could]` Add a ReDevice Voice debug UI over EndpointAudioService showing
   sessions, STT route, transport, latency, VAD events, and retained debug
   clips.
 - [ ] `[deferred]` Full always-on conversational mode, diarization, speaker

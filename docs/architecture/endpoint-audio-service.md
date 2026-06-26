@@ -1,6 +1,7 @@
 # Endpoint Audio Service
 
-Status: target architecture and roadmap seed.
+Status: target architecture, implemented ReDevice MVP, and remaining session
+hardening roadmap.
 
 This document defines the target audio-session layer for ReDevice agents,
 browser endpoints, mobile native agents, and future endpoint devices. It
@@ -28,6 +29,11 @@ The ReDevice Agent is an audio endpoint. It should not become a full voice
 assistant, a local LLM host, or a mandatory STT runtime. Legacy ReDevice devices
 should capture audio, run cheap activation or PTT, and stream or upload bounded
 utterances to a member or hub-hosted service.
+
+The current implementation follows this decision: legacy Android uses
+sound-activation/VAD or push-to-talk capture and sends bounded audio artifacts
+to the subnet-side `EndpointAudioService`. Local Vosk is optional diagnostic
+capability, not the primary legacy path.
 
 ## Scope
 
@@ -366,6 +372,9 @@ transport stack:
   readable content artifact, including WAV metadata.
 - `redevice_settings` surfaces the endpoint audio, Bluetooth, display, battery,
   active app, subnet, and logout/reconnect controls through Endpoint Registry.
+- ReDevice slideshow and voice controls can be driven by published skill
+  surfaces and active endpoint assignments. This proves endpoint-originated and
+  endpoint-directed commands without requiring raw audio or media bytes in Yjs.
 
 The service state uses `endpoint-audio-diagnostics.v1` as a runtime snapshot:
 
@@ -447,3 +456,22 @@ Recommended MVP:
 
 Do not make local STT mandatory for legacy Android 4.1. Treat Vosk and similar
 engines as optional `local_stt` profiles that must pass benchmark gates.
+
+## Known Remaining Gaps
+
+The next architecture work is not another diagnostic skill. It is service and
+router hardening:
+
+- promote command-scoped ReDevice media routes to router-owned direct media
+  sessions with explicit restart and fallback policy;
+- make `audio-session.v1` a durable runtime object for command, dialog,
+  dictation, and audio-debug sessions;
+- add response routing from Voice/NLU/dialog results to endpoint speaker,
+  endpoint display, browser, notification, Telegram, or text buffer;
+- add cloud STT/LLM policy evidence before enabling broad dialog and dictation
+  flows;
+- add multi-endpoint arbitration so simultaneous VAD captures do not dispatch
+  duplicate mutating commands;
+- harden Bluetooth route profiles beyond assisted native settings launch;
+- expose enough telemetry to compare VAD/PTT, local STT, member STT, and cloud
+  STT by latency, success rate, cost, retention, and endpoint quality.

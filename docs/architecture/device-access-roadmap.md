@@ -48,8 +48,53 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [ ] Keep `sdk.data.access_links` as the low-level access-policy surface.
 - [x] Migrate device skills to SDK entrypoints instead of direct `services.*` imports.
 - [x] Expose a stable settings-schema or command-profile contract through the SDK for modal and assistant consumers.
-- [~] Expose ReDevice endpoint command compatibility helpers through `sdk.data.device_access` while `EndpointRouter` is being built.
+- [x] Expose ReDevice endpoint command compatibility helpers through `sdk.data.device_access` while `EndpointRouter` is being built.
 - [ ] Move ReDevice endpoint commands from the compatibility bridge to core `EndpointRouter`.
+
+## Current ReDevice implementation snapshot
+
+The ReDevice implementation is already beyond the original "first dashboard"
+slice. The current baseline is:
+
+- [x] ReDevice endpoints are materialized through the access-link registry and
+  `DeviceInventoryService`, with scope filtering by subnet, hub, owner, and
+  current endpoint identity.
+- [x] Superseded or revoked admission rows are treated as historical evidence,
+  not as independent live endpoints. SDK helpers may resolve an old code for
+  operator convenience, but commands target the current endpoint record.
+- [x] `DeviceRecord` projections include ReDevice identity, trust, policy,
+  manifest, health, diagnostics, service state, build/version data,
+  `active_app`, `active_surface`, and `assignment`.
+- [x] `sdk.data.device_access` exposes ReDevice-compatible operations:
+  endpoint resolution, command send, profile update, rename, assignment,
+  revoke, and retire.
+- [x] `sdk.redevice` owns the compatibility transport ladder and compact
+  endpoint projection used by scenario skills.
+- [x] `redevice_settings`, `redevice_voice`, `slideshow_skill`, and
+  `redevice_list` are consumers of core registry/SDK state. They are not
+  independent registries or transport owners.
+- [x] Android ReDevice Agent supports active endpoint mode, command polling,
+  slideshow/display commands, active-app reporting, logout/re-admission,
+  native settings intents, VAD/PTT audio capture, bounded audio segment upload,
+  and degraded-friendly diagnostics.
+- [x] ReDevice User Face is a scenario composition in the regular desktop
+  webspace. A separate webspace is not required for the current debug/product
+  slice and can be added later without changing the endpoint contracts.
+
+Remaining architecture work is therefore not "create ReDevice registry and
+settings". It is:
+
+- [ ] Promote command-scoped ReDevice media routes to router-owned direct media
+  sessions when LAN/WebRTC evidence is stable.
+- [ ] Move endpoint assignments fully into a first-class core
+  `EndpointAssignment` model with audit and conflict handling.
+- [ ] Replace remaining compatibility bridge calls with generic
+  `EndpointRouter` APIs.
+- [ ] Add sidecar/runtime restart continuity rules for active endpoint media
+  sessions.
+- [ ] Close response routes from Voice/NLU/dialog back to endpoint speaker,
+  display, notification, or text buffer.
+- [ ] Add multi-endpoint audio arbitration and duplicate suppression.
 
 ## Enforcement and lifecycle
 
@@ -107,17 +152,18 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 
 ## Voice and automation follow-up
 
-- [ ] Use `display_name` as the canonical voice-facing device label.
+- [x] Use `display_name` as the canonical voice-facing device label.
 - [ ] Expose device policies to automation and assistant skills.
-- [ ] Treat ReDevice aliases as endpoint named-entity labels for active-app routing.
-- [ ] Route phrases such as "tablet, next" to the selected endpoint's active app.
+- [x] Treat ReDevice aliases as endpoint named-entity labels for active-app routing.
+- [x] Route the first bounded slideshow voice commands through the selected
+  endpoint's active app using `slideshow_skill.voice_control_redevice_slideshow`.
 - [ ] Support operator and assistant intents such as:
   - [ ] "disconnect the living room TV"
   - [ ] "show apps on kitchen tablet"
   - [ ] "give this browser access for one day"
   - [ ] "open ReDevice settings"
-  - [ ] "start slideshow on the kitchen tablet"
-  - [ ] "tablet, next"
+  - [x] "start slideshow on the kitchen tablet"
+  - [x] "tablet, next"
 
 ## ReDevice User Face scenario
 
@@ -134,10 +180,10 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
   `webio.stream.subscription.changed` handlers restore the last cached stream
   snapshot instead of performing live Endpoint Registry or ReDevice bridge
   refreshes.
-- [ ] Move scenario assignment into core `EndpointAssignment`.
-- [ ] Add native ReDevice Agent support for Wi-Fi/Bluetooth settings intents,
+- [~] Move scenario assignment into core `EndpointAssignment`.
+- [x] Add native ReDevice Agent support for Wi-Fi/Bluetooth settings intents,
   speaker test, volume, diagnostics, logout, and active-app controls.
-- [ ] Keep the browser client generic: it renders `webui.json` and does not
+- [x] Keep the browser client generic: it renders `webui.json` and does not
   gain ReDevice-specific business logic.
 
 ## Recommended execution order
@@ -151,6 +197,8 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [x] Phase 7: unified settings contract and command-profile surface.
 - [~] Phase 8: browser and member convergence cleanup, reconciler rollout, and `connected_to_subnet` migration.
 - [ ] Phase 9: issuer-side autorotation.
-- [ ] Phase 10: system-model, voice, and automation integration.
+- [~] Phase 10: system-model, voice, and automation integration.
 - [~] Phase 11: ReDevice User Face scenario and Endpoint Registry-backed
   endpoint settings surfaces.
+- [ ] Phase 12: router-owned endpoint media sessions, endpoint audio response
+  routes, and restart-safe active endpoint sessions.
