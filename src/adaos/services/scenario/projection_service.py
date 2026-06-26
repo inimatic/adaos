@@ -160,6 +160,60 @@ def _projection_guard_key(webspace_id: str, owner: str, path: str) -> str:
     return "\0".join([str(webspace_id or "default"), str(owner or "unknown"), str(path or "")])
 
 
+def _projection_amplification_domain(path: str) -> tuple[str, str] | None:
+    segments = [str(item or "").strip() for item in str(path or "").split("/") if str(item or "").strip()]
+    if len(segments) < 3:
+        return None
+    return segments[0], segments[1]
+
+
+def _projection_amplification_suspects(
+    *,
+    webspace_id: str,
+    writer_owner: str,
+    path: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    domain = _projection_amplification_domain(path)
+    if domain is None:
+        return []
+    token_ws = str(webspace_id or "").strip() or "default"
+    token_owner = str(writer_owner or "").strip()
+    candidates: list[dict[str, Any]] = []
+    for row in _yjs_projection_guard_rows():
+        row_path = str(row.get("path") or "").strip()
+        if _projection_amplification_domain(row_path) != domain:
+            continue
+        if str(row.get("webspace_id") or "").strip() != token_ws:
+            continue
+        row_owner = str(row.get("owner") or "").strip()
+        if token_owner and row_owner == token_owner:
+            continue
+        candidates.append(
+            {
+                "domain": "/".join(domain),
+                "owner": row_owner or None,
+                "slot": str(row.get("slot") or "").strip() or None,
+                "path": row_path or None,
+                "reason": str(row.get("reason") or "").strip() or None,
+                "payload_bytes": max(0, _int_or_zero(row.get("payload_bytes"))),
+                "degraded_bytes": max(0, _int_or_zero(row.get("degraded_bytes"))),
+                "max_payload_bytes": row.get("max_payload_bytes"),
+                "max_list_items": max(0, _int_or_zero(row.get("max_list_items"))),
+                "last_at": _float_or_zero(row.get("last_at")) or None,
+            }
+        )
+    candidates.sort(
+        key=lambda item: (
+            -int(item.get("payload_bytes") or 0),
+            -float(item.get("last_at") or 0.0),
+            str(item.get("owner") or ""),
+            str(item.get("path") or ""),
+        )
+    )
+    return candidates[: max(1, min(int(limit or 5), 20))]
+
+
 def _projection_guard_events_path(*, create: bool) -> Path:
     root = current_state_dir() / "observability"
     if create:
@@ -389,6 +443,10 @@ def _record_primary_doc_governance_event(*, webspace_id: str, owner: str, path: 
         current["last_reason"] = str(policy.get("reason") or "").strip() or None
         current["last_path"] = str(path or "").strip() or None
         current["last_at"] = time.time()
+        suspects = policy.get("write_amplification_suspects")
+        current["last_write_amplification_suspects"] = (
+            [dict(item) for item in suspects[:10] if isinstance(item, dict)] if isinstance(suspects, list) else []
+        )
         if policy_state == "block":
             current["last_blocked_roots"] = list(policy.get("blocked_roots") or [])
             current["last_affected_roots"] = list(policy.get("blocked_roots") or [])
@@ -421,6 +479,7 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
         "last_blocked_roots": list(current.get("last_blocked_roots") or []),
         "last_throttled_roots": list(current.get("last_throttled_roots") or []),
         "last_affected_roots": list(current.get("last_affected_roots") or []),
+        "last_write_amplification_suspects": list(current.get("last_write_amplification_suspects") or []),
     }
 
 
@@ -818,6 +877,10 @@ class ProjectionService:
             path=path,
             root_name=root_name,
         )
+        suspects = _projection_amplification_suspects(webspace_id=ws_id, writer_owner=owner, path=path)
+        if suspects:
+            policy["write_amplification_suspects"] = suspects
+            policy["amplified_branch_owner"] = suspects[0].get("owner")
         if not await _govern_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner):
             return
         projected_value = _compact_projection_payload(value)

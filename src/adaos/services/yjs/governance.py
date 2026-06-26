@@ -134,6 +134,11 @@ def _record_event(
         current["last_guard_visibility"] = (
             dict(policy.get("guard_visibility")) if isinstance(policy.get("guard_visibility"), dict) else {}
         )
+        suspects = policy.get("write_amplification_suspects")
+        current["last_write_amplification_suspects"] = (
+            [dict(item) for item in suspects[:10] if isinstance(item, dict)] if isinstance(suspects, list) else []
+        )
+        current["last_amplified_branch_owner"] = str(policy.get("amplified_branch_owner") or "").strip() or None
         current["last_correlation_id"] = str(policy.get("correlation_id") or "").strip() or None
         current["last_generation_id"] = str(policy.get("generation_id") or "").strip() or None
         current["last_at"] = now
@@ -447,6 +452,12 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
             if isinstance(selected.get("last_guard_visibility"), dict)
             else {}
         ),
+        "last_write_amplification_suspects": (
+            [dict(item) for item in selected.get("last_write_amplification_suspects") or [] if isinstance(item, dict)]
+            if isinstance(selected.get("last_write_amplification_suspects"), list)
+            else []
+        ),
+        "last_amplified_branch_owner": str(selected.get("last_amplified_branch_owner") or "").strip() or None,
         "last_correlation_id": str(selected.get("last_correlation_id") or "").strip() or None,
         "last_generation_id": str(selected.get("last_generation_id") or "").strip() or None,
         "last_at": float(selected.get("last_at") or 0.0) or None,

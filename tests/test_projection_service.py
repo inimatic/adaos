@@ -522,6 +522,84 @@ def test_projection_guard_snapshot_reads_persisted_cli_process_events(monkeypatc
     assert item["last_at"] == 1778055331.0
 
 
+def test_projection_governance_attributes_sibling_write_amplification_suspect(monkeypatch, tmp_path) -> None:
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
+    from adaos.services.yjs import governance as yjs_governance
+    from adaos.services.yjs import owner_guard
+
+    with yjs_governance._LOCK:
+        yjs_governance._STATS.clear()
+    with owner_guard._LOCK:
+        owner_guard._DECISIONS.clear()
+        owner_guard._QUARANTINES.clear()
+        owner_guard._QUARANTINE_INCIDENTS.clear()
+        owner_guard._QUARANTINE_TOTAL = 0
+        owner_guard._DENIED_TOTAL = 0
+
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/infrastate/summary",
+        webspace_id=None,
+    )
+    registry = SimpleNamespace(
+        resolve_rule=lambda scope, slot: SimpleNamespace(targets=[target], budget={}, route={}),  # noqa: ARG005
+        resolve=lambda scope, slot: [target],  # noqa: ARG005
+    )
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(owner_guard, "admit_owner_work", lambda **_kwargs: {"allowed": True})
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="infrastate_skill"),
+    )
+
+    projection_service_module._record_yjs_projection_guard_event(
+        webspace_id="desktop",
+        owner="skill:mediaserver",
+        scope="subnet",
+        slot="mediaserver.library",
+        path="data/nodes/hub/media/library",
+        root_name="data",
+        reason="yjs_projection_payload_budget_exceeded",
+        payload_bytes=402482,
+        projected_bytes=402482,
+        degraded_bytes=26969,
+        max_payload_bytes=262144,
+        max_items=1000,
+        collection_metrics={
+            "max_list_items": 1520,
+            "max_list_path": "items",
+            "list_item_total": 1643,
+            "mapping_key_total": 8404,
+        },
+        route={"projection_slot": "mediaserver.library"},
+    )
+
+    asyncio.run(service.apply("subnet", "infrastate.summary", {"ok": True}, webspace_id="desktop"))
+
+    snapshot = projection_service_module.primary_doc_governance_snapshot(
+        webspace_id="desktop",
+        owner="skill:infrastate_skill",
+    )
+
+    suspects = snapshot["last_write_amplification_suspects"]
+    assert suspects[0]["owner"] == "skill:mediaserver"
+    assert suspects[0]["slot"] == "mediaserver.library"
+    assert suspects[0]["path"] == "data/nodes/hub/media/library"
+    assert suspects[0]["payload_bytes"] == 402482
+    assert snapshot["last_amplified_branch_owner"] == "skill:mediaserver"
+
+
 def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
     from adaos.services.yjs import governance as yjs_governance

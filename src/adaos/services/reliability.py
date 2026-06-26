@@ -6170,6 +6170,17 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 "last_blocked_roots": list(governance.get("last_blocked_roots") or []),
                 "last_throttled_roots": list(governance.get("last_throttled_roots") or []),
                 "last_affected_roots": list(governance.get("last_affected_roots") or []),
+                "last_write_amplification_suspects": (
+                    [
+                        dict(item)
+                        for item in list(governance.get("last_write_amplification_suspects") or [])[:10]
+                        if isinstance(item, dict)
+                    ]
+                    if isinstance(governance.get("last_write_amplification_suspects"), list)
+                    else []
+                ),
+                "last_amplified_branch_owner": str(governance.get("last_amplified_branch_owner") or "").strip()
+                or None,
             }
     except Exception:
         pass
@@ -6211,6 +6222,8 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
         "last_blocked_roots": [],
         "last_throttled_roots": [],
         "last_affected_roots": [],
+        "last_write_amplification_suspects": [],
+        "last_amplified_branch_owner": None,
     }
 
 
