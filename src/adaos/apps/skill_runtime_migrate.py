@@ -152,7 +152,10 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
             except Exception as exc:
                 entry["disable_error"] = str(exc)
             entry["stage"] = "prepare"
-            runtime = mgr.prepare_runtime(skill_name, run_tests=False)
+            prepare_kwargs: dict[str, Any] = {"run_tests": False}
+            if bool(entry.get("disabled_for_migration")):
+                prepare_kwargs["allow_deactivated"] = True
+            runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
             entry["prepared_version"] = getattr(runtime, "version", None)
             entry["prepared_slot"] = getattr(runtime, "slot", None)
 

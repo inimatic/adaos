@@ -119,6 +119,12 @@ def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _is_runtime_migration_transient_deactivation(value: Mapping[str, Any] | None) -> bool:
+    payload = _mapping_or_empty(value)
+    reason = str(payload.get("reason") or "").strip()
+    return bool(payload.get("deactivated")) and bool(payload.get("transient")) and reason == "runtime_migration_in_progress"
+
+
 def _skill_tool_yjs_governance(tool_spec: Mapping[str, Any] | None) -> dict[str, Any]:
     spec = _mapping_or_empty(tool_spec)
     governance = dict(_mapping_or_empty(spec.get("yjs_governance") or spec.get("yjs")))
@@ -2007,6 +2013,7 @@ class SkillManager:
                 version_override=target_version,
                 run_tests=False,
                 preferred_slot=target_slot,
+                allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
             )
             metadata = env.read_version_metadata(target_version)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})

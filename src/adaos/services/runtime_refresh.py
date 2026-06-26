@@ -67,6 +67,11 @@ def _record_stage(payload: dict[str, Any], stage: str, *, ok: bool, **fields: An
     payload.setdefault("lifecycle_stages", []).append(entry)
 
 
+def _is_runtime_migration_transient(deactivation: dict[str, Any]) -> bool:
+    reason = str(deactivation.get("reason") or "").strip()
+    return bool(deactivation.get("deactivated")) and bool(deactivation.get("transient")) and reason == "runtime_migration_in_progress"
+
+
 def refresh_skill_runtime(
     mgr: Any,
     skill_name: str,
@@ -104,12 +109,17 @@ def refresh_skill_runtime(
     runtime_version_before = str(runtime_status_before.get("version") or "").strip()
     payload["active_version_before"] = runtime_version_before
     payload["active_slot_before"] = str(runtime_status_before.get("active_slot") or "").strip()
-    if bool(runtime_status_before.get("deactivated")):
-        deactivation = runtime_status_before.get("deactivation") if isinstance(runtime_status_before.get("deactivation"), dict) else {}
+    deactivation_before = (
+        runtime_status_before.get("deactivation")
+        if isinstance(runtime_status_before.get("deactivation"), dict)
+        else {}
+    )
+    recover_transient_deactivation = _is_runtime_migration_transient(deactivation_before)
+    if bool(runtime_status_before.get("deactivated")) and not recover_transient_deactivation:
         payload["ok"] = True
         payload["skipped"] = True
         payload["deactivated"] = True
-        payload["deactivation"] = deactivation
+        payload["deactivation"] = deactivation_before
         payload["active_version_after"] = runtime_version_before
         payload["active_slot_after"] = str(runtime_status_before.get("active_slot") or "").strip()
         payload["active_converged"] = True
@@ -118,12 +128,15 @@ def refresh_skill_runtime(
             "runtime_update",
             ok=True,
             skipped=True,
-            reason=str((deactivation or {}).get("reason") or "deactivated"),
+            reason=str((deactivation_before or {}).get("reason") or "deactivated"),
         )
         _record_stage(payload, "prepare", ok=True, skipped=True, reason="deactivated")
         _record_stage(payload, "activate", ok=True, skipped=True, reason="deactivated")
         _record_stage(payload, "converge", ok=True, skipped=True, active_version=runtime_version_before)
         return payload
+    if recover_transient_deactivation:
+        payload["deactivation_recovery"] = True
+        payload["deactivation"] = deactivation_before
     try:
         runtime_result = mgr.runtime_update(skill_name, space="workspace")
         payload["runtime_updated"] = True
@@ -138,7 +151,10 @@ def refresh_skill_runtime(
         should_prepare = bool(str(source_version or "").strip() and str(source_version or "").strip() != runtime_version_before)
     if isinstance(runtime_result, dict) and not bool(runtime_result.get("ok", True)):
         should_prepare = True
+    if recover_transient_deactivation:
+        should_prepare = True
     if migrate_runtime and should_prepare:
+        allow_deactivated_prepare = bool(recover_transient_deactivation)
         if disable_during_migration:
             try:
                 payload["deactivation"] = mgr.deactivate_runtime(
@@ -153,12 +169,16 @@ def refresh_skill_runtime(
                     operation_id=str(operation_id or ""),
                     transient=True,
                 )
+                allow_deactivated_prepare = True
             except Exception as exc:
                 payload["deactivation_error"] = str(exc)
         if ensure_installed:
             mgr.install(skill_name, validate=False)
         try:
-            runtime = mgr.prepare_runtime(skill_name, run_tests=False)
+            prepare_kwargs: dict[str, Any] = {"run_tests": False}
+            if allow_deactivated_prepare:
+                prepare_kwargs["allow_deactivated"] = True
+            runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
         except Exception as exc:
             message = f"runtime prepare failed after skill update: {exc}"
             payload["failed_stage"] = "prepare"

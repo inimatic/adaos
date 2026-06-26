@@ -238,6 +238,89 @@ def test_migrate_installed_skills_skips_already_deactivated_skills(monkeypatch) 
     assert payload["skills"][0]["failure_kind"] == "prepare"
 
 
+def test_migrate_installed_skills_allows_prepare_after_transient_disable(monkeypatch) -> None:
+    import adaos.apps.skill_runtime_migrate as mod
+
+    calls: list[str] = []
+
+    class _Runtime:
+        version = "1.2.3"
+        slot = "B"
+
+    class _Manager:
+        def runtime_status(self, name: str):
+            calls.append(f"runtime_status:{name}")
+            return {"version": "1.0.0", "active_slot": "A", "deactivated": False, "lifecycle": {}}
+
+        def deactivate_runtime(
+            self,
+            name: str,
+            reason: str = "",
+            failure_kind: str = "",
+            failed_stage: str = "",
+            source: str = "",
+            committed_core_switch=None,
+            status: str = "",
+            comment: str = "",
+            operation_id: str = "",
+            transient=None,
+        ):
+            calls.append(f"deactivate_runtime:{name}:{reason}:{int(bool(transient))}")
+            return {"name": name, "deactivated": True, "reason": reason, "transient": bool(transient)}
+
+        def prepare_runtime(self, name: str, *, run_tests: bool = False, allow_deactivated: bool = False):
+            calls.append(f"prepare_runtime:{name}:{int(run_tests)}:{int(allow_deactivated)}")
+            assert allow_deactivated is True
+            return _Runtime()
+
+        def activate_runtime(self, name: str, version=None, slot=None):
+            calls.append(f"activate_runtime:{name}:{version}:{slot}")
+            return slot
+
+        def run_skill_tests(self, name: str, source: str = "installed"):
+            calls.append(f"run_skill_tests:{name}:{source}")
+            return {}
+
+    class _Ctx:
+        sql = object()
+        skills_repo = object()
+        git = object()
+        paths = object()
+        bus = None
+        caps = object()
+
+    monkeypatch.setattr(mod, "init_ctx", lambda: None)
+    monkeypatch.setattr(mod, "get_ctx", lambda: _Ctx())
+    monkeypatch.setattr(mod, "_manager", lambda: _Manager())
+    monkeypatch.setattr(
+        mod,
+        "migration_candidates",
+        lambda _ctx, _mgr, force=False: [
+            {
+                "skill": "mediaserver",
+                "workspace_version": "1.2.3",
+                "runtime_version": "1.0.0",
+                "reason": "runtime_version_behind",
+            }
+        ],
+    )
+
+    payload = mod.migrate_installed_skills(run_tests=True)
+
+    assert payload["ok"] is True
+    assert payload["failed_total"] == 0
+    assert payload["skills"][0]["ok"] is True
+    assert payload["skills"][0]["disabled_for_migration"] is True
+    assert calls == [
+        "runtime_status:mediaserver",
+        "deactivate_runtime:mediaserver:runtime_migration_in_progress:1",
+        "prepare_runtime:mediaserver:0:1",
+        "activate_runtime:mediaserver:1.2.3:B",
+        "runtime_status:mediaserver",
+        "run_skill_tests:mediaserver:installed",
+    ]
+
+
 def test_migrate_installed_skills_marks_prepare_failures_safe_for_core_update(monkeypatch) -> None:
     import adaos.apps.skill_runtime_migrate as mod
 
