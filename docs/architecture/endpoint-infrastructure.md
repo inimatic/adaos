@@ -739,7 +739,19 @@ stay in `ACTIVE_ENDPOINT`, but command polling against
 `SSL23_GET_SERVER_HELLO:unsupported protocol`. This is not a reliable runtime
 transport for legacy ReDevice endpoints.
 
-The same test confirmed that the hub-local Python API on `.30` does not expose
+The immediate compatibility slice uses a separate legacy Root hostname instead
+of enabling old TLS on the main API host:
+
+- global: `https://legacy.api.inimatic.com`;
+- RU zone: `https://ru.legacy.api.inimatic.com`.
+
+These hostnames are served by the same backend process as the normal API host,
+but nginx applies a legacy TLS profile only to the legacy aliases. Android
+`app-legacy` creates new ReDevice pairing sessions through the legacy hostname
+and records both `root_url` and `legacy_root_url` in the endpoint policy.
+
+This is still a fallback, not the target runtime transport. The same test
+confirmed that the hub-local Python API on `.30` does not expose
 `/v1/redevice/*` yet. Therefore the next transport slice must add a hub-local
 ReDevice command/event queue and advertise it to the agent through endpoint
 policy or reconnect metadata. Root remains useful for QR admission and as a
