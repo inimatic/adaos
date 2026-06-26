@@ -55,6 +55,14 @@ def _stream_guard_status(guard: Mapping[str, Any]) -> tuple[str, str]:
     return "ready", "info"
 
 
+def _projection_guard_status(guard: Mapping[str, Any]) -> tuple[str, str]:
+    totals = _dict(guard.get("totals"))
+    guarded = _int(totals.get("guarded"))
+    if guarded or _int(guard.get("total")):
+        return "degraded", "high"
+    return "ready", "info"
+
+
 def _stream_control_status(backlog: Mapping[str, Any]) -> tuple[str, str]:
     rows = [_dict(item) for item in _list(backlog.get("top_webio_stream_controls"))]
     dropped = sum(_int(item.get("dropped_total")) for item in rows)
@@ -123,6 +131,74 @@ def _yjs_guard_card(
             "quarantine_until": pressure.get("quarantine_until"),
             "quarantine_trigger": pressure.get("quarantine_trigger"),
             "correlation_id": pressure.get("correlation_id") or pressure.get("generation_id"),
+            "reason": reason,
+        },
+    )
+
+
+def _yjs_projection_guard_card(
+    guard: Mapping[str, Any],
+    *,
+    webspace_id: str | None,
+    updated_at: float,
+) -> StatusCard | None:
+    if not guard:
+        return None
+    items = [_dict(item) for item in _list(guard.get("items"))]
+    top = items[0] if items else {}
+    status, severity = _projection_guard_status(guard)
+    totals = _dict(guard.get("totals"))
+    owner = _text(top.get("owner"), "unknown")
+    reason = _text(top.get("reason"), "healthy")
+    slot = _text(top.get("slot"))
+    path = _text(top.get("path"))
+    payload_bytes = _int(top.get("payload_bytes"))
+    max_payload_bytes = _int(top.get("max_payload_bytes"))
+    summary = f"Yjs projection guard {reason}: guarded={_int(totals.get('guarded'))}"
+    if slot:
+        summary += f" slot={slot}"
+    if payload_bytes:
+        summary += f" bytes={payload_bytes}/{max_payload_bytes or '-'}"
+    return StatusCard(
+        id="guard:yjs_projection",
+        owner="core:yjs",
+        kind="guard",
+        scope="core",
+        status=status,
+        severity=severity,
+        summary=summary[:240],
+        webspace_id=webspace_id or _text(guard.get("webspace_id")) or _text(top.get("webspace_id")) or None,
+        updated_at=updated_at,
+        ttl_ms=15000,
+        details_ref={
+            "kind": "api",
+            "path": "/api/node/reliability",
+            "field": "runtime.yjs_projection_guard",
+        },
+        route=_dict(top.get("route")) or {
+            "kind": "yjs_projection_guard",
+            "scope": _text(top.get("scope")) or None,
+            "slot": slot or None,
+            "path": path or None,
+        },
+        guard_ref={
+            "guard": "yjs_projection",
+            "owner": owner,
+            "webspace_id": webspace_id or _text(guard.get("webspace_id")) or _text(top.get("webspace_id")),
+            "path": path,
+            "budget": {
+                "max_payload_bytes": top.get("max_payload_bytes"),
+                "max_items": top.get("max_items"),
+            },
+            "observed_pressure": {
+                "payload_bytes": payload_bytes,
+                "degraded_bytes": _int(top.get("degraded_bytes")),
+                "max_list_items": _int(top.get("max_list_items")),
+                "max_list_path": top.get("max_list_path"),
+                "list_item_total": _int(top.get("list_item_total")),
+            },
+            "suppression_count": _int(totals.get("guarded")),
+            "correlation_id": guard.get("correlation_id") or guard.get("generation_id"),
             "reason": reason,
         },
     )
@@ -338,6 +414,11 @@ def guard_status_cards_from_runtime(
     ts = float(updated_at if updated_at is not None else time.time())
     cards = [
         _yjs_guard_card(_dict(runtime.get("yjs_pressure")), webspace_id=webspace_id, updated_at=ts),
+        _yjs_projection_guard_card(
+            _dict(runtime.get("yjs_projection_guard")),
+            webspace_id=webspace_id,
+            updated_at=ts,
+        ),
         _stream_guard_card(_dict(runtime.get("webio_stream_guard")), webspace_id=webspace_id, updated_at=ts),
         _stream_control_card(_dict(runtime.get("eventbus_backlog")), webspace_id=webspace_id, updated_at=ts),
     ]

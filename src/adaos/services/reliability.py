@@ -6246,6 +6246,40 @@ def _webio_stream_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) ->
     }
 
 
+def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
+    runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
+    selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
+    try:
+        from adaos.services.scenario.projection_service import yjs_projection_guard_snapshot
+
+        payload = yjs_projection_guard_snapshot(webspace_id=selected_webspace_id, limit=20)
+        if isinstance(payload, dict):
+            result = dict(payload)
+            items = list(result.get("items") or []) if isinstance(result.get("items"), list) else []
+            result["available"] = True
+            result["webspace_id"] = str(result.get("webspace_id") or selected_webspace_id or "").strip() or None
+            result["items"] = items
+            result["total"] = int(result.get("total") or len(items))
+            result.setdefault(
+                "totals",
+                {
+                    "guarded": sum(int(item.get("guarded_total") or 0) for item in items if isinstance(item, dict)),
+                },
+            )
+            return result
+    except Exception:
+        pass
+    return {
+        "schema": "adaos.yjs_projection_guard.v1",
+        "available": False,
+        "enabled": False,
+        "webspace_id": selected_webspace_id,
+        "items": [],
+        "total": 0,
+        "totals": {"guarded": 0},
+    }
+
+
 def _eventbus_backlog_runtime_snapshot() -> dict[str, Any]:
     try:
         ctx = get_ctx()
@@ -7221,6 +7255,7 @@ def reliability_snapshot(
     state_sync = _state_sync_snapshot(sync_runtime)
     yjs_pressure = _yjs_pressure_snapshot(sync_runtime)
     webio_stream_guard = _webio_stream_guard_runtime_snapshot(sync_runtime)
+    yjs_projection_guard = _yjs_projection_guard_runtime_snapshot(sync_runtime)
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
@@ -7266,6 +7301,7 @@ def reliability_snapshot(
             "state_sync": state_sync,
             "yjs_pressure": yjs_pressure,
             "webio_stream_guard": webio_stream_guard,
+            "yjs_projection_guard": yjs_projection_guard,
             "eventbus_backlog": eventbus_backlog,
             "incident_registry": incidents,
             "media_runtime": media_runtime,

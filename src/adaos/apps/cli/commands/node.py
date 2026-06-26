@@ -449,6 +449,9 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
     connectivity = runtime.get("connectivity") if isinstance(runtime.get("connectivity"), dict) else {}
     state_sync = runtime.get("state_sync") if isinstance(runtime.get("state_sync"), dict) else {}
     yjs_pressure = runtime.get("yjs_pressure") if isinstance(runtime.get("yjs_pressure"), dict) else {}
+    yjs_projection_guard = (
+        runtime.get("yjs_projection_guard") if isinstance(runtime.get("yjs_projection_guard"), dict) else {}
+    )
     webio_stream_guard = (
         runtime.get("webio_stream_guard") if isinstance(runtime.get("webio_stream_guard"), dict) else {}
     )
@@ -768,6 +771,42 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"path={yjs_pressure.get('last_path') or '-'} "
                 f"route={last_route.get('kind') or '-'} "
                 f"surface={last_route.get('surface') or last_projection.get('slot') or '-'}"
+            )
+    if yjs_projection_guard:
+        projection_guard_totals = (
+            yjs_projection_guard.get("totals")
+            if isinstance(yjs_projection_guard.get("totals"), dict)
+            else {}
+        )
+        typer.echo(
+            "yjs_projection_guard: "
+            f"webspace={yjs_projection_guard.get('webspace_id') or '-'} "
+            f"enabled={'yes' if yjs_projection_guard.get('enabled') else 'no'} "
+            f"total={yjs_projection_guard.get('total') or 0} "
+            f"guarded={projection_guard_totals.get('guarded') or 0}"
+        )
+        projection_guard_items = (
+            yjs_projection_guard.get("items")
+            if isinstance(yjs_projection_guard.get("items"), list)
+            else []
+        )
+        projection_guard_top = (
+            projection_guard_items[0]
+            if projection_guard_items and isinstance(projection_guard_items[0], dict)
+            else {}
+        )
+        if projection_guard_top:
+            typer.echo(
+                "yjs_projection_guard.top: "
+                f"owner={projection_guard_top.get('owner') or '-'} "
+                f"slot={projection_guard_top.get('slot') or '-'} "
+                f"path={projection_guard_top.get('path') or '-'} "
+                f"payload={projection_guard_top.get('payload_bytes') or 0} "
+                f"degraded={projection_guard_top.get('degraded_bytes') or 0} "
+                f"max_payload={projection_guard_top.get('max_payload_bytes') or '-'} "
+                f"max_items={projection_guard_top.get('max_items') or '-'} "
+                f"max_list={projection_guard_top.get('max_list_items') or 0} "
+                f"reason={projection_guard_top.get('reason') or '-'}"
             )
     if webio_stream_guard:
         guard_totals = webio_stream_guard.get("totals") if isinstance(webio_stream_guard.get("totals"), dict) else {}

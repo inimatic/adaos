@@ -2512,6 +2512,7 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
     assert payload["runtime"]["connectivity"]["required_upstream_link"]["kind"] == "hub_root"
     assert payload["runtime"]["state_sync"]["replay"]["mode"] == "snapshot_plus_diff"
     assert payload["runtime"]["yjs_pressure"]["target"] == "primary_shared_doc"
+    assert payload["runtime"]["yjs_projection_guard"]["schema"] == "adaos.yjs_projection_guard.v1"
     assert payload["runtime"]["webio_stream_guard"]["schema"] == "adaos.webio_stream_guard.v1"
     assert "top_webio_stream_controls" in payload["runtime"]["eventbus_backlog"]
 
@@ -2672,6 +2673,37 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                     "blocked_roots": [],
                     "observed_state": "critical",
                 },
+                "yjs_projection_guard": {
+                    "schema": "adaos.yjs_projection_guard.v1",
+                    "available": True,
+                    "enabled": True,
+                    "webspace_id": "desktop",
+                    "total": 1,
+                    "totals": {"guarded": 2},
+                    "items": [
+                        {
+                            "webspace_id": "desktop",
+                            "owner": "skill:mediaserver",
+                            "scope": "mediaserver",
+                            "slot": "library",
+                            "path": "data/nodes/hub-1/media/library",
+                            "root": "data",
+                            "reason": "yjs_projection_payload_budget_exceeded",
+                            "payload_bytes": 409600,
+                            "degraded_bytes": 1536,
+                            "max_payload_bytes": 262144,
+                            "max_items": 1000,
+                            "max_list_items": 1520,
+                            "max_list_path": "items",
+                            "list_item_total": 1520,
+                            "guarded_total": 2,
+                            "route": {
+                                "kind": "yjs_projection",
+                                "surface": "media.library",
+                            },
+                        }
+                    ],
+                },
                 "webio_stream_guard": {
                     "available": True,
                     "webspace_id": "desktop",
@@ -2794,6 +2826,9 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["hubBrowserQuality"]["gates"]["yjsPressure"]["state"] == "warning"
     assert payload["hubBrowserQuality"]["fallbacks"][0]["from"] == "webrtc_data:yjs"
     assert payload["yjsPressure"]["policyState"] == "warn"
+    assert payload["yjsProjectionGuard"]["top"]["owner"] == "skill:mediaserver"
+    assert payload["yjsProjectionGuard"]["top"]["slot"] == "library"
+    assert payload["yjsProjectionGuard"]["top"]["payloadBytes"] == 409600
     assert payload["webioStreamGuard"]["totals"]["attempted"] == 4
     assert payload["webioStreamGuard"]["top"]["receiver"] == "infrastate.realtime"
     assert payload["eventbusBacklog"]["boundedQueueTotal"] == 2
@@ -2801,11 +2836,13 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["phase0Communication"]["tasks"]["nodeBrowserReady"]["status"] == "done"
     assert payload["statusPlane"]["available"] is True
     assert payload["statusPlane"]["diagnostics"]["cardCount"] == 1
-    assert payload["statusPlane"]["diagnostics"]["derivedCardCount"] == 3
-    assert payload["statusPlane"]["total"] == 4
+    assert payload["statusPlane"]["diagnostics"]["derivedCardCount"] == 4
+    assert payload["statusPlane"]["total"] == 5
     cards_by_id = {card["id"]: card for card in payload["statusPlane"]["cards"]}
     assert cards_by_id["runtime"]["detailsRef"]["receiver"] == "infrastate.runtime"
     assert cards_by_id["guard:yjs_pressure"]["severity"] == "high"
+    assert cards_by_id["guard:yjs_projection"]["guardRef"]["owner"] == "skill:mediaserver"
+    assert cards_by_id["guard:yjs_projection"]["guardRef"]["budget"]["max_payload_bytes"] == 262144
     assert cards_by_id["guard:webio_stream"]["guardRef"]["receiver"] == "infrastate.realtime"
     assert cards_by_id["guard:webio_stream_control"]["status"] == "warning"
 
@@ -3595,6 +3632,32 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                         "last_reason": "write_amplification_blocked",
                         "last_path": "data/infrastate",
                     },
+                    "yjs_projection_guard": {
+                        "schema": "adaos.yjs_projection_guard.v1",
+                        "available": True,
+                        "enabled": True,
+                        "webspace_id": "desktop",
+                        "total": 1,
+                        "totals": {"guarded": 1},
+                        "items": [
+                            {
+                                "owner": "skill:mediaserver",
+                                "scope": "mediaserver",
+                                "slot": "library",
+                                "path": "data/nodes/hub-1/media/library",
+                                "root": "data",
+                                "reason": "yjs_projection_payload_budget_exceeded",
+                                "payload_bytes": 409600,
+                                "degraded_bytes": 1536,
+                                "max_payload_bytes": 262144,
+                                "max_items": 1000,
+                                "max_list_items": 1520,
+                                "max_list_path": "items",
+                                "list_item_total": 1520,
+                                "guarded_total": 1,
+                            }
+                        ],
+                    },
                     "webio_stream_guard": {
                         "available": True,
                         "webspace_id": "desktop",
@@ -3658,6 +3721,9 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "yjs_pressure: webspace=desktop owner=_by_owner/skill_infrastate_skill state=high policy=warn" in result.output
     assert "throttled=3 blocked=1" in result.output
     assert "yjs_pressure.last: policy=block reason=write_amplification_blocked path=data/infrastate" in result.output
+    assert "yjs_projection_guard: webspace=desktop enabled=yes total=1 guarded=1" in result.output
+    assert "yjs_projection_guard.top: owner=skill:mediaserver slot=library path=data/nodes/hub-1/media/library" in result.output
+    assert "payload=409600 degraded=1536 max_payload=262144 max_items=1000 max_list=1520" in result.output
     assert "webio_stream_guard: webspace=desktop total=1 attempted=6 published=3 suppressed=2 throttled=1 fanout=3" in result.output
     assert "webio_stream_guard.top: receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output
     assert "eventbus: pending=1 bounded_queue=2 peak=4 active=1" in result.output

@@ -1664,6 +1664,12 @@ def _compact_runtime_reliability_payload(
     replay = _coerce_dict(state_sync.get("replay"))
     hub_member_connection_state = _coerce_dict(runtime.get("hub_member_connection_state"))
     yjs_pressure = _coerce_dict(runtime.get("yjs_pressure"))
+    yjs_projection_guard = _coerce_dict(runtime.get("yjs_projection_guard"))
+    yjs_projection_guard_totals = _coerce_dict(yjs_projection_guard.get("totals"))
+    yjs_projection_guard_items = _coerce_list(yjs_projection_guard.get("items"))
+    yjs_projection_guard_top = _coerce_dict(
+        yjs_projection_guard_items[0] if yjs_projection_guard_items else {}
+    )
     webio_stream_guard = _coerce_dict(runtime.get("webio_stream_guard"))
     webio_stream_guard_totals = _coerce_dict(webio_stream_guard.get("totals"))
     webio_stream_guard_items = _coerce_list(webio_stream_guard.get("items"))
@@ -1750,6 +1756,33 @@ def _compact_runtime_reliability_payload(
             "observedState": str(yjs_pressure.get("observed_state") or "idle").strip() or "idle",
             "lastRoute": _coerce_dict(yjs_pressure.get("last_route")),
             "lastProjection": _coerce_dict(yjs_pressure.get("last_projection")),
+        },
+        "yjsProjectionGuard": {
+            "available": bool(yjs_projection_guard.get("available")),
+            "enabled": bool(yjs_projection_guard.get("enabled")),
+            "webspaceId": str(yjs_projection_guard.get("webspace_id") or resolved_webspace_id).strip()
+            or resolved_webspace_id,
+            "total": int(yjs_projection_guard.get("total") or 0),
+            "totals": {
+                "guarded": int(yjs_projection_guard_totals.get("guarded") or 0),
+            },
+            "top": {
+                "owner": str(yjs_projection_guard_top.get("owner") or "").strip() or None,
+                "scope": str(yjs_projection_guard_top.get("scope") or "").strip() or None,
+                "slot": str(yjs_projection_guard_top.get("slot") or "").strip() or None,
+                "path": str(yjs_projection_guard_top.get("path") or "").strip() or None,
+                "root": str(yjs_projection_guard_top.get("root") or "").strip() or None,
+                "reason": str(yjs_projection_guard_top.get("reason") or "").strip() or None,
+                "payloadBytes": int(yjs_projection_guard_top.get("payload_bytes") or 0),
+                "degradedBytes": int(yjs_projection_guard_top.get("degraded_bytes") or 0),
+                "maxPayloadBytes": _coerce_optional_int(yjs_projection_guard_top.get("max_payload_bytes")),
+                "maxItems": _coerce_optional_int(yjs_projection_guard_top.get("max_items")),
+                "maxListItems": int(yjs_projection_guard_top.get("max_list_items") or 0),
+                "maxListPath": str(yjs_projection_guard_top.get("max_list_path") or "").strip() or None,
+                "listItemTotal": int(yjs_projection_guard_top.get("list_item_total") or 0),
+                "guarded": int(yjs_projection_guard_top.get("guarded_total") or 0),
+                "lastAt": yjs_projection_guard_top.get("last_at"),
+            },
         },
         "hubBrowserQuality": _compact_hub_browser_quality(
             connectivity=compact_connectivity,
