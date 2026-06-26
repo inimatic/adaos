@@ -4260,6 +4260,63 @@ def test_runtime_self_heal_decision_restarts_after_api_timeout(monkeypatch, tmp_
     assert payload["runtime_port"] == 8777
 
 
+def test_runtime_self_heal_restart_records_compact_evidence(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_runtime_instance_id = "rt-test"
+    calls = []
+
+    def _fake_capture(**kwargs):
+        calls.append(dict(kwargs))
+        return {
+            "captured_at": 123.0,
+            "reason": kwargs["reason"],
+            "stage": kwargs["stage"],
+            "pid": 32123,
+            "runtime_instance_id": "rt-test",
+            "transition_role": "active",
+            "evidence_path": str(tmp_path / "evidence.json"),
+            "memory": {
+                "process_rss_bytes": 100,
+                "family_rss_bytes": 200,
+                "cgroup_memory_current_bytes": 300,
+            },
+            "process": {
+                "available": True,
+                "state": "D (disk sleep)",
+                "wchan": "jbd2_log_wait_commit",
+                "threads_total": 2,
+                "threads_returned": 1,
+                "threads": [{"tid": 32123, "state": "D (disk sleep)", "wchan": "jbd2_log_wait_commit"}],
+            },
+        }
+
+    monkeypatch.setattr(manager, "_capture_runtime_stop_evidence", _fake_capture)
+    monkeypatch.setattr(supervisor.time, "time", lambda: 222.0)
+
+    payload = manager._record_runtime_self_heal_restart(
+        {
+            "reason": "supervisor.runtime.api_unready",
+            "message": "runtime API stayed unavailable",
+            "runtime_port": 8777,
+        }
+    )
+
+    assert calls
+    assert calls[0]["reason"] == "supervisor.runtime.api_unready"
+    assert calls[0]["stage"] == "runtime_self_heal_restart"
+    assert calls[0]["decision"]["recorded_at"] == 222.0
+    assert payload["recorded_at"] == 222.0
+    evidence = payload["pre_restart_evidence"]
+    assert evidence["evidence_path"] == str(tmp_path / "evidence.json")
+    assert evidence["memory"]["family_rss_bytes"] == 200
+    assert evidence["process"]["state"] == "D (disk sleep)"
+    assert evidence["process"]["threads"][0]["wchan"] == "jbd2_log_wait_commit"
+    status = manager._runtime_self_heal_status_payload()
+    assert status["last_decision"]["reason"] == "supervisor.runtime.api_unready"
+    assert status["last_evidence"]["process"]["wchan"] == "jbd2_log_wait_commit"
+
+
 def test_runtime_self_heal_decision_skips_listener_restart_while_update_apply_runs(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")

@@ -2305,6 +2305,104 @@ def _linux_smaps_rollup_snapshot(pid: int | None) -> dict[str, Any]:
     return result
 
 
+def _linux_process_state_snapshot(pid: int | None, *, max_threads: int = 16) -> dict[str, Any]:
+    if not pid or not sys.platform.startswith("linux"):
+        return {"available": False, "reason": "linux_required"}
+    normalized_pid = int(pid)
+    proc_dir = Path(f"/proc/{normalized_pid}")
+    status: dict[str, str] = {}
+    try:
+        status_text = (proc_dir / "status").read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return {"available": False, "reason": f"status_read_failed:{type(exc).__name__}"}
+    for line in status_text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        normalized_key = key.strip().lower()
+        if normalized_key in {
+            "state",
+            "vmrss",
+            "vmhwm",
+            "threads",
+            "voluntary_ctxt_switches",
+            "nonvoluntary_ctxt_switches",
+        }:
+            status[normalized_key] = value.strip()
+    try:
+        wchan = (proc_dir / "wchan").read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        wchan = None
+    threads: list[dict[str, Any]] = []
+    try:
+        task_dirs = sorted((proc_dir / "task").iterdir(), key=lambda item: int(item.name))
+    except Exception:
+        task_dirs = []
+    for task_dir in task_dirs[: max(0, int(max_threads or 0))]:
+        try:
+            tid = int(task_dir.name)
+        except Exception:
+            continue
+        try:
+            task_wchan = (task_dir / "wchan").read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            task_wchan = None
+        task_state = None
+        with contextlib.suppress(Exception):
+            for line in (task_dir / "status").read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("State:"):
+                    task_state = line.split(":", 1)[1].strip()
+                    break
+        threads.append({"tid": tid, "state": task_state, "wchan": task_wchan})
+    return {
+        "available": True,
+        "pid": normalized_pid,
+        "state": status.get("state"),
+        "wchan": wchan,
+        "vmrss": status.get("vmrss"),
+        "vmhwm": status.get("vmhwm"),
+        "threads_total": _positive_int_or_none(status.get("threads")),
+        "voluntary_ctxt_switches": _positive_int_or_none(status.get("voluntary_ctxt_switches")),
+        "nonvoluntary_ctxt_switches": _positive_int_or_none(status.get("nonvoluntary_ctxt_switches")),
+        "threads_returned": len(threads),
+        "threads": threads,
+    }
+
+
+def _compact_runtime_stop_evidence(evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(evidence, dict):
+        return {}
+    memory = evidence.get("memory") if isinstance(evidence.get("memory"), dict) else {}
+    process = evidence.get("process") if isinstance(evidence.get("process"), dict) else {}
+    return {
+        "captured_at": evidence.get("captured_at"),
+        "reason": evidence.get("reason"),
+        "stage": evidence.get("stage"),
+        "pid": evidence.get("pid"),
+        "runtime_instance_id": evidence.get("runtime_instance_id"),
+        "transition_role": evidence.get("transition_role"),
+        "evidence_path": evidence.get("evidence_path"),
+        "evidence_error": evidence.get("evidence_error"),
+        "memory": {
+            "process_rss_bytes": memory.get("process_rss_bytes"),
+            "family_rss_bytes": memory.get("family_rss_bytes"),
+            "cgroup_memory_current_bytes": memory.get("cgroup_memory_current_bytes"),
+            "cgroup_anon_bytes": memory.get("cgroup_anon_bytes"),
+            "cgroup_file_bytes": memory.get("cgroup_file_bytes"),
+            "cgroup_kernel_bytes": memory.get("cgroup_kernel_bytes"),
+            "cgroup_slab_bytes": memory.get("cgroup_slab_bytes"),
+        },
+        "process": {
+            "available": process.get("available"),
+            "state": process.get("state"),
+            "wchan": process.get("wchan"),
+            "threads_total": process.get("threads_total"),
+            "threads_returned": process.get("threads_returned"),
+            "threads": process.get("threads") if isinstance(process.get("threads"), list) else [],
+        },
+    }
+
+
 def _runtime_memory_attribution_snapshot(
     pid: int | None,
     *,
@@ -2366,6 +2464,8 @@ class SupervisorManager:
         self._last_error: str | None = None
         self._runtime_unhealthy_since: float | None = None
         self._runtime_unhealthy_kind: str | None = None
+        self._runtime_self_heal_last_decision: dict[str, Any] | None = None
+        self._runtime_self_heal_last_evidence: dict[str, Any] | None = None
         self._hub_root_watchdog_last_reconnect_at: float | None = None
         self._hub_root_watchdog_last_state: str | None = None
         self._hub_root_watchdog_last_reason: str | None = None
@@ -5976,6 +6076,7 @@ class SupervisorManager:
             "last_exit_at": self._last_exit_at,
             "last_exit_code": self._last_exit_code,
             "last_error": self._last_error,
+            "runtime_self_heal": self._runtime_self_heal_status_payload(),
             "updated_at": time.time(),
         }
 
@@ -6189,6 +6290,7 @@ class SupervisorManager:
             "memory": attribution,
             "smaps_rollup": _linux_smaps_rollup_snapshot(pid),
             "runtime_memory_diagnostics": self._runtime_memory_diagnostics_payload(),
+            "process": _linux_process_state_snapshot(pid),
             "log_files": path_size_snapshot(log_paths),
             "recent_reconnect_markers": self._recent_reconnect_markers(),
             "telemetry_tail": read_memory_telemetry_tail(limit=50),
@@ -6216,6 +6318,29 @@ class SupervisorManager:
             payload["evidence_error"] = f"{type(exc).__name__}: {exc}"
             _LOG.warning("failed to capture runtime stop evidence", exc_info=True)
         return payload
+
+    def _record_runtime_self_heal_restart(self, decision: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(decision or {})
+        reason = str(payload.get("reason") or "supervisor.runtime.unhealthy")
+        payload["recorded_at"] = time.time()
+        evidence = self._capture_runtime_stop_evidence(
+            reason=reason,
+            stage="runtime_self_heal_restart",
+            decision=payload,
+        )
+        compact_evidence = _compact_runtime_stop_evidence(evidence)
+        payload["pre_restart_evidence"] = compact_evidence
+        self._runtime_self_heal_last_decision = payload
+        self._runtime_self_heal_last_evidence = compact_evidence
+        return payload
+
+    def _runtime_self_heal_status_payload(self) -> dict[str, Any]:
+        return {
+            "last_decision": dict(self._runtime_self_heal_last_decision or {}),
+            "last_evidence": dict(self._runtime_self_heal_last_evidence or {}),
+            "unhealthy_since": self._runtime_unhealthy_since,
+            "unhealthy_kind": self._runtime_unhealthy_kind,
+        }
 
     def _memory_sessions_index_compact(self, *, limit: int = 10) -> dict[str, Any]:
         index = read_memory_session_index()
@@ -7586,13 +7711,14 @@ class SupervisorManager:
                     _LOG.warning("required-upstream-link supervisor watchdog failed", exc_info=True)
                 restart_decision = self._runtime_self_heal_decision()
                 if restart_decision is not None:
-                    self._last_error = str(restart_decision.get("message") or "active runtime became unhealthy")
+                    recorded_decision = self._record_runtime_self_heal_restart(restart_decision)
+                    self._last_error = str(recorded_decision.get("message") or "active runtime became unhealthy")
                     self._runtime_unhealthy_since = None
                     self._runtime_unhealthy_kind = None
                     self._persist_runtime_state()
                     try:
                         await self.restart_runtime(
-                            reason=str(restart_decision.get("reason") or "supervisor.runtime.unhealthy")
+                            reason=str(recorded_decision.get("reason") or "supervisor.runtime.unhealthy")
                         )
                     except Exception:
                         _LOG.warning("failed to self-heal active runtime", exc_info=True)
