@@ -34,4 +34,4 @@ def test_skill_facing_sdk_surfaces_are_bootstrap_promoted() -> None:
     assert "src/adaos/sdk/io/media.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/sdk/redevice.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/services/endpoint_audio.py" in BOOTSTRAP_CRITICAL_PATHS
-
+    assert "src/adaos/services/endpoint_router.py" in BOOTSTRAP_CRITICAL_PATHS

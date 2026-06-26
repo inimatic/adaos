@@ -71,6 +71,7 @@ RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/sdk/io/media.py",
     "src/adaos/sdk/redevice.py",
     "src/adaos/services/endpoint_audio.py",
+    "src/adaos/services/endpoint_router.py",
     "src/adaos/services/skills_loader_importlib.py",
     "src/adaos/services/skill/manager.py",
     "src/adaos/services/models/__init__.py",
