@@ -68,7 +68,7 @@ _YJS_PROJECTION_GUARD_EVENT_TAIL_BYTES = _int_env(
 )
 _YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES = _int_env(
     "ADAOS_YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES",
-    64 * 1024,
+    32 * 1024,
     1024,
 )
 _YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO = _int_env(
@@ -92,6 +92,14 @@ _YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC = max(
     0.0,
     float(os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC") or "0.0"),
 )
+_YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM = str(
+    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM") or "1"
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
@@ -410,6 +418,106 @@ def _record_yjs_projection_guard_event(
     _append_yjs_projection_guard_event(persisted_row)
 
 
+def _projection_compaction_runtime_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "log_mode": snapshot.get("log_mode"),
+        "update_log_entries": max(0, _int_or_zero(snapshot.get("update_log_entries"))),
+        "update_log_bytes": max(0, _int_or_zero(snapshot.get("update_log_bytes"))),
+        "replay_window_entries": max(0, _int_or_zero(snapshot.get("replay_window_entries"))),
+        "replay_window_bytes": max(0, _int_or_zero(snapshot.get("replay_window_bytes"))),
+        "runtime_compaction_eligible": bool(snapshot.get("runtime_compaction_eligible")),
+        "snapshot_file_exists": bool(snapshot.get("snapshot_file_exists")),
+        "snapshot_file_size": max(0, _int_or_zero(snapshot.get("snapshot_file_size"))),
+        "persisted_up_to_date": bool(snapshot.get("persisted_up_to_date")),
+        "compact_total": max(0, _int_or_zero(snapshot.get("compact_total"))),
+        "backup_total": max(0, _int_or_zero(snapshot.get("backup_total"))),
+        "auto_backup_total": max(0, _int_or_zero(snapshot.get("auto_backup_total"))),
+    }
+
+
+def _trim_allocator_after_projection_compaction() -> bool:
+    if not _YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM:
+        return False
+    if os.name != "posix":
+        return False
+    try:
+        import ctypes  # pylint: disable=import-outside-toplevel
+
+        libc = ctypes.CDLL("libc.so.6")
+        trim = getattr(libc, "malloc_trim", None)
+        if not callable(trim):
+            return False
+        return bool(trim(0))
+    except Exception:
+        return False
+
+
+async def _compact_projection_amplification_store(
+    webspace_id: str,
+    *,
+    mode: str,
+    delay_sec: float | None = None,
+) -> dict[str, Any]:
+    key = str(webspace_id or "").strip() or "default"
+    delay = float(_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC if delay_sec is None else delay_sec)
+    result = {
+        "action": "ystore_runtime_compaction",
+        "requested": False,
+        "executed": False,
+        "reason": "projection_write_amplification",
+        "webspace_id": key,
+        "mode": str(mode or "").strip() or "background",
+        "delay_sec": delay,
+        "min_quiet_sec": float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC),
+    }
+    if not _YJS_PROJECTION_AUTOCOMPACT_ON_WRITE_AMPLIFICATION:
+        result["disabled"] = True
+        return result
+    result["requested"] = True
+    if delay > 0.0:
+        await asyncio.sleep(delay)
+    try:
+        from adaos.services.yjs.store import get_ystore_for_webspace
+
+        store = get_ystore_for_webspace(key)
+        before = store.runtime_snapshot()
+        result["before"] = _projection_compaction_runtime_summary(before)
+        quiet_sec = float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC)
+        last_write_at = _float_or_zero(before.get("last_write_at"))
+        if quiet_sec > 0.0 and last_write_at > 0.0 and time.time() - last_write_at < quiet_sec:
+            result["skipped"] = "quiet_window"
+            return result
+        if not bool(before.get("runtime_compaction_eligible")) and bool(before.get("persisted_up_to_date")):
+            result["skipped"] = "no_runtime_replay_tail"
+            result["after"] = result["before"]
+            return result
+
+        await store.backup_to_disk(
+            compact_runtime=True,
+            backup_kind="projection_write_amplification",
+        )
+        after = store.runtime_snapshot()
+        result["after"] = _projection_compaction_runtime_summary(after)
+        result["executed"] = True
+        before_replay_bytes = max(0, _int_or_zero(before.get("replay_window_bytes")))
+        after_replay_bytes = max(0, _int_or_zero(after.get("replay_window_bytes")))
+        before_entries = max(0, _int_or_zero(before.get("update_log_entries")))
+        after_entries = max(0, _int_or_zero(after.get("update_log_entries")))
+        result["compacted"] = bool(after_entries < before_entries or after_replay_bytes < before_replay_bytes)
+        result["released_replay_bytes"] = max(0, before_replay_bytes - after_replay_bytes)
+        try:
+            import gc  # pylint: disable=import-outside-toplevel
+
+            result["gc_collected"] = int(gc.collect() or 0)
+        except Exception:
+            result["gc_collected"] = 0
+        result["malloc_trimmed"] = _trim_allocator_after_projection_compaction()
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        _log.debug("failed to compact YStore after projection amplification webspace=%s", key, exc_info=True)
+    return result
+
+
 def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
     result = {
@@ -417,6 +525,7 @@ def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, 
         "requested": False,
         "reason": "projection_write_amplification",
         "webspace_id": key,
+        "mode": "background",
         "delay_sec": float(_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC),
         "min_quiet_sec": float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC),
     }
@@ -425,18 +534,15 @@ def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, 
         return result
 
     async def _runner() -> None:
-        try:
-            if _YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC > 0.0:
-                await asyncio.sleep(float(_YJS_PROJECTION_AUTOCOMPACT_DELAY_SEC))
-            from adaos.services.yjs.store import get_ystore_for_webspace
-
-            store = get_ystore_for_webspace(key)
-            await store.request_runtime_compaction(
-                reason="projection_write_amplification",
-                min_quiet_sec=float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC),
+        outcome = await _compact_projection_amplification_store(key, mode="background")
+        if outcome.get("executed"):
+            _log.warning(
+                "YStore compacted after projection amplification webspace=%s compacted=%s released_replay_bytes=%s malloc_trimmed=%s",
+                key,
+                bool(outcome.get("compacted")),
+                int(outcome.get("released_replay_bytes") or 0),
+                bool(outcome.get("malloc_trimmed")),
             )
-        except Exception:
-            _log.debug("failed to request YStore compaction after projection amplification webspace=%s", key, exc_info=True)
 
     try:
         loop = asyncio.get_running_loop()
@@ -497,17 +603,33 @@ def _record_yjs_projection_write_amplification(
     max_items: int | None,
     collection_metrics: Mapping[str, Any],
     route: Mapping[str, Any] | None,
-) -> None:
+    compaction_mode: str = "background",
+) -> bool:
     if not _YJS_PROJECTION_GUARD_ENABLED:
-        return
+        return False
     observed_update_bytes = max(0, int(update_bytes or 0))
     observed_payload_bytes = max(1, int(projected_bytes or payload_bytes or 1))
     ratio = float(observed_update_bytes) / float(observed_payload_bytes)
     if observed_update_bytes < int(_YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES):
-        return
+        return False
     if ratio < float(_YJS_PROJECTION_WRITE_AMPLIFICATION_RATIO):
-        return
-    recovery = _request_projection_amplification_compaction(webspace_id)
+        return False
+    mode = str(compaction_mode or "").strip() or "background"
+    if mode == "inline_after_detached_write":
+        recovery = {
+            "action": "ystore_runtime_compaction",
+            "requested": True,
+            "reason": "projection_write_amplification",
+            "webspace_id": str(webspace_id or "").strip() or "default",
+            "mode": mode,
+            "delay_sec": 0.0,
+            "min_quiet_sec": float(_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC),
+            "deferred_until": "detached_writer_flush_complete",
+        }
+        if not _YJS_PROJECTION_AUTOCOMPACT_ON_WRITE_AMPLIFICATION:
+            recovery["disabled"] = True
+    else:
+        recovery = _request_projection_amplification_compaction(webspace_id)
     _record_yjs_projection_guard_event(
         webspace_id=webspace_id,
         owner=owner,
@@ -575,6 +697,7 @@ def _record_yjs_projection_write_amplification(
         observed_update_bytes,
         ratio,
     )
+    return True
 
 
 def _yjs_primary_doc_policy_state(*, webspace_id: str, owner: str, root_name: str) -> dict[str, Any]:
@@ -1188,9 +1311,12 @@ class ProjectionService:
         write_max_items = _positive_int(budget.get("max_items")) or int(_YJS_PROJECTION_DEFAULT_MAX_ITEMS)
         policy_route = policy.get("route") if isinstance(policy.get("route"), dict) else {}
         write_route = dict(route or policy_route or {})
+        detached_compaction_needed = False
 
         def _on_yjs_update(update_meta: Mapping[str, Any]) -> None:
-            _record_yjs_projection_write_amplification(
+            nonlocal detached_compaction_needed
+            live_room_update = bool(update_meta.get("live_room"))
+            compaction_needed = _record_yjs_projection_write_amplification(
                 webspace_id=ws_id,
                 owner=owner,
                 scope=scope,
@@ -1204,7 +1330,10 @@ class ProjectionService:
                 max_items=write_max_items,
                 collection_metrics=write_collection_metrics,
                 route=write_route,
+                compaction_mode="background" if live_room_update else "inline_after_detached_write",
             )
+            if compaction_needed and not live_room_update:
+                detached_compaction_needed = True
 
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)
@@ -1260,6 +1389,20 @@ class ProjectionService:
                 ) as ydoc:
                     with ydoc.begin_transaction() as txn:
                         _mutator(ydoc, txn)
+            if detached_compaction_needed:
+                outcome = await _compact_projection_amplification_store(
+                    ws_id,
+                    mode="inline_after_detached_write",
+                    delay_sec=0.0,
+                )
+                if outcome.get("executed"):
+                    _log.warning(
+                        "YStore compacted inline after detached projection amplification webspace=%s compacted=%s released_replay_bytes=%s malloc_trimmed=%s",
+                        ws_id,
+                        bool(outcome.get("compacted")),
+                        int(outcome.get("released_replay_bytes") or 0),
+                        bool(outcome.get("malloc_trimmed")),
+                    )
         except Exception:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)
 

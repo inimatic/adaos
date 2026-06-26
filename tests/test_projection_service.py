@@ -60,6 +60,41 @@ def _fake_async_get_ydoc(state: dict[str, _FakeMap], calls: list[dict[str, objec
     return _factory
 
 
+class _FakeAsyncDocWithUpdateCallback(_FakeAsyncDoc):
+    def __init__(self, state: dict[str, _FakeMap], kwargs: dict[str, object]) -> None:
+        super().__init__(state)
+        self._kwargs = kwargs
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        callback = self._kwargs.get("write_update_callback")
+        if callable(callback):
+            callback(
+                {
+                    "webspace_id": "desktop",
+                    "update_bytes": 96 * 1024,
+                    "source": "projection_service",
+                    "owner": "skill:mediaserver",
+                    "channel": "projection.yjs",
+                    "root_names": ["data"],
+                    "live_room": False,
+                    "persisted": True,
+                }
+            )
+        return False
+
+
+def _fake_async_get_ydoc_with_update_callback(
+    state: dict[str, _FakeMap],
+    calls: list[dict[str, object]] | None = None,
+):
+    def _factory(_ws: str, **kwargs) -> _FakeAsyncDocWithUpdateCallback:
+        if calls is not None:
+            calls.append(dict(kwargs))
+        return _FakeAsyncDocWithUpdateCallback(state, dict(kwargs))
+
+    return _factory
+
+
 @asynccontextmanager
 async def _fake_ystore_write_metadata(**kwargs):
     yield kwargs
@@ -361,6 +396,87 @@ def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monk
 
     assert mutate_calls == ["ws-test"]
     assert calls == []
+
+
+def test_projection_service_compacts_inline_after_detached_write_amplification(monkeypatch, tmp_path) -> None:
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    fake_state = {"data": _FakeMap()}
+    calls: list[dict[str, object]] = []
+    compaction_calls: list[dict[str, object]] = []
+
+    async def _capture_compaction(webspace_id: str, **kwargs) -> dict[str, object]:
+        compaction_calls.append({"webspace_id": webspace_id, **dict(kwargs)})
+        return {
+            "requested": True,
+            "executed": True,
+            "compacted": True,
+            "released_replay_bytes": 98304,
+            "malloc_trimmed": True,
+        }
+
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/media/library_summary",
+        webspace_id=None,
+    )
+    rule = SimpleNamespace(
+        targets=[target],
+        budget={"max_payload_bytes": 65536, "max_items": 1000},
+        route={"surface": "widget:media", "route": "yjs", "projection_slot": "mediaserver.library_summary"},
+    )
+    registry = SimpleNamespace(
+        resolve_rule=lambda scope, slot: rule,  # noqa: ARG005
+        resolve=lambda scope, slot: [target],  # noqa: ARG005
+    )
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(
+        projection_service_module,
+        "async_get_ydoc",
+        _fake_async_get_ydoc_with_update_callback(fake_state, calls),
+    )
+    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
+    monkeypatch.setattr(projection_service_module, "_compact_projection_amplification_store", _capture_compaction)
+    monkeypatch.setattr(
+        projection_service_module,
+        "_request_projection_amplification_compaction",
+        lambda _ws: (_ for _ in ()).throw(AssertionError("detached path should compact inline")),
+    )
+    monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="mediaserver"),
+    )
+
+    asyncio.run(
+        service.apply(
+            "subnet",
+            "mediaserver.library_summary",
+            {"ok": True, "count": 1534, "items": [{"id": "all", "count": 1534}]},
+            webspace_id="desktop",
+        )
+    )
+
+    assert len(calls) == 1
+    assert compaction_calls == [
+        {
+            "webspace_id": "desktop",
+            "mode": "inline_after_detached_write",
+            "delay_sec": 0.0,
+        }
+    ]
+    snapshot = projection_service_module.yjs_projection_guard_snapshot(webspace_id="desktop")
+    assert snapshot["totals"]["guarded"] == 1
+    item = snapshot["items"][0]
+    assert item["owner"] == "skill:mediaserver"
+    assert item["recovery"]["mode"] == "inline_after_detached_write"
+    assert item["recovery"]["deferred_until"] == "detached_writer_flush_complete"
 
 
 def test_projection_service_throttles_skill_owned_primary_doc_writes_when_policy_is_critical(monkeypatch) -> None:
