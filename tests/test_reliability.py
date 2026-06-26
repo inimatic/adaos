@@ -2576,6 +2576,7 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
                     "backup_malloc_trim_total": 2,
                     "auto_backup_total": 4,
                     "auto_backup_large_update_bytes": 262144,
+                    "auto_backup_large_update_debounce_sec": 30.0,
                     "last_backup_gc_collected": 17,
                     "last_backup_malloc_trimmed": True,
                     "last_auto_backup_reason": "projection_write_amplification",
@@ -2598,6 +2599,7 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
     assert snapshot["recovery"]["ystore"]["backup_gc_total"] == 3
     assert snapshot["recovery"]["ystore"]["backup_malloc_trim_total"] == 2
     assert snapshot["recovery"]["ystore"]["auto_backup_large_update_bytes"] == 262144
+    assert snapshot["recovery"]["ystore"]["auto_backup_large_update_debounce_sec"] == 30.0
     assert snapshot["recovery"]["ystore"]["last_backup_gc_collected"] == 17
     assert snapshot["recovery"]["ystore"]["last_backup_malloc_trimmed"] is True
     repair = snapshot["builder_repair_packets"][0]

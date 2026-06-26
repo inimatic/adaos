@@ -355,6 +355,11 @@ class AdaosMemoryYStore(BaseYStore):
             256 * 1024,
             minimum=0,
         )
+        self.auto_backup_large_update_debounce_sec = _env_float(
+            "ADAOS_YSTORE_AUTOBACKUP_LARGE_UPDATE_DEBOUNCE_SEC",
+            30.0,
+            minimum=0.0,
+        )
         self._lock = threading.RLock()
         self._updates: List[Tuple[bytes, bytes, float]] = []
         self._base_snapshot_present = False
@@ -507,6 +512,7 @@ class AdaosMemoryYStore(BaseYStore):
             except Exception:
                 _log.debug("failed to apply YStore primary-doc governance webspace=%s", self.path, exc_info=True)
         auto_backup_reason: str | None = None
+        auto_backup_debounce_override: float | None = None
         with self._lock:
             was_empty = not self._updates
             self._write_total += 1
@@ -549,6 +555,7 @@ class AdaosMemoryYStore(BaseYStore):
             ):
                 self._auto_backup_inflight = True
                 auto_backup_reason = "large_update"
+                auto_backup_debounce_override = float(self.auto_backup_large_update_debounce_sec)
             self._generation += 1
         if notify:
             try:
@@ -556,7 +563,7 @@ class AdaosMemoryYStore(BaseYStore):
             except Exception:
                 pass
         if auto_backup_reason:
-            self._schedule_auto_backup(reason=auto_backup_reason)
+            self._schedule_auto_backup(reason=auto_backup_reason, debounce_sec=auto_backup_debounce_override)
         return True
 
     async def encode_state_as_update(self, ydoc: Y.YDoc) -> None:  # type: ignore[override]
@@ -810,11 +817,12 @@ class AdaosMemoryYStore(BaseYStore):
                 self._last_disk_snapshot_bytes = len(data)
         self._loaded_from_disk = True
 
-    def _schedule_auto_backup(self, *, reason: str) -> bool:
+    def _schedule_auto_backup(self, *, reason: str, debounce_sec: float | None = None) -> bool:
         async def _runner() -> None:
             try:
-                if self.auto_backup_debounce_sec > 0:
-                    await asyncio.sleep(self.auto_backup_debounce_sec)
+                delay = self.auto_backup_debounce_sec if debounce_sec is None else max(0.0, float(debounce_sec))
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 await self.backup_to_disk(compact_runtime=True, backup_kind=f"auto_after_compact:{reason}")
             except Exception as exc:
                 _log.warning(
@@ -1043,6 +1051,7 @@ class AdaosMemoryYStore(BaseYStore):
             "auto_backup_cooldown_sec": float(self.auto_backup_cooldown_sec),
             "auto_backup_debounce_sec": float(self.auto_backup_debounce_sec),
             "auto_backup_large_update_bytes": int(self.auto_backup_large_update_bytes),
+            "auto_backup_large_update_debounce_sec": float(self.auto_backup_large_update_debounce_sec),
             "auto_backup_inflight": bool(self._auto_backup_inflight),
             "snapshot_file_exists": bool(snapshot_exists),
             "snapshot_file_size": int(snapshot_size),

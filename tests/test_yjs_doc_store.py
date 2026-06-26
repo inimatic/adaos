@@ -391,6 +391,7 @@ async def test_ystore_auto_backup_after_large_update(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "1")
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", "0")
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", "0.05")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_LARGE_UPDATE_DEBOUNCE_SEC", "0.05")
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_LARGE_UPDATE_BYTES", "4")
     webspace_id = _webspace_id("large-update-auto-backup")
     store = get_ystore_for_webspace(webspace_id)
@@ -410,6 +411,7 @@ async def test_ystore_auto_backup_after_large_update(monkeypatch) -> None:
         snapshot = store.runtime_snapshot()
         assert snapshot["auto_backup_total"] >= 1
         assert snapshot["last_auto_backup_reason"] == "large_update"
+        assert snapshot["auto_backup_large_update_debounce_sec"] == 0.05
         assert snapshot["snapshot_file_exists"] is True
         assert snapshot["base_snapshot_present"] is True
         assert snapshot["update_log_entries"] == 1
