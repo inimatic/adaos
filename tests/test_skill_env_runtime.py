@@ -615,6 +615,49 @@ def test_prepare_runtime_copies_bucket_data_when_migration_file_missing(monkeypa
     assert (env.data_root("1.1.0") / "files" / "blob.txt").read_text(encoding="utf-8") == "blob"
 
 
+def test_run_tool_loads_runtime_data_projections(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "runtime_projection_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def ping(payload=None):\n    return {'ok': True}\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text(
+        """
+name: runtime_projection_skill
+version: '1.0.0'
+default_tool: ping
+tools:
+  - name: ping
+    entry: handlers.main:ping
+data_projections:
+  - scope: subnet
+    slot: contract.snapshot
+    targets:
+      - backend: yjs
+        path: data/contracts/snapshot
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+    monkeypatch.setattr(skill_manager_module, "execute_tool", lambda *args, **kwargs: {"ok": True})
+
+    runtime = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    mgr.activate_runtime(skill_name, version=runtime.version, slot=runtime.slot)
+
+    assert ctx.projections.resolve_rule("subnet", "contract.snapshot") is None
+
+    assert mgr.run_tool(skill_name, "ping", {}) == {"ok": True}
+    rule = ctx.projections.resolve_rule("subnet", "contract.snapshot")
+
+    assert rule is not None
+    assert rule.targets[0].backend == "yjs"
+    assert rule.targets[0].path == "data/contracts/snapshot"
+
+
 def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())

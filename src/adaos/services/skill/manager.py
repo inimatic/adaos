@@ -2704,6 +2704,7 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self._load_runtime_data_projections(data)
         tools = data.get("tools") or {}
         target_tool = _resolve_runtime_tool_name(tool, data.get("default_tool"), tools)
         if not target_tool:
@@ -2878,6 +2879,7 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self._load_runtime_data_projections(data)
         tools = data.get("tools") or {}
         if tool:
             target_tool = tool
@@ -3029,6 +3031,24 @@ class SkillManager:
                 return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             return json.loads(path.read_text(encoding="utf-8"))
         raise FileNotFoundError("skill manifest not found")
+
+    def _load_runtime_data_projections(self, manifest: Mapping[str, Any]) -> int:
+        entries = manifest.get("data_projections") if isinstance(manifest, Mapping) else []
+        if not isinstance(entries, list) or not entries:
+            return 0
+        projections = getattr(self.ctx, "projections", None)
+        if projections is None:
+            return 0
+        try:
+            load_manifest = getattr(projections, "load_manifest", None)
+            if callable(load_manifest):
+                return int(load_manifest(dict(manifest)))
+            load_entries = getattr(projections, "load_entries", None)
+            if callable(load_entries):
+                return int(load_entries(entries))
+        except Exception:
+            _log.debug("failed to load runtime data_projections", exc_info=True)
+        return 0
 
     def _prepare_runtime_environment(
         self,
