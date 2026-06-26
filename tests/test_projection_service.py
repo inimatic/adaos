@@ -418,7 +418,7 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
     assert fake_state["data"] == {}
 
 
-def test_projection_service_degrades_oversized_yjs_projection_before_write(monkeypatch) -> None:
+def test_projection_service_degrades_oversized_yjs_projection_before_write(monkeypatch, tmp_path) -> None:
     projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
     fake_state = {"data": _FakeMap()}
     target = SimpleNamespace(
@@ -440,6 +440,7 @@ def test_projection_service_degrades_oversized_yjs_projection_before_write(monke
         registry=registry,
     )
 
+    monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
@@ -478,6 +479,47 @@ def test_projection_service_degrades_oversized_yjs_projection_before_write(monke
     assert snapshot["total"] == 1
     assert snapshot["totals"]["guarded"] == 1
     assert snapshot["items"][0]["slot"] == "mediaserver.library"
+
+
+def test_projection_guard_snapshot_reads_persisted_cli_process_events(monkeypatch, tmp_path) -> None:
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(projection_service_module.time, "time", lambda: 1778055331.0)
+
+    projection_service_module._record_yjs_projection_guard_event(
+        webspace_id="desktop",
+        owner="skill:mediaserver",
+        scope="subnet",
+        slot="mediaserver.library",
+        path="data/nodes/hub/media/library",
+        root_name="data",
+        reason="yjs_projection_payload_budget_exceeded",
+        payload_bytes=402482,
+        projected_bytes=402482,
+        degraded_bytes=26969,
+        max_payload_bytes=262144,
+        max_items=1000,
+        collection_metrics={
+            "max_list_items": 1520,
+            "max_list_path": "items",
+            "list_item_total": 1643,
+            "mapping_key_total": 8404,
+        },
+        route={"surface": "widget:media", "projection_slot": "mediaserver.library"},
+    )
+
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+
+    snapshot = projection_service_module.yjs_projection_guard_snapshot(webspace_id="desktop", limit=20)
+
+    assert snapshot["total"] == 1
+    assert snapshot["totals"]["guarded"] == 1
+    item = snapshot["items"][0]
+    assert item["owner"] == "skill:mediaserver"
+    assert item["slot"] == "mediaserver.library"
+    assert item["payload_bytes"] == 402482
+    assert item["max_list_items"] == 1520
+    assert item["last_at"] == 1778055331.0
 
 
 def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:

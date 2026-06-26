@@ -7,12 +7,14 @@ from typing import Any, List, Mapping, Optional
 import json
 import logging
 import os
+from pathlib import Path
 import threading
 import time
 
 from adaos.sdk.data.context import get_current_skill
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.node_config import load_config
+from adaos.services.runtime_paths import current_state_dir
 from adaos.services.scenario.node_data_scope import node_scope_data_path
 from adaos.services.yjs.doc import mutate_live_room, async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
@@ -54,6 +56,16 @@ _YJS_PROJECTION_DEFAULT_MAX_ITEMS = _int_env(
     1000,
     1,
 )
+_YJS_PROJECTION_GUARD_EVENT_READ_LIMIT = _int_env(
+    "ADAOS_YJS_PROJECTION_GUARD_EVENT_READ_LIMIT",
+    5000,
+    100,
+)
+_YJS_PROJECTION_GUARD_EVENT_TAIL_BYTES = _int_env(
+    "ADAOS_YJS_PROJECTION_GUARD_EVENT_TAIL_BYTES",
+    4 * 1024 * 1024,
+    64 * 1024,
+)
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
@@ -86,6 +98,20 @@ def _positive_int(value: Any) -> int | None:
     except Exception:
         return None
     return result if result > 0 else None
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
 
 
 def _json_payload_bytes(value: Any) -> int:
@@ -134,6 +160,122 @@ def _projection_guard_key(webspace_id: str, owner: str, path: str) -> str:
     return "\0".join([str(webspace_id or "default"), str(owner or "unknown"), str(path or "")])
 
 
+def _projection_guard_events_path(*, create: bool) -> Path:
+    root = current_state_dir() / "observability"
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    return root / "yjs_projection_guard.ndjson"
+
+
+def _append_yjs_projection_guard_event(row: Mapping[str, Any]) -> None:
+    try:
+        path = _projection_guard_events_path(create=True)
+        event = {
+            "schema": "adaos.yjs_projection_guard.event.v1",
+            "event_count": 1,
+            "pid": os.getpid(),
+            **dict(row),
+        }
+        line = json.dumps(event, ensure_ascii=False, separators=(",", ":"), default=str)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.write("\n")
+    except Exception:
+        _log.debug("failed to persist YJS projection guard event", exc_info=True)
+
+
+def _iter_persisted_yjs_projection_guard_events() -> list[dict[str, Any]]:
+    try:
+        path = _projection_guard_events_path(create=False)
+        if not path.exists():
+            return []
+        size = path.stat().st_size
+        max_bytes = int(_YJS_PROJECTION_GUARD_EVENT_TAIL_BYTES)
+        max_events = int(_YJS_PROJECTION_GUARD_EVENT_READ_LIMIT)
+        rows: list[dict[str, Any]] = []
+        with path.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(max(0, size - max_bytes))
+                handle.readline()
+            for raw in handle:
+                try:
+                    payload = json.loads(raw.decode("utf-8", errors="replace"))
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+                    if len(rows) > max_events:
+                        del rows[: len(rows) - max_events]
+        return rows
+    except Exception:
+        _log.debug("failed to read persisted YJS projection guard events", exc_info=True)
+        return []
+
+
+def _aggregate_yjs_projection_guard_events(events: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for event in events:
+        webspace_id = str(event.get("webspace_id") or "").strip() or "default"
+        owner = str(event.get("owner") or "").strip() or "unknown"
+        path = str(event.get("path") or "").strip()
+        key = _projection_guard_key(webspace_id, owner, path)
+        last_at = _float_or_zero(event.get("last_at"))
+        current = rows.get(key)
+        if current is None:
+            current = {}
+            rows[key] = current
+        guarded_total = _int_or_zero(current.get("guarded_total")) + max(1, _int_or_zero(event.get("event_count") or 1))
+        if last_at >= _float_or_zero(current.get("last_at")):
+            current.update(
+                {
+                    "webspace_id": webspace_id,
+                    "owner": owner,
+                    "scope": str(event.get("scope") or "").strip() or None,
+                    "slot": str(event.get("slot") or "").strip() or None,
+                    "path": path or None,
+                    "root": str(event.get("root") or "").strip() or None,
+                    "reason": str(event.get("reason") or "").strip() or "yjs_projection_payload_guarded",
+                    "payload_bytes": max(0, _int_or_zero(event.get("payload_bytes"))),
+                    "projected_bytes": max(0, _int_or_zero(event.get("projected_bytes"))),
+                    "degraded_bytes": max(0, _int_or_zero(event.get("degraded_bytes"))),
+                    "max_payload_bytes": event.get("max_payload_bytes"),
+                    "max_items": event.get("max_items"),
+                    "max_list_items": _int_or_zero(event.get("max_list_items")),
+                    "max_list_path": str(event.get("max_list_path") or "").strip() or None,
+                    "list_item_total": _int_or_zero(event.get("list_item_total")),
+                    "mapping_key_total": _int_or_zero(event.get("mapping_key_total")),
+                    "route": dict(event.get("route") or {}) if isinstance(event.get("route"), dict) else {},
+                    "last_at": last_at,
+                    "last_pid": _int_or_zero(event.get("pid")) or None,
+                }
+            )
+        current["guarded_total"] = guarded_total
+    return rows
+
+
+def _yjs_projection_guard_rows() -> list[dict[str, Any]]:
+    persisted = _aggregate_yjs_projection_guard_events(_iter_persisted_yjs_projection_guard_events())
+    with _YJS_PROJECTION_GUARD_LOCK:
+        memory_rows = [dict(item) for item in _YJS_PROJECTION_GUARD_STATS.values()]
+    if not persisted:
+        return memory_rows
+    for row in memory_rows:
+        key = _projection_guard_key(
+            str(row.get("webspace_id") or ""),
+            str(row.get("owner") or ""),
+            str(row.get("path") or ""),
+        )
+        existing = persisted.get(key)
+        if existing is None:
+            persisted[key] = row
+            continue
+        guarded_total = max(_int_or_zero(existing.get("guarded_total")), _int_or_zero(row.get("guarded_total")))
+        if _float_or_zero(row.get("last_at")) > _float_or_zero(existing.get("last_at")):
+            existing.update(row)
+        existing["guarded_total"] = guarded_total
+    return [dict(item) for item in persisted.values()]
+
+
 def _record_yjs_projection_guard_event(
     *,
     webspace_id: str,
@@ -152,6 +294,7 @@ def _record_yjs_projection_guard_event(
     route: Mapping[str, Any] | None,
 ) -> None:
     key = _projection_guard_key(webspace_id, owner, path)
+    persisted_row: dict[str, Any] | None = None
     with _YJS_PROJECTION_GUARD_LOCK:
         current = dict(_YJS_PROJECTION_GUARD_STATS.get(key) or {})
         current["webspace_id"] = str(webspace_id or "").strip() or "default"
@@ -174,6 +317,8 @@ def _record_yjs_projection_guard_event(
         current["last_at"] = time.time()
         current["guarded_total"] = int(current.get("guarded_total") or 0) + 1
         _YJS_PROJECTION_GUARD_STATS[key] = current
+        persisted_row = dict(current)
+    _append_yjs_projection_guard_event(persisted_row)
 
 
 def yjs_projection_guard_snapshot(
@@ -185,8 +330,7 @@ def yjs_projection_guard_snapshot(
     token_ws = str(webspace_id or "").strip()
     token_owner = str(owner or "").strip()
     max_items = max(1, min(int(limit or 20), 100))
-    with _YJS_PROJECTION_GUARD_LOCK:
-        rows = [dict(item) for item in _YJS_PROJECTION_GUARD_STATS.values()]
+    rows = _yjs_projection_guard_rows()
     if token_ws:
         rows = [row for row in rows if str(row.get("webspace_id") or "") == token_ws]
     if token_owner:
