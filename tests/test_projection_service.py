@@ -418,6 +418,57 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
     assert fake_state["data"] == {}
 
 
+def test_projection_service_degrades_oversized_yjs_projection_before_write(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/media/library",
+        webspace_id=None,
+    )
+    rule = SimpleNamespace(
+        targets=[target],
+        budget={"max_payload_bytes": 512, "max_items": 10},
+        route={"surface": "widget:media", "route": "yjs", "projection_slot": "mediaserver.library"},
+    )
+    registry = SimpleNamespace(
+        resolve_rule=lambda scope, slot: rule,  # noqa: ARG005
+        resolve=lambda scope, slot: [target],  # noqa: ARG005
+    )
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="mediaserver"),
+    )
+
+    payload = {
+        "ok": True,
+        "items": [{"name": f"file-{idx}.mp4", "size_bytes": idx} for idx in range(40)],
+        "count": 40,
+        "total_bytes": 780,
+        "summary": {"title": "Media Server", "value": 40},
+    }
+
+    asyncio.run(service.apply("subnet", "mediaserver.library", payload, webspace_id="desktop"))
+
+    projected = fake_state["data"]["nodes"]["hub"]["media"]["library"]
+    assert projected["ok"] is False
+    assert projected["state"] == "degraded"
+    assert projected["error"] == "yjs_projection_payload_budget_exceeded"
+    assert "items" not in projected
+    assert projected["guard"]["owner"] == "skill:mediaserver"
+    assert projected["guard"]["slot"] == "mediaserver.library"
+    assert projected["guard"]["max_list_items"] == 40
+    assert projected["preserved"]["count"] == 40
+
+
 def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
     from adaos.services.yjs import governance as yjs_governance

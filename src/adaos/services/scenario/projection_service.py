@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Mapping, Optional
 import json
 import logging
 import os
@@ -38,6 +38,24 @@ def _int_env(name: str, default: int, minimum: int) -> int:
 
 
 _PRIMARY_DOC_MAX_STRING_CHARS = _int_env("ADAOS_YJS_PRIMARY_DOC_MAX_STRING_CHARS", 4096, 512)
+_YJS_PROJECTION_GUARD_ENABLED = str(os.getenv("ADAOS_YJS_PROJECTION_GUARD_ENABLE") or "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_YJS_PROJECTION_DEFAULT_MAX_PAYLOAD_BYTES = _int_env(
+    "ADAOS_YJS_PROJECTION_DEFAULT_MAX_PAYLOAD_BYTES",
+    256 * 1024,
+    1024,
+)
+_YJS_PROJECTION_DEFAULT_MAX_ITEMS = _int_env(
+    "ADAOS_YJS_PROJECTION_DEFAULT_MAX_ITEMS",
+    1000,
+    1,
+)
+_YJS_PROJECTION_GUARD_LOCK = threading.Lock()
+_YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
 
 def _projection_write_owner() -> str:
@@ -60,6 +78,126 @@ def _local_node_id() -> str:
     except Exception:
         pass
     return "hub"
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        result = int(value)
+    except Exception:
+        return None
+    return result if result > 0 else None
+
+
+def _json_payload_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value).encode("utf-8", errors="replace"))
+
+
+def _projection_collection_metrics(value: Any) -> dict[str, Any]:
+    max_list_items = 0
+    max_list_path = ""
+    list_total = 0
+    mapping_total = 0
+
+    def _walk(item: Any, path: str) -> None:
+        nonlocal max_list_items, max_list_path, list_total, mapping_total
+        if isinstance(item, (str, bytes, bytearray)):
+            return
+        if isinstance(item, list) or isinstance(item, tuple):
+            count = len(item)
+            list_total += count
+            if count > max_list_items:
+                max_list_items = count
+                max_list_path = path or "$"
+            for index, child in enumerate(item[: min(count, 2048)]):
+                _walk(child, f"{path}[{index}]" if path else f"$[{index}]")
+            return
+        mapping_items = _mapping_items(item)
+        if mapping_items is not None:
+            mapping_total += len(mapping_items)
+            for key, child in mapping_items:
+                next_path = f"{path}.{key}" if path else str(key)
+                _walk(child, next_path)
+
+    _walk(value, "")
+    return {
+        "max_list_items": max_list_items,
+        "max_list_path": max_list_path or None,
+        "list_item_total": list_total,
+        "mapping_key_total": mapping_total,
+    }
+
+
+def _projection_guard_key(webspace_id: str, owner: str, path: str) -> str:
+    return "\0".join([str(webspace_id or "default"), str(owner or "unknown"), str(path or "")])
+
+
+def _record_yjs_projection_guard_event(
+    *,
+    webspace_id: str,
+    owner: str,
+    scope: str,
+    slot: str,
+    path: str,
+    root_name: str,
+    reason: str,
+    payload_bytes: int,
+    projected_bytes: int,
+    degraded_bytes: int,
+    max_payload_bytes: int | None,
+    max_items: int | None,
+    collection_metrics: Mapping[str, Any],
+    route: Mapping[str, Any] | None,
+) -> None:
+    key = _projection_guard_key(webspace_id, owner, path)
+    with _YJS_PROJECTION_GUARD_LOCK:
+        current = dict(_YJS_PROJECTION_GUARD_STATS.get(key) or {})
+        current["webspace_id"] = str(webspace_id or "").strip() or "default"
+        current["owner"] = str(owner or "").strip() or "unknown"
+        current["scope"] = str(scope or "").strip() or None
+        current["slot"] = str(slot or "").strip() or None
+        current["path"] = str(path or "").strip() or None
+        current["root"] = str(root_name or "").strip() or None
+        current["reason"] = str(reason or "").strip() or "yjs_projection_payload_guarded"
+        current["payload_bytes"] = max(0, int(payload_bytes or 0))
+        current["projected_bytes"] = max(0, int(projected_bytes or 0))
+        current["degraded_bytes"] = max(0, int(degraded_bytes or 0))
+        current["max_payload_bytes"] = max_payload_bytes
+        current["max_items"] = max_items
+        current["max_list_items"] = int(collection_metrics.get("max_list_items") or 0)
+        current["max_list_path"] = str(collection_metrics.get("max_list_path") or "").strip() or None
+        current["list_item_total"] = int(collection_metrics.get("list_item_total") or 0)
+        current["mapping_key_total"] = int(collection_metrics.get("mapping_key_total") or 0)
+        current["route"] = dict(route or {})
+        current["last_at"] = time.time()
+        current["guarded_total"] = int(current.get("guarded_total") or 0) + 1
+        _YJS_PROJECTION_GUARD_STATS[key] = current
+
+
+def yjs_projection_guard_snapshot(
+    *,
+    webspace_id: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    token_ws = str(webspace_id or "").strip()
+    token_owner = str(owner or "").strip()
+    max_items = max(1, min(int(limit or 20), 100))
+    with _YJS_PROJECTION_GUARD_LOCK:
+        rows = [dict(item) for item in _YJS_PROJECTION_GUARD_STATS.values()]
+    if token_ws:
+        rows = [row for row in rows if str(row.get("webspace_id") or "") == token_ws]
+    if token_owner:
+        rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
+    rows.sort(key=lambda row: float(row.get("last_at") or 0.0), reverse=True)
+    return {
+        "schema": "adaos.yjs_projection_guard.v1",
+        "enabled": bool(_YJS_PROJECTION_GUARD_ENABLED),
+        "total": len(rows),
+        "items": rows[:max_items],
+    }
 
 
 def _yjs_primary_doc_policy_state(*, webspace_id: str, owner: str, root_name: str) -> dict[str, Any]:
@@ -253,6 +391,77 @@ def _compact_projection_payload(value: Any) -> Any:
     return _clone_json_like(value)
 
 
+def _projection_budget(rule: Any) -> dict[str, Any]:
+    budget = getattr(rule, "budget", None)
+    return dict(budget) if isinstance(budget, dict) else {}
+
+
+def _projection_route(rule: Any) -> dict[str, Any]:
+    route = getattr(rule, "route", None)
+    return dict(route) if isinstance(route, dict) else {}
+
+
+def _guarded_projection_payload(
+    value: Any,
+    *,
+    scope: str,
+    slot: str,
+    path: str,
+    owner: str,
+    budget: Mapping[str, Any],
+    route: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any] | None]:
+    if not _YJS_PROJECTION_GUARD_ENABLED:
+        return value, None
+    payload_bytes = _json_payload_bytes(value)
+    max_payload_bytes = _positive_int(budget.get("max_payload_bytes")) or int(_YJS_PROJECTION_DEFAULT_MAX_PAYLOAD_BYTES)
+    max_items = _positive_int(budget.get("max_items")) or int(_YJS_PROJECTION_DEFAULT_MAX_ITEMS)
+    collection_metrics = _projection_collection_metrics(value)
+    reason = ""
+    if max_payload_bytes and payload_bytes > max_payload_bytes:
+        reason = "yjs_projection_payload_budget_exceeded"
+    if max_items and int(collection_metrics.get("max_list_items") or 0) > max_items:
+        reason = reason or "yjs_projection_item_budget_exceeded"
+    if not reason:
+        return value, None
+
+    preserved: dict[str, Any] = {}
+    if isinstance(value, dict):
+        for key in ("summary", "count", "total_bytes", "capabilities", "runtime", "updated_at", "ok"):
+            item = value.get(key)
+            if item is not None and _json_payload_bytes(item) <= 16 * 1024:
+                preserved[key] = item
+    guard = {
+        "schema": "adaos.yjs_projection_guard.v1",
+        "state": "degraded",
+        "reason": reason,
+        "owner": owner,
+        "scope": scope,
+        "slot": slot,
+        "path": path,
+        "payload_bytes": payload_bytes,
+        "max_payload_bytes": max_payload_bytes,
+        "max_items": max_items,
+        "max_list_items": int(collection_metrics.get("max_list_items") or 0),
+        "max_list_path": collection_metrics.get("max_list_path"),
+        "list_item_total": int(collection_metrics.get("list_item_total") or 0),
+        "route": dict(route or {}),
+    }
+    degraded = {
+        "ok": False,
+        "state": "degraded",
+        "error": reason,
+        "guard": guard,
+        "preserved": preserved,
+    }
+    guard["degraded_bytes"] = _json_payload_bytes(degraded)
+    return degraded, {
+        **guard,
+        "projected_bytes": payload_bytes,
+        "collection_metrics": dict(collection_metrics),
+    }
+
+
 def _projection_policy_metadata(
     *,
     scope: str,
@@ -397,13 +606,15 @@ class ProjectionService:
         user_id: Optional[str] = None,
         webspace_id: Optional[str] = None,
     ) -> None:
-        targets = self.registry.resolve(scope, slot)
+        resolve_rule = getattr(self.registry, "resolve_rule", None)
+        rule = resolve_rule(scope, slot) if callable(resolve_rule) else None
+        targets = list(getattr(rule, "targets", []) or []) if rule is not None else self.registry.resolve(scope, slot)
         if not targets:
             _log.debug("no projections configured for scope=%s slot=%s", scope, slot)
             return
         for t in targets:
             if t.backend == "yjs":
-                await self._apply_yjs(t, value, scope=scope, slot=slot, user_id=user_id, webspace_id=webspace_id)
+                await self._apply_yjs(t, value, scope=scope, slot=slot, user_id=user_id, webspace_id=webspace_id, rule=rule)
             elif t.backend == "kv":
                 self._apply_kv(scope, slot, value, user_id=user_id)
             else:
@@ -419,6 +630,7 @@ class ProjectionService:
         slot: str,
         user_id: Optional[str],
         webspace_id: Optional[str],
+        rule: Any = None,
     ) -> None:
         # For projections we trust the calling context (events_ws, ctx.* helpers)
         # to pass the actual webspace id used by the Y websocket room. Fall back
@@ -459,6 +671,49 @@ class ProjectionService:
         if not await _govern_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner):
             return
         projected_value = _compact_projection_payload(value)
+        budget = _projection_budget(rule)
+        route = _projection_route(rule)
+        projected_value, guard = _guarded_projection_payload(
+            projected_value,
+            scope=scope,
+            slot=slot,
+            path=path,
+            owner=owner,
+            budget=budget,
+            route=route,
+        )
+        if guard is not None:
+            degraded_bytes = int(guard.get("degraded_bytes") or _json_payload_bytes(projected_value))
+            _record_yjs_projection_guard_event(
+                webspace_id=ws_id,
+                owner=owner,
+                scope=scope,
+                slot=slot,
+                path=path,
+                root_name=root_name,
+                reason=str(guard.get("reason") or "yjs_projection_payload_guarded"),
+                payload_bytes=int(guard.get("payload_bytes") or 0),
+                projected_bytes=int(guard.get("projected_bytes") or 0),
+                degraded_bytes=degraded_bytes,
+                max_payload_bytes=_positive_int(guard.get("max_payload_bytes")),
+                max_items=_positive_int(guard.get("max_items")),
+                collection_metrics=guard.get("collection_metrics") if isinstance(guard.get("collection_metrics"), dict) else {},
+                route=route,
+            )
+            policy.setdefault("projection_guard", {key: value for key, value in guard.items() if key != "collection_metrics"})
+            policy.setdefault("reason", str(guard.get("reason") or "yjs_projection_payload_guarded"))
+            _log.warning(
+                "YJS projection payload guarded webspace=%s owner=%s slot=%s path=%s bytes=%s max_bytes=%s max_list_items=%s max_items=%s reason=%s",
+                ws_id,
+                owner,
+                slot,
+                path,
+                int(guard.get("payload_bytes") or 0),
+                guard.get("max_payload_bytes") or "-",
+                guard.get("max_list_items") or 0,
+                guard.get("max_items") or "-",
+                guard.get("reason") or "yjs_projection_payload_guarded",
+            )
 
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)
@@ -521,4 +776,4 @@ class ProjectionService:
             _log.debug("kv projection ignored for scope=%s slot=%s (no handler)", scope, slot)
 
 
-__all__ = ["ProjectionService", "primary_doc_governance_snapshot"]
+__all__ = ["ProjectionService", "primary_doc_governance_snapshot", "yjs_projection_guard_snapshot"]

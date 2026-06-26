@@ -135,7 +135,12 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if not isinstance(entries, list) or not entries:
             return
         try:
-            get_ctx().projections.load_entries(entries)
+            projections = get_ctx().projections
+            load_manifest = getattr(projections, "load_manifest", None)
+            if callable(load_manifest):
+                load_manifest(payload)
+            else:
+                projections.load_entries(entries)
             _LOG.info("loaded skill data_projections path=%s entries=%d", manifest_path, len(entries))
         except Exception:
             _LOG.debug("failed to load skill data_projections path=%s", manifest_path, exc_info=True)

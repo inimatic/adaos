@@ -1,8 +1,8 @@
 # \src\adaos\services\scenario\projection_registry.py
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional
 from adaos.services.scenarios.loader import read_manifest
 
 
@@ -32,6 +32,9 @@ class ProjectionRule:
     scope: str
     slot: str
     targets: List[ProjectionTarget]
+    route: dict[str, Any] = field(default_factory=dict)
+    budget: dict[str, Any] = field(default_factory=dict)
+    guard_visibility: Any = None
 
 
 class ProjectionRegistry:
@@ -50,7 +53,37 @@ class ProjectionRegistry:
         self._active_scenario_id: Optional[str] = None
         self._active_space: str = "workspace"
 
-    def load_entries(self, entries: list[dict]) -> int:
+    @staticmethod
+    def _route_index(manifest: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        payload = manifest if isinstance(manifest, dict) else {}
+        routes = payload.get("data_routes") if isinstance(payload.get("data_routes"), list) else []
+        result: dict[str, dict[str, Any]] = {}
+        for item in routes:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("route") or "").strip().lower() != "yjs":
+                continue
+            slot = str(item.get("projection_slot") or "").strip()
+            if not slot:
+                continue
+            result.setdefault(slot, dict(item))
+        return result
+
+    @staticmethod
+    def _rule_metadata(item: dict[str, Any], route_index: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any], Any]:
+        slot = str(item.get("slot") or "").strip()
+        route = dict(route_index.get(slot) or {})
+        raw_budget = route.get("budget") if isinstance(route.get("budget"), dict) else item.get("budget")
+        budget = dict(raw_budget) if isinstance(raw_budget, dict) else {}
+        guard_visibility = route.get("guard_visibility") if route else item.get("guard_visibility")
+        return route, budget, guard_visibility
+
+    def load_manifest(self, manifest: dict[str, Any]) -> int:
+        payload = manifest if isinstance(manifest, dict) else {}
+        entries = payload.get("data_projections") or []
+        return self.load_entries(entries, route_index=self._route_index(payload))
+
+    def load_entries(self, entries: list[dict], *, route_index: dict[str, dict[str, Any]] | None = None) -> int:
         """
         Load projection rules from a generic ``data_projections``-like list.
 
@@ -61,6 +94,7 @@ class ProjectionRegistry:
         raw = entries or []
         if not isinstance(raw, list):
             return 0
+        route_lookup = route_index if isinstance(route_index, dict) else {}
 
         loaded = 0
         for item in raw:
@@ -94,7 +128,15 @@ class ProjectionRegistry:
                 )
             key = (scope, slot)
             if targets:
-                self._rules[key] = ProjectionRule(scope=scope, slot=slot, targets=targets)
+                route, budget, guard_visibility = self._rule_metadata(item, route_lookup)
+                self._rules[key] = ProjectionRule(
+                    scope=scope,
+                    slot=slot,
+                    targets=targets,
+                    route=route,
+                    budget=budget,
+                    guard_visibility=guard_visibility,
+                )
                 loaded += 1
         return loaded
 
@@ -104,6 +146,7 @@ class ProjectionRegistry:
         *,
         scenario_id: Optional[str] = None,
         space: str = "workspace",
+        route_index: dict[str, dict[str, Any]] | None = None,
     ) -> int:
         """
         Replace the active scenario override layer.
@@ -120,6 +163,7 @@ class ProjectionRegistry:
         raw = entries or []
         if not isinstance(raw, list):
             return 0
+        manifest_route_lookup = route_index if isinstance(route_index, dict) else {}
 
         loaded = 0
         for item in raw:
@@ -154,7 +198,15 @@ class ProjectionRegistry:
 
             key = (scope, slot)
             if targets:
-                self._scenario_rules[key] = ProjectionRule(scope=scope, slot=slot, targets=targets)
+                route, budget, guard_visibility = self._rule_metadata(item, manifest_route_lookup)
+                self._scenario_rules[key] = ProjectionRule(
+                    scope=scope,
+                    slot=slot,
+                    targets=targets,
+                    route=route,
+                    budget=budget,
+                    guard_visibility=guard_visibility,
+                )
                 loaded += 1
         return loaded
 
@@ -174,7 +226,16 @@ class ProjectionRegistry:
         """
         manifest = read_manifest(scenario_id, space=space)
         entries = manifest.get("data_projections") or []
-        return self.replace_scenario_entries(entries, scenario_id=scenario_id, space=space)
+        return self.replace_scenario_entries(
+            entries,
+            scenario_id=scenario_id,
+            space=space,
+            route_index=self._route_index(manifest),
+        )
+
+    def resolve_rule(self, scope: str, slot: str) -> ProjectionRule | None:
+        key = (str(scope).strip(), str(slot).strip())
+        return self._scenario_rules.get(key) or self._rules.get(key)
 
     def resolve(self, scope: str, slot: str) -> List[ProjectionTarget]:
         """
@@ -183,8 +244,7 @@ class ProjectionRegistry:
         If no rule is present, returns an empty list; callers should treat
         this as "no projections configured".
         """
-        key = (str(scope).strip(), str(slot).strip())
-        rule = self._scenario_rules.get(key) or self._rules.get(key)
+        rule = self.resolve_rule(scope, slot)
         return list(rule.targets) if rule else []
 
     def active_scenario_id(self) -> Optional[str]:

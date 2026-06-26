@@ -74,3 +74,35 @@ def test_projection_registry_clears_stale_scenario_overrides(monkeypatch) -> Non
     assert registry.active_scenario_id() == "without_override"
     assert registry.active_space() == "dev"
     assert restored[0].path == "data/infrastate/base"
+
+
+def test_projection_registry_loads_yjs_route_budget_from_manifest() -> None:
+    registry = ProjectionRegistry()
+
+    loaded = registry.load_manifest(
+        {
+            "data_routes": [
+                {
+                    "surface": "widget:media",
+                    "route": "yjs",
+                    "projection_slot": "mediaserver.library",
+                    "budget": {"max_payload_bytes": 8192, "max_items": 25},
+                    "guard_visibility": {"degraded_state": "media library summary degraded"},
+                }
+            ],
+            "data_projections": [
+                {
+                    "scope": "subnet",
+                    "slot": "mediaserver.library",
+                    "targets": [{"backend": "yjs", "path": "data/media/library"}],
+                }
+            ],
+        }
+    )
+
+    rule = registry.resolve_rule("subnet", "mediaserver.library")
+    assert loaded == 1
+    assert rule is not None
+    assert rule.budget == {"max_payload_bytes": 8192, "max_items": 25}
+    assert rule.route["surface"] == "widget:media"
+    assert rule.guard_visibility == {"degraded_state": "media library summary degraded"}
