@@ -1937,16 +1937,23 @@ def _compact_public_runtime_self_heal(value: dict[str, Any] | None) -> dict[str,
     state = value if isinstance(value, dict) else {}
     decision = state.get("last_decision") if isinstance(state.get("last_decision"), dict) else {}
     last_evidence = state.get("last_evidence") if isinstance(state.get("last_evidence"), dict) else {}
+    has_decision = any(
+        decision.get(key) not in (None, "", {})
+        for key in ("recorded_at", "reason", "message", "runtime_port", "runtime_url", "timeout_sec")
+    )
+    has_last_evidence = any(
+        last_evidence.get(key) not in (None, "", {})
+        for key in ("captured_at", "reason", "stage", "pid", "runtime_instance_id", "evidence_path", "evidence_error")
+    )
     pre_restart_evidence = (
         decision.get("pre_restart_evidence")
         if isinstance(decision.get("pre_restart_evidence"), dict)
         else last_evidence
     )
-    evidence = _compact_runtime_stop_evidence(pre_restart_evidence)
-    return {
-        "unhealthy_since": state.get("unhealthy_since"),
-        "unhealthy_kind": str(state.get("unhealthy_kind") or "").strip() or None,
-        "last_decision": {
+    evidence = _compact_runtime_stop_evidence(pre_restart_evidence) if has_decision or has_last_evidence else {}
+    public_decision = {}
+    if has_decision:
+        public_decision = {
             "recorded_at": decision.get("recorded_at"),
             "reason": str(decision.get("reason") or "").strip() or None,
             "message": str(decision.get("message") or "").strip() or None,
@@ -1956,7 +1963,11 @@ def _compact_public_runtime_self_heal(value: dict[str, Any] | None) -> dict[str,
             "runtime_api_ready": decision.get("runtime_api_ready"),
             "timeout_sec": decision.get("timeout_sec"),
             "pre_restart_evidence": evidence,
-        },
+        }
+    return {
+        "unhealthy_since": state.get("unhealthy_since"),
+        "unhealthy_kind": str(state.get("unhealthy_kind") or "").strip() or None,
+        "last_decision": public_decision,
         "last_evidence": evidence,
     }
 

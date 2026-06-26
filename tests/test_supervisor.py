@@ -5104,6 +5104,8 @@ def test_public_update_status_payload_prefers_runtime_root_promotion_flag() -> N
     )
 
     assert payload["runtime"]["root_promotion_required"] is False
+    assert payload["runtime"]["runtime_self_heal"]["last_decision"] == {}
+    assert payload["runtime"]["runtime_self_heal"]["last_evidence"] == {}
 
 
 def test_public_update_status_endpoint_is_unauthenticated(monkeypatch) -> None:
