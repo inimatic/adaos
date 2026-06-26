@@ -181,6 +181,51 @@ def test_sdk_device_access_assign_endpoint_records_owner(monkeypatch) -> None:
     assert result["endpoint_assignment"]["owner"] == {"node_id": "hub-1", "skill_id": "slideshow_skill"}
 
 
+def test_sdk_device_access_send_endpoint_command_wraps_endpoint_envelope(monkeypatch) -> None:
+    from adaos.sdk import redevice as sdk_redevice
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    sent: dict[str, object] = {}
+
+    class FakeBridge:
+        def __init__(self, timeout=0):
+            self.timeout = timeout
+
+        def send_command(self, code, payload):
+            sent["code"] = code
+            sent["payload"] = payload
+            return {"ok": True, "state": "queued"}
+
+    monkeypatch.setattr(sdk_redevice, "ReDeviceBridge", FakeBridge)
+    monkeypatch.setattr(
+        sdk_device_access,
+        "_resolve_redevice_endpoint",
+        lambda device_ref=None, code=None: (
+            {
+                "endpoint_id": "endpoint-1",
+                "code": "ABCD1234",
+                "endpoint_policy": {"trust_level": "limited"},
+            },
+            "ABCD1234",
+        ),
+    )
+
+    result = sdk_device_access.send_endpoint_command(
+        "redevice:endpoint-1",
+        {"type": "display.show_text", "text": "hello"},
+        requested_by={"node_id": "hub-1", "skill_id": "test_skill"},
+        constraints={"timeout_ms": 5000},
+    )
+
+    assert result["ok"] is True
+    assert result["endpoint_command"]["schema_version"] == "endpoint-command.v1"
+    assert result["endpoint_command"]["target"]["service"] == "display_endpoint"
+    assert result["endpoint_command"]["requested_by"] == {"node_id": "hub-1", "skill_id": "test_skill"}
+    assert sent["code"] == "ABCD1234"
+    assert sent["payload"]["endpoint_command"]["command_id"] == result["endpoint_command"]["command_id"]
+    assert sent["payload"]["command_id"] == result["endpoint_command"]["command_id"]
+
+
 def test_command_profile_for_observed_only_member_allows_detach_and_deny(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",

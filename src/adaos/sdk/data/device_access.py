@@ -349,6 +349,8 @@ def send_endpoint_command(
     command: Mapping[str, Any] | None = None,
     *,
     code: str | None = None,
+    requested_by: Mapping[str, Any] | None = None,
+    constraints: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
@@ -357,16 +359,29 @@ def send_endpoint_command(
     if not pair_code:
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
+        from adaos.services import endpoint_router
         from adaos.sdk.redevice import ReDeviceBridge, select_transport
 
         payload = dict(command or {})
-        result = ReDeviceBridge(timeout=12).send_command(pair_code, payload)
+        transport = select_transport(endpoint or {}, intent=_text(payload.get("type")) or "endpoint.command")
+        endpoint_command = endpoint_router.build_endpoint_command(
+            payload,
+            endpoint=endpoint or {},
+            device_ref=target or None,
+            code=pair_code,
+            requested_by=requested_by,
+            transport=transport,
+            constraints=constraints,
+        )
+        legacy_payload = endpoint_router.legacy_payload_from_envelope(endpoint_command)
+        result = ReDeviceBridge(timeout=12).send_command(pair_code, legacy_payload)
         return {
             **result,
             "device_ref": target or f"redevice:{_text(_mapping(endpoint).get('endpoint_id')) or pair_code}",
             "code": pair_code,
             "endpoint": endpoint or None,
-            "transport": select_transport(endpoint or {}, intent=_text(payload.get("type")) or "endpoint.command"),
+            "transport": transport,
+            "endpoint_command": endpoint_command,
         }
     except Exception as exc:
         return {"ok": False, "error": "endpoint_command_failed", "detail": str(exc), "device_ref": target, "code": pair_code}
