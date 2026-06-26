@@ -1540,6 +1540,104 @@ def test_process_events_command_preserves_target_node_for_voice_chat(monkeypatch
     gateway_module._COMMAND_TRACE_SEQ = 0
 
 
+def test_process_events_command_publishes_pending_action_directly(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    calls: list[dict[str, object]] = []
+    ctx = SimpleNamespace(name="ctx")
+
+    import adaos.services.pending_actions as pending_actions_module
+
+    async def _publish_pending_action_async(**kwargs):
+        calls.append(dict(kwargs))
+        return {"id": kwargs["action_id"], "status": "pending"}
+
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: ctx)
+    monkeypatch.setattr(pending_actions_module, "publish_pending_action_async", _publish_pending_action_async)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="pending_actions.publish.request",
+            cmd_id="cmd-pending-publish-1",
+            payload={
+                "webspace_id": "desktop",
+                "action_id": "pa.test",
+                "kind": "test.pending",
+                "title": "Pending test",
+                "_meta": {"cmd_id": "ignored"},
+            },
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert calls == [
+        {
+            "ctx": ctx,
+            "webspace_id": "desktop",
+            "action_id": "pa.test",
+            "kind": "test.pending",
+            "title": "Pending test",
+        }
+    ]
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"] == {"action": {"id": "pa.test", "status": "pending"}}
+
+
+def test_process_events_command_responds_pending_action_directly(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    ctx = SimpleNamespace(name="ctx")
+
+    import adaos.services.pending_actions as pending_actions_module
+
+    async def _respond_pending_action_async(action_id, response_action_id, **kwargs):
+        calls.append((action_id, response_action_id, dict(kwargs)))
+        return {"response": {"response_action_id": response_action_id}, "terminal": True}
+
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: ctx)
+    monkeypatch.setattr(pending_actions_module, "respond_pending_action_async", _respond_pending_action_async)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="pending_actions.respond.request",
+            cmd_id="cmd-pending-respond-1",
+            payload={
+                "webspace_id": "desktop",
+                "action_id": "pa.test",
+                "response_action_id": "refuse",
+                "responder": {"type": "browser"},
+                "response_payload": {"source": "pending_actions"},
+                "_meta": {"cmd_id": "ignored"},
+            },
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert calls == [
+        (
+            "pa.test",
+            "refuse",
+            {
+                "ctx": ctx,
+                "webspace_id": "desktop",
+                "responder": {"type": "browser"},
+                "response_payload": {"source": "pending_actions"},
+            },
+        )
+    ]
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"] == {"response": {"response_action_id": "refuse"}, "terminal": True}
+
+
 def test_process_events_command_requires_scenario_id_for_set_home(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []

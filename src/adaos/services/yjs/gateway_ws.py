@@ -6198,6 +6198,60 @@ async def process_events_command(
         await _ack()
         return None
 
+    if kind == "pending_actions.publish.request":
+        event_payload = dict(payload or {})
+        event_payload.pop("_meta", None)
+        try:
+            from adaos.services.pending_actions import publish_pending_action_async
+
+            action = await publish_pending_action_async(ctx=get_agent_ctx(), **event_payload)
+            await _ack(data={"action": action})
+        except Exception as exc:
+            _log.warning("pending action publish command failed", exc_info=True)
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        return None
+
+    if kind == "pending_actions.respond.request":
+        event_payload = dict(payload or {})
+        event_payload.pop("_meta", None)
+        action_id = str(event_payload.pop("action_id", event_payload.pop("pending_action_id", "")) or "").strip()
+        response_action_id = str(event_payload.pop("response_action_id", event_payload.pop("action", "")) or "").strip()
+        try:
+            from adaos.services.pending_actions import respond_pending_action_async
+
+            result = await respond_pending_action_async(
+                action_id,
+                response_action_id,
+                ctx=get_agent_ctx(),
+                **event_payload,
+            )
+            await _ack(data=result)
+        except Exception as exc:
+            _log.warning(
+                "pending action respond command failed action_id=%s response_action_id=%s",
+                action_id or "-",
+                response_action_id or "-",
+                exc_info=True,
+            )
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        return None
+
+    if kind == "pending_actions.expire.request":
+        event_payload = dict(payload or {})
+        event_payload.pop("_meta", None)
+        try:
+            from adaos.services.pending_actions import expire_pending_actions_async
+
+            result = await expire_pending_actions_async(
+                webspace_id=event_payload.get("webspace_id"),
+                ctx=get_agent_ctx(),
+            )
+            await _ack(data=result)
+        except Exception as exc:
+            _log.warning("pending action expire command failed", exc_info=True)
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        return None
+
     if kind == "desktop.webspace.reload":
         payload = dict(payload or {})
         trace = _record_command_trace(
