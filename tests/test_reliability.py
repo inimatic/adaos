@@ -2568,7 +2568,11 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
                     "persisted_up_to_date": False,
                     "compact_total": 3,
                     "backup_total": 4,
+                    "backup_gc_total": 3,
+                    "backup_malloc_trim_total": 2,
                     "auto_backup_total": 4,
+                    "last_backup_gc_collected": 17,
+                    "last_backup_malloc_trimmed": True,
                     "last_auto_backup_reason": "projection_write_amplification",
                     "last_compact_reason": "backup_compaction",
                 }
@@ -2584,6 +2588,10 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
     assert snapshot["recovery"]["ystore"]["runtime_compaction_eligible"] is True
     assert snapshot["recovery"]["ystore"]["replay_window_bytes"] == 57344
     assert snapshot["recovery"]["ystore"]["last_auto_backup_reason"] == "projection_write_amplification"
+    assert snapshot["recovery"]["ystore"]["backup_gc_total"] == 3
+    assert snapshot["recovery"]["ystore"]["backup_malloc_trim_total"] == 2
+    assert snapshot["recovery"]["ystore"]["last_backup_gc_collected"] == 17
+    assert snapshot["recovery"]["ystore"]["last_backup_malloc_trimmed"] is True
     repair = snapshot["builder_repair_packets"][0]
     assert repair["schema"] == "adaos.llm_builder.yjs_projection_repair.v1"
     assert repair["skill"] == "mediaserver"

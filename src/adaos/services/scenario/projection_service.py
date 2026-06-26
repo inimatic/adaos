@@ -431,7 +431,11 @@ def _projection_compaction_runtime_summary(snapshot: Mapping[str, Any]) -> dict[
         "persisted_up_to_date": bool(snapshot.get("persisted_up_to_date")),
         "compact_total": max(0, _int_or_zero(snapshot.get("compact_total"))),
         "backup_total": max(0, _int_or_zero(snapshot.get("backup_total"))),
+        "backup_gc_total": max(0, _int_or_zero(snapshot.get("backup_gc_total"))),
+        "backup_malloc_trim_total": max(0, _int_or_zero(snapshot.get("backup_malloc_trim_total"))),
         "auto_backup_total": max(0, _int_or_zero(snapshot.get("auto_backup_total"))),
+        "last_backup_gc_collected": max(0, _int_or_zero(snapshot.get("last_backup_gc_collected"))),
+        "last_backup_malloc_trimmed": bool(snapshot.get("last_backup_malloc_trimmed")),
     }
 
 
