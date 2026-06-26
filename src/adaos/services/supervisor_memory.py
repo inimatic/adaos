@@ -591,8 +591,11 @@ class MemoryRuntimeState:
     runtime_instance_id: str | None = None
     transition_role: str | None = None
     managed_pid: int | None = None
+    current_sample_state: str = "unknown"
+    current_sample_reason: str | None = None
     current_process_rss_bytes: int | None = None
     current_family_rss_bytes: int | None = None
+    current_process_tree: dict[str, Any] = field(default_factory=dict)
     current_cgroup_memory_current_bytes: int | None = None
     current_cgroup_anon_bytes: int | None = None
     current_cgroup_file_bytes: int | None = None
@@ -607,6 +610,12 @@ class MemoryRuntimeState:
     baseline_family_rss_bytes: int | None = None
     rss_growth_bytes: int | None = None
     rss_growth_bytes_per_min: float | None = None
+    last_telemetry_sampled_at: float | None = None
+    last_telemetry_age_sec: float | None = None
+    last_observed_process_rss_bytes: int | None = None
+    last_observed_family_rss_bytes: int | None = None
+    last_observed_rss_growth_bytes: int | None = None
+    last_observed_rss_growth_bytes_per_min: float | None = None
     suspicion_family_rss_threshold_bytes: int | None = None
     suspicion_growth_threshold_bytes: int | None = None
     suspicion_slope_threshold_bytes_per_min: float | None = None
@@ -664,8 +673,11 @@ class MemoryRuntimeState:
             runtime_instance_id=_optional_string(source.get("runtime_instance_id")),
             transition_role=_optional_string(source.get("transition_role")),
             managed_pid=_int(source.get("managed_pid")),
+            current_sample_state=_string(source.get("current_sample_state"), default="unknown"),
+            current_sample_reason=_optional_string(source.get("current_sample_reason")),
             current_process_rss_bytes=_int(source.get("current_process_rss_bytes")),
             current_family_rss_bytes=_int(source.get("current_family_rss_bytes")),
+            current_process_tree=_mapping(source.get("current_process_tree")),
             current_cgroup_memory_current_bytes=_int(source.get("current_cgroup_memory_current_bytes")),
             current_cgroup_anon_bytes=_int(source.get("current_cgroup_anon_bytes")),
             current_cgroup_file_bytes=_int(source.get("current_cgroup_file_bytes")),
@@ -684,6 +696,12 @@ class MemoryRuntimeState:
             baseline_family_rss_bytes=_positive_int(source.get("baseline_family_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
+            last_telemetry_sampled_at=_float(source.get("last_telemetry_sampled_at")),
+            last_telemetry_age_sec=_float(source.get("last_telemetry_age_sec")),
+            last_observed_process_rss_bytes=_int(source.get("last_observed_process_rss_bytes")),
+            last_observed_family_rss_bytes=_int(source.get("last_observed_family_rss_bytes")),
+            last_observed_rss_growth_bytes=_int(source.get("last_observed_rss_growth_bytes")),
+            last_observed_rss_growth_bytes_per_min=_float(source.get("last_observed_rss_growth_bytes_per_min")),
             suspicion_family_rss_threshold_bytes=_int(source.get("suspicion_family_rss_threshold_bytes")),
             suspicion_growth_threshold_bytes=_int(source.get("suspicion_growth_threshold_bytes")),
             suspicion_slope_threshold_bytes_per_min=_float(source.get("suspicion_slope_threshold_bytes_per_min")),
@@ -726,8 +744,11 @@ class MemoryRuntimeState:
             "runtime_instance_id": self.runtime_instance_id,
             "transition_role": self.transition_role,
             "managed_pid": self.managed_pid,
+            "current_sample_state": self.current_sample_state,
+            "current_sample_reason": self.current_sample_reason,
             "current_process_rss_bytes": self.current_process_rss_bytes,
             "current_family_rss_bytes": self.current_family_rss_bytes,
+            "current_process_tree": dict(self.current_process_tree),
             "current_cgroup_memory_current_bytes": self.current_cgroup_memory_current_bytes,
             "current_cgroup_anon_bytes": self.current_cgroup_anon_bytes,
             "current_cgroup_file_bytes": self.current_cgroup_file_bytes,
@@ -742,6 +763,12 @@ class MemoryRuntimeState:
             "baseline_family_rss_bytes": self.baseline_family_rss_bytes,
             "rss_growth_bytes": self.rss_growth_bytes,
             "rss_growth_bytes_per_min": self.rss_growth_bytes_per_min,
+            "last_telemetry_sampled_at": self.last_telemetry_sampled_at,
+            "last_telemetry_age_sec": self.last_telemetry_age_sec,
+            "last_observed_process_rss_bytes": self.last_observed_process_rss_bytes,
+            "last_observed_family_rss_bytes": self.last_observed_family_rss_bytes,
+            "last_observed_rss_growth_bytes": self.last_observed_rss_growth_bytes,
+            "last_observed_rss_growth_bytes_per_min": self.last_observed_rss_growth_bytes_per_min,
             "suspicion_family_rss_threshold_bytes": self.suspicion_family_rss_threshold_bytes,
             "suspicion_growth_threshold_bytes": self.suspicion_growth_threshold_bytes,
             "suspicion_slope_threshold_bytes_per_min": self.suspicion_slope_threshold_bytes_per_min,

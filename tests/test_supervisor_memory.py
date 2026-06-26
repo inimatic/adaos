@@ -170,6 +170,21 @@ def test_supervisor_manager_memory_status_reports_live_rss(monkeypatch, tmp_path
     monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
     monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
     monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: (111, 222))
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_memory_snapshot",
+        lambda pid: {
+            "available": True,
+            "pid": pid,
+            "root": {"pid": pid, "rss_bytes": 111},
+            "children": [],
+            "children_total": 0,
+            "children_returned": 0,
+            "children_omitted": 0,
+            "children_rss_bytes": 0,
+            "family_rss_bytes": 111,
+        },
+    )
     write_memory_session_index(
         {
             "contract_version": "1",
@@ -183,12 +198,118 @@ def test_supervisor_manager_memory_status_reports_live_rss(monkeypatch, tmp_path
     assert payload["selected_profiler_adapter"] == "tracemalloc"
     assert payload["active_slot"] == "A"
     assert payload["managed_pid"] == 4321
+    assert payload["current_sample_state"] == "fresh"
+    assert payload["current_sample_reason"] is None
     assert payload["current_process_rss_bytes"] == 111
     assert payload["current_family_rss_bytes"] == 222
+    assert payload["current_process_tree"]["children_total"] == 0
     assert payload["sessions_total"] == 1
     assert payload["last_session_id"] == "mem-001"
     assert payload["profile_control_mode"] == "phase2_supervisor_restart"
     assert payload["operation_log_contract_version"] == "1"
+
+
+def test_public_memory_status_exposes_current_rss_and_top_children(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
+    monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: (100, 350))
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_memory_snapshot",
+        lambda pid: {
+            "available": True,
+            "pid": pid,
+            "root": {"pid": pid, "rss_bytes": 100},
+            "children": [
+                {
+                    "pid": 4322,
+                    "ppid": pid,
+                    "name": "python",
+                    "rss_bytes": 250,
+                    "skill_runtime": "neural_nlu_service_skill",
+                    "cmdline_label": "python -m handlers.main",
+                }
+            ],
+            "children_total": 1,
+            "children_returned": 1,
+            "children_omitted": 0,
+            "children_rss_bytes": 250,
+            "family_rss_bytes": 350,
+        },
+    )
+
+    payload = manager.public_memory_status()["memory"]
+
+    assert payload["managed_pid"] == 4321
+    assert payload["current_sample_state"] == "fresh"
+    assert payload["current_process_rss_bytes"] == 100
+    assert payload["current_family_rss_bytes"] == 350
+    assert payload["current_children_rss_bytes"] == 250
+    assert payload["current_top_child_processes"] == [
+        {
+            "pid": 4322,
+            "ppid": 4321,
+            "name": "python",
+            "rss_bytes": 250,
+            "skill_runtime": "neural_nlu_service_skill",
+            "cmdline_label": "python -m handlers.main",
+        }
+    ]
+
+
+def test_public_memory_status_separates_unavailable_current_sample_from_last_telemetry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._memory_baseline_scope_key = "runtime:rt-a"
+    manager._memory_baseline_pid = 4321
+    manager._memory_baseline_family_rss_bytes = 100
+    manager._memory_last_growth_bytes = 900
+    manager._memory_last_growth_bytes_per_min = 12.0
+    manager._managed_runtime_instance_id = "rt-a"
+
+    append_memory_telemetry_sample(
+        MemoryTelemetrySample(
+            sampled_at=10.0,
+            runtime_instance_id="rt-a",
+            managed_pid=4321,
+            process_rss_bytes=400,
+            family_rss_bytes=1000,
+            baseline_scope_key="runtime:rt-a",
+            baseline_pid=4321,
+            baseline_rss_bytes=100,
+            rss_growth_bytes=900,
+            rss_growth_bytes_per_min=12.0,
+        )
+    )
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
+    monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: (None, None))
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_memory_snapshot",
+        lambda pid: {"available": False, "reason": "process_unavailable", "pid": pid},
+    )
+    monkeypatch.setattr(supervisor.time, "time", lambda: 25.0)
+
+    payload = manager.public_memory_status()["memory"]
+
+    assert payload["current_sample_state"] == "unavailable"
+    assert payload["current_sample_reason"] == "process_family_rss_unavailable"
+    assert payload["current_process_rss_bytes"] is None
+    assert payload["current_family_rss_bytes"] is None
+    assert payload["rss_growth_bytes"] is None
+    assert payload["rss_growth_bytes_per_min"] is None
+    assert payload["last_telemetry_sampled_at"] == 10.0
+    assert payload["last_telemetry_age_sec"] == 15.0
+    assert payload["last_observed_family_rss_bytes"] == 1000
+    assert payload["last_observed_rss_growth_bytes"] == 900
 
 
 def test_memory_status_uses_compact_session_index(monkeypatch, tmp_path) -> None:

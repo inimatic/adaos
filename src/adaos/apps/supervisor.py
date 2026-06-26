@@ -2269,6 +2269,88 @@ def _process_family_rss_bytes(pid: int | None) -> tuple[int | None, int | None]:
     return root_rss, family_rss if family_rss > 0 else root_rss
 
 
+def _process_cmdline_label(cmdline: list[str]) -> str | None:
+    parts = [Path(str(item)).name if index == 0 else str(item) for index, item in enumerate(cmdline[:4])]
+    text = " ".join(part for part in parts if part.strip()).strip()
+    return text[:240] or None
+
+
+def _process_skill_runtime_name(cmdline: list[str]) -> str | None:
+    marker = "/skills/.runtime/"
+    for item in cmdline:
+        normalized = str(item or "").replace("\\", "/")
+        if marker not in normalized:
+            continue
+        tail = normalized.split(marker, 1)[1]
+        name = tail.split("/", 1)[0].strip()
+        if name:
+            return name[:120]
+    return None
+
+
+def _process_memory_item(proc: Any) -> dict[str, Any] | None:
+    try:
+        pid = int(proc.pid)
+    except Exception:
+        return None
+    try:
+        ppid = int(proc.ppid())
+    except Exception:
+        ppid = None
+    try:
+        rss_bytes = int(proc.memory_info().rss)
+    except Exception:
+        rss_bytes = None
+    try:
+        name = str(proc.name() or "").strip() or None
+    except Exception:
+        name = None
+    try:
+        cmdline = [str(item) for item in proc.cmdline() if str(item or "").strip()]
+    except Exception:
+        cmdline = []
+    return {
+        "pid": pid,
+        "ppid": ppid,
+        "name": name,
+        "rss_bytes": rss_bytes,
+        "cmdline_label": _process_cmdline_label(cmdline),
+        "skill_runtime": _process_skill_runtime_name(cmdline),
+    }
+
+
+def _process_family_memory_snapshot(pid: int | None, *, max_children: int = 12) -> dict[str, Any]:
+    if not pid:
+        return {"available": False, "reason": "pid_unavailable"}
+    if psutil is None:
+        return {"available": False, "reason": "psutil_unavailable", "pid": int(pid)}
+    try:
+        root = psutil.Process(int(pid))
+    except Exception as exc:
+        return {"available": False, "reason": f"process_unavailable:{type(exc).__name__}", "pid": int(pid)}
+    root_item = _process_memory_item(root) or {"pid": int(pid), "rss_bytes": None}
+    try:
+        raw_children = list(root.children(recursive=True))
+    except Exception:
+        raw_children = []
+    child_items = [item for child in raw_children if (item := _process_memory_item(child)) is not None]
+    child_items.sort(key=lambda item: int(item.get("rss_bytes") or 0), reverse=True)
+    child_total = sum(int(item.get("rss_bytes") or 0) for item in child_items)
+    root_rss = int(root_item.get("rss_bytes") or 0)
+    limit = max(0, min(int(max_children or 0), 64))
+    return {
+        "available": True,
+        "pid": int(pid),
+        "root": root_item,
+        "children": child_items[:limit],
+        "children_total": len(child_items),
+        "children_returned": min(len(child_items), limit),
+        "children_omitted": max(0, len(child_items) - limit),
+        "children_rss_bytes": child_total,
+        "family_rss_bytes": root_rss + child_total if root_rss or child_total else None,
+    }
+
+
 def _parse_linux_memory_stat(text: str) -> dict[str, int]:
     result: dict[str, int] = {}
     for line in str(text or "").splitlines():
@@ -2451,9 +2533,11 @@ def _runtime_memory_attribution_snapshot(
     family_rss_bytes: int | None = None,
 ) -> dict[str, Any]:
     cgroup = _linux_cgroup_memory_snapshot(pid)
+    process_tree = _process_family_memory_snapshot(pid)
     return {
         "process_rss_bytes": process_rss_bytes,
         "family_rss_bytes": family_rss_bytes,
+        "process_tree": process_tree,
         "cgroup_memory_current_bytes": cgroup.get("current_bytes"),
         "cgroup_anon_bytes": cgroup.get("anon_bytes"),
         "cgroup_file_bytes": cgroup.get("file_bytes"),
@@ -6154,6 +6238,7 @@ class SupervisorManager:
         ensure_memory_store()
         self._memory_baseline_family_rss_bytes = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
         current_slot = str(active_slot() or "").strip().upper() or None
+        now = time.time()
         managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
         managed_pid = managed.get("managed_pid")
         self._ensure_memory_baseline_scope(managed_pid=managed_pid)
@@ -6170,6 +6255,48 @@ class SupervisorManager:
         if not last_session_id and session_items:
             last_item = session_items[-1] if isinstance(session_items[-1], dict) else {}
             last_session_id = str(last_item.get("session_id") or "").strip() or None
+        baseline_family_rss = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
+        current_sample_state = "fresh" if family_rss_bytes is not None else "unavailable"
+        if current_sample_state == "fresh":
+            current_sample_reason = None
+        elif managed_pid:
+            current_sample_reason = "process_family_rss_unavailable"
+        else:
+            current_sample_reason = "managed_pid_unavailable"
+        current_growth_bytes = (
+            max(0, int(family_rss_bytes) - int(baseline_family_rss))
+            if family_rss_bytes is not None and baseline_family_rss is not None
+            else None
+        )
+        current_growth_bytes_per_min = self._memory_last_growth_bytes_per_min if current_sample_state == "fresh" else None
+        last_telemetry_sample = None
+        baseline_scope_key = str(self._memory_baseline_scope_key or "").strip() or None
+        runtime_instance_id = str(self._managed_runtime_instance_id or "").strip() or None
+        for item in reversed(telemetry_tail):
+            if not isinstance(item, dict):
+                continue
+            item_scope_key = str(item.get("baseline_scope_key") or "").strip() or None
+            item_runtime_instance_id = str(item.get("runtime_instance_id") or "").strip() or None
+            item_pid = _positive_int_or_none(item.get("managed_pid"))
+            if baseline_scope_key and item_scope_key == baseline_scope_key:
+                last_telemetry_sample = item
+                break
+            if runtime_instance_id and item_runtime_instance_id == runtime_instance_id:
+                last_telemetry_sample = item
+                break
+            if managed_pid and item_pid == managed_pid:
+                last_telemetry_sample = item
+                break
+        last_telemetry_sampled_at = (
+            float(last_telemetry_sample.get("sampled_at"))
+            if isinstance(last_telemetry_sample, dict) and last_telemetry_sample.get("sampled_at") is not None
+            else None
+        )
+        last_telemetry_age_sec = (
+            max(0.0, now - last_telemetry_sampled_at)
+            if last_telemetry_sampled_at is not None
+            else None
+        )
         return {
             "contract_version": "1",
             "authority": "supervisor",
@@ -6195,8 +6322,11 @@ class SupervisorManager:
             "runtime_instance_id": self._managed_runtime_instance_id,
             "transition_role": self._managed_transition_role,
             "managed_pid": managed_pid,
+            "current_sample_state": current_sample_state,
+            "current_sample_reason": current_sample_reason,
             "current_process_rss_bytes": process_rss_bytes,
             "current_family_rss_bytes": family_rss_bytes,
+            "current_process_tree": attribution.get("process_tree") if isinstance(attribution.get("process_tree"), dict) else {},
             "current_cgroup_memory_current_bytes": attribution.get("cgroup_memory_current_bytes"),
             "current_cgroup_anon_bytes": attribution.get("cgroup_anon_bytes"),
             "current_cgroup_file_bytes": attribution.get("cgroup_file_bytes"),
@@ -6211,9 +6341,25 @@ class SupervisorManager:
             "telemetry_samples_total": len(telemetry_tail),
             "baseline_scope_key": self._memory_baseline_scope_key,
             "baseline_pid": self._memory_baseline_pid,
-            "baseline_family_rss_bytes": self._memory_baseline_family_rss_bytes,
-            "rss_growth_bytes": self._memory_last_growth_bytes,
-            "rss_growth_bytes_per_min": self._memory_last_growth_bytes_per_min,
+            "baseline_family_rss_bytes": baseline_family_rss,
+            "rss_growth_bytes": current_growth_bytes,
+            "rss_growth_bytes_per_min": current_growth_bytes_per_min,
+            "last_telemetry_sampled_at": last_telemetry_sampled_at,
+            "last_telemetry_age_sec": last_telemetry_age_sec,
+            "last_observed_process_rss_bytes": (
+                last_telemetry_sample.get("process_rss_bytes") if isinstance(last_telemetry_sample, dict) else None
+            ),
+            "last_observed_family_rss_bytes": (
+                last_telemetry_sample.get("family_rss_bytes") if isinstance(last_telemetry_sample, dict) else None
+            ),
+            "last_observed_rss_growth_bytes": (
+                last_telemetry_sample.get("rss_growth_bytes") if isinstance(last_telemetry_sample, dict) else self._memory_last_growth_bytes
+            ),
+            "last_observed_rss_growth_bytes_per_min": (
+                last_telemetry_sample.get("rss_growth_bytes_per_min")
+                if isinstance(last_telemetry_sample, dict)
+                else self._memory_last_growth_bytes_per_min
+            ),
             "suspicion_family_rss_threshold_bytes": _memory_suspicion_family_rss_threshold_bytes(),
             "suspicion_growth_threshold_bytes": _memory_suspicion_growth_threshold_bytes(),
             "suspicion_slope_threshold_bytes_per_min": _memory_suspicion_slope_threshold_bytes_per_min(),
@@ -6235,7 +6381,7 @@ class SupervisorManager:
             "implemented_operation_events": list(TOP_LEVEL_OPERATION_EVENTS),
             "operation_log_contract_version": MEMORY_OPERATION_CONTRACT_VERSION,
             "sessions_total": len(session_items),
-            "updated_at": time.time(),
+            "updated_at": now,
         }
 
     def _runtime_memory_diagnostics_payload(self) -> dict[str, Any]:
@@ -7912,6 +8058,22 @@ class SupervisorManager:
                 "retry_depth": int(session.get("retry_depth") or 0),
                 "suspected_leak": bool(session.get("suspected_leak")),
             }
+        process_tree = runtime.get("current_process_tree") if isinstance(runtime.get("current_process_tree"), dict) else {}
+        top_children: list[dict[str, Any]] = []
+        if isinstance(process_tree.get("children"), list):
+            for item in process_tree.get("children", [])[:8]:
+                if not isinstance(item, dict):
+                    continue
+                top_children.append(
+                    {
+                        "pid": item.get("pid"),
+                        "ppid": item.get("ppid"),
+                        "name": str(item.get("name") or "").strip() or None,
+                        "rss_bytes": item.get("rss_bytes"),
+                        "skill_runtime": str(item.get("skill_runtime") or "").strip() or None,
+                        "cmdline_label": str(item.get("cmdline_label") or "").strip() or None,
+                    }
+                )
         return {
             "ok": True,
             "memory": {
@@ -7925,11 +8087,26 @@ class SupervisorManager:
                 "publish_request_session_id": str(runtime.get("publish_request_session_id") or "").strip() or None,
                 "suspicion_state": str(runtime.get("suspicion_state") or "idle"),
                 "suspicion_reason": str(runtime.get("suspicion_reason") or "").strip() or None,
+                "managed_pid": runtime.get("managed_pid"),
+                "current_sample_state": str(runtime.get("current_sample_state") or "unknown"),
+                "current_sample_reason": str(runtime.get("current_sample_reason") or "").strip() or None,
+                "current_process_rss_bytes": runtime.get("current_process_rss_bytes"),
+                "current_family_rss_bytes": runtime.get("current_family_rss_bytes"),
+                "current_children_rss_bytes": process_tree.get("children_rss_bytes"),
+                "current_children_total": process_tree.get("children_total"),
+                "current_children_returned": process_tree.get("children_returned"),
+                "current_top_child_processes": top_children,
                 "baseline_scope_key": str(runtime.get("baseline_scope_key") or "").strip() or None,
                 "baseline_pid": runtime.get("baseline_pid"),
                 "baseline_family_rss_bytes": runtime.get("baseline_family_rss_bytes"),
                 "rss_growth_bytes": runtime.get("rss_growth_bytes"),
                 "rss_growth_bytes_per_min": runtime.get("rss_growth_bytes_per_min"),
+                "last_telemetry_sampled_at": runtime.get("last_telemetry_sampled_at"),
+                "last_telemetry_age_sec": runtime.get("last_telemetry_age_sec"),
+                "last_observed_process_rss_bytes": runtime.get("last_observed_process_rss_bytes"),
+                "last_observed_family_rss_bytes": runtime.get("last_observed_family_rss_bytes"),
+                "last_observed_rss_growth_bytes": runtime.get("last_observed_rss_growth_bytes"),
+                "last_observed_rss_growth_bytes_per_min": runtime.get("last_observed_rss_growth_bytes_per_min"),
                 "available_memory_bytes": runtime.get("available_memory_bytes"),
                 "available_memory_percent": runtime.get("available_memory_percent"),
                 "auto_profile_min_uptime_sec": runtime.get("auto_profile_min_uptime_sec"),
