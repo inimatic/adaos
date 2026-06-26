@@ -170,6 +170,16 @@ background work, or heavy resources:
 - Log memory-protection actions as normal operational telemetry: cache eviction,
   stale worker cleanup, rejected oversize payloads, disabled stream sections,
   and skipped refreshes under pressure.
+- Treat runtime memory evidence as parent/child/family attribution, not one
+  process number. When investigating growth, record `managed_pid`,
+  `current_process_rss_bytes`, `current_family_rss_bytes`, child RSS by
+  `skill_runtime`, `baseline_phase`, `baseline_last_adjustment_reason`, and
+  `suspicion_state`. A cold-start baseline in `warming` or
+  `maturity_blocked_slope` is not the same evidence as mature-baseline growth.
+- Separate API starvation from memory growth. Event-loop lag, listener loss,
+  and supervisor self-heal evidence are core signals; do not "fix" a skill for
+  a memory leak until the repair packet says whether the runtime was blocked,
+  growing, or both.
 
 The minimum verification for a memory-sensitive skill is:
 
@@ -181,6 +191,9 @@ The minimum verification for a memory-sensitive skill is:
 - run a short burst/soak using the skill's hottest events and stream subscribe
   requests; RSS should plateau after warmup, and guard logs should explain any
   throttling or dropped oversized payloads
+- for child-process skills, confirm child runtimes exit or stay within budget
+  after idle, and confirm parent RSS either relaxes or produces a named blocker
+  in memory status
 
 ## Data-plane decision table
 
@@ -935,14 +948,19 @@ editing the skill:
   suppression/throttle counters
 - `runtime.skill_runtime_migration.diagnostics`: current skill/stage, stale
   age, suspected blocker, host disk/PSI hints, and recommended operator checks
+- supervisor public memory status: managed PID, process RSS, child RSS, family
+  RSS, top child `skill_runtime` entries, baseline phase, baseline adjustment
+  reason, RSS growth, and suspicion state
+- runtime event-loop lag and supervisor self-heal evidence when the symptom is
+  API unready, listener lost, or slow boot rather than sustained RSS growth
 - skill-local incident log or 360log reference when the payload or traceback is
   too large for browser state
 
 The repair output should say which route changes: keep compact Yjs summary,
 move full data to page/search/details, add stream snapshot-on-subscribe,
-tighten budgets, or add cleanup/dispose. A repair that only raises the guard
-budget is incomplete unless the data is genuinely reconnect-stable and bounded
-by domain rules.
+tighten budgets, add cleanup/dispose, or add a child-runtime memory cap. A
+repair that only raises the guard budget is incomplete unless the data is
+genuinely reconnect-stable and bounded by domain rules.
 
 ## Observability rules
 
@@ -1043,6 +1061,9 @@ Before publishing:
 - install/activate a changed slot and verify the next tool call uses the new
   handler code without restarting the API process
 - run a short RSS soak for the hottest event and stream-subscribe paths
+- inspect supervisor memory status after the soak: baseline should be `mature`,
+  top child skill runtimes should be explainable, and `suspicion_state` should
+  either be `stable` or include repair evidence naming the owner/blocker
 
 ## Anti-patterns
 
