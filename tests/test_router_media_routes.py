@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from types import SimpleNamespace
 
@@ -228,3 +229,46 @@ def test_media_runtime_snapshot_uses_live_member_snapshot_capacity_as_fallback(m
 
     assert runtime["member_browser_direct"]["candidate_member_total"] == 1
     assert runtime["member_browser_direct"]["preferred_member_id"] == "member-live"
+
+
+def test_media_library_page_uses_bounded_cursor_pagination(monkeypatch, tmp_path) -> None:
+    import adaos.services.media_library as media_library
+
+    monkeypatch.setattr(media_library, "media_video_dir", lambda: tmp_path)
+    for idx in range(125):
+        path = tmp_path / f"clip-{idx:03d}.mp4"
+        path.write_bytes(b"x" * (idx + 1))
+        os.utime(path, (1_700_000_000 + idx, 1_700_000_000 + idx))
+
+    first = media_library.list_media_files_page(limit=500)
+
+    assert len(first["items"]) == media_library.MEDIA_LIBRARY_MAX_PAGE_SIZE
+    assert first["items"][0]["name"] == "clip-124.mp4"
+    assert first["items"][-1]["name"] == "clip-025.mp4"
+    assert first["pagination"]["has_more"] is True
+    assert first["pagination"]["next_cursor"]
+    assert first["pagination"]["total_count"] == 125
+    assert first["summary"]["total_bytes"] == sum(range(1, 126))
+
+    second = media_library.list_media_files_page(limit=50, cursor=first["pagination"]["next_cursor"])
+    first_names = {item["name"] for item in first["items"]}
+    second_names = {item["name"] for item in second["items"]}
+
+    assert len(second["items"]) == 25
+    assert not first_names.intersection(second_names)
+    assert second["items"][0]["name"] == "clip-024.mp4"
+    assert second["pagination"]["has_more"] is False
+
+
+def test_media_library_summary_scans_without_public_items(monkeypatch, tmp_path) -> None:
+    import adaos.services.media_library as media_library
+
+    monkeypatch.setattr(media_library, "media_video_dir", lambda: tmp_path)
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    (tmp_path / "notes.txt").write_text("ignored", encoding="utf-8")
+
+    summary = media_library.media_library_summary()
+
+    assert summary["count"] == 1
+    assert summary["total_bytes"] == 5
+    assert summary["latest_modified_at"]

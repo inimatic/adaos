@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
+import heapq
+import json
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import quote
 
 from adaos.services.agent_context import get_ctx
@@ -19,6 +22,9 @@ MEDIA_RUNTIME_SCOPE = "media_server"
 ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 # Keep chunks below the default 1 MiB NATS payload limit after base64/json overhead.
 ROOT_MEDIA_RELAY_CHUNK_BYTES = 512 * 1024
+MEDIA_LIBRARY_DEFAULT_PAGE_SIZE = 50
+MEDIA_LIBRARY_MAX_PAGE_SIZE = 100
+MEDIA_LIBRARY_MAX_OFFSET = 10_000
 SUPPORTED_VIDEO_EXTENSIONS = {
     ".mp4",
     ".webm",
@@ -99,6 +105,182 @@ def guess_media_type(filename: str) -> str:
     if guessed:
         return guessed
     return "application/octet-stream"
+
+
+def _media_item_from_path(path: Path, stat: Any) -> dict[str, Any]:
+    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+    return {
+        "name": path.name,
+        "size_bytes": int(stat.st_size),
+        "mime_type": guess_media_type(path.name),
+        "modified_at": modified.isoformat(),
+        "content_path": f"/api/node/media/files/content/{quote(path.name)}",
+        "_modified_ts": float(stat.st_mtime),
+    }
+
+
+def iter_media_files() -> Iterator[dict[str, Any]]:
+    root = media_video_dir()
+    for path in root.iterdir():
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        yield _media_item_from_path(path, stat)
+
+
+def _public_media_item(item: dict[str, Any]) -> dict[str, Any]:
+    public = dict(item)
+    public.pop("_modified_ts", None)
+    return public
+
+
+def _bounded_page_limit(value: Any) -> int:
+    try:
+        limit = int(value or MEDIA_LIBRARY_DEFAULT_PAGE_SIZE)
+    except Exception:
+        limit = MEDIA_LIBRARY_DEFAULT_PAGE_SIZE
+    return min(max(1, limit), MEDIA_LIBRARY_MAX_PAGE_SIZE)
+
+
+def _bounded_page_offset(value: Any) -> int:
+    try:
+        offset = int(value or 0)
+    except Exception:
+        offset = 0
+    return min(max(0, offset), MEDIA_LIBRARY_MAX_OFFSET)
+
+
+def _encode_media_cursor(key: tuple[float, str]) -> str:
+    payload = {"modified_ts": float(key[0]), "name": str(key[1])}
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_media_cursor(value: Any) -> tuple[float, str] | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        padded = token + ("=" * (-len(token) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        modified_ts = float(payload.get("modified_ts"))
+    except Exception:
+        return None
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        return None
+    return (modified_ts, name)
+
+
+def _matches_media_page_filter(
+    item: dict[str, Any],
+    *,
+    query: str,
+    mime_type: str,
+) -> bool:
+    if query and query not in str(item.get("name") or "").lower():
+        return False
+    if mime_type:
+        observed = str(item.get("mime_type") or "").lower()
+        if mime_type.endswith("/"):
+            if not observed.startswith(mime_type):
+                return False
+        elif observed != mime_type:
+            return False
+    return True
+
+
+def media_library_summary() -> dict[str, Any]:
+    count = 0
+    total_bytes = 0
+    latest_modified_at = ""
+    latest_key: tuple[float, str] | None = None
+    for item in iter_media_files():
+        count += 1
+        total_bytes += int(item.get("size_bytes") or 0)
+        key = (float(item.get("_modified_ts") or 0.0), str(item.get("name") or ""))
+        if latest_key is None or key > latest_key:
+            latest_key = key
+            latest_modified_at = str(item.get("modified_at") or "")
+    return {
+        "count": count,
+        "total_bytes": total_bytes,
+        "latest_modified_at": latest_modified_at,
+    }
+
+
+def list_media_files_page(
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+    cursor: str | None = None,
+    query: str | None = None,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    page_limit = _bounded_page_limit(limit)
+    page_offset = _bounded_page_offset(offset)
+    cursor_key = _decode_media_cursor(cursor)
+    query_norm = str(query or "").strip().lower()[:160]
+    mime_norm = str(mime_type or "").strip().lower()[:128]
+    heap_size = page_offset + page_limit + 1
+    heap: list[tuple[float, str, dict[str, Any]]] = []
+    total_count = 0
+    total_bytes = 0
+    scanned_count = 0
+
+    for item in iter_media_files():
+        scanned_count += 1
+        if not _matches_media_page_filter(item, query=query_norm, mime_type=mime_norm):
+            continue
+        key = (float(item.get("_modified_ts") or 0.0), str(item.get("name") or ""))
+        if cursor_key is not None and key >= cursor_key:
+            continue
+        total_count += 1
+        total_bytes += int(item.get("size_bytes") or 0)
+        entry = (key[0], key[1], item)
+        if len(heap) < heap_size:
+            heapq.heappush(heap, entry)
+        elif key > (heap[0][0], heap[0][1]):
+            heapq.heapreplace(heap, entry)
+
+    ordered = sorted(heap, key=lambda entry: (entry[0], entry[1]), reverse=True)
+    page_entries = ordered[page_offset : page_offset + page_limit]
+    has_more = len(ordered) > page_offset + page_limit
+    items = [_public_media_item(entry[2]) for entry in page_entries]
+    next_cursor = ""
+    if has_more and page_entries:
+        last = page_entries[-1]
+        next_cursor = _encode_media_cursor((last[0], last[1]))
+    return {
+        "ok": True,
+        "schema": "adaos.media_library.page.v1",
+        "items": items,
+        "pagination": {
+            "limit": page_limit,
+            "offset": page_offset,
+            "cursor": str(cursor or ""),
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "total_count": total_count,
+            "scanned_count": scanned_count,
+        },
+        "summary": {
+            "count": total_count,
+            "total_bytes": total_bytes,
+            "query": query_norm,
+            "mime_type": mime_norm,
+        },
+    }
 
 
 def _active_browser_session_totals() -> tuple[int, int]:
@@ -417,24 +599,7 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
 
 
 def list_media_files() -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    root = media_video_dir()
-    for path in root.iterdir():
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
-            continue
-        stat = path.stat()
-        modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-        items.append(
-            {
-                "name": path.name,
-                "size_bytes": int(stat.st_size),
-                "mime_type": guess_media_type(path.name),
-                "modified_at": modified.isoformat(),
-                "content_path": f"/api/node/media/files/content/{quote(path.name)}",
-            }
-        )
+    items = [_public_media_item(item) for item in iter_media_files()]
     items.sort(key=lambda item: (str(item.get("modified_at") or ""), str(item.get("name") or "")), reverse=True)
     return items
 
