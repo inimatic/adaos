@@ -100,6 +100,10 @@ _YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM = str(
     "yes",
     "on",
 }
+_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC = max(
+    0.0,
+    float(os.getenv("ADAOS_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC") or "120.0"),
+)
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
@@ -361,7 +365,7 @@ def _yjs_projection_guard_rows() -> list[dict[str, Any]]:
             persisted[key] = row
             continue
         guarded_total = max(_int_or_zero(existing.get("guarded_total")), _int_or_zero(row.get("guarded_total")))
-        if _float_or_zero(row.get("last_at")) > _float_or_zero(existing.get("last_at")):
+        if _float_or_zero(row.get("last_at")) >= _float_or_zero(existing.get("last_at")):
             existing.update(row)
         existing["guarded_total"] = guarded_total
     return [dict(item) for item in persisted.values()]
@@ -416,6 +420,42 @@ def _record_yjs_projection_guard_event(
         _YJS_PROJECTION_GUARD_STATS[key] = current
         persisted_row = dict(current)
     _append_yjs_projection_guard_event(persisted_row)
+
+
+def _suppress_recent_projection_amplification(
+    *,
+    webspace_id: str,
+    owner: str,
+    scope: str,
+    slot: str,
+    path: str,
+    projected_bytes: int,
+) -> dict[str, Any] | None:
+    window = float(_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC)
+    if window <= 0.0:
+        return None
+    key = _projection_guard_key(webspace_id, owner, path)
+    now = time.time()
+    with _YJS_PROJECTION_GUARD_LOCK:
+        current = _YJS_PROJECTION_GUARD_STATS.get(key)
+        if not isinstance(current, dict):
+            return None
+        if str(current.get("reason") or "") != "yjs_projection_write_amplification":
+            return None
+        last_at = _float_or_zero(current.get("last_at"))
+        if last_at <= 0.0 or now - last_at > window:
+            return None
+        if _int_or_zero(current.get("update_bytes")) < int(_YJS_PROJECTION_WRITE_AMPLIFICATION_MIN_UPDATE_BYTES):
+            return None
+        current["suppressed_total"] = _int_or_zero(current.get("suppressed_total")) + 1
+        current["last_suppressed_at"] = now
+        current["suppressed_until"] = last_at + window
+        current["last_suppressed_reason"] = "recent_projection_write_amplification"
+        current["last_suppressed_scope"] = str(scope or "").strip() or None
+        current["last_suppressed_slot"] = str(slot or "").strip() or None
+        current["last_suppressed_projected_bytes"] = max(0, int(projected_bytes or 0))
+        _YJS_PROJECTION_GUARD_STATS[key] = current
+        return dict(current)
 
 
 def _projection_compaction_runtime_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -1315,6 +1355,25 @@ class ProjectionService:
         write_max_items = _positive_int(budget.get("max_items")) or int(_YJS_PROJECTION_DEFAULT_MAX_ITEMS)
         policy_route = policy.get("route") if isinstance(policy.get("route"), dict) else {}
         write_route = dict(route or policy_route or {})
+        suppressed = _suppress_recent_projection_amplification(
+            webspace_id=ws_id,
+            owner=owner,
+            scope=scope,
+            slot=slot,
+            path=path,
+            projected_bytes=write_projected_bytes,
+        )
+        if suppressed is not None:
+            _log.warning(
+                "YJS projection write suppressed after recent amplification webspace=%s owner=%s slot=%s path=%s suppressed_total=%s until=%.3f",
+                ws_id,
+                owner,
+                slot,
+                path,
+                int(suppressed.get("suppressed_total") or 0),
+                float(suppressed.get("suppressed_until") or 0.0),
+            )
+            return
         detached_compaction_needed = False
 
         def _on_yjs_update(update_meta: Mapping[str, Any]) -> None:

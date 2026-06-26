@@ -6336,6 +6336,9 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
                     "disabled": bool(recovery.get("disabled")),
                     "update_bytes": _nonnegative_int(item.get("update_bytes")),
                     "amplification_ratio": item.get("amplification_ratio"),
+                    "suppressed_total": _nonnegative_int(item.get("suppressed_total")),
+                    "last_suppressed_at": item.get("last_suppressed_at"),
+                    "suppressed_until": item.get("suppressed_until"),
                     "last_at": item.get("last_at"),
                 }
             )
@@ -6377,6 +6380,10 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
                     "degraded_bytes": _nonnegative_int(item.get("degraded_bytes")),
                     "update_bytes": _nonnegative_int(item.get("update_bytes")),
                     "amplification_ratio": item.get("amplification_ratio"),
+                    "suppressed_total": _nonnegative_int(item.get("suppressed_total")),
+                    "last_suppressed_at": item.get("last_suppressed_at"),
+                    "suppressed_until": item.get("suppressed_until"),
+                    "last_suppressed_reason": item.get("last_suppressed_reason"),
                     "max_payload_bytes": item.get("max_payload_bytes"),
                     "max_items": item.get("max_items"),
                     "max_list_items": _nonnegative_int(item.get("max_list_items")),

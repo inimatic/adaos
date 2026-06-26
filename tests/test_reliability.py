@@ -2537,6 +2537,10 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
                     "reason": "yjs_projection_write_amplification",
                     "update_bytes": 57344,
                     "amplification_ratio": 36.2,
+                    "suppressed_total": 2,
+                    "last_suppressed_at": 14.0,
+                    "suppressed_until": 132.5,
+                    "last_suppressed_reason": "recent_projection_write_amplification",
                     "last_at": 12.5,
                     "guarded_total": 2,
                     "recovery": {
@@ -2585,6 +2589,8 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
     assert snapshot["recovery"]["inline_total"] == 1
     assert snapshot["recovery"]["background_total"] == 0
     assert snapshot["recovery"]["items"][0]["deferred_until"] == "detached_writer_flush_complete"
+    assert snapshot["recovery"]["items"][0]["suppressed_total"] == 2
+    assert snapshot["recovery"]["items"][0]["suppressed_until"] == 132.5
     assert snapshot["recovery"]["ystore"]["runtime_compaction_eligible"] is True
     assert snapshot["recovery"]["ystore"]["replay_window_bytes"] == 57344
     assert snapshot["recovery"]["ystore"]["last_auto_backup_reason"] == "projection_write_amplification"
@@ -2596,6 +2602,8 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
     assert repair["schema"] == "adaos.llm_builder.yjs_projection_repair.v1"
     assert repair["skill"] == "mediaserver"
     assert repair["evidence"]["update_bytes"] == 57344
+    assert repair["evidence"]["suppressed_total"] == 2
+    assert repair["evidence"]["last_suppressed_reason"] == "recent_projection_write_amplification"
     assert repair["recovery"]["mode"] == "inline_after_detached_write"
     assert "move_rows_logs_and_large_artifacts_to_bounded_routes" in repair["recommended_actions"]
 
