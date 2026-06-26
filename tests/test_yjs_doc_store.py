@@ -197,6 +197,7 @@ async def test_ystore_runtime_snapshot_reports_replay_byte_budget(monkeypatch) -
         assert "last_compact_reason" in snapshot
         assert "auto_backup_total" in snapshot
         assert "last_auto_backup_reason" in snapshot
+        assert snapshot["auto_backup_large_update_bytes"] == 1024 * 1024
     finally:
         reset_ystore_for_webspace(webspace_id)
 

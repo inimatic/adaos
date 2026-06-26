@@ -352,7 +352,7 @@ class AdaosMemoryYStore(BaseYStore):
         self.auto_backup_debounce_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", 0.5, minimum=0.0)
         self.auto_backup_large_update_bytes = _env_int(
             "ADAOS_YSTORE_AUTOBACKUP_LARGE_UPDATE_BYTES",
-            256 * 1024,
+            1024 * 1024,
             minimum=0,
         )
         self.auto_backup_large_update_debounce_sec = _env_float(
