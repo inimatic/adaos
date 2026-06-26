@@ -147,6 +147,39 @@ def _mapping_or_none(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
+def _normalize_endpoint_assignment(value: Any, *, fallback_role: Any = None, updated_at: Any = None) -> dict[str, Any] | None:
+    data = dict(value) if isinstance(value, Mapping) else {}
+    role = str(data.get("role") or data.get("assignment") or fallback_role or "").strip()
+    if not role:
+        return None
+    try:
+        updated = float(data.get("updated_at") or updated_at or 0.0) or None
+    except Exception:
+        updated = None
+    owner = data.get("owner")
+    owner_map = dict(owner) if isinstance(owner, Mapping) else {}
+    owner_node_id = str(owner_map.get("node_id") or data.get("owner_node_id") or "").strip()
+    owner_skill_id = str(owner_map.get("skill_id") or data.get("owner_skill_id") or "").strip()
+    normalized: dict[str, Any] = {
+        "role": role,
+        "assignment": role,
+    }
+    if updated is not None:
+        normalized["updated_at"] = updated
+    if owner_node_id or owner_skill_id:
+        normalized["owner"] = {
+            **({"node_id": owner_node_id} if owner_node_id else {}),
+            **({"skill_id": owner_skill_id} if owner_skill_id else {}),
+        }
+    source = str(data.get("source") or "").strip()
+    if source:
+        normalized["source"] = source
+    reason = str(data.get("reason") or "").strip()
+    if reason:
+        normalized["reason"] = reason
+    return normalized
+
+
 def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     data = dict(raw or {})
     now = _now_ts()
@@ -199,6 +232,11 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "user_agent": str(data.get("user_agent") or "").strip() or None,
     }
     if kind == "redevice":
+        endpoint_assignment = _normalize_endpoint_assignment(
+            data.get("endpoint_assignment"),
+            fallback_role=data.get("assignment"),
+            updated_at=data.get("assignment_updated_at"),
+        )
         entry.update(
             {
                 "pair_code": str(data.get("pair_code") or data.get("code") or "").strip() or None,
@@ -214,8 +252,9 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
                 "service_state": _mapping_or_none(data.get("service_state")),
                 "active_app": _mapping_or_none(data.get("active_app")),
                 "active_surface": _mapping_or_none(data.get("active_surface")),
-                "assignment": str(data.get("assignment") or "").strip() or None,
-                "assignment_updated_at": float(data.get("assignment_updated_at") or 0.0) or None,
+                "assignment": str((endpoint_assignment or {}).get("role") or data.get("assignment") or "").strip() or None,
+                "assignment_updated_at": float((endpoint_assignment or {}).get("updated_at") or data.get("assignment_updated_at") or 0.0) or None,
+                "endpoint_assignment": endpoint_assignment,
             }
         )
     return entry
@@ -554,6 +593,7 @@ def touch_redevice_link(
     active_app: Mapping[str, Any] | None = None,
     active_surface: Mapping[str, Any] | None = None,
     assignment: str | None = None,
+    endpoint_assignment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     token = str(endpoint_id or "").strip()
     if not token:
@@ -594,9 +634,20 @@ def touch_redevice_link(
         entry["active_app"] = dict(active_app)
     if active_surface is not None:
         entry["active_surface"] = dict(active_surface)
+    if endpoint_assignment is not None:
+        normalized_assignment = _normalize_endpoint_assignment(endpoint_assignment, fallback_role=assignment, updated_at=_now_ts())
+        entry["endpoint_assignment"] = normalized_assignment
+        entry["assignment"] = str((normalized_assignment or {}).get("role") or "").strip() or None
+        entry["assignment_updated_at"] = (normalized_assignment or {}).get("updated_at") or _now_ts()
     if assignment is not None:
+        updated_at = _now_ts()
         entry["assignment"] = str(assignment or "").strip() or None
-        entry["assignment_updated_at"] = _now_ts()
+        entry["assignment_updated_at"] = updated_at
+        entry["endpoint_assignment"] = _normalize_endpoint_assignment(
+            entry.get("endpoint_assignment"),
+            fallback_role=assignment,
+            updated_at=updated_at,
+        )
     entry["last_seen_at"] = _now_ts()
     entry = _updated(entry)
     saved = _put_entry(registry, "redevice", entry)
@@ -605,7 +656,15 @@ def touch_redevice_link(
     return saved
 
 
-def set_redevice_assignment(endpoint_id: str, assignment: str | None) -> dict[str, Any] | None:
+def set_redevice_assignment(
+    endpoint_id: str,
+    assignment: str | None,
+    *,
+    owner_node_id: str | None = None,
+    owner_skill_id: str | None = None,
+    source: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any] | None:
     token = str(endpoint_id or "").strip()
     if not token:
         return None
@@ -614,8 +673,25 @@ def set_redevice_assignment(endpoint_id: str, assignment: str | None) -> dict[st
     if entry is None:
         return None
     previous = dict(entry)
-    entry["assignment"] = str(assignment or "").strip() or None
-    entry["assignment_updated_at"] = _now_ts()
+    updated_at = _now_ts()
+    role = str(assignment or "").strip() or None
+    entry["assignment"] = role
+    entry["assignment_updated_at"] = updated_at
+    if role:
+        entry["endpoint_assignment"] = _normalize_endpoint_assignment(
+            {
+                "role": role,
+                "updated_at": updated_at,
+                "owner": {
+                    **({"node_id": str(owner_node_id or "").strip()} if str(owner_node_id or "").strip() else {}),
+                    **({"skill_id": str(owner_skill_id or "").strip()} if str(owner_skill_id or "").strip() else {}),
+                },
+                "source": str(source or "").strip(),
+                "reason": str(reason or "").strip(),
+            }
+        )
+    else:
+        entry["endpoint_assignment"] = None
     entry = _updated(entry)
     saved = _put_entry(registry, "redevice", entry)
     _save_registry(registry)

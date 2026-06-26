@@ -446,6 +446,12 @@ def test_access_link_normalizer_preserves_redevice_version_payloads() -> None:
             "active_app": {"app_id": "demo"},
             "assignment": "slideshow",
             "assignment_updated_at": 123.0,
+            "endpoint_assignment": {
+                "role": "slideshow",
+                "updated_at": 123.0,
+                "owner": {"node_id": "hub-1", "skill_id": "slideshow_skill"},
+                "source": "test",
+            },
         },
     )
 
@@ -456,6 +462,32 @@ def test_access_link_normalizer_preserves_redevice_version_payloads() -> None:
     assert entry["active_app"] == {"app_id": "demo"}
     assert entry["assignment"] == "slideshow"
     assert entry["assignment_updated_at"] == 123.0
+    assert entry["endpoint_assignment"] == {
+        "role": "slideshow",
+        "assignment": "slideshow",
+        "updated_at": 123.0,
+        "owner": {"node_id": "hub-1", "skill_id": "slideshow_skill"},
+        "source": "test",
+    }
+
+
+def test_access_link_normalizer_builds_redevice_endpoint_assignment_from_legacy_role() -> None:
+    entry = access_links._normalize_entry(
+        "redevice",
+        "endpoint-1",
+        {
+            "assignment": "voice",
+            "assignment_updated_at": 777.0,
+        },
+    )
+
+    assert entry["assignment"] == "voice"
+    assert entry["assignment_updated_at"] == 777.0
+    assert entry["endpoint_assignment"] == {
+        "role": "voice",
+        "assignment": "voice",
+        "updated_at": 777.0,
+    }
 
 
 def test_device_inventory_surfaces_redevice_agent_versions(monkeypatch) -> None:
