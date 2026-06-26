@@ -198,9 +198,52 @@ async def test_default_desktop_nlu_dispatches_marketplace_open(monkeypatch) -> N
             "modal_id": "marketplace_modal",
             "webspace_id": "desktop",
             "text": "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441",
-            "_meta": {"route_id": "voice_chat", "webspace_id": "desktop", "scenario_id": "web_desktop"},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": "desktop",
+                "scenario_id": "web_desktop",
+                "_voice_chat_ack_suppressed": True,
+            },
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_default_desktop_nlu_suppresses_duplicate_voice_dispatch_for_request(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    emitted: list[dict] = []
+    replies: list[dict] = []
+    stages: list[dict] = []
+    ctx.bus.subscribe("desktop.modal.open", lambda ev: emitted.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("io.out.chat.append", lambda ev: replies.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("nlu.trace.stage", lambda ev: stages.append(dict(ev.payload or {})))
+
+    async def _scenario_id(_ctx, _webspace_id: str) -> str:
+        return "web_desktop"
+
+    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
+    dispatcher_module._DISPATCHED_REQUESTS.clear()
+
+    payload = {
+        "intent": "desktop.open_marketplace",
+        "confidence": 1.0,
+        "slots": {},
+        "text": "\u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441",
+        "webspace_id": "desktop",
+        "request_id": "req.voice.marketplace.duplicate",
+        "_meta": {"route_id": "voice_chat"},
+    }
+
+    await dispatcher_module._on_nlp_intent_detected({**payload, "via": "neural"})
+    await dispatcher_module._on_nlp_intent_detected({**payload, "via": "rasa"})
+
+    assert len(emitted) == 1
+    assert emitted[0]["_meta"]["_voice_chat_ack_suppressed"] is True
+    assert len(replies) == 1
+    assert any(stage.get("status") == "duplicate_suppressed" for stage in stages)
 
 
 @pytest.mark.anyio
@@ -281,6 +324,7 @@ async def test_default_desktop_nlu_dispatches_modal_open_with_target_node_meta(m
                 "target_node_id": "member-1",
                 "webspace_id": "desktop",
                 "scenario_id": "web_desktop",
+                "_voice_chat_ack_suppressed": True,
             },
         }
     ]

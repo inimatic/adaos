@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -20,6 +21,8 @@ from adaos.services.nlu.voice_surface import decode_activation_plan
 
 _log = logging.getLogger("adaos.nlu.dispatcher")
 _CONFIDENCE_MIN = float(os.getenv("ADAOS_NLU_CONFIDENCE_MIN", "0.7") or "0.7")
+_DISPATCH_DEDUP_TTL_S = float(os.getenv("ADAOS_NLU_DISPATCH_DEDUP_TTL_S", "60") or "60")
+_DISPATCHED_REQUESTS: dict[str, float] = {}
 
 
 def _payload(evt: Any) -> Dict[str, Any]:
@@ -234,6 +237,80 @@ def _build_event_payload(
 def _route_id(raw: Mapping[str, Any]) -> str:
     meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
     return str(meta.get("route_id") or meta.get("route") or "").strip()
+
+
+def _request_id(raw: Mapping[str, Any]) -> str:
+    return str(raw.get("request_id") or raw.get("id") or "").strip()
+
+
+def _dispatch_dedup_key(*, request_id: str, webspace_id: str, route_id: str) -> str:
+    rid = str(request_id or "").strip()
+    if not rid:
+        return ""
+    return "\0".join(
+        (
+            str(webspace_id or default_webspace_id()).strip() or default_webspace_id(),
+            str(route_id or "").strip(),
+            rid,
+        )
+    )
+
+
+def _prune_dispatched_requests(now: float | None = None) -> None:
+    if not _DISPATCHED_REQUESTS:
+        return
+    current = time.time() if now is None else float(now)
+    expired = [key for key, ts in _DISPATCHED_REQUESTS.items() if current - float(ts or 0) > _DISPATCH_DEDUP_TTL_S]
+    for key in expired:
+        _DISPATCHED_REQUESTS.pop(key, None)
+
+
+def has_dispatched_request(*, request_id: str | None, webspace_id: str | None = None, route_id: str | None = None) -> bool:
+    key = _dispatch_dedup_key(
+        request_id=str(request_id or "").strip(),
+        webspace_id=str(webspace_id or default_webspace_id()).strip() or default_webspace_id(),
+        route_id=str(route_id or "").strip(),
+    )
+    if not key:
+        return False
+    now = time.time()
+    _prune_dispatched_requests(now)
+    return key in _DISPATCHED_REQUESTS
+
+
+def mark_dispatched_request(*, request_id: str | None, webspace_id: str | None = None, route_id: str | None = None) -> bool:
+    key = _dispatch_dedup_key(
+        request_id=str(request_id or "").strip(),
+        webspace_id=str(webspace_id or default_webspace_id()).strip() or default_webspace_id(),
+        route_id=str(route_id or "").strip(),
+    )
+    if not key:
+        return True
+    now = time.time()
+    _prune_dispatched_requests(now)
+    if key in _DISPATCHED_REQUESTS:
+        return False
+    _DISPATCHED_REQUESTS[key] = now
+    return True
+
+
+def _claim_detected_dispatch(ctx: AgentContext, *, webspace_id: str, scenario_id: str, payload: Mapping[str, Any]) -> bool:
+    request_id = _request_id(payload)
+    if not request_id:
+        return True
+    route_id = _route_id(payload)
+    if mark_dispatched_request(request_id=request_id, webspace_id=webspace_id, route_id=route_id):
+        return True
+    _emit_stage(
+        ctx,
+        stage="dispatcher",
+        status="duplicate_suppressed",
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        payload=payload,
+        reason="request_already_dispatched",
+    )
+    return False
 
 
 def _trusted_teacher_dispatch(raw: Mapping[str, Any]) -> bool:
@@ -609,6 +686,10 @@ def _execute_action(
 
     ctx_vars = {"webspace_id": webspace_id, "scenario_id": scenario_id}
     payload = _build_event_payload(base_params=base_params, slots=slots, ctx_vars=ctx_vars, raw=raw)
+    if _route_id(raw) == "voice_chat" and target == "desktop.modal.open":
+        meta = dict(payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {})
+        meta["_voice_chat_ack_suppressed"] = True
+        payload["_meta"] = meta
 
     # For now callSkill/callHost are both modelled as bus events.
     try:
@@ -867,6 +948,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     intents_cfg = nlu_cfg.get("intents") if isinstance(nlu_cfg, dict) else None
     if not isinstance(intents_cfg, dict):
         _log.debug("nlu.intent %s: scenario=%s has no nlu.intents section", intent, scenario_id)
+        if _teacher_skill_action(payload):
+            if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
+                return
         if _dispatch_teacher_skill_action_if_available(
             ctx,
             intent=intent,
@@ -876,6 +960,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
+        if _skill_nlu_actions_for_intent(ctx, intent):
+            if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
+                return
         if _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
@@ -892,6 +979,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     intent_cfg = intents_cfg.get(intent)
     if not isinstance(intent_cfg, Mapping):
         _log.debug("nlu.intent %s: no mapping in scenario=%s", intent, scenario_id)
+        if _teacher_skill_action(payload):
+            if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
+                return
         if _dispatch_teacher_skill_action_if_available(
             ctx,
             intent=intent,
@@ -901,6 +991,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
+        if _skill_nlu_actions_for_intent(ctx, intent):
+            if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
+                return
         if _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
@@ -917,6 +1010,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     actions_cfg = intent_cfg.get("actions") or []
     if not isinstance(actions_cfg, list) or not actions_cfg:
         _log.debug("nlu.intent %s: scenario=%s has no actions", intent, scenario_id)
+        if _teacher_skill_action(payload):
+            if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
+                return
         if _dispatch_teacher_skill_action_if_available(
             ctx,
             intent=intent,
@@ -926,6 +1022,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
+        if _skill_nlu_actions_for_intent(ctx, intent):
+            if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
+                return
         if _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
@@ -937,6 +1036,9 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
+        return
+
+    if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
         return
 
     for action in actions_cfg:

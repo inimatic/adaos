@@ -2355,6 +2355,15 @@ class RouterService:
             route_id = meta.get("route_id") or meta.get("route")
             if not isinstance(route_id, str) or not route_id.strip():
                 return
+            request_id = str(payload.get("request_id") or "").strip()
+            webspace_id = str(meta.get("webspace_id") or payload.get("webspace_id") or "desktop").strip() or "desktop"
+            try:
+                from adaos.services.nlu.dispatcher import has_dispatched_request
+
+                if has_dispatched_request(request_id=request_id, webspace_id=webspace_id, route_id=route_id.strip()):
+                    return
+            except Exception:
+                pass
             try:
                 allow_teacher = bool(getattr(getattr(get_ctx().config, "root_settings", None), "llm", None).allow_nlu_teacher)  # type: ignore[attr-defined]
             except Exception:
@@ -2372,6 +2381,12 @@ class RouterService:
                     )
                 else:
                     if isinstance(result, dict) and bool(result.get("ok")):
+                        try:
+                            from adaos.services.nlu.dispatcher import mark_dispatched_request
+
+                            mark_dispatched_request(request_id=request_id, webspace_id=webspace_id, route_id=route_id.strip())
+                        except Exception:
+                            pass
                         return
                     logging.getLogger("adaos.router.voice_chat").warning(
                         "voice.chat fallback tool returned non-ok result=%r",
