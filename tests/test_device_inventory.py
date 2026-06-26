@@ -535,6 +535,11 @@ def test_device_inventory_surfaces_redevice_assignment(monkeypatch) -> None:
                 "online": True,
                 "assignment": "slideshow",
                 "assignment_updated_at": 900.0,
+                "endpoint_assignment": {
+                    "role": "slideshow",
+                    "updated_at": 900.0,
+                    "owner": {"node_id": "hub-1", "skill_id": "slideshow_skill"},
+                },
             }
         ],
         now=1000.0,
@@ -545,6 +550,12 @@ def test_device_inventory_surfaces_redevice_assignment(monkeypatch) -> None:
     assert item is not None
     assert item["runtime"]["assignment"] == "slideshow"
     assert item["runtime"]["assignment_updated_at"] == 900.0
+    assert item["runtime"]["endpoint_assignment"] == {
+        "role": "slideshow",
+        "assignment": "slideshow",
+        "updated_at": 900.0,
+        "owner": {"node_id": "hub-1", "skill_id": "slideshow_skill"},
+    }
 
 
 def test_sdk_devices_inspect_device_separates_diagnostics(monkeypatch) -> None:

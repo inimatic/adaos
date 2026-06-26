@@ -27,6 +27,17 @@ def _text_or_none(value: Any) -> str | None:
     return token or None
 
 
+def _endpoint_assignment(value: Any) -> dict[str, Any] | None:
+    data = _mapping(value)
+    role = _text_or_none(data.get("role") or data.get("assignment"))
+    if not role:
+        return None
+    out = dict(data)
+    out["role"] = role
+    out.setdefault("assignment", role)
+    return out
+
+
 def _float_or_none(value: Any) -> float | None:
     try:
         token = float(value) if value is not None else None
@@ -488,6 +499,7 @@ class DeviceInventoryService:
                         "active_surface": _mapping(entry.get("active_surface")) or None,
                         "assignment": _text_or_none(entry.get("assignment")),
                         "assignment_updated_at": _float_or_none(entry.get("assignment_updated_at")),
+                        "endpoint_assignment": _endpoint_assignment(entry.get("endpoint_assignment")),
                     },
                     "diagnostics": {
                         "policy_source": "access_links",

@@ -126,6 +126,61 @@ def test_sdk_device_access_resolves_old_pair_code_from_admission_history(monkeyp
     assert pair_code == "SNX68P2A"
 
 
+def test_sdk_device_access_assign_endpoint_records_owner(monkeypatch) -> None:
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    devices = [
+        {
+            "ref": "redevice:endpoint-1",
+            "kind": "redevice",
+            "identity": {"endpoint_id": "endpoint-1", "pair_code": "ABCD1234"},
+            "policy": {"effective_name": "Kitchen tablet"},
+            "observation": {"online": True},
+            "runtime": {},
+        }
+    ]
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(sdk_device_access, "list_endpoint_devices", lambda kind="redevice", sync_registry=True: devices)
+
+    def fake_set_assignment(endpoint_id, assignment, **kwargs):
+        captured.update({"endpoint_id": endpoint_id, "assignment": assignment, **kwargs})
+        return {
+            "id": endpoint_id,
+            "assignment": assignment,
+            "endpoint_assignment": {
+                "role": assignment,
+                "assignment": assignment,
+                "updated_at": 900.0,
+                "owner": {"node_id": kwargs.get("owner_node_id"), "skill_id": kwargs.get("owner_skill_id")},
+                "source": kwargs.get("source"),
+                "reason": kwargs.get("reason"),
+            },
+        }
+
+    monkeypatch.setattr(sdk_device_access._access_links, "set_redevice_assignment", fake_set_assignment)
+
+    result = sdk_device_access.assign_endpoint(
+        "redevice:endpoint-1",
+        "slideshow",
+        owner_node_id="hub-1",
+        owner_skill_id="slideshow_skill",
+        source="test",
+        reason="operator_selected",
+    )
+
+    assert result["ok"] is True
+    assert captured == {
+        "endpoint_id": "endpoint-1",
+        "assignment": "slideshow",
+        "owner_node_id": "hub-1",
+        "owner_skill_id": "slideshow_skill",
+        "source": "test",
+        "reason": "operator_selected",
+    }
+    assert result["endpoint_assignment"]["owner"] == {"node_id": "hub-1", "skill_id": "slideshow_skill"}
+
+
 def test_command_profile_for_observed_only_member_allows_detach_and_deny(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",

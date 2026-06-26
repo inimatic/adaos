@@ -34,6 +34,8 @@ def _device_names(device: Mapping[str, Any]) -> list[str]:
         identity.get("pair_code"),
         runtime.get("assignment"),
     ]
+    endpoint_assignment = _mapping(runtime.get("endpoint_assignment"))
+    names.append(endpoint_assignment.get("role"))
     names.extend(_list(policy.get("aliases")))
     for label in _list(policy.get("labels")):
         if isinstance(label, Mapping):
@@ -184,6 +186,10 @@ def assign_endpoint(
     assignment: str | None = None,
     *,
     code: str | None = None,
+    owner_node_id: str | None = None,
+    owner_skill_id: str | None = None,
+    source: str | None = "sdk.data.device_access",
+    reason: str | None = None,
 ) -> dict[str, Any]:
     resolved = resolve_endpoint_device(device_ref, code=code)
     if not resolved.get("ok"):
@@ -192,7 +198,14 @@ def assign_endpoint(
     if not endpoint_id:
         return {"ok": False, "error": "endpoint_id_missing", "device_ref": resolved.get("device_ref")}
     try:
-        entry = _access_links.set_redevice_assignment(endpoint_id, _text(assignment) or None)
+        entry = _access_links.set_redevice_assignment(
+            endpoint_id,
+            _text(assignment) or None,
+            owner_node_id=owner_node_id,
+            owner_skill_id=owner_skill_id,
+            source=source,
+            reason=reason,
+        )
     except Exception as exc:
         return {"ok": False, "error": "endpoint_assignment_failed", "detail": str(exc), "endpoint_id": endpoint_id}
     if entry is None:
@@ -203,6 +216,7 @@ def assign_endpoint(
         "endpoint_id": endpoint_id,
         "code": resolved.get("code"),
         "assignment": _text(assignment) or None,
+        "endpoint_assignment": _mapping(entry.get("endpoint_assignment")) if isinstance(entry, Mapping) else None,
         "entry": entry,
     }
 
