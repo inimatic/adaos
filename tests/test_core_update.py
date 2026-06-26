@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,7 +18,55 @@ from adaos.services.core_update import (
     write_plan,
     write_status,
 )
-from adaos.services.core_slots import active_slot, activate_slot, read_slot_manifest, write_slot_manifest
+from adaos.services.core_slots import (
+    active_slot,
+    activate_slot,
+    reconcile_active_slot_marker,
+    read_slot_manifest,
+    slot_dir,
+    write_slot_manifest,
+)
+
+
+def _make_valid_slot(slot: str) -> None:
+    root = slot_dir(slot)
+    app_entry = root / "repo" / "src" / "adaos" / "apps" / "autostart_runner.py"
+    app_entry.parent.mkdir(parents=True, exist_ok=True)
+    app_entry.write_text("# test runtime entry\n", encoding="utf-8")
+    python_path = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python_path.parent.mkdir(parents=True, exist_ok=True)
+    python_path.write_text("# test python\n", encoding="utf-8")
+    write_slot_manifest(
+        slot,
+        {
+            "slot": slot,
+            "repo_dir": str(root / "repo"),
+            "venv_dir": str(root / "venv"),
+        },
+    )
+
+
+def test_bootstrap_critical_paths_cover_root_api_contracts() -> None:
+    from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
+
+    assert "src/adaos/apps/api/server.py" in BOOTSTRAP_CRITICAL_PATHS
+    assert "src/adaos/apps/api/node_api.py" in BOOTSTRAP_CRITICAL_PATHS
+    assert "src/adaos/services/bootstrap.py" in BOOTSTRAP_CRITICAL_PATHS
+
+
+def test_reconcile_active_slot_marker_restores_valid_previous_slot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    _make_valid_slot("A")
+    activate_slot("A")
+    activate_slot("B")
+
+    result = reconcile_active_slot_marker()
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["invalid_slot"] == "B"
+    assert result["restored_slot"] == "A"
+    assert active_slot() == "A"
 
 
 def test_core_update_plan_roundtrip(monkeypatch, tmp_path) -> None:

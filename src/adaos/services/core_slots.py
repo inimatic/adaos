@@ -166,6 +166,53 @@ def activate_slot(slot: str) -> None:
     _write_text(_marker_path("active"), s)
 
 
+def reconcile_active_slot_marker() -> dict[str, Any]:
+    current = _read_text(_marker_path("active"))
+    current_slot = current if current in SLOTS else None
+    if not current_slot:
+        return {
+            "ok": True,
+            "changed": False,
+            "active_slot": None,
+            "reason": "no_active_slot_marker",
+        }
+    current_structure = validate_slot_structure(current_slot)
+    if bool(current_structure.get("ok")):
+        return {
+            "ok": True,
+            "changed": False,
+            "active_slot": current_slot,
+            "active_structure": current_structure,
+            "reason": "active_slot_valid",
+        }
+
+    prev = previous_slot()
+    previous_structure = validate_slot_structure(prev) if prev else None
+    if prev and prev != current_slot and bool((previous_structure or {}).get("ok")):
+        activate_slot(prev)
+        return {
+            "ok": True,
+            "changed": True,
+            "restored_slot": prev,
+            "invalid_slot": current_slot,
+            "active_slot": active_slot(),
+            "previous_slot": previous_slot(),
+            "active_structure": current_structure,
+            "restored_structure": previous_structure,
+            "reason": "restored_previous_valid_slot",
+        }
+
+    return {
+        "ok": False,
+        "changed": False,
+        "active_slot": current_slot,
+        "previous_slot": prev,
+        "active_structure": current_structure,
+        "previous_structure": previous_structure,
+        "reason": "active_slot_invalid_no_valid_previous",
+    }
+
+
 def rollback_to_previous_slot() -> str | None:
     prev = previous_slot()
     if not prev:

@@ -470,7 +470,7 @@ def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
             '  SLOT_DIR="$BASE_DIR/state/core_slots/slots/$ACTIVE_SLOT"',
             '  REPO_DIR="$SLOT_DIR/repo"',
             '  VENV_DIR="$SLOT_DIR/venv"',
-            '  if [ -x "$VENV_DIR/bin/python" ]; then',
+            '  if [ -x "$VENV_DIR/bin/python" ] && [ -f "$REPO_DIR/src/adaos/apps/autostart_runner.py" ]; then',
             '    export ADAOS_ACTIVE_CORE_SLOT="$ACTIVE_SLOT"',
             '    export ADAOS_ACTIVE_CORE_SLOT_DIR="$SLOT_DIR"',
             '    export ADAOS_SLOT_REPO_ROOT="$REPO_DIR"',

@@ -46,6 +46,7 @@ from adaos.services.core_slots import (
     active_slot,
     active_slot_manifest,
     read_slot_manifest,
+    reconcile_active_slot_marker,
     rollback_to_previous_slot,
     slot_dir,
     slot_status,
@@ -902,6 +903,32 @@ def _probe_update_runtime(
 
 
 def _launch_active_slot_if_needed(args: argparse.Namespace, *, host: str, port: int, validate: bool = False) -> None:
+    reconciliation = reconcile_active_slot_marker()
+    if reconciliation.get("ok") is False:
+        write_status(
+            {
+                "state": "failed",
+                "phase": "slot_reconcile",
+                "message": "active core slot marker points to an invalid slot and no valid previous slot is available",
+                "slot_reconciliation": reconciliation,
+                "slot_status": slot_status(),
+                "finished_at": time.time(),
+            }
+        )
+        raise SystemExit(2)
+    if bool(reconciliation.get("changed")):
+        write_status(
+            {
+                "state": "rolled_back",
+                "phase": "slot_reconcile",
+                "message": (
+                    f"active core slot marker was invalid; restored slot {reconciliation.get('restored_slot')}"
+                ),
+                "slot_reconciliation": reconciliation,
+                "slot_status": slot_status(),
+                "finished_at": time.time(),
+            }
+        )
     slot = active_slot()
     if not slot:
         return
