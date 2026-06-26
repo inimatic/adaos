@@ -777,6 +777,95 @@ def test_supervisor_resets_memory_baseline_for_new_runtime_instance(monkeypatch,
     assert manager.memory_status()["baseline_scope_key"] == "runtime:rt-new"
 
 
+def test_supervisor_matures_memory_baseline_after_warmup_plateau(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC", "60")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_WARMUP_SEC", "120")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_MATURITY_SLOPE_BYTES_PER_MIN", str(8 * 1024 * 1024))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 4321
+
+        @staticmethod
+        def poll():
+            return None
+
+    samples = iter(
+        [
+            (100 * 1024 * 1024, 100 * 1024 * 1024),
+            (100 * 1024 * 1024, 190 * 1024 * 1024),
+            (100 * 1024 * 1024, 190 * 1024 * 1024),
+        ]
+    )
+    times = iter([10.0, 70.0, 250.0])
+    manager._proc = _Proc()
+    manager._managed_runtime_instance_id = "rt-a"
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
+    monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: next(samples))
+    monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
+    monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    first = manager._sample_memory_telemetry()
+    second = manager._sample_memory_telemetry()
+    matured = manager._sample_memory_telemetry()
+
+    assert first["baseline_phase"] == "warming"
+    assert first["rss_growth_bytes"] == 0
+    assert second["baseline_phase"] == "warming"
+    assert second["rss_growth_bytes"] == 90 * 1024 * 1024
+    assert matured["baseline_phase"] == "mature"
+    assert matured["baseline_rss_bytes"] == 190 * 1024 * 1024
+    assert matured["rss_growth_bytes"] == 0
+    assert matured["baseline_last_adjustment_reason"] == "warmup_matured"
+    assert matured["baseline_adjustment_total"] == 1
+
+
+def test_supervisor_blocks_memory_baseline_maturity_when_slope_remains_high(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC", "300")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_WARMUP_SEC", "60")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_MATURITY_SLOPE_BYTES_PER_MIN", str(8 * 1024 * 1024))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 4321
+
+        @staticmethod
+        def poll():
+            return None
+
+    samples = iter(
+        [
+            (100 * 1024 * 1024, 100 * 1024 * 1024),
+            (100 * 1024 * 1024, 500 * 1024 * 1024),
+        ]
+    )
+    times = iter([10.0, 130.0])
+    manager._proc = _Proc()
+    manager._managed_runtime_instance_id = "rt-a"
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
+    monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: next(samples))
+    monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
+    monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    manager._sample_memory_telemetry()
+    blocked = manager._sample_memory_telemetry()
+
+    assert blocked["baseline_phase"] == "maturity_blocked_slope"
+    assert blocked["baseline_rss_bytes"] == 100 * 1024 * 1024
+    assert blocked["rss_growth_bytes"] == 400 * 1024 * 1024
+    assert blocked["baseline_adjustment_total"] == 0
+
+
 def test_spawn_runtime_locked_sets_profile_launch_env_for_requested_session(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")

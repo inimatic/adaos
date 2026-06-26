@@ -19,6 +19,12 @@ def test_memory_telemetry_preserves_process_family_and_cgroup_breakdown() -> Non
         "available_memory_percent": 50.5,
         "baseline_scope_key": "runtime:rt-a-1",
         "baseline_pid": 123,
+        "baseline_phase": "mature",
+        "baseline_age_sec": 300.0,
+        "baseline_warmup_sec": 120.0,
+        "baseline_maturity_slope_threshold_bytes_per_min": 1234.0,
+        "baseline_last_adjustment_reason": "warmup_matured",
+        "baseline_adjustment_total": 1,
     }
 
     roundtrip = MemoryTelemetrySample.from_dict(payload).to_dict()
@@ -34,3 +40,9 @@ def test_memory_telemetry_preserves_process_family_and_cgroup_breakdown() -> Non
     assert roundtrip["available_memory_percent"] == 50.5
     assert roundtrip["baseline_scope_key"] == "runtime:rt-a-1"
     assert roundtrip["baseline_pid"] == 123
+    assert roundtrip["baseline_phase"] == "mature"
+    assert roundtrip["baseline_age_sec"] == 300.0
+    assert roundtrip["baseline_warmup_sec"] == 120.0
+    assert roundtrip["baseline_maturity_slope_threshold_bytes_per_min"] == 1234.0
+    assert roundtrip["baseline_last_adjustment_reason"] == "warmup_matured"
+    assert roundtrip["baseline_adjustment_total"] == 1

@@ -337,6 +337,15 @@ class MemoryTelemetrySample:
     baseline_scope_key: str | None = None
     baseline_pid: int | None = None
     baseline_rss_bytes: int | None = None
+    baseline_phase: str | None = None
+    baseline_started_at: float | None = None
+    baseline_matured_at: float | None = None
+    baseline_age_sec: float | None = None
+    baseline_warmup_sec: float | None = None
+    baseline_maturity_slope_threshold_bytes_per_min: float | None = None
+    baseline_last_adjusted_at: float | None = None
+    baseline_last_adjustment_reason: str | None = None
+    baseline_adjustment_total: int = 0
     rss_growth_bytes: int | None = None
     rss_growth_bytes_per_min: float | None = None
     sample_source: str = "supervisor"
@@ -370,6 +379,17 @@ class MemoryTelemetrySample:
             baseline_scope_key=_optional_string(source.get("baseline_scope_key")),
             baseline_pid=_int(source.get("baseline_pid")),
             baseline_rss_bytes=_positive_int(source.get("baseline_rss_bytes")),
+            baseline_phase=_optional_string(source.get("baseline_phase")),
+            baseline_started_at=_float(source.get("baseline_started_at")),
+            baseline_matured_at=_float(source.get("baseline_matured_at")),
+            baseline_age_sec=_float(source.get("baseline_age_sec")),
+            baseline_warmup_sec=_float(source.get("baseline_warmup_sec")),
+            baseline_maturity_slope_threshold_bytes_per_min=_float(
+                source.get("baseline_maturity_slope_threshold_bytes_per_min")
+            ),
+            baseline_last_adjusted_at=_float(source.get("baseline_last_adjusted_at")),
+            baseline_last_adjustment_reason=_optional_string(source.get("baseline_last_adjustment_reason")),
+            baseline_adjustment_total=max(0, int(_int(source.get("baseline_adjustment_total")) or 0)),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
             sample_source=_string(source.get("sample_source"), default="supervisor"),
@@ -398,6 +418,15 @@ class MemoryTelemetrySample:
             "baseline_scope_key": self.baseline_scope_key,
             "baseline_pid": self.baseline_pid,
             "baseline_rss_bytes": self.baseline_rss_bytes,
+            "baseline_phase": self.baseline_phase,
+            "baseline_started_at": self.baseline_started_at,
+            "baseline_matured_at": self.baseline_matured_at,
+            "baseline_age_sec": self.baseline_age_sec,
+            "baseline_warmup_sec": self.baseline_warmup_sec,
+            "baseline_maturity_slope_threshold_bytes_per_min": self.baseline_maturity_slope_threshold_bytes_per_min,
+            "baseline_last_adjusted_at": self.baseline_last_adjusted_at,
+            "baseline_last_adjustment_reason": self.baseline_last_adjustment_reason,
+            "baseline_adjustment_total": self.baseline_adjustment_total,
             "rss_growth_bytes": self.rss_growth_bytes,
             "rss_growth_bytes_per_min": self.rss_growth_bytes_per_min,
             "sample_source": self.sample_source,
@@ -608,6 +637,15 @@ class MemoryRuntimeState:
     telemetry_window_sec: float | None = None
     telemetry_samples_total: int = 0
     baseline_family_rss_bytes: int | None = None
+    baseline_phase: str | None = None
+    baseline_started_at: float | None = None
+    baseline_matured_at: float | None = None
+    baseline_age_sec: float | None = None
+    baseline_warmup_sec: float | None = None
+    baseline_maturity_slope_threshold_bytes_per_min: float | None = None
+    baseline_last_adjusted_at: float | None = None
+    baseline_last_adjustment_reason: str | None = None
+    baseline_adjustment_total: int = 0
     rss_growth_bytes: int | None = None
     rss_growth_bytes_per_min: float | None = None
     last_telemetry_sampled_at: float | None = None
@@ -694,6 +732,17 @@ class MemoryRuntimeState:
             telemetry_window_sec=_float(source.get("telemetry_window_sec")),
             telemetry_samples_total=max(0, int(_int(source.get("telemetry_samples_total")) or 0)),
             baseline_family_rss_bytes=_positive_int(source.get("baseline_family_rss_bytes")),
+            baseline_phase=_optional_string(source.get("baseline_phase")),
+            baseline_started_at=_float(source.get("baseline_started_at")),
+            baseline_matured_at=_float(source.get("baseline_matured_at")),
+            baseline_age_sec=_float(source.get("baseline_age_sec")),
+            baseline_warmup_sec=_float(source.get("baseline_warmup_sec")),
+            baseline_maturity_slope_threshold_bytes_per_min=_float(
+                source.get("baseline_maturity_slope_threshold_bytes_per_min")
+            ),
+            baseline_last_adjusted_at=_float(source.get("baseline_last_adjusted_at")),
+            baseline_last_adjustment_reason=_optional_string(source.get("baseline_last_adjustment_reason")),
+            baseline_adjustment_total=max(0, int(_int(source.get("baseline_adjustment_total")) or 0)),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
             last_telemetry_sampled_at=_float(source.get("last_telemetry_sampled_at")),
@@ -761,6 +810,15 @@ class MemoryRuntimeState:
             "telemetry_window_sec": self.telemetry_window_sec,
             "telemetry_samples_total": self.telemetry_samples_total,
             "baseline_family_rss_bytes": self.baseline_family_rss_bytes,
+            "baseline_phase": self.baseline_phase,
+            "baseline_started_at": self.baseline_started_at,
+            "baseline_matured_at": self.baseline_matured_at,
+            "baseline_age_sec": self.baseline_age_sec,
+            "baseline_warmup_sec": self.baseline_warmup_sec,
+            "baseline_maturity_slope_threshold_bytes_per_min": self.baseline_maturity_slope_threshold_bytes_per_min,
+            "baseline_last_adjusted_at": self.baseline_last_adjusted_at,
+            "baseline_last_adjustment_reason": self.baseline_last_adjustment_reason,
+            "baseline_adjustment_total": self.baseline_adjustment_total,
             "rss_growth_bytes": self.rss_growth_bytes,
             "rss_growth_bytes_per_min": self.rss_growth_bytes_per_min,
             "last_telemetry_sampled_at": self.last_telemetry_sampled_at,

@@ -211,6 +211,28 @@ def _memory_telemetry_window_sec() -> float:
         return 180.0
 
 
+def _memory_baseline_warmup_sec() -> float:
+    try:
+        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_WARMUP_SEC") or "300").strip()))
+    except Exception:
+        return 300.0
+
+
+def _memory_baseline_maturity_slope_bytes_per_min() -> float:
+    try:
+        return max(
+            0.0,
+            float(
+                str(
+                    os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_MATURITY_SLOPE_BYTES_PER_MIN")
+                    or str(32 * 1024 * 1024)
+                ).strip()
+            ),
+        )
+    except Exception:
+        return float(32 * 1024 * 1024)
+
+
 def _memory_suspicion_growth_threshold_bytes() -> int:
     default_value = 1024 * 1024 * 1024
     total_memory = _total_memory_bytes()
@@ -2642,6 +2664,12 @@ class SupervisorManager:
         self._memory_baseline_scope_key: str | None = None
         self._memory_baseline_pid: int | None = None
         self._memory_baseline_family_rss_bytes: int | None = None
+        self._memory_baseline_started_at: float | None = None
+        self._memory_baseline_matured_at: float | None = None
+        self._memory_baseline_phase = "uninitialized"
+        self._memory_baseline_last_adjusted_at: float | None = None
+        self._memory_baseline_last_adjustment_reason: str | None = None
+        self._memory_baseline_adjustment_total = 0
         self._memory_last_growth_bytes: int | None = None
         self._memory_last_growth_bytes_per_min: float | None = None
         self._memory_last_available_bytes: int | None = None
@@ -3018,21 +3046,28 @@ class SupervisorManager:
             pid = 0
         return f"pid:{pid}" if pid > 0 else None
 
-    def _reset_memory_baseline_scope(self, *, managed_pid: Any = None) -> None:
+    def _reset_memory_baseline_scope(self, *, managed_pid: Any = None, now: float | None = None) -> None:
         try:
             pid = int(managed_pid or 0) or None
         except Exception:
             pid = None
+        current_time = time.time() if now is None else float(now)
         self._memory_baseline_scope_key = self._memory_scope_key(pid)
         self._memory_baseline_pid = pid
         self._memory_baseline_family_rss_bytes = None
+        self._memory_baseline_started_at = current_time
+        self._memory_baseline_matured_at = None
+        self._memory_baseline_phase = "warming"
+        self._memory_baseline_last_adjusted_at = None
+        self._memory_baseline_last_adjustment_reason = None
+        self._memory_baseline_adjustment_total = 0
         self._memory_last_growth_bytes = 0
         self._memory_last_growth_bytes_per_min = 0.0
         self._memory_suspicion_state = "stable"
         self._memory_suspicion_reason = None
         self._memory_suspicion_since = None
 
-    def _ensure_memory_baseline_scope(self, *, managed_pid: Any = None) -> None:
+    def _ensure_memory_baseline_scope(self, *, managed_pid: Any = None, now: float | None = None) -> None:
         scope_key = self._memory_scope_key(managed_pid)
         try:
             pid = int(managed_pid or 0) or None
@@ -3045,9 +3080,13 @@ class SupervisorManager:
         if previous_scope is None:
             self._memory_baseline_scope_key = scope_key
             self._memory_baseline_pid = pid
+            if self._memory_baseline_started_at is None:
+                self._memory_baseline_started_at = time.time() if now is None else float(now)
+            if self._memory_baseline_phase == "uninitialized":
+                self._memory_baseline_phase = "warming"
             return
         if previous_scope != scope_key or (pid is not None and previous_pid is not None and previous_pid != pid):
-            self._reset_memory_baseline_scope(managed_pid=pid)
+            self._reset_memory_baseline_scope(managed_pid=pid, now=now)
 
     def _memory_profile_request_timeout_sec(self) -> float:
         try:
@@ -3746,7 +3785,7 @@ class SupervisorManager:
         managed_pid = managed.get("managed_pid")
         if not managed_pid:
             return None
-        self._ensure_memory_baseline_scope(managed_pid=managed_pid)
+        self._ensure_memory_baseline_scope(managed_pid=managed_pid, now=now)
         process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
         if family_rss_bytes is None:
             return None
@@ -3765,10 +3804,14 @@ class SupervisorManager:
         )
         family_rss_value = int(family_rss_bytes)
         baseline_family_rss = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
+        previous_baseline_family_rss = baseline_family_rss
         if family_rss_value > 0 and (baseline_family_rss is None or family_rss_value < baseline_family_rss):
             baseline_family_rss = family_rss_value
+            if previous_baseline_family_rss is not None and family_rss_value < previous_baseline_family_rss:
+                self._memory_baseline_last_adjusted_at = now
+                self._memory_baseline_last_adjustment_reason = "rss_relaxed"
+                self._memory_baseline_adjustment_total += 1
         self._memory_baseline_family_rss_bytes = baseline_family_rss
-        growth_bytes = max(0, family_rss_value - baseline_family_rss) if baseline_family_rss is not None else 0
         tail = read_memory_telemetry_tail(limit=256)
         window_start = now - _memory_telemetry_window_sec()
         window = [item for item in tail if float(item.get("sampled_at") or 0.0) >= window_start]
@@ -3779,6 +3822,28 @@ class SupervisorManager:
             first_at = float(first.get("sampled_at") or now)
             elapsed_min = max((now - first_at) / 60.0, 1.0 / 60.0)
             slope = max(0.0, (int(family_rss_bytes) - first_family) / elapsed_min)
+        if self._memory_baseline_started_at is None:
+            self._memory_baseline_started_at = now
+        baseline_age_sec = max(0.0, now - float(self._memory_baseline_started_at or now))
+        warmup_sec = _memory_baseline_warmup_sec()
+        maturity_slope_threshold = _memory_baseline_maturity_slope_bytes_per_min()
+        if self._memory_baseline_matured_at is not None:
+            baseline_phase = "mature"
+        elif baseline_age_sec < warmup_sec:
+            baseline_phase = "warming"
+        elif slope > maturity_slope_threshold:
+            baseline_phase = "maturity_blocked_slope"
+        else:
+            baseline_phase = "mature"
+            self._memory_baseline_matured_at = now
+            if baseline_family_rss is not None and family_rss_value > baseline_family_rss:
+                baseline_family_rss = family_rss_value
+                self._memory_baseline_family_rss_bytes = baseline_family_rss
+                self._memory_baseline_last_adjusted_at = now
+                self._memory_baseline_last_adjustment_reason = "warmup_matured"
+                self._memory_baseline_adjustment_total += 1
+        self._memory_baseline_phase = baseline_phase
+        growth_bytes = max(0, family_rss_value - baseline_family_rss) if baseline_family_rss is not None else 0
         suspicion_state = "stable"
         suspicion_reason: str | None = None
         growth_threshold = _memory_suspicion_growth_threshold_bytes()
@@ -3832,6 +3897,15 @@ class SupervisorManager:
                 "baseline_rss_bytes": self._memory_baseline_family_rss_bytes,
                 "baseline_scope_key": self._memory_baseline_scope_key,
                 "baseline_pid": self._memory_baseline_pid,
+                "baseline_phase": self._memory_baseline_phase,
+                "baseline_started_at": self._memory_baseline_started_at,
+                "baseline_matured_at": self._memory_baseline_matured_at,
+                "baseline_age_sec": baseline_age_sec,
+                "baseline_warmup_sec": warmup_sec,
+                "baseline_maturity_slope_threshold_bytes_per_min": maturity_slope_threshold,
+                "baseline_last_adjusted_at": self._memory_baseline_last_adjusted_at,
+                "baseline_last_adjustment_reason": self._memory_baseline_last_adjustment_reason,
+                "baseline_adjustment_total": self._memory_baseline_adjustment_total,
                 "rss_growth_bytes": growth_bytes,
                 "rss_growth_bytes_per_min": slope,
                 "sample_source": "supervisor",
@@ -6241,7 +6315,7 @@ class SupervisorManager:
         now = time.time()
         managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
         managed_pid = managed.get("managed_pid")
-        self._ensure_memory_baseline_scope(managed_pid=managed_pid)
+        self._ensure_memory_baseline_scope(managed_pid=managed_pid, now=now)
         process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
         attribution = _runtime_memory_attribution_snapshot(
             managed_pid,
@@ -6256,6 +6330,8 @@ class SupervisorManager:
             last_item = session_items[-1] if isinstance(session_items[-1], dict) else {}
             last_session_id = str(last_item.get("session_id") or "").strip() or None
         baseline_family_rss = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
+        baseline_started_at = self._memory_baseline_started_at
+        baseline_age_sec = max(0.0, now - baseline_started_at) if baseline_started_at is not None else None
         current_sample_state = "fresh" if family_rss_bytes is not None else "unavailable"
         if current_sample_state == "fresh":
             current_sample_reason = None
@@ -6342,6 +6418,15 @@ class SupervisorManager:
             "baseline_scope_key": self._memory_baseline_scope_key,
             "baseline_pid": self._memory_baseline_pid,
             "baseline_family_rss_bytes": baseline_family_rss,
+            "baseline_phase": self._memory_baseline_phase,
+            "baseline_started_at": baseline_started_at,
+            "baseline_matured_at": self._memory_baseline_matured_at,
+            "baseline_age_sec": baseline_age_sec,
+            "baseline_warmup_sec": _memory_baseline_warmup_sec(),
+            "baseline_maturity_slope_threshold_bytes_per_min": _memory_baseline_maturity_slope_bytes_per_min(),
+            "baseline_last_adjusted_at": self._memory_baseline_last_adjusted_at,
+            "baseline_last_adjustment_reason": self._memory_baseline_last_adjustment_reason,
+            "baseline_adjustment_total": self._memory_baseline_adjustment_total,
             "rss_growth_bytes": current_growth_bytes,
             "rss_growth_bytes_per_min": current_growth_bytes_per_min,
             "last_telemetry_sampled_at": last_telemetry_sampled_at,
@@ -8099,6 +8184,18 @@ class SupervisorManager:
                 "baseline_scope_key": str(runtime.get("baseline_scope_key") or "").strip() or None,
                 "baseline_pid": runtime.get("baseline_pid"),
                 "baseline_family_rss_bytes": runtime.get("baseline_family_rss_bytes"),
+                "baseline_phase": str(runtime.get("baseline_phase") or "").strip() or None,
+                "baseline_started_at": runtime.get("baseline_started_at"),
+                "baseline_matured_at": runtime.get("baseline_matured_at"),
+                "baseline_age_sec": runtime.get("baseline_age_sec"),
+                "baseline_warmup_sec": runtime.get("baseline_warmup_sec"),
+                "baseline_maturity_slope_threshold_bytes_per_min": runtime.get(
+                    "baseline_maturity_slope_threshold_bytes_per_min"
+                ),
+                "baseline_last_adjusted_at": runtime.get("baseline_last_adjusted_at"),
+                "baseline_last_adjustment_reason": str(runtime.get("baseline_last_adjustment_reason") or "").strip()
+                or None,
+                "baseline_adjustment_total": int(runtime.get("baseline_adjustment_total") or 0),
                 "rss_growth_bytes": runtime.get("rss_growth_bytes"),
                 "rss_growth_bytes_per_min": runtime.get("rss_growth_bytes_per_min"),
                 "last_telemetry_sampled_at": runtime.get("last_telemetry_sampled_at"),
