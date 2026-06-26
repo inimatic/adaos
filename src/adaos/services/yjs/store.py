@@ -6,6 +6,7 @@ import time
 import contextlib
 import contextvars
 import asyncio
+import gc
 import inspect
 import threading
 from pathlib import Path
@@ -53,6 +54,24 @@ def _env_flag(name: str, default: bool = False) -> bool:
 _YSTORE_APPLY_YIELD_BYTES = _env_int("ADAOS_YSTORE_APPLY_YIELD_BYTES", 512 * 1024, minimum=0)
 _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum=0.0)
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
+_YSTORE_BACKUP_MALLOC_TRIM = _env_flag("ADAOS_YSTORE_BACKUP_MALLOC_TRIM", True)
+
+
+def _trim_allocator_after_backup_compaction() -> bool:
+    if not _YSTORE_BACKUP_MALLOC_TRIM:
+        return False
+    if os.name != "posix":
+        return False
+    try:
+        import ctypes  # pylint: disable=import-outside-toplevel
+
+        libc = ctypes.CDLL("libc.so.6")
+        trim = getattr(libc, "malloc_trim", None)
+        if not callable(trim):
+            return False
+        return bool(trim(0))
+    except Exception:
+        return False
 
 
 def add_ystore_write_listener(cb: Callable[..., Any]) -> Callable[[], None]:
@@ -344,6 +363,8 @@ class AdaosMemoryYStore(BaseYStore):
         self._backup_total = 0
         self._backup_fast_path_total = 0
         self._backup_skipped_total = 0
+        self._backup_gc_total = 0
+        self._backup_malloc_trim_total = 0
         self._auto_backup_total = 0
         self._diff_write_total = 0
         self._snapshot_write_total = 0
@@ -358,6 +379,8 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_auto_backup_at = 0.0
         self._last_auto_backup_reason = ""
         self._last_backup_mode = ""
+        self._last_backup_gc_collected = 0
+        self._last_backup_malloc_trimmed = False
         self._last_apply_at = 0.0
         self._last_loaded_from_disk_at = 0.0
         self._last_update_bytes = 0
@@ -933,6 +956,18 @@ class AdaosMemoryYStore(BaseYStore):
                 # Keep the last auto-backup reason observable even when concurrent
                 # writes made runtime-side collapse unsafe for this round.
                 self._last_auto_backup_reason = self._last_auto_backup_reason
+        if compacted_runtime:
+            try:
+                gc_collected = int(gc.collect() or 0)
+            except Exception:
+                gc_collected = 0
+            malloc_trimmed = _trim_allocator_after_backup_compaction()
+            with self._lock:
+                self._backup_gc_total += 1
+                self._last_backup_gc_collected = int(gc_collected)
+                self._last_backup_malloc_trimmed = bool(malloc_trimmed)
+                if malloc_trimmed:
+                    self._backup_malloc_trim_total += 1
 
     def runtime_snapshot(self, *, now_ts: float | None = None) -> dict[str, Any]:
         now = time.time() if now_ts is None else float(now_ts)
@@ -979,6 +1014,8 @@ class AdaosMemoryYStore(BaseYStore):
             "backup_total": int(self._backup_total),
             "backup_fast_path_total": int(self._backup_fast_path_total),
             "backup_skipped_total": int(self._backup_skipped_total),
+            "backup_gc_total": int(self._backup_gc_total),
+            "backup_malloc_trim_total": int(self._backup_malloc_trim_total),
             "auto_backup_total": int(self._auto_backup_total),
             "diff_write_total": int(self._diff_write_total),
             "snapshot_write_total": int(self._snapshot_write_total),
@@ -1007,6 +1044,8 @@ class AdaosMemoryYStore(BaseYStore):
             "last_update_bytes": int(self._last_update_bytes),
             "last_snapshot_bytes": int(self._last_snapshot_bytes),
             "last_backup_mode": self._last_backup_mode or None,
+            "last_backup_gc_collected": int(self._last_backup_gc_collected),
+            "last_backup_malloc_trimmed": bool(self._last_backup_malloc_trimmed),
             "last_apply_update_total": int(self._last_apply_update_total),
             "last_apply_bytes": int(self._last_apply_bytes),
             "last_apply_yield_total": int(self._last_apply_yield_total),

@@ -338,6 +338,13 @@ _GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC = _env_float(
     1.0,
     minimum=0.0,
 )
+_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC = _env_float(
+    "ADAOS_YSTORE_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC",
+    30.0,
+    minimum=0.0,
+)
+_GATEWAY_LIVE_PERSIST_COMPACTION_LOCK = threading.RLock()
+_GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT: dict[str, float] = {}
 _YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S", 3.0, minimum=0.25)
 _YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS = _env_int("ADAOS_YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS", 3, minimum=1)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
@@ -591,20 +598,42 @@ def _request_gateway_live_persist_compaction(
     key = str(webspace_id or "").strip() or "default"
     delay = float(_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC)
     quiet = float(_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC)
+    cooldown = float(_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC)
+    if cooldown > 0.0:
+        now = time.monotonic()
+        with _GATEWAY_LIVE_PERSIST_COMPACTION_LOCK:
+            next_at = float(_GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT.get(key) or 0.0)
+            if now < next_at:
+                return False
+            _GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT[key] = now + cooldown
 
     async def _runner() -> None:
         try:
             if delay > 0.0:
                 await asyncio.sleep(delay)
-            await requester(reason="gateway_live_room_persist", min_quiet_sec=quiet)
-            _ylog.warning(
-                "YStore compaction requested after large gateway live-room persist webspace=%s bytes=%s source=%s channel=%s",
-                key,
-                observed,
-                source,
-                channel,
-            )
+            requested = bool(await requester(reason="gateway_live_room_persist", min_quiet_sec=quiet))
+            if requested:
+                _ylog.warning(
+                    "YStore compaction requested after large gateway live-room persist webspace=%s bytes=%s source=%s channel=%s cooldown_s=%.3f",
+                    key,
+                    observed,
+                    source,
+                    channel,
+                    cooldown,
+                )
+            else:
+                _ylog.debug(
+                    "YStore compaction skipped after large gateway live-room persist webspace=%s bytes=%s source=%s channel=%s",
+                    key,
+                    observed,
+                    source,
+                    channel,
+                )
         except Exception:
+            if cooldown > 0.0:
+                with _GATEWAY_LIVE_PERSIST_COMPACTION_LOCK:
+                    if float(_GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT.get(key) or 0.0) > time.monotonic():
+                        _GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT.pop(key, None)
             _ylog.debug(
                 "failed to request YStore compaction after gateway live-room persist webspace=%s",
                 key,

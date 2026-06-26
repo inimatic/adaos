@@ -645,6 +645,7 @@ def test_diagnostic_room_requests_compaction_after_large_gateway_persist(monkeyp
     monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_BYTES", 4)
     monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC", 0.0)
     monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC", 0.0)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC", 0.0)
 
     async def _exercise() -> None:
         await room._tracked_ystore_write(b"large-gateway-update")
@@ -653,6 +654,35 @@ def test_diagnostic_room_requests_compaction_after_large_gateway_persist(monkeyp
     asyncio.run(_exercise())
 
     assert ystore.writes == [b"large-gateway-update"]
+    assert ystore.compaction_requests == [
+        {
+            "reason": "gateway_live_room_persist",
+            "min_quiet_sec": 0.0,
+        }
+    ]
+
+
+def test_diagnostic_room_throttles_large_gateway_persist_compaction(monkeypatch) -> None:
+    reset_backend_room_update_markers()
+    ystore = _FakeWriteYStore()
+    room = gateway_module.DiagnosticYRoom(ystore=ystore, log=_fake_log())
+    room._webspace_id = "desktop-throttle"
+
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_BYTES", 4)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_DELAY_SEC", 0.0)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_QUIET_SEC", 0.0)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC", 60.0)
+    with gateway_module._GATEWAY_LIVE_PERSIST_COMPACTION_LOCK:
+        gateway_module._GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT.clear()
+
+    async def _exercise() -> None:
+        await room._tracked_ystore_write(b"first-large-gateway-update")
+        await room._tracked_ystore_write(b"second-large-gateway-update")
+        await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+    assert ystore.writes == [b"first-large-gateway-update", b"second-large-gateway-update"]
     assert ystore.compaction_requests == [
         {
             "reason": "gateway_live_room_persist",

@@ -262,6 +262,29 @@ async def test_ystore_backup_to_disk_compacts_runtime_log(monkeypatch) -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_backup_to_disk_releases_allocator_after_compaction(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
+    monkeypatch.setattr(ystore_module.gc, "collect", lambda: 7)
+    monkeypatch.setattr(ystore_module, "_trim_allocator_after_backup_compaction", lambda: True)
+    webspace_id = _webspace_id("backup-release")
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        for idx in range(3):
+            async with async_get_ydoc(webspace_id) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    ydoc.get_map("data").set(txn, f"item_{idx}", idx)
+
+        await store.backup_to_disk(compact_runtime=True, backup_kind="manual")
+
+        snapshot = store.runtime_snapshot()
+        assert snapshot["backup_gc_total"] >= 1
+        assert snapshot["last_backup_gc_collected"] == 7
+        assert snapshot["last_backup_malloc_trimmed"] is True
+        assert snapshot["backup_malloc_trim_total"] >= 1
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_backup_to_disk_reuses_runtime_base_snapshot_without_reencode(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
     webspace_id = _webspace_id("backup-fast-path")
