@@ -6,6 +6,12 @@ SDK module: `adaos.sdk.io`
 
 These helpers publish events onto the local bus. They do not write to Yjs directly.
 
+These helpers are low-level IO/event primitives. For ordinary user-visible
+dialog the target API is `adaos.sdk.conversation`, described in
+[Conversation and Channel Architecture](../architecture/conversation-and-channel-architecture.md).
+Until that SDK exists, `io.out.chat.append` remains the compatibility bridge
+used by existing skills and the Voice surface.
+
 - `io.out.chat.append(text, from_='hub', _meta={...})`
   - RouterService projects into `data.voice_chat.messages` of the target webspace.
 - `io.out.say(text, lang='ru-RU', _meta={...})`
@@ -30,6 +36,12 @@ and configure targets in Yjs: `data.routing.routes[route_id] = { webspace_ids: [
 ## WebIO data contracts (MVP)
 
 ### `data/voice_chat`
+
+Compatibility status: this is the current browser-visible Voice tail, not the
+target canonical conversation history store. The target architecture keeps
+conversation history and memory in a node-local conversation/memory store with
+core-governed policy and owner-scoped access, and projects only compact active
+tails into Yjs/WebIO.
 
 `data.voice_chat` is a JSON object:
 

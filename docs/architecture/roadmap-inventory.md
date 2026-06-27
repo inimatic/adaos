@@ -187,9 +187,35 @@ Current status:
 - [x] Telegram text can be bridged into NLU with transport routing metadata.
 - [x] Router projects SDK chat output into the current browser-visible chat
   path.
+- [x] Target documentation now distinguishes transport channels, dialog
+  channels, conversations, owners, initiators, and browser projections.
 - [ ] There is no first-class `Conversation` service yet.
 - [ ] Conversation identity, thread identity, owner, surface, context policy,
   and routing policy schemas are not frozen.
+- [ ] There is no first-class Dialog Runtime / Tracker yet; current text input
+  flows from transport into NLU and skill dispatch without an explicit turn
+  lifecycle, active frame, repair state, response planner, or trace envelope.
+- [ ] Dialog act, task-frame/form, response envelope, and turn trace schemas are
+  not frozen.
+- [ ] There is no node-local conversation/memory store with append-only
+  message ledger, FTS, segment summaries, memory items, and owner-scoped access
+  yet; current Voice history is a compact compatibility tail.
+- [ ] LLM Builder and skill runtimes do not yet receive budgeted context
+  packets from a shared retrieval service.
+- [ ] Skill/agent personalization is still early and not yet represented as
+  scoped memory items with consent, source refs, and retrieval policy.
+- [ ] There is no `dialog_channel_id` or active dialog-channel registry yet.
+- [x] The dispatcher now materializes a successful skill tool result `message`
+  into the current Voice chat tail when the skill did not already publish a
+  matching chat append.
+- [ ] The dispatcher/conversation service does not yet provide the same
+  guarantee for canonical conversations, future `dialog_channel_id`, typed
+  content, and non-Voice dialog surfaces.
+- [ ] There is no dialog-level golden conversation suite for channel switching,
+  companion agent switching, profile correction, Builder isolation, Teacher
+  clarification, endpoint audio dialog mode, or long-context retrieval.
+- [ ] Response planning is not centralized yet; skills and compatibility paths
+  can still choose user-visible rendering directly.
 - [ ] Skill-owned chats are not yet declarable in manifests.
 - [ ] The SDK does not yet expose `adaos.sdk.conversation`.
 - [ ] Builder does not yet own a separate conversation context.
@@ -197,12 +223,20 @@ Current status:
   conversation-owned.
 - [ ] Voice, Telegram, and browser chat still have compatibility paths where
   transport or route ids imply context.
+- [ ] `voice_chat_skill` still contains semantic fallback behavior that should
+  move to conversation owner/surface policies.
 
 Developer-doc gap:
 
 - LLM skill-development guidance must move from low-level chat/voice helpers to
   conversation-first examples so generated skills can create private skill
   chats without binding themselves to Telegram, voice, or browser transport.
+- Skill-development guidance also needs examples for skill-initiated dialogs,
+  core-governed initiator evidence, scoped memory, context packets, and when to
+  use Pending Actions instead of chat questions.
+- Documentation now needs to teach Dialog Runtime concepts explicitly: turn
+  lifecycle, dialog acts, task frames/forms, repair states, response envelopes,
+  and how NLU evidence differs from a final dialog decision.
 
 ### Root MCP, Planes, and Agent-Facing Governance
 

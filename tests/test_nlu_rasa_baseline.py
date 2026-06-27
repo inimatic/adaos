@@ -466,6 +466,92 @@ async def test_teacher_skill_action_candidate_dispatches_tool_without_scenario_m
     assert outcomes[-1]["action_type"] == "callSkill"
 
 
+def test_skill_tool_result_message_materializes_to_voice_chat(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    messages: list[dict] = []
+    ctx.bus.subscribe("io.out.chat.append", lambda ev: messages.append(dict(ev.payload or {})))
+
+    def _run_skill_tool(_ctx, skill: str, tool: str, payload: dict) -> dict:
+        assert (skill, tool) == ("conversation_companions", "start")
+        assert payload["webspace_id"] == "desktop"
+        assert payload["_meta"]["route_id"] == "voice_chat"
+        return {"ok": True, "message": "Companion ready."}
+
+    monkeypatch.setattr(dispatcher_module, "_run_skill_tool", _run_skill_tool)
+
+    dispatcher_module._execute_skill_tool_action(
+        ctx,
+        action={"skill": "conversation_companions", "tool": "start"},
+        intent="conversation.start",
+        scenario_id="web_desktop",
+        webspace_id="desktop",
+        slots={},
+        raw={
+            "text": "pogovorim",
+            "request_id": "req.materialize.voice",
+            "_meta": {"route_id": "voice_chat", "target_node_id": "local-node"},
+        },
+    )
+
+    visible = [item for item in messages if item.get("text") == "Companion ready."]
+    assert len(visible) == 1
+    assert visible[0]["from"] == "hub"
+    assert visible[0]["_meta"]["route_id"] == "voice_chat"
+    assert visible[0]["_meta"]["webspace_id"] == "desktop"
+    assert visible[0]["_meta"]["request_id"] == "req.materialize.voice"
+    assert visible[0]["_meta"]["target_node_id"] == "local-node"
+    assert visible[0]["_meta"]["nlu_action_target"] == "conversation_companions.start"
+
+
+def test_skill_tool_result_message_does_not_duplicate_existing_chat_append(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.eventbus import emit as bus_emit
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    messages: list[dict] = []
+    ctx.bus.subscribe("io.out.chat.append", lambda ev: messages.append(dict(ev.payload or {})))
+
+    def _run_skill_tool(_ctx, _skill: str, _tool: str, payload: dict) -> dict:
+        bus_emit(
+            ctx.bus,
+            "io.out.chat.append",
+            {
+                "id": "",
+                "from": "hub",
+                "text": "Companion ready.",
+                "ts": None,
+                "_meta": dict(payload.get("_meta") or {}),
+            },
+            source="test",
+        )
+        return {"ok": True, "message": "Companion ready."}
+
+    monkeypatch.setattr(dispatcher_module, "_run_skill_tool", _run_skill_tool)
+
+    dispatcher_module._execute_skill_tool_action(
+        ctx,
+        action={"skill": "conversation_companions", "tool": "start"},
+        intent="conversation.start",
+        scenario_id="web_desktop",
+        webspace_id="desktop",
+        slots={},
+        raw={
+            "text": "pogovorim",
+            "request_id": "req.materialize.dedupe",
+            "_meta": {"route_id": "voice_chat"},
+        },
+    )
+
+    visible = [item for item in messages if item.get("text") == "Companion ready."]
+    assert len(visible) == 1
+    assert visible[0]["_meta"]["route_id"] == "voice_chat"
+    assert visible[0]["_meta"]["webspace_id"] == "desktop"
+
+
 @pytest.mark.anyio
 async def test_skill_owned_nlu_action_dispatches_tool_without_scenario_mapping(monkeypatch) -> None:
     from adaos.services.agent_context import get_ctx

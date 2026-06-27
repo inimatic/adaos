@@ -1,6 +1,6 @@
 # Conversation and Channel Architecture
 
-Status: target architecture and implementation checklist.
+Status: target architecture, current-state delta, and implementation roadmap.
 
 AdaOS needs a first-class conversation model for user-facing and
 skill-owned dialogs. Voice, Telegram, browser chat, and future messenger
@@ -20,6 +20,45 @@ Related documents:
 - [Pending Actions](pending-actions.md)
 - [SDK IO](../sdk/io.md)
 
+## Current Implemented Slice
+
+The current runtime has useful pieces, but not yet a first-class
+conversation service.
+
+Implemented today:
+
+- `voice_chat_skill` declares the browser Voice app and a `voice_chat.messages`
+  WebIO stream.
+- `RouterService` receives `voice.chat.user`, appends the user message to the
+  current Voice tail, and emits `nlp.intent.detect.request`.
+- `RouterService` receives `io.out.chat.append` and projects the message into
+  the browser-visible Voice tail.
+- The NLU pipeline can load skill-declared regex rules and dispatch matching
+  intents to skill tools.
+- The NLU dispatcher has a Voice compatibility bridge: when a skill tool returns
+  `{ok: true, message: "..."}` for `_meta.route_id=voice_chat`, it publishes
+  `io.out.chat.append` unless the skill already emitted a matching chat append.
+- Telegram input is normalized enough to preserve transport reply metadata and
+  enter the NLU pipeline.
+
+Important gaps:
+
+- There is no canonical `Conversation` record or message ledger.
+- There is no node-local conversation/memory store with owner-scoped API,
+  FTS/summary indexing, and policy-checked retrieval.
+- There is no `dialog_channel_id`; `route_id=voice_chat` is a UI/transport
+  route, not a context boundary.
+- Voice history is one compact compatibility tail, not per-conversation
+  history.
+- There is no canonical conversation output contract beyond the current Voice
+  compatibility bridge.
+- LLM Builder and skill runtimes do not yet receive budgeted context packets
+  assembled from recent turns, summaries, memory items, and evidence refs.
+- `voice_chat_skill.handle_text` still owns legacy semantic fallback behavior.
+  In the target design Voice becomes a dialog shell, not the semantic owner.
+- NLU Teacher clarification sessions and Builder dialogs are still partly
+  chat-local instead of conversation-owned.
+
 ## Design Rules
 
 1. A conversation is not a transport.
@@ -34,6 +73,19 @@ Related documents:
    state.
 7. Conversation state is durable enough to resume across transports, but each
    transport can carry its own external references and delivery status.
+8. A dialog channel is a user-interface binding to a conversation, not a
+   transport channel and not the canonical history id.
+9. Conversation storage is node-local and core-governed. A skill may be the
+   logical owner of a conversation or memory namespace, but it should not own
+   arbitrary private transcript files as the primary storage model.
+10. Yjs and WebIO streams are browser projection layers. They may carry compact
+    active tails, but must not become the unbounded transcript store.
+11. Long-context retrieval is a first-class runtime service. LLM Builder and
+    skill runtimes must receive budgeted context packets, not raw unbounded
+    transcripts.
+12. NLU is not the dialog manager. Rasa, regex, neural, or Teacher stages may
+    classify text, but AdaOS owns turn tracking, repair state, forms, response
+    planning, memory policy, and action dispatch.
 
 ## Vocabulary
 
@@ -91,58 +143,343 @@ Examples:
 Surface is used for policy, context selection, UI routing, and tool access. It
 is not a delivery target.
 
+### Dialog Channel
+
+A user-facing slot in a global dialog surface that points to a conversation.
+
+Examples:
+
+- `general`
+- `conversational`
+- `builder`
+- `teacher`
+
+A dialog channel exists so the browser Voice/chat UI can switch the visible
+context without creating separate apps for every dialog owner. It is not a
+transport channel from [Channel Semantics](channel-semantics.md), and it is not
+the durable history key. The durable key is `conversation_id`.
+
+Channel rules:
+
+- A channel entry maps to one active `conversation_id` at a time.
+- Switching a channel switches the visible history by conversation id.
+- A channel may be created by core, by a user command, or by an authorized
+  skill request, but the core owns the channel registry.
+- Channel names are product-level affordances. They should be stable enough
+  for UI and voice commands, but they should not be used as permission keys.
+- The same conversation may be reachable from more than one transport, but it
+  should normally be reachable from one active dialog channel per webspace.
+
+### Owner
+
+The actor accountable for interpreting future turns in a conversation.
+
+Examples:
+
+- `core:general_assistant`
+- `core:nlu_teacher`
+- `skill:conversation_companions`
+- `skill:builder`
+
+The owner controls context policy, fallback behavior, and default tool access.
+Ownership is not the same as initiation: a skill can request a conversation
+that core creates, and core can initiate a conversation whose owner is a skill
+or core surface.
+
+### Initiator
+
+The actor or event that caused a conversation, thread, or message turn to
+start.
+
+Examples:
+
+- user sent a message or switched a dialog channel
+- skill opened a private support chat
+- core started an NLU Teacher clarification after a failed intent match
+- runtime recovery started an operator conversation after a service failure
+- Telegram deep link selected an existing conversation
+
+The initiator is evidence, not authority. It is recorded for audit,
+idempotency, and proactive-message policy. The owner and routing policy still
+decide whether the conversation may continue and where it may be delivered.
+
+### Node Conversation/Memory Store
+
+The physical storage service on one AdaOS node.
+
+The store is local to the node for performance, durability, indexing, and
+operational simplicity. The first implementation should use the node's SQLite
+database with WAL enabled and FTS5 where available. Later implementations may
+add a vector index or separate search sidecar, but the API contract should stay
+node-local and owner-scoped.
+
+The store is not the same as "core owns every dialog". Core governs schema,
+policy, routing, idempotency, projection, and access checks. The logical owner
+of a conversation or memory item may still be `core:*`, `skill:*`, or a
+skill-scoped agent.
+
+### Logical Memory Owner
+
+The actor whose policy controls interpretation and access to a memory item or
+conversation history segment.
+
+Examples:
+
+- `core:general_assistant`
+- `core:nlu_teacher`
+- `skill:conversation_companions`
+- `agent:conversation_companions:nika`
+
+Logical ownership is enforced by the conversation/memory service. Skills use
+SDK calls scoped to their owner id; they do not query the node database
+directly.
+
+### Agent
+
+A skill-scoped participant that can speak or maintain behavior/personality
+state inside one conversation.
+
+Agents are not dialog channels. One `conversational` channel can host multiple
+agents such as `arseny`, `nika`, and `mira`. Messages and memory items should
+carry `agent_id` when the turn or fact belongs to a specific agent.
+
+### Memory Item
+
+A normalized fact, preference, agreement, profile trait, summary, or retrieval
+fragment derived from conversation turns or explicit user configuration.
+
+Memory items are separate from message history. They have source references,
+scope, consent, owner, confidence, timestamps, and optional expiry. This allows
+the runtime to retrieve "what matters" without rereading the entire transcript.
+
 ## Target Data Model
 
-Conversation records live under a shared conversation store:
+Conversation records and memory live in a node-local conversation/memory
+service. The target model separates physical storage from logical ownership:
+
+1. Node-local durable store.
+   This is the physical source of truth on one node for conversation metadata,
+   append-only message ledger, thread records, dialog-channel bindings,
+   transport bindings, memory items, segment summaries, search indexes,
+   idempotency keys, delivery status, and retention/redaction metadata.
+   SQLite with WAL and FTS5 is the preferred first implementation because it is
+   local, transactional, easy to back up, and fast enough for the current node
+   runtime.
+2. Core-governed registry and policy.
+   Core owns ids, schema, owner-scoped access checks, projection refresh,
+   retention, redaction, routing, and federation. Core does not necessarily own
+   the semantics of every conversation.
+3. Logical owner namespace.
+   A conversation or memory item can be owned by `core:*`, `skill:*`, or a
+   skill-scoped agent. The logical owner controls prompt assembly and meaning,
+   but accesses storage through scoped SDK/runtime APIs.
+4. Browser projection.
+   Yjs contains only compact, demand-aware browser state: active dialog channel,
+   conversation summaries, and bounded message tails for active/visible
+   conversations. It is a projection cache, not the transcript ledger.
+5. WebIO streams.
+   Streams provide low-latency replace-mode tails for open chat panels. They are
+   bounded and recoverable from the node-local store or Yjs projection, but they
+   are not durable history.
+6. Background indexes and summaries.
+   FTS, segment summaries, memory extraction, and optional vector embeddings
+   are built asynchronously from the append-only ledger. User turns must not
+   block on heavy summarization or embedding jobs.
+
+Legacy `skill_memory` remains valid for simple private runtime state and for
+compatibility. New LLM-facing skills should prefer the node conversation/memory
+service for dialog history, profiles, long-term preferences, and retrieval
+fragments, using owner-scoped APIs instead of private transcript files.
+
+Canonical conversation record:
+
+```json
+{
+  "id": "conv.builder.default",
+  "node_id": "node.local",
+  "kind": "builder",
+  "owner": "skill:builder",
+  "logical_owner": "skill:builder",
+  "surface": "builder",
+  "webspace_id": "default",
+  "title": "Builder",
+  "state": "active",
+  "created_by": {
+    "type": "user",
+    "id": "user.local",
+    "source": "web",
+    "reason": "opened_builder_channel"
+  },
+  "participants": [
+    {"type": "user", "id": "user.local"},
+    {"type": "skill", "id": "builder"}
+  ],
+  "context_policy": {
+    "strategy": "isolated",
+    "memory_scope": "skill_user",
+    "include_general_history": false,
+    "max_history_messages": 60,
+    "summary_policy": "rolling_summary"
+  },
+  "history_policy": {
+    "mode": "node_store",
+    "searchable": true,
+    "cross_skill_use": "deny_by_default",
+    "raw_window_messages": 500,
+    "segment_size_messages": 40,
+    "summarization": "async"
+  },
+  "retrieval_policy": {
+    "recent_turns": 20,
+    "fts_top_k": 8,
+    "semantic_top_k": 0,
+    "memory_top_k": 12,
+    "max_context_tokens": 12000
+  },
+  "routing_policy": {
+    "default_transports": ["web", "telegram"],
+    "allow_voice": false,
+    "allow_proactive": false
+  },
+  "retention_policy": {
+    "class": "normal",
+    "max_raw_messages": 500,
+    "redaction": "policy_controlled"
+  },
+  "created_at": 1730000000.0,
+  "updated_at": 1730000000.0
+}
+```
+
+Skill conversation with several agents:
+
+```json
+{
+  "id": "conv.skill.conversation_companions.default",
+  "node_id": "node.local",
+  "kind": "skill",
+  "owner": "skill:conversation_companions",
+  "logical_owner": "skill:conversation_companions",
+  "surface": "skill:conversation_companions",
+  "webspace_id": "default",
+  "title": "Companions",
+  "state": "active",
+  "agents": [
+    {"id": "arseny", "display_name": "Arseny", "role": "advisor"},
+    {"id": "nika", "display_name": "Nika", "role": "skeptic"},
+    {"id": "mira", "display_name": "Mira", "role": "storyteller"}
+  ],
+  "active_agent_id": "arseny",
+  "context_policy": {
+    "strategy": "isolated",
+    "memory_scope": "skill_user",
+    "include_general_history": false,
+    "summary_policy": "rolling_summary"
+  },
+  "history_policy": {
+    "mode": "node_store",
+    "logical_owner": "skill:conversation_companions",
+    "searchable": true,
+    "cross_skill_use": "deny_by_default",
+    "raw_window_messages": 300,
+    "segment_size_messages": 40,
+    "summarization": "async"
+  },
+  "personalization_policy": {
+    "global_user_profile": "read_with_consent",
+    "skill_user_profile": "read_write",
+    "agent_user_profile": "read_write",
+    "conversation_profile": "read_write"
+  }
+}
+```
+
+Canonical message record:
+
+```json
+{
+  "id": "msg.123",
+  "node_id": "node.local",
+  "conversation_id": "conv.builder.default",
+  "seq": 42,
+  "thread_id": null,
+  "role": "assistant",
+  "from": {"type": "skill", "id": "builder"},
+  "agent_id": null,
+  "initiator": {"type": "skill", "id": "builder", "reason": "draft_ready"},
+  "content": [{"type": "text", "text": "What should we change?"}],
+  "transport": "web",
+  "external_ref": null,
+  "meta": {
+    "trace_id": "trace.123",
+    "route_id": "voice_chat",
+    "dialog_channel_id": "builder"
+  },
+  "index_state": {"fts": "pending", "summary": "pending", "embedding": "not_configured"},
+  "created_at": 1730000001.0
+}
+```
+
+Memory item record:
+
+```json
+{
+  "id": "mem.123",
+  "node_id": "node.local",
+  "owner": "skill:conversation_companions",
+  "scope": "agent_user",
+  "user_id": "user.local",
+  "conversation_id": "conv.skill.conversation_companions.default",
+  "agent_id": "nika",
+  "kind": "preference",
+  "text": "User prefers short, direct replies from Nika.",
+  "source_refs": [{"message_id": "msg.120", "seq": 17}],
+  "confidence": 0.82,
+  "consent": "skill_scoped",
+  "visibility": "owner_only",
+  "expires_at": null,
+  "created_at": 1730000001.0,
+  "updated_at": 1730000001.0
+}
+```
+
+Browser-visible dialog projection:
 
 ```json
 {
   "data": {
-    "conversations": {
-      "by_id": {
-        "conv.builder.default": {
-          "id": "conv.builder.default",
-          "kind": "builder",
-          "owner": "skill:builder",
-          "surface": "builder",
-          "webspace_id": "default",
+    "dialog": {
+      "active_channel_id": "conversational",
+      "channels": {
+        "general": {
+          "conversation_id": "conv.general.default",
+          "title": "General",
+          "surface": "general_assistant"
+        },
+        "conversational": {
+          "conversation_id": "conv.skill.conversation_companions.default",
+          "title": "Companions",
+          "surface": "skill:conversation_companions"
+        },
+        "builder": {
+          "conversation_id": "conv.builder.default",
           "title": "Builder",
-          "state": "active",
-          "participants": [
-            {"type": "user", "id": "user.local"},
-            {"type": "skill", "id": "builder"}
-          ],
-          "context_policy": {
-            "strategy": "isolated",
-            "memory_scope": "skill",
-            "include_general_history": false
-          },
-          "routing_policy": {
-            "default_transports": ["web", "telegram"],
-            "allow_voice": false
-          },
-          "created_at": 1730000000.0,
-          "updated_at": 1730000000.0
+          "surface": "builder"
         }
       },
-      "messages_by_conversation": {
-        "conv.builder.default": [
+      "visible_tail": {
+        "conversation_id": "conv.skill.conversation_companions.default",
+        "messages": [
           {
             "id": "msg.123",
-            "conversation_id": "conv.builder.default",
-            "thread_id": null,
             "role": "assistant",
-            "from": {"type": "skill", "id": "builder"},
-            "content": [{"type": "text", "text": "What should we change?"}],
-            "transport": "web",
-            "external_ref": null,
-            "meta": {
-              "trace_id": "trace.123",
-              "route_id": "builder"
-            },
+            "from": {"type": "skill", "id": "conversation_companions"},
+            "text": "Choose a character or just start talking.",
             "created_at": 1730000001.0
           }
-        ]
+        ],
+        "message_count": 1,
+        "updated_at": 1730000001.0
       }
     }
   }
@@ -153,18 +490,168 @@ Rules:
 
 - `conversation.id`, `kind`, `owner`, `surface`, `webspace_id`, `state`,
   `context_policy`, and `routing_policy` are required.
+- `node_id` identifies the physical authority for storage and indexing.
 - `owner` is the actor accountable for the conversation context.
+- `logical_owner` controls memory interpretation and owner-scoped retrieval.
+- `created_by` records who or what initiated the conversation. It is required
+  for user-visible conversations created after the conversation service lands.
 - `surface` is the runtime that should interpret incoming user messages by
   default.
 - `kind` is a product category, not an authorization key.
 - `participants` describes who may see or write into the conversation.
 - `context_policy` controls memory and LLM prompt assembly.
+- `history_policy` controls physical history storage, indexing, summarization,
+  cross-owner access, and raw-window limits.
+- `retrieval_policy` controls the budgeted context packet assembled for LLM
+  Builder and skill runtime calls.
 - `routing_policy` controls where outbound messages may be delivered.
+- `retention_policy` controls raw-history limits, summaries, export/delete
+  behavior, and redaction. The defaults must be conservative for personal
+  dialog.
+- `agents` are skill-scoped participants inside a conversation, not separate
+  dialog channels.
 - Message `content` is typed; plain text is only one content part.
+- Message `seq` is monotonically increasing per conversation and is preferred
+  for range queries, segmentation, and replay.
+- Message `initiator` is evidence for why the turn exists. It does not override
+  owner or participant policy.
+- Message `agent_id` points to a skill-scoped agent when the turn is from or to
+  a specific character/agent.
+- Memory `scope` starts with `global_user`, `skill_user`, `agent_user`, and
+  `conversation`.
+- Memory `consent` and `visibility` are required for anything that may be
+  reused outside the immediate prompt.
 - Message `transport` records where the message actually moved. It does not
   decide which context the message belongs to.
 - `external_ref` stores platform-specific ids and must never be used as the
   canonical conversation id.
+- `data.dialog` is a browser projection. It is allowed to be stale, compact, or
+  absent during recovery. The canonical store remains authoritative.
+
+## Node Storage Layout
+
+The first implementation should prefer a single node-local database over
+per-skill transcript files. This is the best tradeoff for performance,
+operations, search, and future federation.
+
+Initial logical tables:
+
+```text
+conversations(
+  id, node_id, kind, owner, logical_owner, surface, webspace_id,
+  title, state, policy_json, created_at, updated_at
+)
+
+dialog_channels(
+  webspace_id, channel_id, active_conversation_id, title,
+  owner, surface, updated_at
+)
+
+conversation_messages(
+  id, node_id, conversation_id, seq, thread_id, role,
+  owner, agent_id, text, content_json, source_json,
+  index_state_json, created_at
+)
+
+conversation_segments(
+  id, conversation_id, seq_from, seq_to, summary,
+  token_estimate, index_state_json, updated_at
+)
+
+memory_items(
+  id, node_id, owner, scope, user_id, conversation_id, agent_id,
+  kind, text, source_refs_json, policy_json,
+  confidence, consent, visibility, expires_at, created_at, updated_at
+)
+
+delivery_attempts(
+  id, message_id, transport, external_ref_json, status,
+  error, created_at, updated_at
+)
+
+conversation_idempotency(
+  key, conversation_id, message_id, action_target, status, created_at
+)
+```
+
+Recommended implementation details:
+
+- use append-only writes for message turns; update only derived state and
+  delivery/index status
+- use per-conversation `seq` for stable ranges and fast pagination
+- use FTS over `conversation_messages.text`, `conversation_segments.summary`,
+  and `memory_items.text`
+- build segment summaries and optional embeddings asynchronously
+- keep hot writes independent from LLM calls, summarization, and vector indexing
+- keep Yjs projection writes bounded and fingerprinted
+- expose all storage through conversation/memory services and SDKs, not direct
+  SQL from skills
+
+## Retrieval and Performance Model
+
+LLM Builder and skill runtime should receive a compact context packet assembled
+by the node conversation/memory service.
+
+Default retrieval pipeline:
+
+1. Resolve current `conversation_id`, `thread_id`, `owner`, `agent_id`, user,
+   and policy.
+2. Fetch recent turns by `(conversation_id, seq desc)` within a strict message
+   or token budget.
+3. Fetch relevant segment summaries through FTS and optional vector search.
+4. Fetch memory items by owner/scope/agent/user with policy checks.
+5. Attach evidence refs for Pending Actions, NLU traces, Builder validation,
+   and tool outcomes instead of copying large blobs.
+6. Return a deterministic context packet with budget accounting.
+
+Context packet shape:
+
+```json
+{
+  "conversation_id": "conv.skill.conversation_companions.default",
+  "owner": "skill:conversation_companions",
+  "agent_id": "nika",
+  "budget": {"max_tokens": 12000, "estimated_tokens": 5300},
+  "recent_messages": [],
+  "relevant_segments": [],
+  "memory_items": [],
+  "profiles": {
+    "global_user": null,
+    "skill_user": {},
+    "agent_user": {},
+    "conversation": {}
+  },
+  "evidence_refs": []
+}
+```
+
+Runtime rules:
+
+- never assemble prompts by reading the full transcript
+- use recent turns + selected segments + selected memory items
+- make cross-skill memory reuse deny-by-default
+- make global user memory consent-aware and auditable
+- degrade gracefully when FTS/vector/summarization is unavailable
+- keep federation optional and timeout-bound
+
+## Subnet Federation
+
+AdaOS should not implement a strongly consistent distributed conversation
+database as the first target. Each node owns its local conversation/memory
+store.
+
+Cross-node access is a federated query:
+
+1. The requesting node sends a policy-checked memory/search request to target
+   node(s).
+2. Each target node runs local retrieval under local owner, user, and consent
+   policy.
+3. Each target returns fragments, summaries, scores, and refs, not raw database
+   access.
+4. The requester aggregates partial results with timeouts and records evidence.
+
+This model supports subnet-wide search and LLM Builder context discovery
+without coupling all nodes to one distributed SQL or vector index.
 
 ## Canonical Conversation Kinds
 
@@ -178,6 +665,168 @@ Initial kinds:
 
 New kinds require a reason that cannot be expressed by owner, surface,
 participants, or context policy.
+
+## Agents and Personalization
+
+A skill-owned conversation may host multiple agents/personas. This is required
+for `conversation_companions` and for future multi-agent Builder or support
+workflows.
+
+Rules:
+
+- A dialog channel selects a conversation, not one agent.
+- A conversation may declare several agents and one active agent.
+- A message may carry `agent_id` when a specific agent speaks, is addressed, or
+  owns the memory update.
+- Agent profiles are logical skill-owned records stored in the node
+  conversation/memory service or referenced through the skill's profile API.
+- Agent memory defaults to `scope=agent_user` or `scope=conversation`.
+- Switching active agent is a conversation state change, not a channel switch.
+
+Personalization layers:
+
+- `global_user_profile`: core-governed, explicit consent, reusable only through
+  policy-checked retrieval
+- `skill_user_profile`: owned by one skill for one user
+- `agent_user_profile`: owned by one skill agent for one user
+- `conversation_profile`: temporary agreements and preferences inside one
+  conversation
+- `memory_items`: extracted facts, preferences, and summaries with source refs
+  and confidence
+
+LLM Builder and generated skills should treat personalization as typed memory
+with source refs and consent, not as arbitrary prompt text hidden in skill
+files.
+
+## Dialog Initiation
+
+AdaOS has more than one legitimate initiator. The architecture must preserve
+that without letting every skill invent its own delivery rules.
+
+### User-Initiated
+
+A user initiates a conversation by sending a message, selecting a dialog
+channel, opening a dedicated surface, following a deep link, or replying through
+a transport such as Telegram.
+
+Rules:
+
+- If an explicit `conversation_id` is present and policy allows it, append the
+  turn there.
+- If a `dialog_channel_id` is present, resolve it to the active conversation in
+  that channel.
+- If neither is present, resolve to the active channel for the current surface
+  or fall back to `general`.
+- The user message is appended before semantic dispatch so failures remain
+  visible and auditable.
+
+### Skill-Initiated
+
+A skill may request a conversation through the SDK or manifest. The core
+creates or opens the conversation, records the skill as initiator, and applies
+policy before any visible message is delivered.
+
+Allowed examples:
+
+- a support skill opens its declared private chat after the user invokes it
+- `conversation_companions` opens a `kind=skill` companion conversation after
+  the user says "let's talk"
+- a skill asks a bounded question through `chat.ask(...)`
+
+Risk controls:
+
+- Skill-initiated visible conversations require an allowed owner/surface and
+  participants.
+- Proactive skill messages require `routing_policy.allow_proactive=true` or an
+  explicit user action/Pending Action that authorizes the prompt.
+- A skill may be the owner of conversation semantics, but the core owns
+  conversation creation, id allocation, history append, and delivery routing.
+- If the skill runtime is unavailable, core records the failed turn and applies
+  the conversation fallback policy instead of silently dropping the message.
+
+### Core-Initiated
+
+The core may initiate a conversation when the runtime itself needs a governed
+human interaction.
+
+Examples:
+
+- NLU Teacher clarification after an intent miss or unsafe candidate
+- Builder repair/approval flow after generated artifact validation
+- runtime recovery conversation after repeated service failures
+- onboarding, pairing, access elevation, or policy review
+
+Rules:
+
+- Core-initiated conversations still have an owner, such as
+  `core:nlu_teacher`, `skill:builder`, or `core:runtime_recovery`.
+- Durable decisions should use Pending Actions. Conversation messages may
+  explain and collect context, but the decision source of truth is the Pending
+  Action response.
+- Core must not hide a new conversation behind a transient notification if the
+  user is expected to respond later.
+
+### Transport-Initiated
+
+Some integrations provide entry points that look like initiation, such as a
+Telegram command, callback button, QR/deep link, or endpoint audio wake event.
+These are transport facts. They must be normalized into a user-, skill-, or
+core-initiated conversation according to routing policy.
+
+Transport ids are recorded in bindings and `external_ref`, never as the
+canonical conversation id.
+
+## Global Dialog Surface
+
+The browser Voice app should evolve into the default global dialog shell.
+
+Target behavior:
+
+- It shows a compact channel selector near the listening control.
+- Initial channels are `general`, `conversational`, and `builder`.
+- Selecting a channel changes `data.dialog.active_channel_id` and switches the
+  visible history to that channel's active conversation.
+- Speech and typed input both send the same neutral dialog input event with
+  `dialog_channel_id`.
+- `voice.chat.user` remains a compatibility command that forwards to the same
+  dialog input path.
+- Voice-specific controls remain in the shell: STT, TTS, push-to-talk, endpoint
+  audio status, and browser recovery.
+- Semantic work moves out of `voice_chat_skill` into conversation owners,
+  surfaces, NLU actions, and channel fallback policies.
+
+Example channel policy:
+
+```json
+{
+  "general": {
+    "surface": "general_assistant",
+    "default_fallback": "nlu_teacher_or_voice_legacy_compat"
+  },
+  "conversational": {
+    "surface": "skill:conversation_companions",
+    "entry_intents": ["conversation.start"],
+    "default_tool": "conversation_companions.talk",
+    "exit_intents": ["conversation.exit", "dialog.general"]
+  },
+  "builder": {
+    "surface": "builder",
+    "default_tool": "builder.handle_dialog_turn",
+    "decision_source": "pending_actions"
+  }
+}
+```
+
+For "let's talk" / Russian "pogovorim":
+
+1. Resolve the utterance as `conversation.start`.
+2. Ensure the `conversational` channel exists.
+3. Create or reuse the `conversation_companions` conversation.
+4. Set `active_channel_id=conversational`.
+5. Run `conversation_companions.start`.
+6. Append the returned message through the conversation service.
+7. Route subsequent unmatched turns in that channel to
+   `conversation_companions.talk` until an exit/switch intent is received.
 
 ## Builder Conversation
 
@@ -228,6 +877,8 @@ chat = conversation.open(
 )
 
 reply = chat.ask("What should I configure?", timeout="10m")
+context = chat.context(max_tokens=8000)
+facts = chat.memory.search("user preferences", scope="skill_user", top_k=5)
 ```
 
 Builder conversation:
@@ -255,6 +906,9 @@ Recommended public helpers:
 - `chat.send(content, ...)`
 - `chat.ask(prompt, timeout=...)`
 - `chat.history(limit=..., thread_id=None)`
+- `chat.context(max_tokens=..., purpose="reply|builder|diagnostics")`
+- `chat.memory.search(query, scope=..., agent_id=None, top_k=...)`
+- `chat.memory.remember(text, scope=..., source_refs=..., consent=...)`
 - `chat.start_thread(title=..., context_policy=None)`
 
 Transport-specific APIs remain available only for transport features:
@@ -275,9 +929,21 @@ conversations:
   main:
     kind: skill
     title: My Skill
+    dialog_channel:
+      preferred_id: my_skill
+      user_visible: true
     context:
       strategy: isolated
-      memory_scope: skill
+      memory_scope: skill_user
+    history:
+      mode: node_store
+      searchable: true
+      cross_skill_use: deny_by_default
+      summarization: async
+    retrieval:
+      recent_turns: 20
+      fts_top_k: 8
+      memory_top_k: 12
     routing:
       default_transports: ["web", "telegram"]
       allow_voice: false
@@ -292,7 +958,7 @@ conversations:
     title: Builder
     context:
       strategy: isolated
-      memory_scope: skill
+      memory_scope: skill_user
       include_general_history: false
     routing:
       default_transports: ["web", "telegram"]
@@ -304,6 +970,14 @@ Manifest rules:
 - `conversations.<name>.kind` is required.
 - `context.strategy` is required and starts with `isolated`, `shared`, or
   `ephemeral`.
+- `dialog_channel` is optional. It requests a browser/global-dialog affordance;
+  the core may deny, rename, hide, or merge it according to product policy.
+- `history.mode` starts with `node_store`, `ephemeral`, or `external_ref`.
+  `node_store` is the default for professional LLM-facing skills.
+- `history.cross_skill_use` must be explicit and defaults to
+  `deny_by_default`.
+- `retrieval` is advisory. The runtime may lower budgets under memory, latency,
+  or model-token pressure.
 - `routing.default_transports` is advisory. Runtime policy may remove
   transports.
 - Skills must not hard-code external chat ids in manifest declarations.
@@ -335,10 +1009,81 @@ Conversation resolution inputs:
 - explicit `conversation_id`
 - explicit `thread_id`
 - active surface selection in the current UI
+- active `dialog_channel_id` in the global dialog shell
 - Telegram command or deep link
 - endpoint audio dialog mode
 - previous transport binding for the user
 - fallback to `general`
+
+## Dispatcher and Output Contract
+
+The dispatcher must not rely on every skill knowing how to publish into the
+active chat UI.
+
+Target contract:
+
+- A tool action may return a plain `message` field, typed `content`, or a
+  richer conversation action result.
+- If the incoming turn has conversation metadata and the tool result contains
+  user-visible content, the dispatcher/conversation service appends that
+  content to the active conversation.
+- A skill may still emit transport-specific or rich side effects, but ordinary
+  text replies should work through the returned result.
+- `io.out.chat.append` remains a compatibility path and transport/event
+  primitive. It should be bridged into the current conversation when enough
+  metadata is present.
+- Tool result publication must be idempotent by `request_id`, action target,
+  and conversation id so a retry does not duplicate the assistant reply.
+- If the skill both emits `io.out.chat.append` and returns `message`, the core
+  must dedupe or mark one path as already materialized.
+
+Minimal compatibility rule for the current Voice path:
+
+```text
+skill tool result {ok: true, message: "..."}
+  + incoming _meta.route_id == "voice_chat"
+  -> dispatcher publishes io.out.chat.append with original _meta
+  -> router projects into the current Voice/dialog tail
+```
+
+This is an interim bridge. The target path is:
+
+```text
+skill tool result
+  -> conversation.append_message(...)
+  -> active dialog projection/WebIO stream refresh
+  -> transport delivery as allowed by routing_policy
+```
+
+## History and Context Policy
+
+History has several distinct forms and they should not be collapsed.
+
+- Raw message ledger: canonical, append-friendly, durable, node-local, and
+  core-governed, bounded by retention policy.
+- Visible tail: compact browser projection or stream payload for the active
+  channel/conversation.
+- Prompt context: selected and possibly summarized subset assembled according
+  to `context_policy`.
+- Owner-scoped memory: skill/core/agent-owned profile and preference state
+  stored in the node conversation/memory service or a compatibility
+  `skill_memory` namespace.
+- Audit/evidence refs: traces, Pending Actions, validation reports, and tool
+  outcomes linked by id rather than copied into every chat turn.
+
+Conversation owners may request different context strategies:
+
+- `isolated`: only this conversation's history and declared memory.
+- `shared`: this conversation may include selected general context.
+- `ephemeral`: visible turn handling without durable raw history beyond audit
+  minimums.
+- `summary_only`: raw messages are compacted into a summary after a small
+  window.
+
+The default for user-facing skill chats should be `isolated` with a bounded raw
+window, FTS-enabled retrieval, and rolling summaries. Builder and Teacher
+conversations should keep evidence references rather than unbounded
+generated-text transcripts.
 
 ## LLM Skill Authoring Guidance
 
@@ -355,90 +1100,495 @@ LLM-facing SDK docs and prompt context should teach these rules:
   conversation memory keys.
 - Do not mix Builder planning history into the general assistant conversation.
 
-## Implementation Checklist
+## Critical Roadmap Review
+
+The target architecture is directionally correct, but the development plan must
+not be read as a purely serial waterfall. A usable dialog system crosses
+storage, transport, policy, SDK, and UI boundaries, so the first deliverable
+should be a thin vertical slice with explicit tests.
+
+Roadmap verdict:
+
+- The proposed first practical slice matches the roadmap, but it spans Phase
+  0.5, Phase 1, Phase 4, and Phase 5. It should be treated as a vertical slice,
+  not as evidence that each phase is complete.
+- The original sequence was too implicit about the missing dialog manager. A
+  first-class Dialog Runtime / Tracker is required between transport input, NLU,
+  skill dispatch, and output materialization.
+- The storage plan is sound: one node-local conversation/memory store per node
+  gives fast append, local search, summaries, policy checks, and future
+  federation without making every skill a database owner.
+- Retrieval and SDK work can start against a minimal store before FTS, segment
+  summaries, or vector search are complete, as long as the context-packet
+  contract already includes budgets, evidence refs, and policy denials.
+- Voice should become the global dialog shell. It should not decide semantic
+  behavior beyond channel selection, STT/TTS controls, and compatibility
+  forwarding.
+- `conversation_companions` is the right pilot because it exercises channel
+  switching, skill-owned history, multiple agents, profile correction, fallback
+  turns, and memory policy without device-control risk.
+- Builder and NLU Teacher should migrate after the core slice proves channel
+  identity, turn tracking, result materialization, and context isolation.
+
+Known missing architecture elements now promoted into the roadmap:
+
+- Dialog Runtime / Tracker with explicit turn state, active frame, repair
+  state, owner, active agent, and trace id.
+- Dialog act and response envelope schemas so tools can return structured
+  results without publishing directly to a transport tail.
+- Task frames / forms for slot filling, validation, correction, confirmation,
+  cancel, resume, and parameter change.
+- Response planning and rendering policy for text, speech, cards, Pending
+  Actions, notifications, and Builder evidence views.
+- End-to-end trace continuity from transport/STT through NLU, retrieval, tool
+  calls, memory writes, response rendering, and delivery attempts.
+- Dialog-level golden conversations and metrics: success rate, repair rate,
+  fallback rate, latency, context budget, memory-write quality, and policy
+  denials.
+- Safety policy for memory writes, cross-owner retrieval, prompt-injection
+  through memory/history, PII redaction, export, delete, and consent.
+
+## Verifiable Milestones and User Stories
+
+These milestones are phrased as acceptance scenarios rather than implementation
+tasks. They are intended for manual testing, automated golden conversations,
+and control-group validation.
+
+### UC1. Start Companion Dialog From Global Voice
+
+User story: as a user, I say or type "let's talk" / Russian "pogovorim" in the global
+dialog shell and enter a companion conversation without opening a separate app.
+
+Acceptance:
+
+- Input is recorded as one user turn with `turn_trace_id`, `dialog_channel_id`,
+  and `conversation_id`.
+- The active channel switches to `conversational`.
+- `conversation_companions.start` runs and the returned message is visible in
+  the same global chat shell.
+- The message is appended through the conversation service or compatibility
+  bridge with idempotency.
+- The general channel history remains unchanged except for optional audit refs.
+- A repeat of the same request does not duplicate the assistant reply.
+
+### UC2. Continue Skill-Owned Conversation
+
+User story: after starting `conversational`, I type an ordinary message such as
+"give advice" and the active character answers without requiring a fresh intent
+match for every phrase.
+
+Acceptance:
+
+- The dialog runtime resolves the turn to the active `conversational`
+  conversation before NLU dispatch.
+- If no higher-priority exit/switch intent is found, the owner policy routes the
+  turn to `conversation_companions.talk`.
+- Recent turns and selected memory are passed as a bounded context packet.
+- The reply carries `agent_id` for the active character.
+- The visible tail and canonical ledger stay consistent.
+
+### UC3. Switch Agent Inside One Conversation
+
+User story: as a user, I say "call Nika" and future companion replies use
+Nika without creating a new dialog channel.
+
+Acceptance:
+
+- The channel remains `conversational`.
+- `active_agent_id` changes in conversation state.
+- The turn and reply record the selected `agent_id`.
+- Agent-specific memory remains scoped to
+  `agent:conversation_companions:nika` or equivalent owner/scope metadata.
+- Returning to another agent is a state change, not a transport or channel
+  change.
+
+### UC4. Correct Character Profile Safely
+
+User story: as a user, I say "be shorter" and the active character adapts
+future replies without silently writing broad global memory.
+
+Acceptance:
+
+- The correction is interpreted as a profile/memory update for the active
+  skill/agent scope.
+- The memory item has source refs, confidence, consent, visibility, and owner.
+- If the update would become long-term or cross-skill reusable, it requires an
+  explicit policy or Pending Action.
+- Diagnostics can show that a profile changed without exposing private dialog
+  text.
+
+### UC5. Switch Back To General Without Mixing Context
+
+User story: as a user, I switch from `conversational` back to `general` and ask
+a normal AdaOS command.
+
+Acceptance:
+
+- The active channel changes to `general`.
+- The visible tail changes to the general conversation.
+- Companion history is not included in the general prompt unless explicitly
+  allowed by policy.
+- General command routing remains compatible with existing NLU behavior.
+
+### UC6. Builder Has Isolated Working Context
+
+User story: as a user, I open Builder and discuss a skill draft without
+polluting the general assistant or companion histories.
+
+Acceptance:
+
+- Builder has a dedicated conversation and channel entry.
+- Builder receives a context packet with draft refs, validation evidence,
+  Pending Action refs, and recent Builder turns.
+- Builder does not receive raw companion or general history by default.
+- Apply/review decisions use Pending Actions or explicit evidence refs, not
+  free-form chat text as the durable approval source.
+
+### UC7. NLU Teacher Clarifies As A Conversation
+
+User story: when AdaOS cannot safely classify a command, Teacher asks a
+clarification question and later resumes the original repair path.
+
+Acceptance:
+
+- The clarification is represented as a `teacher` conversation or thread.
+- Allowed answers, rejected alternatives, missing slots, and resolution path
+  are stored as structured state.
+- A voice yes/no answer and a Pending Action response update the same domain
+  object.
+- The original user turn, candidate, preview, apply result, and final response
+  share a trace chain.
+
+### UC8. Endpoint Audio Dialog Mode Uses The Same Runtime
+
+User story: an endpoint audio `dialog` session sends transcripts into the same
+conversation model as browser typed input.
+
+Acceptance:
+
+- Final transcripts resolve to a conversation before NLU or skill dispatch.
+- Audio session refs remain transport/session metadata, not conversation ids.
+- Barge-in, no-input, and interruption are dialog policy states, not STT
+  implementation details.
+- Delivery can target browser, voice, notification, or Telegram according to
+  routing policy.
+
+### UC9. Long Conversation Retrieval Stays Bounded
+
+User story: after a long companion or Builder conversation, the next reply
+remains fast and relevant.
+
+Acceptance:
+
+- Runtime never reads the full transcript into a prompt.
+- Recent turns, segment summaries, memory items, and evidence refs are selected
+  under explicit token/time budgets.
+- Retrieval diagnostics show selected and skipped sources.
+- If FTS, summaries, or model-backed retrieval are unavailable, the runtime
+  degrades deterministically.
+
+### UC10. Federated Memory Search Is Policy Checked
+
+User story: Builder on one node can discover relevant fragments from another
+node only when policy allows it.
+
+Acceptance:
+
+- The requester sends a scoped federated retrieval request, not a remote SQL
+  query.
+- The target node applies local owner, user, retention, and consent policy.
+- The target returns fragments, summaries, refs, scores, and denials.
+- The requester records partial results and timeouts as evidence.
+
+## Parallel Development Tracks
+
+The roadmap can be split into independent tracks after Phase 0 contracts are
+stable enough for interfaces to stop moving daily.
+
+| Track | Owns | Can Start After | Must Not Block On | Primary Milestones |
+| --- | --- | --- | --- | --- |
+| A. Contracts and Schemas | conversation, turn, dialog act, memory, response envelope, manifest schema | Phase 0 start | UI polish, vector search | UC1-UC4 schema review |
+| B. Node Store and Retrieval | SQLite tables, WAL, append ledger, FTS, summaries, context packets | minimal Phase 0 schemas | full SDK, Builder migration | UC1, UC2, UC9 |
+| C. Dialog Runtime and Policy | tracker, frames/forms, repair states, channel policy, owner dispatch | Phase 0 turn contract | FTS/vector search, final UI | UC1-UC5, UC7 |
+| D. Global Dialog UI and Transports | Voice shell, channel selector, `dialog.user_message`, Telegram/audio routing | dialog-channel contract | full memory extraction | UC1, UC5, UC8 |
+| E. SDK and Skill Migration | `adaos.sdk.conversation`, `adaos.sdk.memory`, manifest support, generated-skill templates | minimal store + runtime context | Builder migration | UC2-UC4 |
+| F. Builder and Teacher Migration | dedicated Builder/Teacher conversations, Pending Action links, evidence refs | minimal store + tracker + context packets | vector search, federation | UC6, UC7 |
+| G. Evaluation and Observability | traces, golden conversations, metrics, diagnostics, performance tests | first vertical slice | federation | all UCs |
+| H. Federation and Privacy | node-to-node retrieval, audit, export/delete/redaction, consent | local store + policy model | Builder UI polish | UC10 |
+
+Synchronization points:
+
+- Phase 0 schemas are the first integration gate.
+- Vertical Slice A is the first runtime gate.
+- Context packet contract is the Builder/skill-runtime gate.
+- Dialog-level golden tests are the quality gate before broad migration from
+  `voice_chat`.
+- Export/delete/redaction and memory-write consent are required before broad
+  long-term personalization.
+
+## Implementation Roadmap
+
+Priority markers:
+
+- `[must]`: required for the professional target architecture and before broad
+  LLM Builder / skill-runtime adoption
+- `[should]`: important hardening or scale work after the first safe slice
+- `[could]`: valuable extension that should not block the initial architecture
+
+### Vertical Slice A. Companion Dialog Through Global Shell
+
+This is the first practical slice. It validates the architecture with minimal
+depth across several phases.
+
+- [ ] `[must]` Keep the current Voice UI usable while adding neutral
+  `dialog.user_message` semantics behind it.
+- [ ] `[must]` Preserve `dialog_channel_id`, `conversation_id`, `request_id`,
+  `turn_trace_id`, and transport metadata through NLU and skill dispatch.
+- [ ] `[must]` Add a minimal active dialog-channel registry for `general` and
+  `conversational`.
+- [ ] `[must]` Add a minimal conversation ledger or compatibility service that
+  can append user and assistant turns idempotently.
+- [ ] `[must]` Make `conversation.start` switch to `conversational`, run
+  `conversation_companions.start`, and show the returned message.
+- [ ] `[must]` Route unmatched turns in `conversational` to
+  `conversation_companions.talk` while preserving exit/switch intents.
+- [ ] `[must]` Keep `voice_chat.messages` as a compatibility projection, not
+  the canonical design.
+- [ ] `[must]` Add a golden conversation test for "pogovorim" -> reply ->
+  follow-up -> switch character -> style correction -> back to `general`.
+- [ ] `[should]` Add diagnostics showing active channel, conversation, owner,
+  active agent, last policy decision, and materialization path.
 
 ### Phase 0. Contract Freeze
 
-- [ ] Define `Conversation`, `ConversationMessage`, `ConversationThread`, and
-  `ConversationRoutingPolicy` schemas.
-- [ ] Add manifest schema support for `conversations`.
-- [ ] Add SDK design docs for `adaos.sdk.conversation`.
-- [ ] Define conversation ids, owner ids, surface ids, and thread id formats.
-- [ ] Define content part schema for text, media, action, form, and system
-  evidence parts.
-- [ ] Define retention and redaction rules for conversation history.
+- [ ] `[must]` Define `Conversation`, `ConversationMessage`,
+  `ConversationThread`, `DialogChannel`, `MemoryItem`,
+  `ConversationSegment`, and `ConversationRoutingPolicy` schemas.
+- [ ] `[must]` Define `DialogTurn`, `DialogAct`, `DialogFrame`,
+  `DialogPolicyState`, `ResponseEnvelope`, and `TurnTrace` schemas.
+- [ ] `[must]` Define actor ids for `core:*`, `skill:*`,
+  `agent:<skill_id>:<agent_id>`, users, nodes, endpoints, and transports.
+- [ ] `[must]` Define `created_by` / `initiator` shape for conversations,
+  threads, messages, memory items, and proactive prompts.
+- [ ] `[must]` Define node-local storage policy: physical store is node-owned,
+  logical owner is core/skill/agent, access is policy-checked.
+- [ ] `[must]` Define `history_policy`, `retrieval_policy`,
+  `personalization_policy`, `repair_policy`, `response_policy`, and
+  `retention_policy`.
+- [ ] `[must]` Define projection rules for `data.dialog` and WebIO stream
+  receivers so Yjs carries only compact active tails.
+- [ ] `[should]` Add manifest schema support for `conversations`, `history`,
+  `retrieval`, `dialog_channel`, `repair`, `response`, form/frame, and agent
+  declarations.
+- [ ] `[should]` Add SDK design docs for `adaos.sdk.conversation` and
+  `adaos.sdk.memory`.
+- [ ] `[could]` Define optional vector-index metadata while keeping vector
+  storage out of the MVP contract.
 
-### Phase 1. Core Conversation Service
+### Phase 0.25. Dialog Runtime and Tracker Contract
 
-- [ ] Add a core service that creates, reads, appends, lists, and archives
+- [ ] `[must]` Define the Dialog Runtime as the owner of turn lifecycle,
+  current conversation resolution, active frame, repair state, response
+  materialization, and trace continuity.
+- [ ] `[must]` Define repair states for no-match, no-input, disambiguation,
+  correction, interruption, cancel, resume, and parameter change.
+- [ ] `[must]` Define task-frame/form semantics for slot collection,
+  validation, preview, confirmation, and bounded user answers.
+- [ ] `[must]` Define how NLU outputs are consumed as evidence by the Dialog
+  Runtime rather than treated as final dialog decisions.
+- [ ] `[must]` Define response rendering targets: text tail, speech text, card,
+  Pending Action, notification, Builder evidence view, and transport-native
+  affordance.
+- [ ] `[should]` Add a small policy-inspection API for one turn:
+  selected channel, conversation, owner, NLU result, frame, repair state,
+  action target, and response renderer.
+- [ ] `[could]` Add a simulator API that replays golden conversations without a
+  browser or real transport.
+
+### Phase 0.5. Voice Compatibility Stabilization
+
+- [x] `[must]` Make dispatcher publish a skill tool result `message` to the
+  active Voice/dialog route when the result has not already been materialized.
+- [x] `[must]` Preserve existing `_meta.webspace_id`, `route_id`,
+  `target_node_id`, and `request_id` through current Voice NLU and skill tool
+  calls.
+- [ ] `[must]` Preserve future `dialog_channel_id` through Dialog Runtime,
+  NLU, and skill tool calls.
+- [ ] `[must]` Add diagnostics when a skill action returns `ok` and `message`
+  but no visible output is published.
+- [ ] `[must]` Add tests for `conversation.start` from Voice producing a
+  visible reply.
+- [ ] `[must]` Add `turn_trace_id` to the Voice compatibility path and preserve
+  it through NLU action outcomes.
+- [ ] `[should]` Keep `voice_chat.messages` as the compatibility tail while
+  introducing neutral `dialog.*` events and metadata.
+- [ ] `[could]` Add a temporary Voice debug panel that shows route id, dialog
+  channel id, conversation id, owner, and last dispatch result.
+
+### Phase 1. Node Conversation/Memory Store
+
+- [ ] `[must]` Add a node-local conversation/memory service backed by the
+  existing node SQLite database.
+- [ ] `[must]` Enable WAL and define tables for conversations, dialog channels,
+  messages, segments, memory items, delivery attempts, and idempotency.
+- [ ] `[must]` Implement append-only message writes with per-conversation
+  monotonic `seq`.
+- [ ] `[must]` Implement owner-scoped reads and writes for core, skills, and
+  skill agents.
+- [ ] `[must]` Implement idempotency for inbound platform message ids and skill
+  action result materialization.
+- [ ] `[must]` Implement retention/redaction fields even if the first pass only
+  enforces conservative defaults.
+- [ ] `[must]` Publish bounded Yjs/WebIO projections from the node store for
+  active browser consumers.
+- [ ] `[should]` Add FTS5 indexes for messages, segment summaries, and memory
+  items.
+- [ ] `[should]` Add background segment summarization jobs with bounded queue
+  and failure diagnostics.
+- [ ] `[should]` Add projection recovery from node store when WebIO/Yjs tail is
+  empty or stale.
+- [ ] `[could]` Add optional embedding queue and vector-index adapter behind a
+  feature flag.
+
+### Phase 2. Retrieval and Context Packets
+
+- [ ] `[must]` Implement budgeted context assembly:
+  recent turns + relevant segments + memory items + evidence refs.
+- [ ] `[must]` Add strict token/message/time budgets and deterministic fallback
+  when FTS, summaries, or model-backed retrieval are unavailable.
+- [ ] `[must]` Implement cross-owner memory reuse as deny-by-default.
+- [ ] `[must]` Attach source refs, confidence, consent, and visibility to
+  memory items.
+- [ ] `[must]` Add a memory-write policy that distinguishes immediate
+  conversation facts, skill-scoped preferences, agent-scoped preferences, and
+  global reusable user memory.
+- [ ] `[should]` Add retrieval diagnostics: selected sources, skipped sources,
+  estimated tokens, latency, and policy denials.
+- [ ] `[should]` Add summary compaction for long conversations without losing
+  message range refs.
+- [ ] `[should]` Add golden retrieval tests for long companion, Builder, and
+  Teacher conversations.
+- [ ] `[could]` Add semantic search / vector retrieval once FTS and summaries
+  are stable.
+
+### Phase 3. SDK and Skill Runtime
+
+- [ ] `[must]` Implement `adaos.sdk.conversation.current()`,
+  `open(...)`, `get(...)`, and manifest-driven default conversation creation.
+- [ ] `[must]` Implement `chat.send`, `chat.ask`, `chat.history`,
+  `chat.context`, and `chat.start_thread`.
+- [ ] `[must]` Implement structured `ResponseEnvelope` handling so generated
+  skills can return user-visible content without directly calling
+  `io.out.chat.append`.
+- [ ] `[must]` Implement scoped memory helpers:
+  `memory.search`, `memory.remember`, `memory.list`, and `memory.forget`.
+- [ ] `[must]` Propagate current conversation context into skill tool calls.
+- [ ] `[must]` Teach LLM skill-development docs to prefer conversation/memory
+  APIs over `io.out.chat.append` and direct `skill_memory` transcript storage.
+- [ ] `[should]` Add generated-skill templates for skill-owned conversations,
+  multi-agent skill conversations, and bounded `chat.ask` flows.
+- [ ] `[should]` Add lint/validation warnings for skills that store
+  user-visible transcript history in arbitrary files.
+- [ ] `[could]` Add SDK helpers for memory extraction proposals that require
+  user confirmation before long-term storage.
+
+### Phase 4. Transport and Global Dialog Integration
+
+- [ ] `[must]` Make Voice/browser typed input resolve to conversations before
+  NLU or skill dispatch.
+- [ ] `[must]` Convert `voice.chat.user` into a compatibility alias for neutral
+  `dialog.user_message`.
+- [ ] `[must]` Add active dialog-channel registry per webspace.
+- [ ] `[must]` Add browser channel selector support for `general`,
+  `conversational`, and `builder`.
+- [ ] `[must]` Make browser chat panels subscribe to `data.dialog` /
+  conversation projections instead of transport-specific chat state.
+- [ ] `[should]` Make Telegram inbound messages resolve to conversations before
+  NLU or skill dispatch.
+- [ ] `[should]` Make endpoint audio dialog mode resolve to conversations
+  before NLU or skill dispatch.
+- [ ] `[should]` Record delivery status per transport attempt.
+- [ ] `[could]` Add deep links that open a specific conversation/thread from a
+  notification, Pending Action, or Telegram command.
+
+### Phase 5. Surface Dispatch and Conversation Policies
+
+- [ ] `[must]` Route `general` conversations to the default assistant/NLU
+  surface.
+- [ ] `[must]` Route `skill` conversations to their logical skill owner through
+  owner-scoped tool dispatch.
+- [ ] `[must]` Add channel policies for entry intents, default tools, fallback
+  behavior, and exit/switch intents.
+- [ ] `[must]` Implement Dialog Runtime handling for no-match, no-input,
+  interruption, cancel, resume, correction, and parameter-change states.
+- [ ] `[must]` Implement task-frame/form routing for multi-turn parameter
+  collection and validation.
+- [ ] `[must]` Add `conversation_companions` as the first multi-agent skill
+  conversation pilot: "let's talk" enters `conversational`, unmatched turns
+  route to `talk`, and exit/switch commands return to `general`.
+- [ ] `[must]` Support multiple agents in one conversation with `agent_id`,
+  `active_agent_id`, and agent-scoped memory.
+- [ ] `[should]` Move legacy semantic fallback out of
+  `voice_chat_skill.handle_text` into conversation owner/surface policies.
+- [ ] `[should]` Add explicit fallback when a surface or owning skill is
+  unavailable.
+- [ ] `[should]` Add response-planning rules for text vs speech vs card vs
+  Pending Action, so skills do not choose transport-specific rendering by
+  default.
+- [ ] `[could]` Add operator-visible policy inspection for one conversation:
+  owner, channel, retrieval policy, memory scopes, and last dispatch.
+
+### Phase 6. Builder and NLU Teacher Migration
+
+- [ ] `[must]` Create the default Builder conversation on first Builder entry.
+- [ ] `[must]` Make LLM Builder consume context packets instead of raw chat
+  history.
+- [ ] `[must]` Link Builder drafts, validation evidence, and Pending Actions to
+  conversation/thread refs.
+- [ ] `[must]` Move NLU Teacher clarification sessions into `kind=teacher`
   conversations.
-- [ ] Store conversations under a shared Yjs projection and, if needed,
-  durable disk/database backing.
-- [ ] Emit lifecycle events: created, message appended, thread created,
-  archived, routing failed.
-- [ ] Add idempotency for inbound platform message ids.
-- [ ] Add owner and participant policy checks.
-- [ ] Add tests for append, ask response correlation, thread creation,
-  idempotency, and policy rejection.
+- [ ] `[must]` Link candidate confirmations and Pending Actions to Teacher
+  conversations and source message ids.
+- [ ] `[should]` Preserve approval/apply evidence outside plain chat messages.
+- [ ] `[should]` Add acceptance tests for Builder through browser and Telegram
+  transport.
+- [ ] `[should]` Add tests for multi-turn NLU correction with separate
+  `general`, `teacher`, and `builder` contexts.
+- [ ] `[could]` Add Builder repair conversations that span generated files,
+  validation runs, CI logs, and user review.
 
-### Phase 2. SDK
+### Phase 7. Subnet Federation
 
-- [ ] Implement `adaos.sdk.conversation`.
-- [ ] Add `conversation.current()` context propagation for tool calls.
-- [ ] Add `chat.send`, `chat.ask`, `chat.history`, and `chat.start_thread`.
-- [ ] Add manifest-driven default conversation creation for skills.
-- [ ] Add LLM skill-development docs and examples for private skill chats.
-- [ ] Mark low-level chat output helpers as transport/event primitives in SDK
-  docs.
+- [ ] `[must]` Define a policy-checked federated search/read request shape for
+  node-to-node conversation and memory retrieval.
+- [ ] `[must]` Keep federation timeout-bound and partial-result-friendly.
+- [ ] `[must]` Return fragments, summaries, refs, and scores, not direct remote
+  database access.
+- [ ] `[should]` Add node-local retrieval health and index-status diagnostics.
+- [ ] `[should]` Add cross-node query audit events with requesting actor,
+  target node, owner scope, and denied/returned counts.
+- [ ] `[could]` Add subnet-level search UI after local-node retrieval and policy
+  gates are stable.
 
-### Phase 3. Transport Integration
+### Phase 8. Cleanup and Hardening
 
-- [ ] Make Telegram inbound messages resolve to conversations before NLU or
-  skill dispatch.
-- [ ] Make voice and endpoint audio resolve to conversations before NLU or
-  skill dispatch.
-- [ ] Make browser chat panels subscribe to `data.conversations` instead of a
-  transport-specific chat path.
-- [ ] Record external transport refs separately from canonical conversation
-  identity.
-- [ ] Add delivery status records per transport attempt.
-
-### Phase 4. Surface Dispatch
-
-- [ ] Route `general` conversations to the default assistant/NLU surface.
-- [ ] Route `builder` conversations to Builder.
-- [ ] Route `teacher` conversations to NLU Teacher surfaces.
-- [ ] Route `skill` conversations to their owning skill.
-- [ ] Add active-surface selection for browser UI and transport commands.
-- [ ] Add explicit fallback behavior when a surface is unavailable.
-
-### Phase 5. Builder Migration
-
-- [ ] Create the default Builder conversation on first Builder entry.
-- [ ] Move Builder clarification, draft, preview, and repair messages into the
-  Builder conversation.
-- [ ] Link Builder Pending Actions to the originating conversation and thread.
-- [ ] Preserve approval/apply evidence outside plain chat messages.
-- [ ] Add acceptance tests for Builder through browser and Telegram transport.
-
-### Phase 6. NLU Teacher Migration
-
-- [ ] Move Teacher clarification sessions into `kind=teacher` conversations.
-- [ ] Link candidate confirmations and Pending Actions to Teacher
-  conversations.
-- [ ] Keep NLU traces as evidence refs, not unbounded chat history blobs.
-- [ ] Add tests for multi-turn correction with separate general and teacher
-  contexts.
-
-### Phase 7. Cleanup
-
-- [ ] Remove public dependency on `voice_chat` as the canonical chat state.
-- [ ] Replace `route_id == "voice_chat"` checks with conversation and surface
-  routing.
-- [ ] Retire direct writes to transport-specific chat projections.
-- [ ] Update SDK IO docs to make conversation APIs the default path.
-- [ ] Remove compatibility bridges once browser, Telegram, voice, Builder, and
-  Teacher use the conversation service.
+- [ ] `[must]` Remove public dependency on `voice_chat` as the canonical chat
+  state.
+- [ ] `[must]` Replace `route_id == "voice_chat"` semantic checks with
+  conversation, channel, and surface routing.
+- [ ] `[must]` Update SDK IO docs to make conversation/memory APIs the default
+  path.
+- [ ] `[should]` Retire direct writes to transport-specific chat projections.
+- [ ] `[should]` Add export/delete/redaction flows for conversation and memory
+  records.
+- [ ] `[should]` Add safety tests for prompt injection through retrieved
+  memory/history and for cross-owner memory denial.
+- [ ] `[should]` Add dialog-level golden conversations and metrics for repair
+  rate, fallback rate, success rate, latency, and context budget.
+- [ ] `[should]` Add performance soak tests for long conversations, FTS,
+  summaries, and active WebIO/Yjs projections.
+- [ ] `[could]` Add model-backed memory extraction and summarization quality
+  evaluation datasets.
 
 ## Acceptance Criteria
 
@@ -446,9 +1596,18 @@ The architecture is implemented when:
 
 - A generated skill can declare and use its own conversation without knowing
   whether the user is in Telegram, browser, or voice.
+- User-visible dialog history and memory live in the node-local
+  conversation/memory service, while logical ownership remains scoped to core,
+  skills, and skill agents.
+- Skills can access their own history and memory through SDK APIs without
+  direct SQL or arbitrary transcript files.
+- LLM Builder and skill runtimes receive budgeted context packets assembled
+  from recent turns, summaries, memory items, and evidence refs.
 - Builder has a separate context from the general assistant.
 - One user can have concurrent `general`, `builder`, and `teacher`
   conversations with different context policies.
+- One skill conversation can host multiple agents/personas without creating
+  one dialog channel per persona.
 - Telegram and voice messages can enter the same conversation when policy says
   they should.
 - Transport ids are preserved for delivery and audit but are never used as the
@@ -457,3 +1616,10 @@ The architecture is implemented when:
   context.
 - Low-level `io.out.chat.append` is no longer the recommended SDK surface for
   ordinary skill dialog.
+- Voice can switch between `general`, `conversational`, and `builder` without
+  mixing histories, while still using one global listening/chat shell.
+- A core-initiated NLU Teacher clarification and a skill-initiated companion
+  prompt both record initiator evidence and obey the same conversation policy
+  model.
+- Subnet-wide search is federated, policy-checked, timeout-bound, and based on
+  summaries/fragments/refs rather than shared remote database access.

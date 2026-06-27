@@ -509,6 +509,135 @@ def _emit_action_outcome(
         _log.debug("failed to emit %s", event_type, exc_info=True)
 
 
+def _result_message(result: Any) -> str:
+    if not isinstance(result, Mapping):
+        return ""
+    for key in ("message", "text"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    content = result.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, Mapping):
+        text = content.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return ""
+
+
+def _webspace_from_chat_append(payload: Mapping[str, Any]) -> str:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    value = payload.get("webspace_id") or meta.get("webspace_id") or meta.get("workspace_id")
+    return str(value or "").strip()
+
+
+def _route_from_chat_append(payload: Mapping[str, Any]) -> str:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    value = meta.get("route_id") or meta.get("route") or payload.get("route_id") or payload.get("route")
+    return str(value or "").strip()
+
+
+def _chat_append_matches_action(
+    payload: Mapping[str, Any],
+    *,
+    text: str,
+    raw: Mapping[str, Any],
+    webspace_id: str,
+) -> bool:
+    emitted_text = payload.get("text")
+    if not isinstance(emitted_text, str) or not emitted_text.strip():
+        return False
+    expected_route = _route_id(raw)
+    emitted_route = _route_from_chat_append(payload)
+    if expected_route and emitted_route != expected_route:
+        return False
+    emitted_webspace = _webspace_from_chat_append(payload)
+    if emitted_webspace and emitted_webspace != webspace_id:
+        return False
+    if emitted_text.strip() == text.strip():
+        return True
+    return bool(expected_route and emitted_route == expected_route)
+
+
+def _emit_skill_tool_result_message(
+    ctx: AgentContext,
+    *,
+    result: Any,
+    target: str,
+    webspace_id: str,
+    raw: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    materialized_chat_appends: list[dict[str, Any]],
+) -> None:
+    text = _result_message(result)
+    if not text:
+        return
+    route_id = _route_id(raw)
+    if route_id != "voice_chat":
+        return
+    if any(
+        _chat_append_matches_action(item, text=text, raw=raw, webspace_id=webspace_id)
+        for item in materialized_chat_appends
+    ):
+        return
+    raw_meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    payload_meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    meta = {**dict(raw_meta), **dict(payload_meta)}
+    meta.setdefault("webspace_id", webspace_id)
+    meta.setdefault("route_id", route_id)
+    request_id = raw.get("request_id") or meta.get("request_id")
+    if isinstance(request_id, str) and request_id.strip():
+        meta.setdefault("request_id", request_id.strip())
+    meta.setdefault("nlu_action_target", target)
+    try:
+        bus_emit(
+            ctx.bus,
+            "io.out.chat.append",
+            {
+                "id": "",
+                "from": "hub",
+                "text": text,
+                "ts": time.time(),
+                "_meta": meta,
+            },
+            source="nlu.dispatcher",
+        )
+    except Exception:
+        _log.debug("failed to materialize skill tool result message target=%s", target, exc_info=True)
+
+
+def _subscribe_chat_materialization_probe(ctx: AgentContext) -> tuple[list[dict[str, Any]], Any | None]:
+    bus = getattr(ctx, "bus", None)
+    if bus is None or not hasattr(bus, "subscribe"):
+        return [], None
+    materialized: list[dict[str, Any]] = []
+
+    def _capture(ev: Any) -> None:
+        payload = _payload(ev)
+        text = payload.get("text")
+        if isinstance(text, str) and text.strip():
+            materialized.append(dict(payload))
+
+    try:
+        bus.subscribe("io.out.chat.append", _capture)
+    except Exception:
+        return materialized, None
+    return materialized, _capture
+
+
+def _unsubscribe_chat_materialization_probe(ctx: AgentContext, handler: Any | None) -> None:
+    if handler is None:
+        return
+    bus = getattr(ctx, "bus", None)
+    if bus is None or not hasattr(bus, "unsubscribe"):
+        return
+    try:
+        bus.unsubscribe("io.out.chat.append", handler)
+    except Exception:
+        _log.debug("failed to unsubscribe chat materialization probe", exc_info=True)
+
+
 def _parse_plan_payload(value: Any) -> list[dict[str, Any]]:
     return decode_activation_plan(value)
 
@@ -775,6 +904,7 @@ def _execute_skill_tool_action(
         raw=raw,
     )
     payload.setdefault("webspace_id", webspace_id)
+    materialized_chat_appends, materialization_probe = _subscribe_chat_materialization_probe(ctx)
     try:
         result = _run_skill_tool(ctx, skill, tool, payload)
     except Exception as exc:
@@ -799,6 +929,8 @@ def _execute_skill_tool_action(
             exc_info=True,
         )
         return
+    finally:
+        _unsubscribe_chat_materialization_probe(ctx, materialization_probe)
 
     if isinstance(result, Mapping) and result.get("ok") is False:
         reason = str(result.get("error") or result.get("reason") or "tool_returned_not_ok").strip()
@@ -815,6 +947,16 @@ def _execute_skill_tool_action(
             reason=reason or "tool_returned_not_ok",
         )
         return
+
+    _emit_skill_tool_result_message(
+        ctx,
+        result=result,
+        target=target,
+        webspace_id=webspace_id,
+        raw=raw,
+        payload=payload,
+        materialized_chat_appends=materialized_chat_appends,
+    )
 
     _emit_action_outcome(
         ctx,
