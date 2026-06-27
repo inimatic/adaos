@@ -1189,6 +1189,114 @@ async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeyp
     dialog_runtime.reset_all()
 
 
+async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "addressed-companion-ws"
+    user_text = "Ника, назови 3 последних русских царей"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "Ника: ответ",
+            "dialog": {
+                "dialog_channel_id": "conversational",
+                "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                "owner": "skill:conversation_companions",
+                "default_tool": "conversation_companions.talk",
+                "active_agent_id": "agent:conversation_companions:nika",
+                "active_agent_label": "Ника",
+                "active_agent": {
+                    "id": "agent:conversation_companions:nika",
+                    "label": "Ника",
+                    "owner": "skill:conversation_companions",
+                    "kind": "skill_agent",
+                    "gender": "female",
+                    "voice": "ru-female",
+                    "voice_profile": {"gender": "female", "voice": "ru-female", "lang": "ru-RU"},
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": user_text,
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls
+    assert calls[0][0:2] == ("conversation_companions", "talk")
+    assert calls[0][2]["text"] == user_text
+    assert calls[0][2]["_meta"]["dialog_channel_id"] == "conversational"
+    assert calls[0][2]["_meta"]["active_agent_id"] == "agent:conversation_companions:nika"
+    assert calls[0][2]["_meta"]["active_agent_label"] == "Ника"
+    assert calls[0][2]["_meta"]["active_agent_gender"] == "female"
+    assert calls[0][2]["_meta"]["voice_gender"] == "female"
+    assert calls[0][2]["_meta"]["voice"] == "ru-female"
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "conversational"
+    assert state.active_agent_id == "agent:conversation_companions:nika"
+    assert state.active_agent_label == "Ника"
+    assert state.active_agent_gender == "female"
+    assert state.active_agent_voice == "ru-female"
+    data = doc.get_map("data")
+    assert data["dialog"]["active_channel_id"] == "conversational"
+    assert data["dialog"]["active_agent"]["id"] == "agent:conversation_companions:nika"
+    assert data["dialog"]["active_agent"]["label"] == "Ника"
+    assert data["dialog"]["active_agent"]["gender"] == "female"
+    dialog_runtime.reset_all()
+
+
 async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_history(monkeypatch) -> None:
     bus = LocalEventBus()
     monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))

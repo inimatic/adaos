@@ -217,10 +217,18 @@ Current status:
   (`agent:core:general`, displayed as `Ада` by default). Addressing it by name
   exits an active companion channel and routes the remaining text through the
   general Voice/NLU path.
+- [x] Router now has a static pilot named-agent registry for the core general
+  agent plus the `conversation_companions` agents. Addressing Arseni, Nika, or
+  Mira by name from the Voice shell switches to `conversational` and delegates
+  to the owning skill before NLU/Teacher fallback.
+- [x] The companion pilot projects `gender`, `voice`, and `voice_profile` hints
+  through the dialog snapshot and chat messages. The browser chat uses those
+  hints to choose an installed speech-synthesis voice when auto-speak is
+  enabled.
 - [ ] There is no canonical persisted active dialog-channel registry for
   `general`, `conversational`, `builder`, and future skill-owned channels yet.
-  The current `data/dialog` shape is a UI projection, not the durable source of
-  truth.
+  The current static pilot agent registry and `data/dialog` shape are
+  compatibility/projection layers, not the durable source of truth.
 - [ ] Per-channel visible history is not implemented yet; the pilot still uses
   the compact Voice compatibility tail until the conversation ledger and
   conversation-id projections exist. The browser chat now exposes a disabled

@@ -20,6 +20,11 @@ MAX_HISTORY = 12
 PANEL_CHARACTERS = ("arseni", "nika", "mira")
 DIALOG_CHANNEL_ID = "conversational"
 CONVERSATION_ID = "conv.skill.conversation_companions.default"
+VOICE_PROFILES = {
+    "arseni": {"gender": "male", "voice": "ru-male", "lang": "ru-RU", "browser_voice_hint": "male"},
+    "nika": {"gender": "female", "voice": "ru-female", "lang": "ru-RU", "browser_voice_hint": "female"},
+    "mira": {"gender": "female", "voice": "ru-female", "lang": "ru-RU", "browser_voice_hint": "female"},
+}
 
 _FALLBACK_MEMORY: dict[str, Any] = {}
 _LOG = logging.getLogger("adaos.skill.conversation_companions")
@@ -107,6 +112,7 @@ def _agent_projection(active_character: str | None, profiles: Mapping[str, Mappi
     char_id = str(active_character or DEFAULT_ACTIVE_CHARACTER).strip() or DEFAULT_ACTIVE_CHARACTER
     profile = (profiles or DEFAULT_PROFILES).get(char_id, {})
     label = str(profile.get("name") or char_id).strip() or char_id
+    voice_profile = dict(VOICE_PROFILES.get(char_id) or VOICE_PROFILES[DEFAULT_ACTIVE_CHARACTER])
     return {
         "id": f"agent:{SKILL_ID}:{char_id}",
         "label": label,
@@ -115,6 +121,9 @@ def _agent_projection(active_character: str | None, profiles: Mapping[str, Mappi
         "skill_id": SKILL_ID,
         "character_id": char_id,
         "memory_scope": "agent_user",
+        "gender": voice_profile.get("gender"),
+        "voice": voice_profile.get("voice"),
+        "voice_profile": voice_profile,
     }
 
 
@@ -225,6 +234,29 @@ def _safe_emit_chat(text: str, *, webspace_id: str, _meta: Mapping[str, Any] | N
         chat_append(text, from_="hub", _meta=meta)
     except Exception:
         return
+
+
+def _agent_chat_meta(
+    _meta: Mapping[str, Any] | None,
+    *,
+    webspace_id: str,
+    character_id: str | None,
+    profiles: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    agent = _agent_projection(character_id, profiles)
+    meta = dict(_meta or {})
+    meta.setdefault("webspace_id", webspace_id)
+    meta.setdefault("active_agent_id", agent["id"])
+    meta.setdefault("active_agent_label", agent["label"])
+    if agent.get("gender"):
+        meta.setdefault("active_agent_gender", agent["gender"])
+        meta.setdefault("voice_gender", agent["gender"])
+    if agent.get("voice"):
+        meta.setdefault("active_agent_voice", agent["voice"])
+        meta.setdefault("voice", agent["voice"])
+    if isinstance(agent.get("voice_profile"), Mapping):
+        meta.setdefault("voice_profile", dict(agent["voice_profile"]))
+    return meta
 
 
 def _build_system_prompt(
@@ -434,7 +466,7 @@ def start(
         f"{profile.get('opening')}\n\n"
         f"{_first_run_message(profiles)}"
     )
-    _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
+    _safe_emit_chat(message, webspace_id=ws, _meta=_agent_chat_meta(_meta, webspace_id=ws, character_id=active, profiles=profiles))
     return {
         "ok": True,
         "webspace_id": ws,
@@ -494,7 +526,7 @@ def switch_character(
         if temporary
         else f"Активный персонаж: {profile['name']}. {profile['opening']}"
     )
-    _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
+    _safe_emit_chat(message, webspace_id=ws, _meta=_agent_chat_meta(_meta, webspace_id=ws, character_id=resolved, profiles=profiles))
     return {
         "ok": True,
         "webspace_id": ws,
@@ -550,7 +582,7 @@ def talk(
         else:
             reply = _draft_reply(profiles[selected], user_text)
     _append_history(ws, role="assistant", text=reply, character_id=selected)
-    _safe_emit_chat(reply, webspace_id=ws, _meta=_meta)
+    _safe_emit_chat(reply, webspace_id=ws, _meta=_agent_chat_meta(_meta, webspace_id=ws, character_id=selected, profiles=profiles))
     if mode != "temporary" and not panel and detected:
         session = _session(ws)
         session["active_character"] = selected
@@ -596,7 +628,7 @@ def update_profile(
         if persist
         else f"Примерил временную правку для {updated['name']} без сохранения."
     )
-    _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
+    _safe_emit_chat(message, webspace_id=ws, _meta=_agent_chat_meta(_meta, webspace_id=ws, character_id=selected, profiles=profiles))
     return {
         "ok": True,
         "webspace_id": ws,
@@ -632,7 +664,8 @@ def capture_feedback(
     items.append(entry)
     _mem_set(key, items[-200:])
     message = "Записал обратную связь. Для контрольной группы важнее ожидания и отторжение, чем только оценка."
-    _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
+    active = _session(ws).get("active_character", DEFAULT_ACTIVE_CHARACTER)
+    _safe_emit_chat(message, webspace_id=ws, _meta=_agent_chat_meta(_meta, webspace_id=ws, character_id=active, profiles=_profiles(ws)))
     return {"ok": True, "webspace_id": ws, "message": message, "feedback_count": len(items)}
 
 
@@ -652,7 +685,11 @@ def reset_session(
         },
     )
     message = "Сессия сброшена. Активный персонаж снова Арсений."
-    _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
+    _safe_emit_chat(
+        message,
+        webspace_id=ws,
+        _meta=_agent_chat_meta(_meta, webspace_id=ws, character_id=DEFAULT_ACTIVE_CHARACTER, profiles=_profiles(ws)),
+    )
     return {
         "ok": True,
         "webspace_id": ws,

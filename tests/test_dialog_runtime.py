@@ -23,6 +23,12 @@ def test_apply_tool_result_activates_companion_channel() -> None:
                 "default_tool": "conversation_companions.talk",
                 "active_agent_id": "agent:conversation_companions:arseni",
                 "active_agent_label": "Арсений",
+                "active_agent": {
+                    "id": "agent:conversation_companions:arseni",
+                    "label": "Арсений",
+                    "gender": "male",
+                    "voice_profile": {"voice": "ru-male"},
+                },
             },
         },
         webspace_id="desktop",
@@ -36,6 +42,8 @@ def test_apply_tool_result_activates_companion_channel() -> None:
     assert state.default_tool == "talk"
     assert state.active_agent_id == "agent:conversation_companions:arseni"
     assert state.active_agent_label == "Арсений"
+    assert state.active_agent_gender == "male"
+    assert state.active_agent_voice == "ru-male"
     assert dialog_runtime.get_active_channel("desktop") == state
 
 
@@ -49,6 +57,8 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
         conversation_id="conv.skill.conversation_companions.default.desktop",
         active_agent_id="agent:conversation_companions:nika",
         active_agent_label="Ника",
+        active_agent_gender="female",
+        active_agent_voice="ru-female",
         route_id="voice_chat",
     )
 
@@ -67,6 +77,8 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
     assert action["payload"]["_meta"]["dialog_channel_id"] == "conversational"
     assert action["payload"]["_meta"]["active_agent_id"] == "agent:conversation_companions:nika"
     assert action["payload"]["_meta"]["active_agent_label"] == "Ника"
+    assert action["payload"]["_meta"]["active_agent_gender"] == "female"
+    assert action["payload"]["_meta"]["active_agent_voice"] == "ru-female"
 
 
 def test_resolve_followup_exit_deactivates_channel() -> None:

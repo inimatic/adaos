@@ -54,6 +54,15 @@ Implemented today:
   Addressing that agent by name while another channel is active deactivates the
   active process-local channel and routes the remaining text through the
   general Voice/NLU path.
+- Router has a small static pilot agent registry for the global dialog shell:
+  the core general agent plus the `conversation_companions` pilot agents
+  Arseni, Nika, and Mira. Addressing one of these companion agents by name from
+  the Voice shell routes directly to the owning skill tool before NLU/Teacher
+  fallback and activates the `conversational` channel.
+- Pilot agent projections and emitted chat messages carry `gender`, `voice`,
+  and `voice_profile` hints. The browser chat uses those hints to pick a
+  suitable installed speech-synthesis voice when auto-speak is enabled; this is
+  a compatibility hint, not the final response-planning contract.
 - The browser Voice widget can show and switch the current channel between
   `general` and `conversational` by sending `dialog.channel.select`; it also
   shows the active agent from `data/dialog`. Selecting `conversational`
@@ -74,9 +83,10 @@ Important gaps:
 - There is no canonical `Conversation` record or message ledger.
 - There is no node-local conversation/memory store with owner-scoped API,
   FTS/summary indexing, and policy-checked retrieval.
-- There is no canonical persisted dialog-channel registry yet. The current
-  `dialog_channel_id` support is a process-local compatibility registry plus a
-  browser-visible `data/dialog` projection for the companion pilot;
+- There is no canonical persisted dialog-channel or agent registry yet. The
+  current `dialog_channel_id` and named-agent support is a process-local
+  compatibility registry plus a browser-visible `data/dialog` projection for
+  the companion pilot;
   `route_id=voice_chat` remains a UI/transport route.
 - Voice history is one compact compatibility tail, not per-conversation
   history.
@@ -98,11 +108,11 @@ Implemented companion pilot scenarios:
   NLU/Teacher first; Router routes it to `conversation_companions.talk` with
   `dialog_channel_id`, `conversation_id`, `conversation_owner`, and
   `active_agent_id` metadata.
-- Agent switch/profile correction: outside an active channel, explicit NLU
-  hits such as "call Nika" or "be shorter" still go through skill-owned NLU
-  actions. Inside the active pilot channel, addressing `Арсений`, `Ника`, or
-  `Мира` is owned by `conversation_companions` and updates `active_agent_id`;
-  richer in-channel profile correction remains a follow-up for the skill.
+- Agent switch/profile correction: addressing `Арсений`, `Ника`, or `Мира`
+  from the Voice shell is resolved by the core pilot registry, delegated to
+  `conversation_companions`, switches to `conversational` when needed, and
+  updates `active_agent_id`. Richer in-channel profile correction remains a
+  follow-up for the skill.
 - Exit: explicit "general"/"back to general" style commands deactivate the
   pilot channel and return unmatched turns to the general Voice fallback.
   Addressing the general agent by name, for example "Ада, ...", performs the
@@ -1404,8 +1414,14 @@ depth across several phases.
   `conversational` in the Voice compatibility path.
 - [x] `[must]` Add a browser-visible active dialog-channel projection for
   `general` and `conversational`, including active owner/agent metadata.
+- [x] `[must]` Add a static pilot named-agent registry for `general` plus the
+  `conversation_companions` agents, so addressed agent names can switch the
+  active channel and delegate to the owning skill before NLU/Teacher fallback.
 - [ ] `[must]` Persist the active dialog-channel registry and extend it to
   `builder` and future skill-owned channels.
+- [ ] `[must]` Replace the static pilot registry with a persisted,
+  manifest-fed agent/channel registry that supports skill-declared aliases,
+  capabilities, voice profiles, and policy.
 - [ ] `[must]` Add a minimal conversation ledger or compatibility service that
   can append user and assistant turns idempotently.
 - [x] `[must]` Make `conversation.start` switch to `conversational`, run
@@ -1416,6 +1432,9 @@ depth across several phases.
 - [x] `[must]` Move in-channel agent switching by addressed name under the
   `conversation_companions` owner policy and project the active agent to the
   browser shell.
+- [x] `[should]` Project pilot `gender`/`voice`/`voice_profile` hints from
+  core and `conversation_companions` into chat messages so the browser can
+  choose a more appropriate speech-synthesis voice.
 - [ ] `[must]` Move in-channel profile-correction commands fully under the
   `conversation_companions` owner policy.
 - [x] `[must]` Keep `voice_chat.messages` as a compatibility projection, not
@@ -1573,6 +1592,9 @@ depth across several phases.
 - [ ] `[must]` Add active dialog-channel registry per webspace.
 - [x] `[must]` Add browser channel selector support for `general` and
   `conversational`.
+- [x] `[should]` In the Voice compatibility path, resolve pilot addressed-agent
+  names from a core-owned registry and switch the visible channel/agent
+  projection accordingly.
 - [ ] `[must]` Extend browser channel selector support to `builder` and
   dynamically declared skill-owned channels.
 - [ ] `[must]` Make browser chat panels subscribe to `data.dialog` /
@@ -1602,6 +1624,8 @@ depth across several phases.
   route to `talk`, and exit/switch commands return to `general`.
 - [x] `[must]` Support multiple pilot agents in one skill conversation with
   `active_agent_id` and browser-visible active-agent projection.
+- [x] `[should]` Attach pilot agent gender/voice hints to projections and
+  emitted chat messages for browser speech synthesis.
 - [ ] `[must]` Persist agent-scoped memory as canonical `MemoryItem` records.
 - [ ] `[should]` Move legacy semantic fallback out of
   `voice_chat_skill.handle_text` into conversation owner/surface policies.

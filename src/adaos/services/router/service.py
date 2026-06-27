@@ -49,6 +49,60 @@ GENERAL_DIALOG_AGENT_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "Ада")
 GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
 GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
+_CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
+    {
+        "id": GENERAL_DIALOG_AGENT_ID,
+        "label": GENERAL_DIALOG_AGENT_LABEL,
+        "owner": GENERAL_DIALOG_AGENT_OWNER,
+        "kind": "core_agent",
+        "channel_id": GENERAL_DIALOG_CHANNEL_ID,
+        "gender": "female",
+        "voice": "ru-female",
+        "aliases": (GENERAL_DIALOG_AGENT_LABEL, "Ада", "Ada", "general", "общий ассистент"),
+    },
+    {
+        "id": "agent:conversation_companions:arseni",
+        "label": "Арсений",
+        "owner": "skill:conversation_companions",
+        "kind": "skill_agent",
+        "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
+        "skill": "conversation_companions",
+        "talk_tool": "talk",
+        "switch_tool": "switch_character",
+        "character_id": "arseni",
+        "gender": "male",
+        "voice": "ru-male",
+        "aliases": ("Арсений", "Arseni", "Arseniy", "советник", "консультант"),
+    },
+    {
+        "id": "agent:conversation_companions:nika",
+        "label": "Ника",
+        "owner": "skill:conversation_companions",
+        "kind": "skill_agent",
+        "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
+        "skill": "conversation_companions",
+        "talk_tool": "talk",
+        "switch_tool": "switch_character",
+        "character_id": "nika",
+        "gender": "female",
+        "voice": "ru-female",
+        "aliases": ("Ника", "Nika", "скептик"),
+    },
+    {
+        "id": "agent:conversation_companions:mira",
+        "label": "Мира",
+        "owner": "skill:conversation_companions",
+        "kind": "skill_agent",
+        "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
+        "skill": "conversation_companions",
+        "talk_tool": "talk",
+        "switch_tool": "switch_character",
+        "character_id": "mira",
+        "gender": "female",
+        "voice": "ru-female",
+        "aliases": ("Мира", "Mira", "собеседник", "рассказчик"),
+    },
+)
 _GENERAL_AGENT_ADDRESS_RE = re.compile(
     r"^\s*(?:ада|ada|general|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
     re.IGNORECASE | re.UNICODE,
@@ -121,31 +175,61 @@ def _general_conversation_id(webspace_id: str) -> str:
     return f"conv.core.general.{ws}"
 
 
+def _agent_record_by_id(agent_id: Any) -> dict[str, Any] | None:
+    token = str(agent_id or "").strip()
+    if not token:
+        return None
+    for item in _CONVERSATION_AGENT_REGISTRY:
+        if str(item.get("id") or "").strip() == token:
+            return dict(item)
+    return None
+
+
+def _agent_voice_profile(agent: Mapping[str, Any]) -> dict[str, Any]:
+    gender = str(agent.get("gender") or "").strip().lower()
+    voice = str(agent.get("voice") or "").strip()
+    return {
+        "gender": gender or None,
+        "voice": voice or None,
+        "lang": "ru-RU",
+        "browser_voice_hint": voice or gender or None,
+    }
+
+
+def _agent_projection_from_record(agent: Mapping[str, Any]) -> dict[str, Any]:
+    projection = {
+        "id": str(agent.get("id") or "").strip(),
+        "label": str(agent.get("label") or agent.get("id") or "").strip(),
+        "owner": str(agent.get("owner") or "").strip(),
+        "kind": str(agent.get("kind") or "agent").strip(),
+        "channel_id": str(agent.get("channel_id") or "").strip(),
+        "memory_scope": "global_user" if agent.get("id") == GENERAL_DIALOG_AGENT_ID else "agent_user",
+        "gender": str(agent.get("gender") or "").strip() or None,
+        "voice": str(agent.get("voice") or "").strip() or None,
+        "voice_profile": _agent_voice_profile(agent),
+    }
+    if agent.get("skill"):
+        projection["skill_id"] = str(agent.get("skill") or "").strip()
+    if agent.get("character_id"):
+        projection["character_id"] = str(agent.get("character_id") or "").strip()
+    aliases = [str(item).strip() for item in agent.get("aliases", ()) if str(item).strip()]
+    if aliases:
+        projection["aliases"] = aliases
+    return projection
+
+
 def _agent_label_from_id(agent_id: Any) -> str:
     token = str(agent_id or "").strip()
     if not token:
         return ""
-    labels = {
-        GENERAL_DIALOG_AGENT_ID: GENERAL_DIALOG_AGENT_LABEL,
-        "agent:conversation_companions:arseni": "Арсений",
-        "agent:conversation_companions:nika": "Ника",
-        "agent:conversation_companions:mira": "Мира",
-    }
-    if token in labels:
-        return labels[token]
+    agent = _agent_record_by_id(token)
+    if agent is not None:
+        return str(agent.get("label") or "").strip() or token
     return token.rsplit(":", 1)[-1] or token
 
 
 def _general_agent_projection() -> dict[str, Any]:
-    return {
-        "id": GENERAL_DIALOG_AGENT_ID,
-        "label": GENERAL_DIALOG_AGENT_LABEL,
-        "owner": GENERAL_DIALOG_AGENT_OWNER,
-        "kind": "core_agent",
-        "channel_id": GENERAL_DIALOG_CHANNEL_ID,
-        "memory_scope": "global_user",
-        "aliases": [GENERAL_DIALOG_AGENT_LABEL, "Ада", "Ada", "general"],
-    }
+    return _agent_projection_from_record(_CONVERSATION_AGENT_REGISTRY[0])
 
 
 def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: str) -> dict[str, Any]:
@@ -155,6 +239,9 @@ def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: 
     label = str(active_channel.get("active_agent_label") or "").strip() or _agent_label_from_id(agent_id)
     owner = str(active_channel.get("active_agent_owner") or active_channel.get("owner") or "").strip()
     kind = str(active_channel.get("active_agent_kind") or "").strip() or "skill_agent"
+    registry_agent = _agent_record_by_id(agent_id)
+    gender = str(active_channel.get("active_agent_gender") or (registry_agent or {}).get("gender") or "").strip()
+    voice = str(active_channel.get("active_agent_voice") or (registry_agent or {}).get("voice") or "").strip()
     return {
         "id": agent_id or f"agent:{channel_id}:active",
         "label": label,
@@ -162,6 +249,9 @@ def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: 
         "kind": kind,
         "channel_id": channel_id,
         "memory_scope": "agent_user",
+        "gender": gender or None,
+        "voice": voice or None,
+        "voice_profile": _agent_voice_profile({"gender": gender, "voice": voice}),
     }
 
 
@@ -192,6 +282,28 @@ def _extract_general_agent_addressed_text(text: str) -> str | None:
     if not match:
         return None
     return str(match.group("rest") or "").strip()
+
+
+def _extract_addressed_agent(text: str) -> tuple[dict[str, Any], str] | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    lowered = value.lower()
+    for agent in _CONVERSATION_AGENT_REGISTRY:
+        aliases = [str(item or "").strip() for item in agent.get("aliases", ()) if str(item or "").strip()]
+        aliases.sort(key=len, reverse=True)
+        for alias in aliases:
+            alias_lower = alias.lower()
+            if lowered == alias_lower:
+                return dict(agent), ""
+            match = re.match(
+                rf"^\s*{re.escape(alias)}\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
+                value,
+                re.IGNORECASE | re.UNICODE,
+            )
+            if match:
+                return dict(agent), str(match.group("rest") or "").strip()
+    return None
 
 
 def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
@@ -1181,6 +1293,8 @@ class RouterService:
                 "conversation_id": _general_conversation_id(ws),
                 "active_agent_id": general_agent["id"],
                 "active_agent_label": general_agent["label"],
+                "active_agent_gender": general_agent.get("gender"),
+                "active_agent_voice": general_agent.get("voice"),
                 "active_agent": general_agent,
                 "active": active_id == "general",
             }
@@ -1201,6 +1315,8 @@ class RouterService:
                         "conversation_id": active_dict.get("conversation_id"),
                         "active_agent_id": active_dict.get("active_agent_id"),
                         "active_agent_label": active_agent.get("label"),
+                        "active_agent_gender": active_agent.get("gender"),
+                        "active_agent_voice": active_agent.get("voice"),
                         "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                     }
@@ -1215,6 +1331,8 @@ class RouterService:
                         "conversation_id": active_dict.get("conversation_id"),
                         "active_agent_id": active_dict.get("active_agent_id"),
                         "active_agent_label": active_agent.get("label"),
+                        "active_agent_gender": active_agent.get("gender"),
+                        "active_agent_voice": active_agent.get("voice"),
                         "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                         "active": True,
@@ -1232,6 +1350,8 @@ class RouterService:
                     "active_agent_label": general_agent["label"],
                     "active_agent_owner": general_agent["owner"],
                     "active_agent_kind": general_agent["kind"],
+                    "active_agent_gender": general_agent.get("gender"),
+                    "active_agent_voice": general_agent.get("voice"),
                     "route_id": "voice_chat",
                 }
             elif active_agent:
@@ -1239,6 +1359,8 @@ class RouterService:
                 active_dict.setdefault("active_agent_label", active_agent.get("label"))
                 active_dict.setdefault("active_agent_owner", active_agent.get("owner"))
                 active_dict.setdefault("active_agent_kind", active_agent.get("kind"))
+                active_dict.setdefault("active_agent_gender", active_agent.get("gender"))
+                active_dict.setdefault("active_agent_voice", active_agent.get("voice"))
             memory_owner = str(active_dict.get("owner") or active_agent.get("owner") or "core").strip() or "core"
             agent_owner = str(active_agent.get("owner") or memory_owner).strip() or memory_owner
             memory = {
@@ -2235,6 +2357,22 @@ class RouterService:
                 "text": text.strip(),
                 "ts": float(payload.get("ts") or time.time()),
             }
+            for key in (
+                "voice",
+                "voice_gender",
+                "active_agent_id",
+                "active_agent_label",
+                "active_agent_gender",
+                "active_agent_voice",
+            ):
+                raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    msg[key] = raw_value.strip()
+            voice_profile = payload.get("voice_profile") if isinstance(payload.get("voice_profile"), dict) else None
+            if voice_profile is None and isinstance(meta.get("voice_profile"), dict):
+                voice_profile = meta.get("voice_profile")
+            if isinstance(voice_profile, dict):
+                msg["voice_profile"] = dict(voice_profile)
             targets = await _resolve_webspace_ids(payload)
             route_id = str(meta.get("route_id") or meta.get("route") or "").strip()
             target_node_id = _resolve_voice_target_node_id(
@@ -2755,8 +2893,9 @@ class RouterService:
                     return
             except Exception:
                 pass
-            addressed_general_text = _extract_general_agent_addressed_text(text)
-            if addressed_general_text is not None:
+            addressed_agent = _extract_addressed_agent(text)
+            if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
+                addressed_general_text = addressed_agent[1]
                 current_dialog_channel = dialog_runtime.get_active_channel(ws)
                 if current_dialog_channel is not None:
                     dialog_runtime.deactivate_channel(
@@ -2782,6 +2921,8 @@ class RouterService:
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
                 meta["active_agent_id"] = GENERAL_DIALOG_AGENT_ID
                 meta["active_agent_label"] = GENERAL_DIALOG_AGENT_LABEL
+                meta["active_agent_gender"] = "female"
+                meta["active_agent_voice"] = "ru-female"
                 try:
                     await _write_dialog_state(ws, event="general_agent_addressed")
                 except Exception:
@@ -2806,6 +2947,61 @@ class RouterService:
                         pass
                     return
                 text = addressed_general_text
+            elif addressed_agent is not None:
+                agent, agent_rest = addressed_agent
+                channel_id = str(agent.get("channel_id") or "").strip()
+                skill = str(agent.get("skill") or "").strip()
+                talk_tool = str(agent.get("talk_tool") or "talk").strip()
+                switch_tool = str(agent.get("switch_tool") or "").strip()
+                character_id = str(agent.get("character_id") or "").strip()
+                if channel_id == CONVERSATIONAL_DIALOG_CHANNEL_ID and skill:
+                    action_meta = {
+                        **meta,
+                        "webspace_id": ws,
+                        "route_id": "voice_chat",
+                        "dialog_channel_id": channel_id,
+                        "active_agent_id": str(agent.get("id") or "").strip(),
+                        "active_agent_label": str(agent.get("label") or "").strip(),
+                        "active_agent_gender": str(agent.get("gender") or "").strip(),
+                        "active_agent_voice": str(agent.get("voice") or "").strip(),
+                        "voice_gender": str(agent.get("gender") or "").strip(),
+                        "voice": str(agent.get("voice") or "").strip(),
+                        "voice_profile": _agent_voice_profile(agent),
+                    }
+                    if character_id:
+                        action_meta["character_id"] = character_id
+                    if agent_rest:
+                        action_payload = {
+                            "text": text,
+                            "webspace_id": ws,
+                            "_meta": action_meta,
+                        }
+                        action_tool = talk_tool
+                    else:
+                        action_payload = {
+                            "character_id": character_id,
+                            "webspace_id": ws,
+                            "_meta": action_meta,
+                        }
+                        action_tool = switch_tool or talk_tool
+                    dialog_action = {
+                        "kind": "skill_tool",
+                        "skill": skill,
+                        "tool": action_tool,
+                        "payload": action_payload,
+                    }
+                    if await _handle_dialog_action(
+                        dialog_action=dialog_action,
+                        webspace_id=ws,
+                        meta=action_meta,
+                        route_id="voice_chat",
+                        mark_request=False,
+                    ):
+                        try:
+                            await _ensure_tts_state(ws)
+                        except Exception:
+                            pass
+                        return
             try:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,
