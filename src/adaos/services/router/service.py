@@ -8,6 +8,7 @@ import threading
 import time
 import requests
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,15 @@ _log = logging.getLogger("adaos.router.service")
 _WEBIO_RECEIVER_METADATA_CACHE_TTL_S = 2.0
 _WEBIO_STREAM_GUARD_STATS_LOCK = threading.Lock()
 _WEBIO_STREAM_GUARD_STATS: dict[str, dict[str, Any]] = {}
+GENERAL_DIALOG_AGENT_ID = "agent:core:general"
+GENERAL_DIALOG_AGENT_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "Ада").strip() or "Ада"
+GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
+GENERAL_DIALOG_CHANNEL_ID = "general"
+CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
+_GENERAL_AGENT_ADDRESS_RE = re.compile(
+    r"^\s*(?:ада|ada|general|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
+    re.IGNORECASE | re.UNICODE,
+)
 
 
 def _webio_receiver_metadata_timeout_s() -> float:
@@ -104,6 +114,84 @@ def _positive_int(value: Any) -> int | None:
         return parsed if parsed > 0 else None
     except Exception:
         return None
+
+
+def _general_conversation_id(webspace_id: str) -> str:
+    ws = str(webspace_id or "default").strip() or "default"
+    return f"conv.core.general.{ws}"
+
+
+def _agent_label_from_id(agent_id: Any) -> str:
+    token = str(agent_id or "").strip()
+    if not token:
+        return ""
+    labels = {
+        GENERAL_DIALOG_AGENT_ID: GENERAL_DIALOG_AGENT_LABEL,
+        "agent:conversation_companions:arseni": "Арсений",
+        "agent:conversation_companions:nika": "Ника",
+        "agent:conversation_companions:mira": "Мира",
+    }
+    if token in labels:
+        return labels[token]
+    return token.rsplit(":", 1)[-1] or token
+
+
+def _general_agent_projection() -> dict[str, Any]:
+    return {
+        "id": GENERAL_DIALOG_AGENT_ID,
+        "label": GENERAL_DIALOG_AGENT_LABEL,
+        "owner": GENERAL_DIALOG_AGENT_OWNER,
+        "kind": "core_agent",
+        "channel_id": GENERAL_DIALOG_CHANNEL_ID,
+        "memory_scope": "global_user",
+        "aliases": [GENERAL_DIALOG_AGENT_LABEL, "Ада", "Ada", "general"],
+    }
+
+
+def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: str) -> dict[str, Any]:
+    if channel_id == GENERAL_DIALOG_CHANNEL_ID or not active_channel:
+        return _general_agent_projection()
+    agent_id = str(active_channel.get("active_agent_id") or "").strip()
+    label = str(active_channel.get("active_agent_label") or "").strip() or _agent_label_from_id(agent_id)
+    owner = str(active_channel.get("active_agent_owner") or active_channel.get("owner") or "").strip()
+    kind = str(active_channel.get("active_agent_kind") or "").strip() or "skill_agent"
+    return {
+        "id": agent_id or f"agent:{channel_id}:active",
+        "label": label,
+        "owner": owner,
+        "kind": kind,
+        "channel_id": channel_id,
+        "memory_scope": "agent_user",
+    }
+
+
+def _extract_general_agent_addressed_text(text: str) -> str | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    aliases = {
+        GENERAL_DIALOG_AGENT_LABEL.strip().lower(),
+        "ада",
+        "ada",
+        "general",
+        "общий ассистент",
+    }
+    aliases = {item for item in aliases if item}
+    lowered = value.lower()
+    if lowered in aliases:
+        return ""
+    for alias in aliases:
+        match = re.match(
+            rf"^\s*{re.escape(alias)}\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
+            value,
+            re.IGNORECASE | re.UNICODE,
+        )
+        if match:
+            return str(match.group("rest") or "").strip()
+    match = _GENERAL_AGENT_ADDRESS_RE.match(value)
+    if not match:
+        return None
+    return str(match.group("rest") or "").strip()
 
 
 def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
@@ -1083,27 +1171,37 @@ class RouterService:
             if not active_id:
                 active_id = "general"
             now = time.time()
+            active_agent = _active_agent_projection(active_dict, active_id)
+            general_agent = _general_agent_projection()
+            general_channel = {
+                "id": "general",
+                "label": "General",
+                "owner": GENERAL_DIALOG_AGENT_OWNER,
+                "route_id": "voice_chat",
+                "conversation_id": _general_conversation_id(ws),
+                "active_agent_id": general_agent["id"],
+                "active_agent_label": general_agent["label"],
+                "active_agent": general_agent,
+                "active": active_id == "general",
+            }
+            conversational_channel = {
+                "id": "conversational",
+                "label": "Conversational",
+                "owner": "skill:conversation_companions",
+                "route_id": "voice_chat",
+                "active": active_id == "conversational",
+            }
             channels: list[dict[str, Any]] = [
-                {
-                    "id": "general",
-                    "label": "General",
-                    "owner": "core:router",
-                    "route_id": "voice_chat",
-                    "active": active_id == "general",
-                },
-                {
-                    "id": "conversational",
-                    "label": "Conversational",
-                    "owner": "skill:conversation_companions",
-                    "route_id": "voice_chat",
-                    "active": active_id == "conversational",
-                },
+                general_channel,
+                conversational_channel,
             ]
             if active_dict and active_id == "conversational":
                 channels[1].update(
                     {
                         "conversation_id": active_dict.get("conversation_id"),
                         "active_agent_id": active_dict.get("active_agent_id"),
+                        "active_agent_label": active_agent.get("label"),
+                        "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                     }
                 )
@@ -1116,14 +1214,66 @@ class RouterService:
                         "route_id": active_dict.get("route_id") or "voice_chat",
                         "conversation_id": active_dict.get("conversation_id"),
                         "active_agent_id": active_dict.get("active_agent_id"),
+                        "active_agent_label": active_agent.get("label"),
+                        "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                         "active": True,
                     }
                 )
+            if active_dict is None:
+                active_dict = {
+                    "webspace_id": ws,
+                    "channel_id": "general",
+                    "owner": GENERAL_DIALOG_AGENT_OWNER,
+                    "default_skill": "voice_chat_skill",
+                    "default_tool": "handle_text",
+                    "conversation_id": _general_conversation_id(ws),
+                    "active_agent_id": general_agent["id"],
+                    "active_agent_label": general_agent["label"],
+                    "active_agent_owner": general_agent["owner"],
+                    "active_agent_kind": general_agent["kind"],
+                    "route_id": "voice_chat",
+                }
+            elif active_agent:
+                active_dict = dict(active_dict)
+                active_dict.setdefault("active_agent_label", active_agent.get("label"))
+                active_dict.setdefault("active_agent_owner", active_agent.get("owner"))
+                active_dict.setdefault("active_agent_kind", active_agent.get("kind"))
+            memory_owner = str(active_dict.get("owner") or active_agent.get("owner") or "core").strip() or "core"
+            agent_owner = str(active_agent.get("owner") or memory_owner).strip() or memory_owner
+            memory = {
+                "status": "projection_only",
+                "storage": "node_conversation_store_pending",
+                "scopes": [
+                    {"id": "global_user", "label": "Global user", "owner": "core", "writable_by": ["core"]},
+                    {"id": "core", "label": "Core", "owner": "core", "writable_by": ["core"]},
+                    {
+                        "id": "skill_user",
+                        "label": "Skill user",
+                        "owner": memory_owner,
+                        "writable_by": [memory_owner],
+                    },
+                    {
+                        "id": "agent_user",
+                        "label": "Agent user",
+                        "owner": agent_owner,
+                        "active_agent_id": active_agent.get("id"),
+                        "writable_by": [agent_owner],
+                    },
+                    {
+                        "id": "conversation",
+                        "label": "Conversation",
+                        "conversation_id": active_dict.get("conversation_id"),
+                        "owner": memory_owner,
+                    },
+                ],
+            }
             return {
                 "active_channel_id": active_id,
                 "active_channel": active_dict,
+                "active_agent": active_agent,
                 "channels": channels,
+                "memory": memory,
                 "event": event,
                 "webspace_id": ws,
                 "updated_at": now,
@@ -1236,6 +1386,8 @@ class RouterService:
                 "messages": cached_messages,
                 "last_refresh_ts": last_refresh_ts,
                 "message_count": len(cached_messages),
+                "has_more_before": False,
+                "history_mode": "compact_tail",
             }
             payload: dict[str, Any] = {
                 "receiver": "voice_chat.messages",
@@ -1245,6 +1397,8 @@ class RouterService:
                     "messages": cached_messages,
                     "last_refresh_ts": last_refresh_ts,
                     "message_count": len(cached_messages),
+                    "has_more_before": False,
+                    "history_mode": "compact_tail",
                 },
                 "_meta": {
                     "webspace_id": webspace_id,
@@ -2468,7 +2622,7 @@ class RouterService:
                             {
                                 "id": _make_id("m"),
                                 "from": "hub",
-                                "text": "Вернулся в общий режим.",
+                                "text": f"Перешел к {GENERAL_DIALOG_AGENT_LABEL} в общий режим.",
                                 "ts": time.time(),
                             },
                             _resolve_voice_target_node_id(payload, route_meta, default_local=False),
@@ -2601,6 +2755,57 @@ class RouterService:
                     return
             except Exception:
                 pass
+            addressed_general_text = _extract_general_agent_addressed_text(text)
+            if addressed_general_text is not None:
+                current_dialog_channel = dialog_runtime.get_active_channel(ws)
+                if current_dialog_channel is not None:
+                    dialog_runtime.deactivate_channel(
+                        webspace_id=ws,
+                        channel_id=current_dialog_channel.channel_id,
+                        bus=self.bus,
+                        source="router.voice",
+                        reason="general_agent_address",
+                    )
+                    try:
+                        await _append_voice_chat_message(
+                            ws,
+                            {
+                                "id": _make_id("m"),
+                                "from": "hub",
+                                "text": f"Перешел к {GENERAL_DIALOG_AGENT_LABEL} в общий режим.",
+                                "ts": time.time(),
+                            },
+                            target_node_id,
+                        )
+                    except Exception:
+                        pass
+                meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
+                meta["active_agent_id"] = GENERAL_DIALOG_AGENT_ID
+                meta["active_agent_label"] = GENERAL_DIALOG_AGENT_LABEL
+                try:
+                    await _write_dialog_state(ws, event="general_agent_addressed")
+                except Exception:
+                    pass
+                if not addressed_general_text:
+                    try:
+                        await _append_voice_chat_message(
+                            ws,
+                            {
+                                "id": _make_id("m"),
+                                "from": "hub",
+                                "text": f"{GENERAL_DIALOG_AGENT_LABEL} на связи в общем режиме.",
+                                "ts": time.time(),
+                            },
+                            target_node_id,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        await _ensure_tts_state(ws)
+                    except Exception:
+                        pass
+                    return
+                text = addressed_general_text
             try:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,

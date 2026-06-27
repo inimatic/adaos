@@ -1,6 +1,6 @@
 # Roadmap Inventory and Documentation Audit
 
-Snapshot date: 2026-05-27.
+Snapshot date: 2026-06-27.
 
 This page is the current cross-document inventory for AdaOS target
 architecture, implementation roadmaps, and high-value documentation gaps. It is
@@ -210,15 +210,24 @@ Current status:
   fallback, handles explicit exit/general commands, and emits
   `dialog.channel.*` lifecycle events.
 - [x] Router projects a compact browser-visible `data/dialog` snapshot for the
-  Voice pilot, and the Voice widget can switch `general`/`conversational` via
-  `dialog.channel.select`.
+  Voice pilot, including current channel, owner, active agent, and projected
+  memory scopes. The Voice widget can switch `general`/`conversational` via
+  `dialog.channel.select` and displays the active agent.
+- [x] The `general` channel now has a core-owned default agent identity
+  (`agent:core:general`, displayed as `Ада` by default). Addressing it by name
+  exits an active companion channel and routes the remaining text through the
+  general Voice/NLU path.
 - [ ] There is no canonical persisted active dialog-channel registry for
   `general`, `conversational`, `builder`, and future skill-owned channels yet.
   The current `data/dialog` shape is a UI projection, not the durable source of
   truth.
 - [ ] Per-channel visible history is not implemented yet; the pilot still uses
   the compact Voice compatibility tail until the conversation ledger and
-  conversation-id projections exist.
+  conversation-id projections exist. The browser chat now exposes a disabled
+  `Еще истории` affordance based on the `has_more_before` projection flag.
+- [x] The Voice toolbox has an initial read-only `Memory` inspector for the
+  current agent/channel projection. Canonical memory CRUD and policy-checked
+  retrieval remain future work.
 - [x] The dispatcher now materializes a successful skill tool result `message`
   into the current Voice chat tail when the skill did not already publish a
   matching chat append.

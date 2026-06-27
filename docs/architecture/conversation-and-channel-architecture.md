@@ -47,12 +47,25 @@ Implemented today:
 - `RouterService` projects the active dialog-channel snapshot into
   `data/dialog` for the browser shell. The current projection is a compact UI
   state with `active_channel_id`, known channels, owner, default tool, active
-  agent, and update metadata; it is not the canonical conversation store.
+  agent, memory scope summary, and update metadata; it is not the canonical
+  conversation store.
+- The `general` channel has a core-owned default agent identity:
+  `agent:core:general`, displayed as `Ada`/`Ада` unless configured otherwise.
+  Addressing that agent by name while another channel is active deactivates the
+  active process-local channel and routes the remaining text through the
+  general Voice/NLU path.
 - The browser Voice widget can show and switch the current channel between
-  `general` and `conversational` by sending `dialog.channel.select`. Selecting
-  `conversational` delegates activation to `conversation_companions.start`;
-  selecting `general` deactivates the process-local channel and leaves a short
-  marker in the current Voice tail.
+  `general` and `conversational` by sending `dialog.channel.select`; it also
+  shows the active agent from `data/dialog`. Selecting `conversational`
+  delegates activation to `conversation_companions.start`; selecting `general`
+  deactivates the process-local channel and leaves a short marker in the
+  current Voice tail.
+- The browser chat widget has an `Еще истории` affordance for Voice chat. It is
+  currently backed by the compact-tail projection flag
+  `has_more_before=false`; real loading waits for the canonical ledger.
+- The Voice toolbox has a read-only `Memory` inspector that shows the current
+  channel, active agent, conversation id, and projected memory scopes. It is an
+  observability surface, not a memory editor.
 - Telegram input is normalized enough to preserve transport reply metadata and
   enter the NLU pipeline.
 
@@ -87,11 +100,13 @@ Implemented companion pilot scenarios:
   `active_agent_id` metadata.
 - Agent switch/profile correction: outside an active channel, explicit NLU
   hits such as "call Nika" or "be shorter" still go through skill-owned NLU
-  actions. Inside the active pilot channel, free turns are owned by
-  `conversation_companions`; richer in-channel command parsing remains a
-  follow-up for the skill.
+  actions. Inside the active pilot channel, addressing `Арсений`, `Ника`, or
+  `Мира` is owned by `conversation_companions` and updates `active_agent_id`;
+  richer in-channel profile correction remains a follow-up for the skill.
 - Exit: explicit "general"/"back to general" style commands deactivate the
   pilot channel and return unmatched turns to the general Voice fallback.
+  Addressing the general agent by name, for example "Ада, ...", performs the
+  same channel exit and continues with the remaining text in the general path.
 - Manual channel switch: the Voice selector can switch `general` ->
   `conversational` through the same skill-owned start contract and
   `conversational` -> `general` through core-owned deactivation.
@@ -1387,8 +1402,10 @@ depth across several phases.
   `turn_trace_id`, and transport metadata through NLU and skill dispatch.
 - [x] `[must]` Add a minimal active dialog-channel registry for
   `conversational` in the Voice compatibility path.
-- [ ] `[must]` Add a persisted/browser-visible active dialog-channel registry
-  for `general`, `conversational`, and future `builder`.
+- [x] `[must]` Add a browser-visible active dialog-channel projection for
+  `general` and `conversational`, including active owner/agent metadata.
+- [ ] `[must]` Persist the active dialog-channel registry and extend it to
+  `builder` and future skill-owned channels.
 - [ ] `[must]` Add a minimal conversation ledger or compatibility service that
   can append user and assistant turns idempotently.
 - [x] `[must]` Make `conversation.start` switch to `conversational`, run
@@ -1396,14 +1413,19 @@ depth across several phases.
 - [x] `[must]` Route active `conversational` Voice turns directly to
   `conversation_companions.talk` while preserving explicit exit/general
   commands.
-- [ ] `[must]` Move in-channel agent switch and profile-correction commands
-  fully under the `conversation_companions` owner policy.
-- [ ] `[must]` Keep `voice_chat.messages` as a compatibility projection, not
+- [x] `[must]` Move in-channel agent switching by addressed name under the
+  `conversation_companions` owner policy and project the active agent to the
+  browser shell.
+- [ ] `[must]` Move in-channel profile-correction commands fully under the
+  `conversation_companions` owner policy.
+- [x] `[must]` Keep `voice_chat.messages` as a compatibility projection, not
   the canonical design.
 - [ ] `[must]` Add a golden conversation test for "pogovorim" -> reply ->
   follow-up -> switch character -> style correction -> back to `general`.
-- [ ] `[should]` Add diagnostics showing active channel, conversation, owner,
-  active agent, last policy decision, and materialization path.
+- [x] `[should]` Add initial diagnostics showing active channel, conversation,
+  owner, active agent, and projected memory scopes.
+- [ ] `[should]` Extend diagnostics with last policy decision, turn trace, and
+  materialization path.
 
 ### Phase 0. Contract Freeze
 
@@ -1458,8 +1480,10 @@ depth across several phases.
 - [x] `[must]` Preserve existing `_meta.webspace_id`, `route_id`,
   `target_node_id`, and `request_id` through current Voice NLU and skill tool
   calls.
-- [ ] `[must]` Preserve future `dialog_channel_id` through Dialog Runtime,
-  NLU, and skill tool calls.
+- [x] `[must]` Preserve current `dialog_channel_id` through the Voice
+  compatibility Dialog Runtime and skill tool calls.
+- [ ] `[must]` Preserve future canonical dialog metadata through neutral
+  `dialog.*` events, NLU evidence, and skill tool calls.
 - [ ] `[must]` Add diagnostics when a skill action returns `ok` and `message`
   but no visible output is published.
 - [x] `[must]` Add tests for `conversation.start` from Voice producing a
@@ -1468,8 +1492,10 @@ depth across several phases.
   it through NLU action outcomes.
 - [x] `[should]` Keep `voice_chat.messages` as the compatibility tail while
   introducing neutral `dialog.*` events and metadata.
-- [ ] `[could]` Add a temporary Voice debug panel that shows route id, dialog
-  channel id, conversation id, owner, and last dispatch result.
+- [x] `[could]` Add a temporary Voice debug panel that shows NLU logs,
+  runtime flags, active dialog/memory projection, and current owner/agent.
+- [ ] `[could]` Add last dispatch result and renderer/materialization status
+  to the Voice debug panel.
 
 ### Phase 1. Node Conversation/Memory Store
 
@@ -1545,8 +1571,10 @@ depth across several phases.
 - [ ] `[must]` Convert `voice.chat.user` into a compatibility alias for neutral
   `dialog.user_message`.
 - [ ] `[must]` Add active dialog-channel registry per webspace.
-- [ ] `[must]` Add browser channel selector support for `general`,
-  `conversational`, and `builder`.
+- [x] `[must]` Add browser channel selector support for `general` and
+  `conversational`.
+- [ ] `[must]` Extend browser channel selector support to `builder` and
+  dynamically declared skill-owned channels.
 - [ ] `[must]` Make browser chat panels subscribe to `data.dialog` /
   conversation projections instead of transport-specific chat state.
 - [ ] `[should]` Make Telegram inbound messages resolve to conversations before
@@ -1572,8 +1600,9 @@ depth across several phases.
 - [x] `[must]` Add `conversation_companions` as the first multi-agent skill
   conversation pilot: "let's talk" enters `conversational`, unmatched turns
   route to `talk`, and exit/switch commands return to `general`.
-- [ ] `[must]` Support multiple agents in one conversation with `agent_id`,
-  `active_agent_id`, and agent-scoped memory.
+- [x] `[must]` Support multiple pilot agents in one skill conversation with
+  `active_agent_id` and browser-visible active-agent projection.
+- [ ] `[must]` Persist agent-scoped memory as canonical `MemoryItem` records.
 - [ ] `[should]` Move legacy semantic fallback out of
   `voice_chat_skill.handle_text` into conversation owner/surface policies.
 - [ ] `[should]` Add explicit fallback when a surface or owning skill is

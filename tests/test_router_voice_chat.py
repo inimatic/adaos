@@ -683,8 +683,10 @@ async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) 
     await _drain_voice_chat_persist(router)
     data = doc.get_map("data")
     assert data["dialog"]["active_channel_id"] == "general"
+    assert data["dialog"]["active_agent"]["id"] == "agent:core:general"
+    assert data["dialog"]["active_agent"]["label"] == "Ада"
     assert dialog_runtime.get_active_channel(webspace_id) is None
-    assert data["voice_chat"]["messages"][-1]["text"] == "Вернулся в общий режим."
+    assert data["voice_chat"]["messages"][-1]["text"] == "Перешел к Ада в общий режим."
     dialog_runtime.reset_all()
 
 
@@ -1101,6 +1103,89 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
         )
     ]
     assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "free form companion turn"
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "general-agent-address-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(
+            run_tool=lambda skill, tool, payload, **opts: calls.append((skill, tool, dict(payload), dict(opts)))
+            or {"ok": True}
+        ),
+    )
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        route_id="voice_chat",
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "Ada, weather in Paris",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert calls == []
+    assert dialog_runtime.get_active_channel(webspace_id) is None
+    assert len(seen_nlu) == 1
+    assert seen_nlu[0].payload["text"] == "weather in Paris"
+    assert seen_nlu[0].payload["_meta"]["dialog_channel_id"] == "general"
+    assert seen_nlu[0].payload["_meta"]["active_agent_id"] == "agent:core:general"
+    data = doc.get_map("data")
+    assert data["dialog"]["active_channel_id"] == "general"
+    assert data["dialog"]["active_agent"]["label"] == "Ада"
+    assert data["voice_chat"]["messages"][-1]["text"] == "Перешел к Ада в общий режим."
     dialog_runtime.reset_all()
 
 

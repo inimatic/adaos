@@ -18,6 +18,9 @@ class DialogChannelState:
     default_tool: str
     conversation_id: str
     active_agent_id: str | None = None
+    active_agent_label: str | None = None
+    active_agent_owner: str | None = None
+    active_agent_kind: str | None = None
     route_id: str | None = None
     source_request_id: str | None = None
     activated_at: float = 0.0
@@ -98,6 +101,9 @@ def activate_channel(
     default_tool: str,
     conversation_id: str | None = None,
     active_agent_id: str | None = None,
+    active_agent_label: str | None = None,
+    active_agent_owner: str | None = None,
+    active_agent_kind: str | None = None,
     route_id: str | None = None,
     source_request_id: str | None = None,
     ttl_s: float | None = None,
@@ -114,6 +120,9 @@ def activate_channel(
         default_tool=_clean(default_tool),
         conversation_id=_clean(conversation_id) or f"conv.{ws}.{_clean(channel_id) or 'general'}",
         active_agent_id=_clean(active_agent_id) or None,
+        active_agent_label=_clean(active_agent_label) or None,
+        active_agent_owner=_clean(active_agent_owner) or None,
+        active_agent_kind=_clean(active_agent_kind) or None,
         route_id=_clean(route_id) or None,
         source_request_id=_clean(source_request_id) or None,
         activated_at=now,
@@ -203,6 +212,7 @@ def apply_tool_result(
     owner = _clean(dialog.get("owner")) or _target_owner(target)
     ttl_raw = dialog.get("ttl_s")
     ttl_s = float(ttl_raw) if isinstance(ttl_raw, (int, float)) and float(ttl_raw) > 0 else None
+    active_agent = dialog.get("active_agent") if isinstance(dialog.get("active_agent"), Mapping) else {}
     return activate_channel(
         webspace_id=webspace_id,
         channel_id=channel_id or "conversational",
@@ -211,6 +221,15 @@ def apply_tool_result(
         default_tool=default_tool,
         conversation_id=_clean(dialog.get("conversation_id")) or None,
         active_agent_id=_clean(dialog.get("active_agent_id") or result.get("active_character")) or None,
+        active_agent_label=_clean(
+            dialog.get("active_agent_label")
+            or dialog.get("active_agent_name")
+            or active_agent.get("label")
+            or active_agent.get("name")
+        )
+        or None,
+        active_agent_owner=_clean(active_agent.get("owner") or dialog.get("active_agent_owner") or owner) or None,
+        active_agent_kind=_clean(active_agent.get("kind") or dialog.get("active_agent_kind")) or None,
         route_id=_clean(meta.get("route_id") or meta.get("route")) or None,
         source_request_id=_clean(meta.get("request_id")) or None,
         ttl_s=ttl_s,
@@ -244,6 +263,8 @@ def resolve_followup_action(
     action_meta.setdefault("conversation_owner", state.owner)
     if state.active_agent_id:
         action_meta.setdefault("active_agent_id", state.active_agent_id)
+    if state.active_agent_label:
+        action_meta.setdefault("active_agent_label", state.active_agent_label)
     return {
         "kind": "skill_tool",
         "skill": state.default_skill,

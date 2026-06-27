@@ -22,6 +22,7 @@ def test_apply_tool_result_activates_companion_channel() -> None:
                 "owner": "skill:conversation_companions",
                 "default_tool": "conversation_companions.talk",
                 "active_agent_id": "agent:conversation_companions:arseni",
+                "active_agent_label": "Арсений",
             },
         },
         webspace_id="desktop",
@@ -34,6 +35,7 @@ def test_apply_tool_result_activates_companion_channel() -> None:
     assert state.default_skill == "conversation_companions"
     assert state.default_tool == "talk"
     assert state.active_agent_id == "agent:conversation_companions:arseni"
+    assert state.active_agent_label == "Арсений"
     assert dialog_runtime.get_active_channel("desktop") == state
 
 
@@ -46,6 +48,7 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
         default_tool="talk",
         conversation_id="conv.skill.conversation_companions.default.desktop",
         active_agent_id="agent:conversation_companions:nika",
+        active_agent_label="Ника",
         route_id="voice_chat",
     )
 
@@ -63,6 +66,7 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
     assert action["payload"]["text"] == "let us discuss the launch plan"
     assert action["payload"]["_meta"]["dialog_channel_id"] == "conversational"
     assert action["payload"]["_meta"]["active_agent_id"] == "agent:conversation_companions:nika"
+    assert action["payload"]["_meta"]["active_agent_label"] == "Ника"
 
 
 def test_resolve_followup_exit_deactivates_channel() -> None:
