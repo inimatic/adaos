@@ -1082,6 +1082,8 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
+    turn_trace_id = calls[0][2]["_meta"]["turn_trace_id"]
+    assert str(turn_trace_id).startswith("trace.")
     assert calls == [
         (
             "conversation_companions",
@@ -1090,12 +1092,13 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
                 "text": "free form companion turn",
                 "webspace_id": webspace_id,
                 "_meta": {
-                    "route_id": "voice_chat",
-                    "voice_chat_scope": "shared",
-                    "webspace_id": webspace_id,
-                    "dialog_channel_id": "conversational",
-                    "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
-                    "conversation_owner": "skill:conversation_companions",
+                        "route_id": "voice_chat",
+                        "voice_chat_scope": "shared",
+                        "webspace_id": webspace_id,
+                        "turn_trace_id": turn_trace_id,
+                        "dialog_channel_id": "conversational",
+                        "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                        "conversation_owner": "skill:conversation_companions",
                     "active_agent_id": "agent:conversation_companions:arseni",
                 },
             },

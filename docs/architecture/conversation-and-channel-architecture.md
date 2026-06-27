@@ -22,19 +22,21 @@ Related documents:
 
 ## Current Implemented Slice
 
-The current runtime has useful pieces, but not yet a first-class
-conversation service.
+The current runtime now has the first node-local conversation slice, but not
+yet the full retrieval-oriented conversation service.
 
 Implemented today:
 
 - `voice_chat_skill` declares the browser Voice app and a `voice_chat.messages`
   WebIO stream.
 - `RouterService` receives `voice.chat.user`, appends the user message to the
-  current Voice tail, and normally emits `nlp.intent.detect.request`.
+  node-local conversation ledger, projects a compact Voice tail, and normally
+  emits `nlp.intent.detect.request`.
   When a process-local dialog channel is active, Router delegates the turn to
   that channel owner before NLU/Teacher fallback.
-- `RouterService` receives `io.out.chat.append` and projects the message into
-  the browser-visible Voice tail.
+- `RouterService` receives `io.out.chat.append`, stores the message in the
+  same ledger, and projects the browser-visible Voice tail from the active
+  conversation.
 - The NLU pipeline can load skill-declared regex rules and dispatch matching
   intents to skill tools.
 - The NLU dispatcher has a Voice compatibility bridge: when a skill tool returns
@@ -47,18 +49,18 @@ Implemented today:
 - `RouterService` projects the active dialog-channel snapshot into
   `data/dialog` for the browser shell. The current projection is a compact UI
   state with `active_channel_id`, known channels, owner, default tool, active
-  agent, agent icon, memory scope summary, and update metadata; it is not the
-  canonical conversation store.
+  agent, agent icon, memory scope summary, and update metadata; the durable
+  state lives in the node SQLite conversation tables.
 - The `general` channel has a core-owned default agent identity:
   `agent:core:general`, displayed as `Ada`/`Ада` unless configured otherwise.
   Addressing that agent by name while another channel is active deactivates the
   active process-local channel and routes the remaining text through the
   general Voice/NLU path.
-- Router has a small static pilot agent registry for the global dialog shell:
-  the core general agent plus the `conversation_companions` pilot agents
-  Arseni, Nika, and Mira. Addressing one of these companion agents by name from
-  the Voice shell routes directly to the owning skill tool before NLU/Teacher
-  fallback and activates the `conversational` channel.
+- Router seeds a persisted pilot agent/channel registry from the core general
+  agent and the `conversation_companions` manifest declarations. Addressing one
+  of these companion agents by name from the Voice shell routes directly to the
+  owning skill tool before NLU/Teacher fallback and activates the
+  `conversational` channel.
 - Pilot agent projections and emitted chat messages carry `gender`, `voice`,
   `voice_profile`, and `icon` hints. The browser chat uses those hints to label
   assistant messages and pick a suitable installed speech-synthesis voice when
@@ -74,30 +76,32 @@ Implemented today:
   surface so the header remains a low-friction entry point rather than the
   semantic owner of the conversation.
 - The browser chat widget has an `Еще истории` affordance for Voice chat. It is
-  currently backed by a bounded process-local compatibility history cache and a
-  compact Yjs tail; durable loading waits for the canonical conversation
-  ledger.
+  backed by the node-local conversation ledger and keeps Yjs/WebIO as a compact
+  projection only.
 - Voice input has a conservative pre-NLU text-correction stage for common local
   recognition/typing errors. Corrections are stored in request metadata so
   diagnostics can show both the original and normalized text.
 - The Voice toolbox has a read-only `Memory` inspector that shows the current
-  channel, active agent, conversation id, and projected memory scopes. It is an
-  observability surface, not a memory editor.
+  channel, active agent, conversation id, projected memory scopes, and a small
+  node-store memory preview. It is an observability surface, not a memory
+  editor.
+- `adaos.sdk.conversation` and `adaos.sdk.memory` expose the first low-level
+  facades for generated skills and Builder experiments. They are intentionally
+  thin over the node store until response envelopes and context packets are
+  frozen.
 - Telegram input is normalized enough to preserve transport reply metadata and
   enter the NLU pipeline.
 
 Important gaps:
 
-- There is no canonical `Conversation` record or message ledger.
-- There is no node-local conversation/memory store with owner-scoped API,
-  FTS/summary indexing, and policy-checked retrieval.
-- There is no canonical persisted dialog-channel or agent registry yet. The
-  current `dialog_channel_id` and named-agent support is a process-local
-  compatibility registry plus a browser-visible `data/dialog` projection for
-  the companion pilot;
-  `route_id=voice_chat` remains a UI/transport route.
-- Voice history is a process-local compatibility cache plus one compact
-  browser tail, not durable per-conversation history.
+- The node-local conversation/memory store is an MVP: append-only messages,
+  channels, agents, memory items, and turn traces exist, but FTS, summaries,
+  deletion/redaction workflows, delivery attempts, and budgeted retrieval are
+  still missing.
+- The dialog-channel and agent registry is persisted for the current pilot, but
+  full manifest schema validation, dynamic skill-owned channels, and Builder /
+  Teacher channel registration are still missing.
+- `route_id=voice_chat` remains a UI/transport compatibility route.
 - There is no canonical conversation output contract beyond the current Voice
   compatibility bridge.
 - LLM Builder and skill runtimes do not yet receive budgeted context packets
@@ -1417,7 +1421,7 @@ depth across several phases.
 
 - [ ] `[must]` Keep the current Voice UI usable while adding neutral
   `dialog.user_message` semantics behind it.
-- [ ] `[must]` Preserve `dialog_channel_id`, `conversation_id`, `request_id`,
+- [x] `[must]` Preserve `dialog_channel_id`, `conversation_id`, `request_id`,
   `turn_trace_id`, and transport metadata through NLU and skill dispatch.
 - [x] `[must]` Add a minimal active dialog-channel registry for
   `conversational` in the Voice compatibility path.
@@ -1426,16 +1430,18 @@ depth across several phases.
 - [x] `[must]` Add a static pilot named-agent registry for `general` plus the
   `conversation_companions` agents, so addressed agent names can switch the
   active channel and delegate to the owning skill before NLU/Teacher fallback.
-- [ ] `[must]` Persist the active dialog-channel registry and extend it to
-  `builder` and future skill-owned channels.
-- [ ] `[must]` Replace the static pilot registry with a persisted,
+- [x] `[must]` Persist the active dialog-channel registry for `general` and
+  `conversational`; extension to `builder` and future skill-owned channels is
+  still pending.
+- [x] `[must]` Replace the static pilot registry with a persisted,
   manifest-fed agent/channel registry that supports skill-declared aliases,
-  capabilities, voice profiles, and policy.
-- [ ] `[must]` Add a minimal conversation ledger or compatibility service that
+  capabilities, voice profiles, and policy. Current implementation seeds the
+  registry from `conversation_companions.skill.yaml`; schema validation and
+  dynamic marketplace registration remain pending.
+- [x] `[must]` Add a minimal conversation ledger or compatibility service that
   can append user and assistant turns idempotently.
-- [x] `[should]` Add a bounded process-local Voice history cache and
-  `Еще истории` pagination as a temporary compatibility bridge until the
-  node-local conversation ledger exists.
+- [x] `[should]` Replace the bounded process-local Voice history cache with
+  `Еще истории` pagination backed by the node-local conversation ledger.
 - [x] `[must]` Make `conversation.start` switch to `conversational`, run
   `conversation_companions.start`, and show the returned message.
 - [x] `[must]` Route active `conversational` Voice turns directly to
@@ -1461,7 +1467,7 @@ depth across several phases.
   follow-up -> switch character -> style correction -> back to `general`.
 - [x] `[should]` Add initial diagnostics showing active channel, conversation,
   owner, active agent, and projected memory scopes.
-- [ ] `[should]` Extend diagnostics with last policy decision, turn trace, and
+- [x] `[should]` Extend diagnostics with last policy decision, turn trace, and
   materialization path.
 
 ### Phase 0. Contract Freeze
@@ -1525,7 +1531,7 @@ depth across several phases.
   but no visible output is published.
 - [x] `[must]` Add tests for `conversation.start` from Voice producing a
   visible reply and activating the companion dialog channel.
-- [ ] `[must]` Add `turn_trace_id` to the Voice compatibility path and preserve
+- [x] `[must]` Add `turn_trace_id` to the Voice compatibility path and preserve
   it through NLU action outcomes.
 - [x] `[should]` Keep `voice_chat.messages` as the compatibility tail while
   introducing neutral `dialog.*` events and metadata.
@@ -1536,19 +1542,21 @@ depth across several phases.
 
 ### Phase 1. Node Conversation/Memory Store
 
-- [ ] `[must]` Add a node-local conversation/memory service backed by the
+- [x] `[must]` Add a node-local conversation/memory service backed by the
   existing node SQLite database.
-- [ ] `[must]` Enable WAL and define tables for conversations, dialog channels,
-  messages, segments, memory items, delivery attempts, and idempotency.
-- [ ] `[must]` Implement append-only message writes with per-conversation
+- [x] `[must]` Enable WAL and define tables for conversations, dialog channels,
+  messages, memory items, agent registry, turn traces, and idempotency. Segments
+  and delivery attempts remain pending.
+- [x] `[must]` Implement append-only message writes with per-conversation
   monotonic `seq`.
-- [ ] `[must]` Implement owner-scoped reads and writes for core, skills, and
-  skill agents.
-- [ ] `[must]` Implement idempotency for inbound platform message ids and skill
-  action result materialization.
+- [x] `[must]` Implement owner-scoped reads and writes for core, skills, and
+  skill agents at the service/API boundary. Full policy enforcement remains
+  pending.
+- [x] `[must]` Implement idempotency for inbound platform message ids and skill
+  action result materialization at the ledger write level.
 - [ ] `[must]` Implement retention/redaction fields even if the first pass only
   enforces conservative defaults.
-- [ ] `[must]` Publish bounded Yjs/WebIO projections from the node store for
+- [x] `[must]` Publish bounded Yjs/WebIO projections from the node store for
   active browser consumers.
 - [ ] `[should]` Add FTS5 indexes for messages, segment summaries, and memory
   items.
@@ -1582,8 +1590,9 @@ depth across several phases.
 
 ### Phase 3. SDK and Skill Runtime
 
-- [ ] `[must]` Implement `adaos.sdk.conversation.current()`,
-  `open(...)`, `get(...)`, and manifest-driven default conversation creation.
+- [x] `[must]` Implement `adaos.sdk.conversation.current()`,
+  `open(...)`, and `get(...)` as the first low-level SDK facade. Manifest-driven
+  default conversation creation remains pending.
 - [ ] `[must]` Implement `chat.send`, `chat.ask`, `chat.history`,
   `chat.context`, and `chat.start_thread`.
 - [ ] `[must]` Implement structured `ResponseEnvelope` handling so generated
@@ -1591,6 +1600,8 @@ depth across several phases.
   `io.out.chat.append`.
 - [ ] `[must]` Implement scoped memory helpers:
   `memory.search`, `memory.remember`, `memory.list`, and `memory.forget`.
+  Current MVP exposes `adaos.sdk.memory.remember` and `list`; search and forget
+  remain pending.
 - [ ] `[must]` Propagate current conversation context into skill tool calls.
 - [ ] `[must]` Teach LLM skill-development docs to prefer conversation/memory
   APIs over `io.out.chat.append` and direct `skill_memory` transcript storage.

@@ -189,7 +189,9 @@ Current status:
   path.
 - [x] Target documentation now distinguishes transport channels, dialog
   channels, conversations, owners, initiators, and browser projections.
-- [ ] There is no first-class `Conversation` service yet.
+- [x] A first node-local `Conversation` service MVP exists for the Voice slice:
+  SQLite conversations, dialog channels, agent registry, append-only messages,
+  memory items, and turn traces.
 - [ ] Conversation identity, thread identity, owner, surface, context policy,
   and routing policy schemas are not frozen.
 - [ ] There is no first-class Dialog Runtime / Tracker yet; current text input
@@ -197,13 +199,15 @@ Current status:
   lifecycle, active frame, repair state, response planner, or trace envelope.
 - [ ] Dialog act, task-frame/form, response envelope, and turn trace schemas are
   not frozen.
-- [ ] There is no node-local conversation/memory store with append-only
-  message ledger, FTS, segment summaries, memory items, and owner-scoped access
-  yet; current Voice history is a compact compatibility tail.
+- [ ] The node-local conversation/memory store still lacks FTS, segment
+  summaries, delivery attempts, redaction/export flows, and strict
+  policy-checked retrieval. The append-only ledger and memory item tables exist
+  for the Voice slice.
 - [ ] LLM Builder and skill runtimes do not yet receive budgeted context
   packets from a shared retrieval service.
-- [ ] Skill/agent personalization is still early and not yet represented as
-  scoped memory items with consent, source refs, and retrieval policy.
+- [ ] Skill/agent personalization is still early. Scoped memory item records
+  now exist with consent/source/policy fields, but extraction, approval, search,
+  and retrieval policies are not implemented.
 - [x] There is a minimal process-local active dialog-channel registry for the
   `conversation_companions` Voice pilot. It activates `conversational`, routes
   active Voice turns directly to the owner default tool before NLU/Teacher
@@ -228,21 +232,18 @@ Current status:
 - [x] The global app header now uses a compact Voice entry point with the
   active agent chip next to the listen button. Explicit `general` /
   `conversational` switching stays inside the Voice dialog surface.
-- [ ] There is no canonical persisted active dialog-channel registry for
-  `general`, `conversational`, `builder`, and future skill-owned channels yet.
-  The current static pilot agent registry and `data/dialog` shape are
-  compatibility/projection layers, not the durable source of truth.
-- [ ] Per-channel durable visible history is not implemented yet; the pilot
-  uses a bounded process-local compatibility history cache plus the compact
-  Voice tail until the conversation ledger and conversation-id projections
-  exist. The browser chat can page older cached messages through
-  `Еще истории`.
+- [x] The active dialog-channel registry is persisted for `general` and
+  `conversational`; `builder` and future dynamic skill-owned channels remain
+  pending.
+- [x] Per-conversation durable visible history is implemented for the Voice
+  slice. `Еще истории` pages from the node-local ledger, while Yjs/WebIO carries
+  only the compact active projection.
 - [x] Voice input has a conservative pre-NLU autocorrection stage for common
   local typing/recognition errors, with the original text preserved in request
   diagnostics metadata.
 - [x] The Voice toolbox has an initial read-only `Memory` inspector for the
-  current agent/channel projection. Canonical memory CRUD and policy-checked
-  retrieval remain future work.
+  current agent/channel projection and node-store memory preview. Canonical
+  memory editing, search, and policy-checked retrieval remain future work.
 - [x] The dispatcher now materializes a successful skill tool result `message`
   into the current Voice chat tail when the skill did not already publish a
   matching chat append.
@@ -254,8 +255,11 @@ Current status:
   clarification, endpoint audio dialog mode, or long-context retrieval.
 - [ ] Response planning is not centralized yet; skills and compatibility paths
   can still choose user-visible rendering directly.
-- [ ] Skill-owned chats are not yet declarable in manifests.
-- [ ] The SDK does not yet expose `adaos.sdk.conversation`.
+- [x] Skill-owned pilot chats are declarable in the
+  `conversation_companions` manifest. General manifest schema validation and
+  marketplace-wide registration remain pending.
+- [x] The SDK now exposes low-level `adaos.sdk.conversation` and
+  `adaos.sdk.memory` facades for the first node-store slice.
 - [ ] Builder does not yet own a separate conversation context.
 - [ ] NLU Teacher clarification sessions are still chat-local rather than
   conversation-owned.
