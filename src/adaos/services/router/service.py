@@ -34,6 +34,7 @@ from adaos.services.scenario.projection_service import _merge_nested_path
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
+from adaos.services import dialog_runtime
 
 
 _log = logging.getLogger("adaos.router.service")
@@ -2188,7 +2189,7 @@ class RouterService:
                 observed_failure=observed_failure,
             )
 
-        def _call_voice_chat_tool(text: str, meta: dict) -> Any:
+        def _call_runtime_skill_tool(skill: str, tool: str, payload: dict[str, Any], meta: dict) -> Any:
             ctx = get_ctx()
             prev = ctx.skill_ctx.get()
             mgr = SkillManager(
@@ -2201,17 +2202,17 @@ class RouterService:
                 settings=ctx.settings,
             )
             try:
-                # Ensure SDK io.out helpers (chat_append/say) include routing meta.
                 route_meta = dict(meta)
-                payload: dict[str, Any] = {"text": text, "_meta": route_meta}
+                tool_payload: dict[str, Any] = dict(payload)
+                tool_payload["_meta"] = route_meta
                 webspace_id = str(route_meta.get("webspace_id") or "").strip()
                 if webspace_id:
-                    payload["webspace_id"] = webspace_id
+                    tool_payload.setdefault("webspace_id", webspace_id)
                 target_node_id = str(route_meta.get("target_node_id") or "").strip()
                 if target_node_id:
-                    payload["target_node_id"] = target_node_id
+                    tool_payload.setdefault("target_node_id", target_node_id)
                 with io_meta(route_meta):
-                    return mgr.run_tool("voice_chat_skill", "handle_text", payload, bypass_yjs_guard=True)
+                    return mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
             finally:
                 if prev is None:
                     try:
@@ -2223,6 +2224,120 @@ class RouterService:
                         ctx.skill_ctx.set(prev.name, prev.path)
                     except Exception:
                         pass
+
+        def _call_voice_chat_tool(text: str, meta: dict) -> Any:
+            return _call_runtime_skill_tool("voice_chat_skill", "handle_text", {"text": text}, meta)
+
+        async def _handle_dialog_action(
+            *,
+            dialog_action: dict[str, Any],
+            webspace_id: str,
+            meta: dict[str, Any],
+            request_id: str | None = None,
+            route_id: str = "voice_chat",
+            mark_request: bool = False,
+        ) -> bool:
+            kind = str(dialog_action.get("kind") or "").strip()
+            if kind == "exit":
+                channel = dialog_action.get("channel") if isinstance(dialog_action.get("channel"), dict) else {}
+                dialog_runtime.deactivate_channel(
+                    webspace_id=webspace_id,
+                    channel_id=str(channel.get("channel_id") or "").strip() or None,
+                    bus=self.bus,
+                    source="router.voice_chat",
+                    reason="voice_exit",
+                )
+                exit_text = str(dialog_action.get("message") or "").strip()
+                if exit_text:
+                    try:
+                        self.bus.publish(
+                            Event(
+                                type="io.out.chat.append",
+                                source="router.voice_chat",
+                                ts=time.time(),
+                                payload={
+                                    "id": _make_id("m"),
+                                    "from": "hub",
+                                    "text": exit_text,
+                                    "ts": time.time(),
+                                    "_meta": {**meta, "route_id": route_id},
+                                },
+                            )
+                        )
+                    except Exception:
+                        pass
+                if mark_request:
+                    try:
+                        from adaos.services.nlu.dispatcher import mark_dispatched_request
+
+                        mark_dispatched_request(
+                            request_id=request_id,
+                            webspace_id=webspace_id,
+                            route_id=route_id,
+                        )
+                    except Exception:
+                        pass
+                return True
+
+            if kind != "skill_tool":
+                return False
+            skill = str(dialog_action.get("skill") or "").strip()
+            tool = str(dialog_action.get("tool") or "").strip()
+            action_payload = dialog_action.get("payload") if isinstance(dialog_action.get("payload"), dict) else {}
+            action_meta = action_payload.get("_meta") if isinstance(action_payload.get("_meta"), dict) else meta
+            if not skill or not tool:
+                return False
+            try:
+                result = await asyncio.to_thread(
+                    _call_runtime_skill_tool,
+                    skill,
+                    tool,
+                    dict(action_payload),
+                    dict(action_meta),
+                )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "dialog follow-up tool failed skill=%s tool=%s",
+                    skill,
+                    tool,
+                    exc_info=True,
+                )
+                return False
+            if not isinstance(result, dict) or not bool(result.get("ok")):
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "dialog follow-up tool returned non-ok skill=%s tool=%s result=%r",
+                    skill,
+                    tool,
+                    result,
+                )
+                return False
+            try:
+                dialog_runtime.apply_tool_result(
+                    result,
+                    webspace_id=webspace_id,
+                    target=f"{skill}.{tool}",
+                    raw_meta=meta,
+                    payload_meta=action_meta,
+                    bus=self.bus,
+                    source="router.voice_chat",
+                )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").debug(
+                    "dialog follow-up result state update failed",
+                    exc_info=True,
+                )
+            if mark_request:
+                try:
+                    from adaos.services.nlu.dispatcher import mark_dispatched_request
+
+                    mark_dispatched_request(
+                        request_id=request_id,
+                        webspace_id=webspace_id,
+                        route_id=route_id,
+                    )
+                except Exception:
+                    pass
+            return True
 
         async def _on_voice_user(ev: Event) -> None:
             payload = ev.payload or {}
@@ -2313,6 +2428,27 @@ class RouterService:
                     return
             except Exception:
                 pass
+            try:
+                dialog_action = dialog_runtime.resolve_followup_action(
+                    webspace_id=ws,
+                    text=text,
+                    route_id="voice_chat",
+                    meta={**meta, "route_id": "voice_chat"},
+                )
+            except Exception:
+                dialog_action = None
+            if isinstance(dialog_action, dict) and await _handle_dialog_action(
+                dialog_action=dialog_action,
+                webspace_id=ws,
+                meta={**meta, "route_id": "voice_chat"},
+                route_id="voice_chat",
+                mark_request=False,
+            ):
+                try:
+                    await _ensure_tts_state(ws)
+                except Exception:
+                    pass
+                return
             # Fire-and-forget NLU detection so that text commands can be
             # mapped to scenario/skill actions via an external interpreter.
             try:
@@ -2372,6 +2508,21 @@ class RouterService:
             if not isinstance(text, str) or not text.strip():
                 text = ""
             if route_id.strip() == "voice_chat" and text:
+                dialog_action = dialog_runtime.resolve_followup_action(
+                    webspace_id=webspace_id,
+                    text=text,
+                    route_id=route_id.strip(),
+                    meta=meta,
+                )
+                if isinstance(dialog_action, dict) and await _handle_dialog_action(
+                    dialog_action=dialog_action,
+                    webspace_id=webspace_id,
+                    meta=meta,
+                    request_id=request_id,
+                    route_id=route_id.strip(),
+                    mark_request=True,
+                ):
+                    return
                 try:
                     result = await asyncio.to_thread(_call_voice_chat_tool, text, meta)
                 except Exception:

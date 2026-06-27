@@ -552,6 +552,55 @@ def test_skill_tool_result_message_does_not_duplicate_existing_chat_append(monke
     assert visible[0]["_meta"]["webspace_id"] == "desktop"
 
 
+def test_skill_tool_dialog_result_activates_followup_channel(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    webspace_id = "dialog-runtime-dispatch"
+    dialog_runtime.reset_all()
+
+    def _run_skill_tool(_ctx, skill: str, tool: str, payload: dict) -> dict:
+        assert (skill, tool) == ("conversation_companions", "start")
+        return {
+            "ok": True,
+            "message": "Companion ready.",
+            "active_character": "arseni",
+            "dialog": {
+                "dialog_channel_id": "conversational",
+                "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                "owner": "skill:conversation_companions",
+                "default_tool": "conversation_companions.talk",
+                "active_agent_id": "agent:conversation_companions:arseni",
+            },
+        }
+
+    monkeypatch.setattr(dispatcher_module, "_run_skill_tool", _run_skill_tool)
+
+    dispatcher_module._execute_skill_tool_action(
+        ctx,
+        action={"skill": "conversation_companions", "tool": "start"},
+        intent="conversation.start",
+        scenario_id="web_desktop",
+        webspace_id=webspace_id,
+        slots={},
+        raw={
+            "text": "pogovorim",
+            "request_id": "req.dialog-runtime-dispatch",
+            "_meta": {"route_id": "voice_chat"},
+        },
+    )
+
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "conversational"
+    assert state.default_skill == "conversation_companions"
+    assert state.default_tool == "talk"
+    assert state.active_agent_id == "agent:conversation_companions:arseni"
+    dialog_runtime.reset_all()
+
+
 @pytest.mark.anyio
 async def test_skill_owned_nlu_action_dispatches_tool_without_scenario_mapping(monkeypatch) -> None:
     from adaos.services.agent_context import get_ctx

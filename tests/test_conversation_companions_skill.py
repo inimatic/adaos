@@ -35,6 +35,8 @@ def test_start_is_deterministic_and_lists_characters() -> None:
 
     assert result["ok"] is True
     assert result["active_character"] == "arseni"
+    assert result["dialog"]["dialog_channel_id"] == "conversational"
+    assert result["dialog"]["default_tool"] == "conversation_companions.talk"
     assert "Арсений" in result["message"]
     assert len(result["characters"]) >= 3
     assert result["next_actions"]
@@ -49,6 +51,7 @@ def test_switch_character_accepts_russian_alias() -> None:
 
     assert result["ok"] is True
     assert result["selected_character"] == "nika"
+    assert result["dialog"]["active_agent_id"] == "agent:conversation_companions:nika"
     assert listing["active_character"] == "nika"
 
 
@@ -59,6 +62,7 @@ def test_update_profile_applies_bounded_style_patch() -> None:
     result = skill.update_profile("говори короче и теплее, не задавай вопрос в конце", webspace_id="test-profile")
 
     assert result["ok"] is True
+    assert result["dialog"]["dialog_channel_id"] == "conversational"
     assert result["patch"]["verbosity"] == "коротко, одна-две главные мысли"
     assert "теплее" in result["profile"]["tone"]
     assert any("Не заканчивает ответ вопросом" in rule for rule in result["profile"]["style_rules"])
@@ -72,6 +76,7 @@ def test_talk_preview_uses_local_fallback_without_llm() -> None:
 
     assert result["ok"] is True
     assert result["selected_character"] == "arseni"
+    assert result["dialog"]["active_agent_id"] == "agent:conversation_companions:arseni"
     assert "Арсений" in result["message"]
 
 

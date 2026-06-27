@@ -283,6 +283,194 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_during_intent_demo
     ]
 
 
+async def test_voice_chat_not_obtained_routes_active_dialog_followup(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    calls: list[tuple[str, str, dict, dict]] = []
+    webspace_id = "companion-dialog-ws"
+
+    class _SkillCtx:
+        def get(self):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def clear(self):
+            return None
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="member-local",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "dialog reply",
+            "dialog": {
+                "dialog_channel_id": "conversational",
+                "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                "owner": "skill:conversation_companions",
+                "default_tool": "conversation_companions.talk",
+                "active_agent_id": "agent:conversation_companions:arseni",
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        route_id="voice_chat",
+    )
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="nlp.intent.not_obtained",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "let us discuss my launch plan",
+                "reason": "no_intent_mapping",
+                "request_id": "req.dialog-followup",
+                "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert calls == [
+        (
+            "conversation_companions",
+            "talk",
+            {
+                "text": "let us discuss my launch plan",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "webspace_id": webspace_id,
+                    "dialog_channel_id": "conversational",
+                    "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                    "conversation_owner": "skill:conversation_companions",
+                    "active_agent_id": "agent:conversation_companions:arseni",
+                },
+            },
+            {"bypass_yjs_guard": True},
+        )
+    ]
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_not_obtained_exits_active_dialog(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    messages: list[dict] = []
+    calls: list[object] = []
+    webspace_id = "companion-exit-ws"
+
+    class _SkillCtx:
+        def get(self):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def clear(self):
+            return None
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="member-local",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=lambda *_args, **_opts: calls.append(object()) or {"ok": True}),
+    )
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        route_id="voice_chat",
+    )
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("io.out.chat.append", lambda ev: messages.append(dict(ev.payload or {})))
+
+    bus.publish(
+        Event(
+            type="nlp.intent.not_obtained",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "\u0432 \u043e\u0431\u0449\u0438\u0439 \u0440\u0435\u0436\u0438\u043c",
+                "reason": "no_intent_mapping",
+                "request_id": "req.dialog-exit",
+                "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert calls == []
+    assert dialog_runtime.get_active_channel(webspace_id) is None
+    assert any(item.get("from") == "hub" and item.get("_meta", {}).get("route_id") == "voice_chat" for item in messages)
+    dialog_runtime.reset_all()
+
+
 def test_voice_chat_data_path_is_node_scoped() -> None:
     assert node_scope_data_path("data/voice_chat", "member-1") == "data/nodes/member-1/voice_chat"
 
@@ -546,6 +734,161 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     assert seen_stream[0].payload["receiver"] == "voice_chat.messages"
     assert seen_stream[0].payload["data"]["messages"][0]["text"] == "weather in Moscow"
     assert seen_stream[0].payload["data"]["message_count"] == 1
+
+
+async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    class _Txn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Map(dict):
+        def set(self, txn, key, value):  # noqa: ARG002
+            self[key] = value
+
+        def to_json(self):
+            return dict(self)
+
+    class _Doc:
+        def __init__(self) -> None:
+            self._maps = {"data": _Map()}
+
+        def get_map(self, name: str):
+            return self._maps.setdefault(name, _Map())
+
+        def begin_transaction(self):
+            return _Txn()
+
+    class _AsyncDoc:
+        async def __aenter__(self):
+            return doc
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _MetaCtx:
+        async def __aenter__(self):
+            return {}
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _SkillCtx:
+        def get(self):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def clear(self):
+            return None
+
+    doc = _Doc()
+    bus = LocalEventBus()
+    calls: list[tuple[str, str, dict, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "active-dialog-voice-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc())
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "dialog reply",
+            "dialog": {
+                "dialog_channel_id": "conversational",
+                "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                "owner": "skill:conversation_companions",
+                "default_tool": "conversation_companions.talk",
+                "active_agent_id": "agent:conversation_companions:arseni",
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        route_id="voice_chat",
+    )
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "free form companion turn",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls == [
+        (
+            "conversation_companions",
+            "talk",
+            {
+                "text": "free form companion turn",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "webspace_id": webspace_id,
+                    "dialog_channel_id": "conversational",
+                    "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                    "conversation_owner": "skill:conversation_companions",
+                    "active_agent_id": "agent:conversation_companions:arseni",
+                },
+            },
+            {"bypass_yjs_guard": True},
+        )
+    ]
+    assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "free form companion turn"
+    dialog_runtime.reset_all()
 
 
 async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_history(monkeypatch) -> None:

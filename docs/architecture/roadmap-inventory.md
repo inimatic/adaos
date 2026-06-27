@@ -204,13 +204,20 @@ Current status:
   packets from a shared retrieval service.
 - [ ] Skill/agent personalization is still early and not yet represented as
   scoped memory items with consent, source refs, and retrieval policy.
-- [ ] There is no `dialog_channel_id` or active dialog-channel registry yet.
+- [x] There is a minimal process-local active dialog-channel registry for the
+  `conversation_companions` Voice pilot. It activates `conversational`, routes
+  active Voice turns directly to the owner default tool before NLU/Teacher
+  fallback, handles explicit exit/general commands, and emits
+  `dialog.channel.*` lifecycle events.
+- [ ] There is no canonical persisted/browser-visible active dialog-channel
+  registry for `general`, `conversational`, `builder`, and future skill-owned
+  channels yet.
 - [x] The dispatcher now materializes a successful skill tool result `message`
   into the current Voice chat tail when the skill did not already publish a
   matching chat append.
 - [ ] The dispatcher/conversation service does not yet provide the same
-  guarantee for canonical conversations, future `dialog_channel_id`, typed
-  content, and non-Voice dialog surfaces.
+  guarantee for canonical conversations, typed content, and non-Voice dialog
+  surfaces.
 - [ ] There is no dialog-level golden conversation suite for channel switching,
   companion agent switching, profile correction, Builder isolation, Teacher
   clarification, endpoint audio dialog mode, or long-context retrieval.

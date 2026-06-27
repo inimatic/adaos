@@ -607,6 +607,33 @@ def _emit_skill_tool_result_message(
         _log.debug("failed to materialize skill tool result message target=%s", target, exc_info=True)
 
 
+def _apply_skill_tool_dialog_result(
+    ctx: AgentContext,
+    *,
+    result: Any,
+    target: str,
+    webspace_id: str,
+    raw: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    raw_meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    payload_meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    try:
+        from adaos.services.dialog_runtime import apply_tool_result
+
+        apply_tool_result(
+            result,
+            webspace_id=webspace_id,
+            target=target,
+            raw_meta=raw_meta,
+            payload_meta=payload_meta,
+            bus=ctx.bus,
+            source="nlu.dispatcher",
+        )
+    except Exception:
+        _log.debug("failed to apply dialog result target=%s", target, exc_info=True)
+
+
 def _subscribe_chat_materialization_probe(ctx: AgentContext) -> tuple[list[dict[str, Any]], Any | None]:
     bus = getattr(ctx, "bus", None)
     if bus is None or not hasattr(bus, "subscribe"):
@@ -956,6 +983,14 @@ def _execute_skill_tool_action(
         raw=raw,
         payload=payload,
         materialized_chat_appends=materialized_chat_appends,
+    )
+    _apply_skill_tool_dialog_result(
+        ctx,
+        result=result,
+        target=target,
+        webspace_id=webspace_id,
+        raw=raw,
+        payload=payload,
     )
 
     _emit_action_outcome(

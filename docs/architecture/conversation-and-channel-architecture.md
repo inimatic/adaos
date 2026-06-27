@@ -30,7 +30,9 @@ Implemented today:
 - `voice_chat_skill` declares the browser Voice app and a `voice_chat.messages`
   WebIO stream.
 - `RouterService` receives `voice.chat.user`, appends the user message to the
-  current Voice tail, and emits `nlp.intent.detect.request`.
+  current Voice tail, and normally emits `nlp.intent.detect.request`.
+  When a process-local dialog channel is active, Router delegates the turn to
+  that channel owner before NLU/Teacher fallback.
 - `RouterService` receives `io.out.chat.append` and projects the message into
   the browser-visible Voice tail.
 - The NLU pipeline can load skill-declared regex rules and dispatch matching
@@ -38,6 +40,10 @@ Implemented today:
 - The NLU dispatcher has a Voice compatibility bridge: when a skill tool returns
   `{ok: true, message: "..."}` for `_meta.route_id=voice_chat`, it publishes
   `io.out.chat.append` unless the skill already emitted a matching chat append.
+- `conversation_companions.start` returns a `dialog` contract that activates a
+  process-local `conversational` channel. While that channel is active,
+  Voice turns route directly to `conversation_companions.talk`; explicit exit
+  phrases deactivate the channel and return to the general Voice path.
 - Telegram input is normalized enough to preserve transport reply metadata and
   enter the NLU pipeline.
 
@@ -46,8 +52,9 @@ Important gaps:
 - There is no canonical `Conversation` record or message ledger.
 - There is no node-local conversation/memory store with owner-scoped API,
   FTS/summary indexing, and policy-checked retrieval.
-- There is no `dialog_channel_id`; `route_id=voice_chat` is a UI/transport
-  route, not a context boundary.
+- There is no canonical persisted dialog-channel registry yet. The current
+  `dialog_channel_id` support is a process-local compatibility registry for
+  the companion pilot; `route_id=voice_chat` remains a UI/transport route.
 - Voice history is one compact compatibility tail, not per-conversation
   history.
 - There is no canonical conversation output contract beyond the current Voice
@@ -58,6 +65,23 @@ Important gaps:
   In the target design Voice becomes a dialog shell, not the semantic owner.
 - NLU Teacher clarification sessions and Builder dialogs are still partly
   chat-local instead of conversation-owned.
+
+Implemented companion pilot scenarios:
+
+- Start: user says "pogovorim"; NLU resolves `conversation.start`,
+  `conversation_companions.start` answers, and the core activates
+  `dialog_channel_id=conversational`.
+- Follow-up: while `conversational` is active, a free Voice turn is not sent to
+  NLU/Teacher first; Router routes it to `conversation_companions.talk` with
+  `dialog_channel_id`, `conversation_id`, `conversation_owner`, and
+  `active_agent_id` metadata.
+- Agent switch/profile correction: outside an active channel, explicit NLU
+  hits such as "call Nika" or "be shorter" still go through skill-owned NLU
+  actions. Inside the active pilot channel, free turns are owned by
+  `conversation_companions`; richer in-channel command parsing remains a
+  follow-up for the skill.
+- Exit: explicit "general"/"back to general" style commands deactivate the
+  pilot channel and return unmatched turns to the general Voice fallback.
 
 ## Design Rules
 
@@ -825,8 +849,9 @@ For "let's talk" / Russian "pogovorim":
 4. Set `active_channel_id=conversational`.
 5. Run `conversation_companions.start`.
 6. Append the returned message through the conversation service.
-7. Route subsequent unmatched turns in that channel to
-   `conversation_companions.talk` until an exit/switch intent is received.
+7. Route subsequent free turns in that channel directly to
+   `conversation_companions.talk` until an exit/general-channel command is
+   received.
 
 ## Builder Conversation
 
@@ -1344,14 +1369,19 @@ depth across several phases.
   `dialog.user_message` semantics behind it.
 - [ ] `[must]` Preserve `dialog_channel_id`, `conversation_id`, `request_id`,
   `turn_trace_id`, and transport metadata through NLU and skill dispatch.
-- [ ] `[must]` Add a minimal active dialog-channel registry for `general` and
-  `conversational`.
+- [x] `[must]` Add a minimal active dialog-channel registry for
+  `conversational` in the Voice compatibility path.
+- [ ] `[must]` Add a persisted/browser-visible active dialog-channel registry
+  for `general`, `conversational`, and future `builder`.
 - [ ] `[must]` Add a minimal conversation ledger or compatibility service that
   can append user and assistant turns idempotently.
-- [ ] `[must]` Make `conversation.start` switch to `conversational`, run
+- [x] `[must]` Make `conversation.start` switch to `conversational`, run
   `conversation_companions.start`, and show the returned message.
-- [ ] `[must]` Route unmatched turns in `conversational` to
-  `conversation_companions.talk` while preserving exit/switch intents.
+- [x] `[must]` Route active `conversational` Voice turns directly to
+  `conversation_companions.talk` while preserving explicit exit/general
+  commands.
+- [ ] `[must]` Move in-channel agent switch and profile-correction commands
+  fully under the `conversation_companions` owner policy.
 - [ ] `[must]` Keep `voice_chat.messages` as a compatibility projection, not
   the canonical design.
 - [ ] `[must]` Add a golden conversation test for "pogovorim" -> reply ->
@@ -1416,11 +1446,11 @@ depth across several phases.
   NLU, and skill tool calls.
 - [ ] `[must]` Add diagnostics when a skill action returns `ok` and `message`
   but no visible output is published.
-- [ ] `[must]` Add tests for `conversation.start` from Voice producing a
-  visible reply.
+- [x] `[must]` Add tests for `conversation.start` from Voice producing a
+  visible reply and activating the companion dialog channel.
 - [ ] `[must]` Add `turn_trace_id` to the Voice compatibility path and preserve
   it through NLU action outcomes.
-- [ ] `[should]` Keep `voice_chat.messages` as the compatibility tail while
+- [x] `[should]` Keep `voice_chat.messages` as the compatibility tail while
   introducing neutral `dialog.*` events and metadata.
 - [ ] `[could]` Add a temporary Voice debug panel that shows route id, dialog
   channel id, conversation id, owner, and last dispatch result.
@@ -1523,7 +1553,7 @@ depth across several phases.
   interruption, cancel, resume, correction, and parameter-change states.
 - [ ] `[must]` Implement task-frame/form routing for multi-turn parameter
   collection and validation.
-- [ ] `[must]` Add `conversation_companions` as the first multi-agent skill
+- [x] `[must]` Add `conversation_companions` as the first multi-agent skill
   conversation pilot: "let's talk" enters `conversational`, unmatched turns
   route to `talk`, and exit/switch commands return to `general`.
 - [ ] `[must]` Support multiple agents in one conversation with `agent_id`,
