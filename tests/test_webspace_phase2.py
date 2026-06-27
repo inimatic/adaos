@@ -73,6 +73,59 @@ def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypat
     assert snapshot["widgets"][0]["id"] == "member_widget"
 
 
+def test_node_owned_shared_stream_widget_stays_shared(monkeypatch) -> None:
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Node 1",
+            "node_compact_label": "N1",
+            "node_index": 1,
+            "node_color": "#F28E2B",
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="member", node_id="node-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+
+    snapshot = webspace_runtime_module._local_catalog_decl_entries(
+        [
+            {
+                "skill": "voice_chat_skill",
+                "ui_owner": "node",
+                "widgets": [
+                    {
+                        "id": "voice_chat_widget",
+                        "dataSource": {
+                            "kind": "stream",
+                            "receiver": "voice_chat.messages",
+                            "transport": "hub",
+                            "scope": "shared",
+                        },
+                    },
+                    {
+                        "id": "node_stream_widget",
+                        "dataSource": {
+                            "kind": "stream",
+                            "receiver": "node.metrics",
+                        },
+                    },
+                ],
+            }
+        ]
+    )
+
+    shared_ds = snapshot["widgets"][0]["dataSource"]
+    node_ds = snapshot["widgets"][1]["dataSource"]
+    assert shared_ds["receiver"] == "voice_chat.messages"
+    assert shared_ds["scope"] == "shared"
+    assert "nodeId" not in shared_ds
+    assert node_ds["nodeId"] == "node-1"
+
+
 def test_build_local_desktop_catalog_snapshot_prefers_live_ydoc_values_over_decl_defaults(monkeypatch) -> None:
     monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: SimpleNamespace())
     monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")

@@ -979,7 +979,9 @@ def _scope_node_data_source(data_source: Any, *, node_id: str) -> Any:
         return data_source
     kind = str(scoped.get("kind") or "").strip().lower()
     if kind == "stream":
-        if node_id and not str(scoped.get("nodeId") or scoped.get("node_id") or "").strip():
+        requested_scope = str(scoped.get("scope") or "").strip().lower()
+        shared_scope = requested_scope in {"shared", "workspace", "local"}
+        if node_id and not shared_scope and not str(scoped.get("nodeId") or scoped.get("node_id") or "").strip():
             scoped["nodeId"] = node_id
     if kind == "y" and scoped.get("path") is not None:
         scoped["path"] = node_scope_data_path(str(scoped.get("path") or ""), node_id)
