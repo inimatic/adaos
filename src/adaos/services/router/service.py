@@ -36,6 +36,7 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
 from adaos.services import dialog_runtime
+from adaos.services.nlu.text_correction import correct_light_text
 
 
 _log = logging.getLogger("adaos.router.service")
@@ -49,6 +50,8 @@ GENERAL_DIALOG_AGENT_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "Ада")
 GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
 GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
+VOICE_CHAT_VISIBLE_TAIL = 8
+VOICE_CHAT_HISTORY_LIMIT = 200
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
     {
         "id": GENERAL_DIALOG_AGENT_ID,
@@ -58,6 +61,7 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
         "channel_id": GENERAL_DIALOG_CHANNEL_ID,
         "gender": "female",
         "voice": "ru-female",
+        "icon": "sparkles-outline",
         "aliases": (GENERAL_DIALOG_AGENT_LABEL, "Ада", "Ada", "general", "общий ассистент"),
     },
     {
@@ -72,6 +76,7 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
         "character_id": "arseni",
         "gender": "male",
         "voice": "ru-male",
+        "icon": "male-outline",
         "aliases": ("Арсений", "Arseni", "Arseniy", "советник", "консультант"),
     },
     {
@@ -86,6 +91,7 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
         "character_id": "nika",
         "gender": "female",
         "voice": "ru-female",
+        "icon": "female-outline",
         "aliases": ("Ника", "Nika", "скептик"),
     },
     {
@@ -100,6 +106,7 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
         "character_id": "mira",
         "gender": "female",
         "voice": "ru-female",
+        "icon": "heart-circle-outline",
         "aliases": ("Мира", "Mira", "собеседник", "рассказчик"),
     },
 )
@@ -206,6 +213,7 @@ def _agent_projection_from_record(agent: Mapping[str, Any]) -> dict[str, Any]:
         "memory_scope": "global_user" if agent.get("id") == GENERAL_DIALOG_AGENT_ID else "agent_user",
         "gender": str(agent.get("gender") or "").strip() or None,
         "voice": str(agent.get("voice") or "").strip() or None,
+        "icon": str(agent.get("icon") or "").strip() or None,
         "voice_profile": _agent_voice_profile(agent),
     }
     if agent.get("skill"):
@@ -242,6 +250,12 @@ def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: 
     registry_agent = _agent_record_by_id(agent_id)
     gender = str(active_channel.get("active_agent_gender") or (registry_agent or {}).get("gender") or "").strip()
     voice = str(active_channel.get("active_agent_voice") or (registry_agent or {}).get("voice") or "").strip()
+    icon = str(
+        active_channel.get("active_agent_icon")
+        or active_channel.get("agent_icon")
+        or (registry_agent or {}).get("icon")
+        or ""
+    ).strip()
     return {
         "id": agent_id or f"agent:{channel_id}:active",
         "label": label,
@@ -251,6 +265,7 @@ def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: 
         "memory_scope": "agent_user",
         "gender": gender or None,
         "voice": voice or None,
+        "icon": icon or None,
         "voice_profile": _agent_voice_profile({"gender": gender, "voice": voice}),
     }
 
@@ -304,6 +319,72 @@ def _extract_addressed_agent(text: str) -> tuple[dict[str, Any], str] | None:
             if match:
                 return dict(agent), str(match.group("rest") or "").strip()
     return None
+
+
+def _general_agent_transition_text(seed: str = "") -> str:
+    variants = [
+        f"{GENERAL_DIALOG_AGENT_LABEL} на связи. Продолжим в общем режиме.",
+        f"{GENERAL_DIALOG_AGENT_LABEL} к вашим услугам. Чем помочь дальше?",
+        f"{GENERAL_DIALOG_AGENT_LABEL} рада помочь. Я вернула диалог в общий режим.",
+    ]
+    try:
+        index = sum(ord(ch) for ch in str(seed or "")) % len(variants)
+    except Exception:
+        index = 0
+    return variants[index]
+
+
+def _general_agent_ready_text(seed: str = "") -> str:
+    variants = [
+        f"{GENERAL_DIALOG_AGENT_LABEL} на связи.",
+        f"{GENERAL_DIALOG_AGENT_LABEL} к вашим услугам.",
+        f"{GENERAL_DIALOG_AGENT_LABEL} рада помочь.",
+    ]
+    try:
+        index = sum(ord(ch) for ch in str(seed or "")) % len(variants)
+    except Exception:
+        index = 0
+    return variants[index]
+
+
+def _is_agent_roster_question(text: str) -> bool:
+    value = str(text or "").strip().lower()
+    if not value:
+        return False
+    return any(
+        token in value
+        for token in (
+            "агент",
+            "ассистент",
+            "персонаж",
+            "кто у тебя",
+            "кто доступен",
+            "представь",
+            "познакомь",
+        )
+    )
+
+
+def _agent_roster_text() -> str:
+    companions = [
+        agent
+        for agent in _CONVERSATION_AGENT_REGISTRY
+        if str(agent.get("channel_id") or "").strip() == CONVERSATIONAL_DIALOG_CHANNEL_ID
+    ]
+    lines = [
+        f"{GENERAL_DIALOG_AGENT_LABEL}: в общем режиме я отвечаю как системный ассистент.",
+        "Для разговорного режима доступны персонажи:",
+    ]
+    for agent in companions:
+        label = str(agent.get("label") or "").strip()
+        role = {
+            "agent:conversation_companions:arseni": "спокойный советник",
+            "agent:conversation_companions:nika": "скептик для проверки идей",
+            "agent:conversation_companions:mira": "теплый собеседник",
+        }.get(str(agent.get("id") or "").strip(), "разговорный агент")
+        lines.append(f"- {label}: {role}.")
+    lines.append("Можно обратиться по имени: «Арсений, ...», «Ника, ...» или «Мира, ...».")
+    return "\n".join(lines)
 
 
 def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
@@ -1205,6 +1286,7 @@ class RouterService:
             return base_ids
 
         _voice_chat_stream_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        _voice_chat_history_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
         def _voice_chat_data_path(target_node_id: str | None) -> str:
             return node_scope_data_path("data/voice_chat", str(target_node_id or "").strip())
@@ -1295,6 +1377,7 @@ class RouterService:
                 "active_agent_label": general_agent["label"],
                 "active_agent_gender": general_agent.get("gender"),
                 "active_agent_voice": general_agent.get("voice"),
+                "active_agent_icon": general_agent.get("icon"),
                 "active_agent": general_agent,
                 "active": active_id == "general",
             }
@@ -1317,6 +1400,7 @@ class RouterService:
                         "active_agent_label": active_agent.get("label"),
                         "active_agent_gender": active_agent.get("gender"),
                         "active_agent_voice": active_agent.get("voice"),
+                        "active_agent_icon": active_agent.get("icon"),
                         "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                     }
@@ -1333,6 +1417,7 @@ class RouterService:
                         "active_agent_label": active_agent.get("label"),
                         "active_agent_gender": active_agent.get("gender"),
                         "active_agent_voice": active_agent.get("voice"),
+                        "active_agent_icon": active_agent.get("icon"),
                         "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                         "active": True,
@@ -1352,6 +1437,7 @@ class RouterService:
                     "active_agent_kind": general_agent["kind"],
                     "active_agent_gender": general_agent.get("gender"),
                     "active_agent_voice": general_agent.get("voice"),
+                    "active_agent_icon": general_agent.get("icon"),
                     "route_id": "voice_chat",
                 }
             elif active_agent:
@@ -1361,6 +1447,7 @@ class RouterService:
                 active_dict.setdefault("active_agent_kind", active_agent.get("kind"))
                 active_dict.setdefault("active_agent_gender", active_agent.get("gender"))
                 active_dict.setdefault("active_agent_voice", active_agent.get("voice"))
+                active_dict.setdefault("active_agent_icon", active_agent.get("icon"))
             memory_owner = str(active_dict.get("owner") or active_agent.get("owner") or "core").strip() or "core"
             agent_owner = str(active_agent.get("owner") or memory_owner).strip() or memory_owner
             memory = {
@@ -1500,15 +1587,22 @@ class RouterService:
             target_node_id: str | None,
             messages: list[dict[str, Any]],
             last_refresh_ts: float,
+            *,
+            before_cursor: str | None = None,
+            has_more_before: bool = False,
+            total_message_count: int | None = None,
         ) -> None:
             # Keep the browser stream as a compact tail. Voice must never wait
             # on heavier YJS history writes before dispatching NLU.
-            cached_messages = [dict(item) for item in messages[-8:] if isinstance(item, dict)]
+            cached_messages = [dict(item) for item in messages if isinstance(item, dict)]
+            total_count = int(total_message_count if total_message_count is not None else len(cached_messages))
             _voice_chat_stream_cache[(str(webspace_id or "").strip(), str(target_node_id or "").strip())] = {
                 "messages": cached_messages,
                 "last_refresh_ts": last_refresh_ts,
                 "message_count": len(cached_messages),
-                "has_more_before": False,
+                "total_message_count": total_count,
+                "has_more_before": bool(has_more_before),
+                "before_cursor": str(before_cursor or ""),
                 "history_mode": "compact_tail",
             }
             payload: dict[str, Any] = {
@@ -1519,7 +1613,9 @@ class RouterService:
                     "messages": cached_messages,
                     "last_refresh_ts": last_refresh_ts,
                     "message_count": len(cached_messages),
-                    "has_more_before": False,
+                    "total_message_count": total_count,
+                    "has_more_before": bool(has_more_before),
+                    "before_cursor": str(before_cursor or ""),
                     "history_mode": "compact_tail",
                 },
                 "_meta": {
@@ -1550,8 +1646,12 @@ class RouterService:
             target_node_id: str | None,
             messages: list[dict[str, Any]],
             last_refresh_ts: float,
+            *,
+            before_cursor: str | None = None,
+            has_more_before: bool = False,
+            total_message_count: int | None = None,
         ) -> None:
-            snapshot = [dict(item) for item in messages[-8:] if isinstance(item, dict)]
+            snapshot = [dict(item) for item in messages[-VOICE_CHAT_VISIBLE_TAIL:] if isinstance(item, dict)]
             if not snapshot:
                 return
 
@@ -1571,6 +1671,11 @@ class RouterService:
                         {
                             "messages": [dict(item) for item in snapshot],
                             "last_refresh_ts": float(last_refresh_ts or time.time()),
+                            "message_count": len(snapshot),
+                            "total_message_count": int(total_message_count if total_message_count is not None else len(snapshot)),
+                            "has_more_before": bool(has_more_before),
+                            "before_cursor": str(before_cursor or ""),
+                            "history_mode": "compact_tail",
                         },
                     )
 
@@ -1631,7 +1736,52 @@ class RouterService:
             if not messages:
                 return
             last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
-            _publish_voice_chat_stream(webspace_id, target_node_id, messages, last_refresh_ts)
+            _publish_voice_chat_stream(
+                webspace_id,
+                target_node_id,
+                messages,
+                last_refresh_ts,
+                before_cursor=str(current.get("before_cursor") or ""),
+                has_more_before=bool(current.get("has_more_before")),
+                total_message_count=int(current.get("total_message_count") or len(messages)),
+            )
+
+        async def _publish_voice_chat_history_more(
+            webspace_id: str,
+            target_node_id: str | None,
+            before_cursor: Any,
+        ) -> None:
+            cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
+            full_history = [dict(item) for item in _voice_chat_history_cache.get(cache_key, []) if isinstance(item, dict)]
+            if not full_history:
+                await _publish_voice_chat_snapshot(webspace_id, target_node_id)
+                return
+            try:
+                cursor = int(str(before_cursor or "").strip())
+            except Exception:
+                cursor = max(0, len(full_history) - VOICE_CHAT_VISIBLE_TAIL)
+            cursor = max(0, min(cursor, len(full_history)))
+            start = max(0, cursor - VOICE_CHAT_VISIBLE_TAIL)
+            window = full_history[start:]
+            last_refresh_ts = time.time()
+            _publish_voice_chat_stream(
+                webspace_id,
+                target_node_id,
+                window,
+                last_refresh_ts,
+                before_cursor=str(start),
+                has_more_before=start > 0,
+                total_message_count=len(full_history),
+            )
+            _schedule_voice_chat_persist(
+                webspace_id,
+                target_node_id,
+                window,
+                last_refresh_ts,
+                before_cursor=str(start),
+                has_more_before=start > 0,
+                total_message_count=len(full_history),
+            )
 
         async def _append_voice_chat_message(
             webspace_id: str,
@@ -1639,15 +1789,36 @@ class RouterService:
             target_node_id: str | None = None,
         ) -> None:
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
-            cached = _voice_chat_stream_cache.get(cache_key) or {}
-            cached_raw = cached.get("messages") if isinstance(cached, dict) else None
-            cached_messages = [dict(item) for item in cached_raw if isinstance(item, dict)] if isinstance(cached_raw, list) else []
+            full_history = [dict(item) for item in _voice_chat_history_cache.get(cache_key, []) if isinstance(item, dict)]
+            if not full_history:
+                cached = _voice_chat_stream_cache.get(cache_key) or {}
+                cached_raw = cached.get("messages") if isinstance(cached, dict) else None
+                full_history = [dict(item) for item in cached_raw if isinstance(item, dict)] if isinstance(cached_raw, list) else []
             last_refresh_ts = time.time()
-            stream_snapshot = [*cached_messages, dict(msg)]
-            if len(stream_snapshot) > 8:
-                stream_snapshot = stream_snapshot[-8:]
-            _publish_voice_chat_stream(webspace_id, target_node_id, stream_snapshot, last_refresh_ts)
-            _schedule_voice_chat_persist(webspace_id, target_node_id, stream_snapshot, last_refresh_ts)
+            full_history = [*full_history, dict(msg)]
+            if len(full_history) > VOICE_CHAT_HISTORY_LIMIT:
+                full_history = full_history[-VOICE_CHAT_HISTORY_LIMIT:]
+            _voice_chat_history_cache[cache_key] = [dict(item) for item in full_history]
+            start = max(0, len(full_history) - VOICE_CHAT_VISIBLE_TAIL)
+            stream_snapshot = full_history[start:]
+            _publish_voice_chat_stream(
+                webspace_id,
+                target_node_id,
+                stream_snapshot,
+                last_refresh_ts,
+                before_cursor=str(start),
+                has_more_before=start > 0,
+                total_message_count=len(full_history),
+            )
+            _schedule_voice_chat_persist(
+                webspace_id,
+                target_node_id,
+                stream_snapshot,
+                last_refresh_ts,
+                before_cursor=str(start),
+                has_more_before=start > 0,
+                total_message_count=len(full_history),
+            )
 
             count = len(stream_snapshot)
             try:
@@ -2364,6 +2535,8 @@ class RouterService:
                 "active_agent_label",
                 "active_agent_gender",
                 "active_agent_voice",
+                "active_agent_icon",
+                "agent_icon",
             ):
                 raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():
@@ -2373,6 +2546,18 @@ class RouterService:
                 voice_profile = meta.get("voice_profile")
             if isinstance(voice_profile, dict):
                 msg["voice_profile"] = dict(voice_profile)
+            active_agent = payload.get("active_agent") if isinstance(payload.get("active_agent"), dict) else None
+            if active_agent is None and isinstance(meta.get("active_agent"), dict):
+                active_agent = meta.get("active_agent")
+            if isinstance(active_agent, dict):
+                if "active_agent_label" not in msg:
+                    label = str(active_agent.get("label") or active_agent.get("name") or "").strip()
+                    if label:
+                        msg["active_agent_label"] = label
+                if "active_agent_icon" not in msg:
+                    icon = str(active_agent.get("icon") or active_agent.get("avatar") or "").strip()
+                    if icon:
+                        msg["active_agent_icon"] = icon
             targets = await _resolve_webspace_ids(payload)
             route_id = str(meta.get("route_id") or meta.get("route") or "").strip()
             target_node_id = _resolve_voice_target_node_id(
@@ -2535,6 +2720,21 @@ class RouterService:
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
                 await _publish_voice_chat_snapshot(ws, target_node_id)
+
+        async def _on_conversation_history_more(ev: Event) -> None:
+            payload = ev.payload or {}
+            if not isinstance(payload, dict):
+                return
+            if self._event_originates_from_remote_member(payload):
+                return
+            if not self._event_targets_local_node(payload):
+                return
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=False)
+            before_cursor = payload.get("before_cursor") or payload.get("older_cursor")
+            targets = await _resolve_webspace_ids(payload)
+            for ws in targets:
+                await _publish_voice_chat_history_more(ws, target_node_id, before_cursor)
 
         async def _on_browser_session_changed(ev: Event) -> None:
             payload = ev.payload or {}
@@ -2760,8 +2960,13 @@ class RouterService:
                             {
                                 "id": _make_id("m"),
                                 "from": "hub",
-                                "text": f"Перешел к {GENERAL_DIALOG_AGENT_LABEL} в общий режим.",
+                                "text": _general_agent_transition_text("manual_select_general"),
                                 "ts": time.time(),
+                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
+                                "active_agent_gender": "female",
+                                "active_agent_voice": "ru-female",
+                                "active_agent_icon": _general_agent_projection().get("icon"),
                             },
                             _resolve_voice_target_node_id(payload, route_meta, default_local=False),
                         )
@@ -2893,6 +3098,15 @@ class RouterService:
                     return
             except Exception:
                 pass
+            try:
+                correction = correct_light_text(text)
+                if correction.text and correction.text != text:
+                    meta["original_text"] = text
+                    meta["autocorrected_text"] = correction.text
+                    meta["text_corrections"] = [dict(item) for item in correction.corrections]
+                    text = correction.text
+            except Exception:
+                pass
             addressed_agent = _extract_addressed_agent(text)
             if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
                 addressed_general_text = addressed_agent[1]
@@ -2911,8 +3125,13 @@ class RouterService:
                             {
                                 "id": _make_id("m"),
                                 "from": "hub",
-                                "text": f"Перешел к {GENERAL_DIALOG_AGENT_LABEL} в общий режим.",
+                                "text": _general_agent_transition_text(text),
                                 "ts": time.time(),
+                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
+                                "active_agent_gender": "female",
+                                "active_agent_voice": "ru-female",
+                                "active_agent_icon": _general_agent_projection().get("icon"),
                             },
                             target_node_id,
                         )
@@ -2923,6 +3142,7 @@ class RouterService:
                 meta["active_agent_label"] = GENERAL_DIALOG_AGENT_LABEL
                 meta["active_agent_gender"] = "female"
                 meta["active_agent_voice"] = "ru-female"
+                meta["active_agent_icon"] = _general_agent_projection().get("icon")
                 try:
                     await _write_dialog_state(ws, event="general_agent_addressed")
                 except Exception:
@@ -2934,8 +3154,37 @@ class RouterService:
                             {
                                 "id": _make_id("m"),
                                 "from": "hub",
-                                "text": f"{GENERAL_DIALOG_AGENT_LABEL} на связи в общем режиме.",
+                                "text": _general_agent_ready_text(text),
                                 "ts": time.time(),
+                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
+                                "active_agent_gender": "female",
+                                "active_agent_voice": "ru-female",
+                                "active_agent_icon": _general_agent_projection().get("icon"),
+                            },
+                            target_node_id,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        await _ensure_tts_state(ws)
+                    except Exception:
+                        pass
+                    return
+                if _is_agent_roster_question(addressed_general_text):
+                    try:
+                        await _append_voice_chat_message(
+                            ws,
+                            {
+                                "id": _make_id("m"),
+                                "from": "hub",
+                                "text": _agent_roster_text(),
+                                "ts": time.time(),
+                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
+                                "active_agent_gender": "female",
+                                "active_agent_voice": "ru-female",
+                                "active_agent_icon": _general_agent_projection().get("icon"),
                             },
                             target_node_id,
                         )
@@ -2964,12 +3213,40 @@ class RouterService:
                         "active_agent_label": str(agent.get("label") or "").strip(),
                         "active_agent_gender": str(agent.get("gender") or "").strip(),
                         "active_agent_voice": str(agent.get("voice") or "").strip(),
+                        "active_agent_icon": str(agent.get("icon") or "").strip(),
                         "voice_gender": str(agent.get("gender") or "").strip(),
                         "voice": str(agent.get("voice") or "").strip(),
                         "voice_profile": _agent_voice_profile(agent),
                     }
                     if character_id:
                         action_meta["character_id"] = character_id
+                    try:
+                        dialog_runtime.activate_channel(
+                            webspace_id=ws,
+                            channel_id=channel_id,
+                            owner=str(agent.get("owner") or f"skill:{skill}").strip(),
+                            default_skill=skill,
+                            default_tool=talk_tool,
+                            conversation_id=f"conv.skill.{skill}.default.{ws}",
+                            active_agent_id=str(agent.get("id") or "").strip(),
+                            active_agent_label=str(agent.get("label") or "").strip(),
+                            active_agent_owner=str(agent.get("owner") or f"skill:{skill}").strip(),
+                            active_agent_kind=str(agent.get("kind") or "skill_agent").strip(),
+                            active_agent_gender=str(agent.get("gender") or "").strip(),
+                            active_agent_voice=str(agent.get("voice") or "").strip(),
+                            active_agent_icon=str(agent.get("icon") or "").strip(),
+                            route_id="voice_chat",
+                            bus=self.bus,
+                            source="router.voice.addressed_agent",
+                        )
+                        await _write_dialog_state(ws, event="agent_addressed")
+                    except Exception:
+                        logging.getLogger("adaos.router.dialog").debug(
+                            "addressed agent state update failed webspace=%s agent=%s",
+                            ws,
+                            agent.get("id"),
+                            exc_info=True,
+                        )
                     if agent_rest:
                         action_payload = {
                             "text": text,
@@ -3002,6 +3279,39 @@ class RouterService:
                         except Exception:
                             pass
                         return
+            try:
+                current_channel_for_roster = dialog_runtime.get_active_channel(ws)
+            except Exception:
+                current_channel_for_roster = None
+            current_channel_id_for_roster = (
+                str(current_channel_for_roster.channel_id or "").strip().lower()
+                if current_channel_for_roster is not None
+                else GENERAL_DIALOG_CHANNEL_ID
+            )
+            if current_channel_id_for_roster == GENERAL_DIALOG_CHANNEL_ID and _is_agent_roster_question(text):
+                try:
+                    await _append_voice_chat_message(
+                        ws,
+                        {
+                            "id": _make_id("m"),
+                            "from": "hub",
+                            "text": _agent_roster_text(),
+                            "ts": time.time(),
+                            "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+                            "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
+                            "active_agent_gender": "female",
+                            "active_agent_voice": "ru-female",
+                            "active_agent_icon": _general_agent_projection().get("icon"),
+                        },
+                        target_node_id,
+                    )
+                except Exception:
+                    pass
+                try:
+                    await _ensure_tts_state(ws)
+                except Exception:
+                    pass
+                return
             try:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,
@@ -3234,6 +3544,7 @@ class RouterService:
         self.bus.subscribe("io.out.stream.publish", _on_io_out_stream_publish)
         self.bus.subscribe("webio.stream.snapshot.requested", _on_voice_chat_stream_snapshot)
         self.bus.subscribe("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot)
+        self.bus.subscribe("conversation.history.more", _on_conversation_history_more)
         self.bus.subscribe("browser.session.changed", _on_browser_session_changed)
         self.bus.subscribe("subnet.member.snapshot.changed", _on_member_media_inventory_changed)
         self.bus.subscribe("subnet.member.link.up", _on_member_media_inventory_changed)

@@ -47,8 +47,8 @@ Implemented today:
 - `RouterService` projects the active dialog-channel snapshot into
   `data/dialog` for the browser shell. The current projection is a compact UI
   state with `active_channel_id`, known channels, owner, default tool, active
-  agent, memory scope summary, and update metadata; it is not the canonical
-  conversation store.
+  agent, agent icon, memory scope summary, and update metadata; it is not the
+  canonical conversation store.
 - The `general` channel has a core-owned default agent identity:
   `agent:core:general`, displayed as `Ada`/`Ада` unless configured otherwise.
   Addressing that agent by name while another channel is active deactivates the
@@ -60,18 +60,26 @@ Implemented today:
   the Voice shell routes directly to the owning skill tool before NLU/Teacher
   fallback and activates the `conversational` channel.
 - Pilot agent projections and emitted chat messages carry `gender`, `voice`,
-  and `voice_profile` hints. The browser chat uses those hints to pick a
-  suitable installed speech-synthesis voice when auto-speak is enabled; this is
-  a compatibility hint, not the final response-planning contract.
-- The browser Voice widget can show and switch the current channel between
-  `general` and `conversational` by sending `dialog.channel.select`; it also
-  shows the active agent from `data/dialog`. Selecting `conversational`
-  delegates activation to `conversation_companions.start`; selecting `general`
-  deactivates the process-local channel and leaves a short marker in the
-  current Voice tail.
+  `voice_profile`, and `icon` hints. The browser chat uses those hints to label
+  assistant messages and pick a suitable installed speech-synthesis voice when
+  auto-speak is enabled; this is a compatibility hint, not the final
+  response-planning contract.
+- The Voice modal can show and switch the current channel between `general` and
+  `conversational` by sending `dialog.channel.select`; it also shows the active
+  agent from `data/dialog`. Selecting `conversational` delegates activation to
+  `conversation_companions.start`; selecting `general` deactivates the
+  process-local channel and leaves a short marker in the current Voice tail.
+- The global app header uses a compact Voice control: active agent chip first,
+  then the listen button. Channel selection stays inside the Voice dialog
+  surface so the header remains a low-friction entry point rather than the
+  semantic owner of the conversation.
 - The browser chat widget has an `Еще истории` affordance for Voice chat. It is
-  currently backed by the compact-tail projection flag
-  `has_more_before=false`; real loading waits for the canonical ledger.
+  currently backed by a bounded process-local compatibility history cache and a
+  compact Yjs tail; durable loading waits for the canonical conversation
+  ledger.
+- Voice input has a conservative pre-NLU text-correction stage for common local
+  recognition/typing errors. Corrections are stored in request metadata so
+  diagnostics can show both the original and normalized text.
 - The Voice toolbox has a read-only `Memory` inspector that shows the current
   channel, active agent, conversation id, and projected memory scopes. It is an
   observability surface, not a memory editor.
@@ -88,8 +96,8 @@ Important gaps:
   compatibility registry plus a browser-visible `data/dialog` projection for
   the companion pilot;
   `route_id=voice_chat` remains a UI/transport route.
-- Voice history is one compact compatibility tail, not per-conversation
-  history.
+- Voice history is a process-local compatibility cache plus one compact
+  browser tail, not durable per-conversation history.
 - There is no canonical conversation output contract beyond the current Voice
   compatibility bridge.
 - LLM Builder and skill runtimes do not yet receive budgeted context packets
@@ -120,7 +128,8 @@ Implemented companion pilot scenarios:
 - Manual channel switch: the Voice selector can switch `general` ->
   `conversational` through the same skill-owned start contract and
   `conversational` -> `general` through core-owned deactivation.
-- History: the pilot still uses one compact Voice tail. Per-channel visible
+- History: the pilot can page older messages from a bounded process-local
+  compatibility cache through the `Еще истории` control. Per-channel durable
   history must wait for the canonical conversation ledger and conversation-id
   based projection.
 
@@ -1424,6 +1433,9 @@ depth across several phases.
   capabilities, voice profiles, and policy.
 - [ ] `[must]` Add a minimal conversation ledger or compatibility service that
   can append user and assistant turns idempotently.
+- [x] `[should]` Add a bounded process-local Voice history cache and
+  `Еще истории` pagination as a temporary compatibility bridge until the
+  node-local conversation ledger exists.
 - [x] `[must]` Make `conversation.start` switch to `conversational`, run
   `conversation_companions.start`, and show the returned message.
 - [x] `[must]` Route active `conversational` Voice turns directly to
@@ -1432,9 +1444,15 @@ depth across several phases.
 - [x] `[must]` Move in-channel agent switching by addressed name under the
   `conversation_companions` owner policy and project the active agent to the
   browser shell.
-- [x] `[should]` Project pilot `gender`/`voice`/`voice_profile` hints from
+- [x] `[should]` Project pilot `gender`/`voice`/`voice_profile`/`icon` hints from
   core and `conversation_companions` into chat messages so the browser can
-  choose a more appropriate speech-synthesis voice.
+  label the speaking agent and choose a more appropriate speech-synthesis
+  voice.
+- [x] `[should]` Keep the global app header compact by showing the active
+  agent chip next to the listen button and leaving explicit channel selection
+  inside the Voice dialog surface.
+- [x] `[should]` Add conservative pre-NLU autocorrection for common local text
+  input mistakes while preserving the original text in diagnostics metadata.
 - [ ] `[must]` Move in-channel profile-correction commands fully under the
   `conversation_companions` owner policy.
 - [x] `[must]` Keep `voice_chat.messages` as a compatibility projection, not

@@ -41,6 +41,7 @@ def test_start_is_deterministic_and_lists_characters() -> None:
     assert result["dialog"]["active_agent"]["kind"] == "skill_agent"
     assert result["dialog"]["active_agent"]["gender"] == "male"
     assert result["dialog"]["active_agent"]["voice"] == "ru-male"
+    assert result["dialog"]["active_agent"]["icon"] == "male-outline"
     assert result["dialog"]["active_agent"]["voice_profile"]["lang"] == "ru-RU"
     assert "Арсений" in result["message"]
     assert len(result["characters"]) >= 3
@@ -60,6 +61,7 @@ def test_switch_character_accepts_russian_alias() -> None:
     assert result["dialog"]["active_agent_label"] == "Ника"
     assert result["dialog"]["active_agent"]["gender"] == "female"
     assert result["dialog"]["active_agent"]["voice"] == "ru-female"
+    assert result["dialog"]["active_agent"]["icon"] == "female-outline"
     assert listing["active_character"] == "nika"
 
 

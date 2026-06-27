@@ -23,6 +23,7 @@ class DialogChannelState:
     active_agent_kind: str | None = None
     active_agent_gender: str | None = None
     active_agent_voice: str | None = None
+    active_agent_icon: str | None = None
     route_id: str | None = None
     source_request_id: str | None = None
     activated_at: float = 0.0
@@ -108,6 +109,7 @@ def activate_channel(
     active_agent_kind: str | None = None,
     active_agent_gender: str | None = None,
     active_agent_voice: str | None = None,
+    active_agent_icon: str | None = None,
     route_id: str | None = None,
     source_request_id: str | None = None,
     ttl_s: float | None = None,
@@ -129,6 +131,7 @@ def activate_channel(
         active_agent_kind=_clean(active_agent_kind) or None,
         active_agent_gender=_clean(active_agent_gender) or None,
         active_agent_voice=_clean(active_agent_voice) or None,
+        active_agent_icon=_clean(active_agent_icon) or None,
         route_id=_clean(route_id) or None,
         source_request_id=_clean(source_request_id) or None,
         activated_at=now,
@@ -247,6 +250,13 @@ def apply_tool_result(
             )
         )
         or None,
+        active_agent_icon=_clean(
+            active_agent.get("icon")
+            or active_agent.get("avatar")
+            or dialog.get("active_agent_icon")
+            or dialog.get("agent_icon")
+        )
+        or None,
         route_id=_clean(meta.get("route_id") or meta.get("route")) or None,
         source_request_id=_clean(meta.get("request_id")) or None,
         ttl_s=ttl_s,
@@ -286,6 +296,8 @@ def resolve_followup_action(
         action_meta.setdefault("active_agent_gender", state.active_agent_gender)
     if state.active_agent_voice:
         action_meta.setdefault("active_agent_voice", state.active_agent_voice)
+    if state.active_agent_icon:
+        action_meta.setdefault("active_agent_icon", state.active_agent_icon)
     return {
         "kind": "skill_tool",
         "skill": state.default_skill,

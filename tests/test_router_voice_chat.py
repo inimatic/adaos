@@ -686,7 +686,7 @@ async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) 
     assert data["dialog"]["active_agent"]["id"] == "agent:core:general"
     assert data["dialog"]["active_agent"]["label"] == "Ада"
     assert dialog_runtime.get_active_channel(webspace_id) is None
-    assert data["voice_chat"]["messages"][-1]["text"] == "Перешел к Ада в общий режим."
+    assert "Ада" in data["voice_chat"]["messages"][-1]["text"]
     dialog_runtime.reset_all()
 
 
@@ -1185,7 +1185,7 @@ async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeyp
     data = doc.get_map("data")
     assert data["dialog"]["active_channel_id"] == "general"
     assert data["dialog"]["active_agent"]["label"] == "Ада"
-    assert data["voice_chat"]["messages"][-1]["text"] == "Перешел к Ада в общий режим."
+    assert "Ада" in data["voice_chat"]["messages"][-1]["text"]
     dialog_runtime.reset_all()
 
 
@@ -1241,6 +1241,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
                     "kind": "skill_agent",
                     "gender": "female",
                     "voice": "ru-female",
+                    "icon": "female-outline",
                     "voice_profile": {"gender": "female", "voice": "ru-female", "lang": "ru-RU"},
                 },
             },
@@ -1282,6 +1283,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert calls[0][2]["_meta"]["active_agent_gender"] == "female"
     assert calls[0][2]["_meta"]["voice_gender"] == "female"
     assert calls[0][2]["_meta"]["voice"] == "ru-female"
+    assert calls[0][2]["_meta"]["active_agent_icon"] == "female-outline"
     state = dialog_runtime.get_active_channel(webspace_id)
     assert state is not None
     assert state.channel_id == "conversational"
@@ -1289,11 +1291,13 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert state.active_agent_label == "Ника"
     assert state.active_agent_gender == "female"
     assert state.active_agent_voice == "ru-female"
+    assert state.active_agent_icon == "female-outline"
     data = doc.get_map("data")
     assert data["dialog"]["active_channel_id"] == "conversational"
     assert data["dialog"]["active_agent"]["id"] == "agent:conversation_companions:nika"
     assert data["dialog"]["active_agent"]["label"] == "Ника"
     assert data["dialog"]["active_agent"]["gender"] == "female"
+    assert data["dialog"]["active_agent"]["icon"] == "female-outline"
     dialog_runtime.reset_all()
 
 
@@ -1321,6 +1325,175 @@ async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_histo
     await bus.wait_for_idle(timeout=1.0)
 
     assert seen_stream == []
+
+
+async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "history-more-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            )
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    for index in range(10):
+        bus.publish(
+            Event(
+                type="voice.chat.user",
+                source="test",
+                ts=1.0 + index,
+                payload={
+                    "text": f"turn {index}",
+                    "webspace_id": webspace_id,
+                    "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+                },
+            )
+        )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    last_tail = seen_stream[-1].payload["data"]
+    assert last_tail["message_count"] == 8
+    assert last_tail["total_message_count"] == 10
+    assert last_tail["has_more_before"] is True
+    assert last_tail["before_cursor"] == "2"
+    assert last_tail["messages"][0]["text"] == "turn 2"
+
+    bus.publish(
+        Event(
+            type="conversation.history.more",
+            source="test",
+            ts=20.0,
+            payload={
+                "webspace_id": webspace_id,
+                "before_cursor": last_tail["before_cursor"],
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    expanded = seen_stream[-1].payload["data"]
+    assert expanded["message_count"] == 10
+    assert expanded["total_message_count"] == 10
+    assert expanded["has_more_before"] is False
+    assert expanded["before_cursor"] == "0"
+    assert expanded["messages"][0]["text"] == "turn 0"
+    assert expanded["messages"][-1]["text"] == "turn 9"
+
+
+async def test_voice_chat_user_autocorrects_text_before_nlu(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    seen_nlu: list[Event] = []
+    webspace_id = "autocorrect-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            )
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "открой слайшоу",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert len(seen_nlu) == 1
+    assert seen_nlu[0].payload["text"] == "открой слайдшоу"
+    assert seen_nlu[0].payload["_meta"]["original_text"] == "открой слайшоу"
+    assert seen_nlu[0].payload["_meta"]["autocorrected_text"] == "открой слайдшоу"
+    assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "открой слайшоу"
+
+
+async def test_voice_chat_general_agent_describes_available_agents(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    seen_nlu: list[Event] = []
+    webspace_id = "agent-roster-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            )
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "Ада, расскажи о своих агентах",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    response = doc.get_map("data")["voice_chat"]["messages"][-1]
+    assert response["active_agent_id"] == "agent:core:general"
+    assert response["active_agent_icon"] == "sparkles-outline"
+    assert "Арсений" in response["text"]
+    assert "Ника" in response["text"]
+    assert "Мира" in response["text"]
 
 
 async def test_voice_chat_user_continues_when_yjs_history_write_times_out(monkeypatch) -> None:

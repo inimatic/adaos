@@ -27,6 +27,7 @@ def test_apply_tool_result_activates_companion_channel() -> None:
                     "id": "agent:conversation_companions:arseni",
                     "label": "Арсений",
                     "gender": "male",
+                    "icon": "male-outline",
                     "voice_profile": {"voice": "ru-male"},
                 },
             },
@@ -44,6 +45,7 @@ def test_apply_tool_result_activates_companion_channel() -> None:
     assert state.active_agent_label == "Арсений"
     assert state.active_agent_gender == "male"
     assert state.active_agent_voice == "ru-male"
+    assert state.active_agent_icon == "male-outline"
     assert dialog_runtime.get_active_channel("desktop") == state
 
 
@@ -59,6 +61,7 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
         active_agent_label="Ника",
         active_agent_gender="female",
         active_agent_voice="ru-female",
+        active_agent_icon="female-outline",
         route_id="voice_chat",
     )
 
@@ -79,6 +82,7 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
     assert action["payload"]["_meta"]["active_agent_label"] == "Ника"
     assert action["payload"]["_meta"]["active_agent_gender"] == "female"
     assert action["payload"]["_meta"]["active_agent_voice"] == "ru-female"
+    assert action["payload"]["_meta"]["active_agent_icon"] == "female-outline"
 
 
 def test_resolve_followup_exit_deactivates_channel() -> None:
