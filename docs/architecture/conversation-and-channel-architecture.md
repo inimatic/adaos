@@ -44,6 +44,15 @@ Implemented today:
   process-local `conversational` channel. While that channel is active,
   Voice turns route directly to `conversation_companions.talk`; explicit exit
   phrases deactivate the channel and return to the general Voice path.
+- `RouterService` projects the active dialog-channel snapshot into
+  `data/dialog` for the browser shell. The current projection is a compact UI
+  state with `active_channel_id`, known channels, owner, default tool, active
+  agent, and update metadata; it is not the canonical conversation store.
+- The browser Voice widget can show and switch the current channel between
+  `general` and `conversational` by sending `dialog.channel.select`. Selecting
+  `conversational` delegates activation to `conversation_companions.start`;
+  selecting `general` deactivates the process-local channel and leaves a short
+  marker in the current Voice tail.
 - Telegram input is normalized enough to preserve transport reply metadata and
   enter the NLU pipeline.
 
@@ -53,8 +62,9 @@ Important gaps:
 - There is no node-local conversation/memory store with owner-scoped API,
   FTS/summary indexing, and policy-checked retrieval.
 - There is no canonical persisted dialog-channel registry yet. The current
-  `dialog_channel_id` support is a process-local compatibility registry for
-  the companion pilot; `route_id=voice_chat` remains a UI/transport route.
+  `dialog_channel_id` support is a process-local compatibility registry plus a
+  browser-visible `data/dialog` projection for the companion pilot;
+  `route_id=voice_chat` remains a UI/transport route.
 - Voice history is one compact compatibility tail, not per-conversation
   history.
 - There is no canonical conversation output contract beyond the current Voice
@@ -82,6 +92,12 @@ Implemented companion pilot scenarios:
   follow-up for the skill.
 - Exit: explicit "general"/"back to general" style commands deactivate the
   pilot channel and return unmatched turns to the general Voice fallback.
+- Manual channel switch: the Voice selector can switch `general` ->
+  `conversational` through the same skill-owned start contract and
+  `conversational` -> `general` through core-owned deactivation.
+- History: the pilot still uses one compact Voice tail. Per-channel visible
+  history must wait for the canonical conversation ledger and conversation-id
+  based projection.
 
 ## Design Rules
 

@@ -1075,6 +1075,60 @@ class RouterService:
             if changed:
                 data_map.set(txn, top_key, merged)
 
+        def _dialog_channel_snapshot(webspace_id: str, *, event: str = "snapshot") -> dict[str, Any]:
+            ws = str(webspace_id or "default").strip() or "default"
+            active = dialog_runtime.get_active_channel(ws)
+            active_dict = active.as_dict() if active is not None else None
+            active_id = str(active.channel_id).strip() if active is not None else "general"
+            if not active_id:
+                active_id = "general"
+            now = time.time()
+            channels: list[dict[str, Any]] = [
+                {
+                    "id": "general",
+                    "label": "General",
+                    "owner": "core:router",
+                    "route_id": "voice_chat",
+                    "active": active_id == "general",
+                },
+                {
+                    "id": "conversational",
+                    "label": "Conversational",
+                    "owner": "skill:conversation_companions",
+                    "route_id": "voice_chat",
+                    "active": active_id == "conversational",
+                },
+            ]
+            if active_dict and active_id == "conversational":
+                channels[1].update(
+                    {
+                        "conversation_id": active_dict.get("conversation_id"),
+                        "active_agent_id": active_dict.get("active_agent_id"),
+                        "default_tool": active_dict.get("default_tool"),
+                    }
+                )
+            elif active_dict and active_id not in {"general", "conversational"}:
+                channels.append(
+                    {
+                        "id": active_id,
+                        "label": active_id,
+                        "owner": active_dict.get("owner"),
+                        "route_id": active_dict.get("route_id") or "voice_chat",
+                        "conversation_id": active_dict.get("conversation_id"),
+                        "active_agent_id": active_dict.get("active_agent_id"),
+                        "default_tool": active_dict.get("default_tool"),
+                        "active": True,
+                    }
+                )
+            return {
+                "active_channel_id": active_id,
+                "active_channel": active_dict,
+                "channels": channels,
+                "event": event,
+                "webspace_id": ws,
+                "updated_at": now,
+            }
+
         async def _mutate_data_map(
             webspace_id: str,
             mutator: Callable[[Any, Any], None],
@@ -1106,6 +1160,36 @@ class RouterService:
                 ) as ydoc:
                     with ydoc.begin_transaction() as txn:
                         _apply(ydoc, txn)
+
+        async def _write_dialog_state(webspace_id: str, *, event: str = "snapshot") -> None:
+            snapshot = _dialog_channel_snapshot(webspace_id, event=event)
+
+            def _mutator(data_map: Any, txn: Any) -> None:
+                data_map.set(txn, "dialog", snapshot)
+
+            try:
+                await asyncio.wait_for(
+                    _mutate_data_map(
+                        webspace_id,
+                        _mutator,
+                        channel="core.router.dialog.live_room",
+                        prefer_live_room=False,
+                    ),
+                    timeout=_voice_chat_yjs_timeout_s(),
+                )
+            except asyncio.TimeoutError:
+                logging.getLogger("adaos.router.dialog").warning(
+                    "dialog.state yjs write timed out webspace=%s event=%s",
+                    webspace_id,
+                    event,
+                )
+            except Exception:
+                logging.getLogger("adaos.router.dialog").warning(
+                    "dialog.state yjs write failed webspace=%s event=%s",
+                    webspace_id,
+                    event,
+                    exc_info=True,
+                )
 
         async def _ensure_voice_chat_state(webspace_id: str, target_node_id: str | None = None) -> None:
             def _mutator(data_map: Any, txn: Any) -> None:
@@ -1916,6 +2000,7 @@ class RouterService:
             for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws, target_node_id)
                 await _ensure_tts_state(ws)
+                await _write_dialog_state(ws, event="voice_open")
 
         async def _on_io_out_chat_append(ev: Event) -> None:
             payload = ev.payload or {}
@@ -2277,6 +2362,7 @@ class RouterService:
                         )
                     except Exception:
                         pass
+                await _write_dialog_state(webspace_id, event="exit")
                 return True
 
             if kind != "skill_tool":
@@ -2326,6 +2412,7 @@ class RouterService:
                     "dialog follow-up result state update failed",
                     exc_info=True,
                 )
+            await _write_dialog_state(webspace_id, event="turn")
             if mark_request:
                 try:
                     from adaos.services.nlu.dispatcher import mark_dispatched_request
@@ -2338,6 +2425,92 @@ class RouterService:
                 except Exception:
                     pass
             return True
+
+        async def _on_dialog_channel_event(ev: Event) -> None:
+            payload = ev.payload or {}
+            if not isinstance(payload, dict):
+                return
+            webspace_id = str(payload.get("webspace_id") or "default").strip() or "default"
+            event_name = str(ev.type or "").rsplit(".", 1)[-1] or "changed"
+            await _write_dialog_state(webspace_id, event=event_name)
+
+        async def _on_dialog_channel_select(ev: Event) -> None:
+            payload = ev.payload or {}
+            if not isinstance(payload, dict):
+                return
+            if self._event_originates_from_remote_member(payload):
+                return
+            if not self._event_targets_local_node(payload):
+                return
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            channel_id = str(payload.get("channel_id") or payload.get("id") or payload.get("value") or "").strip().lower()
+            if channel_id in {"", "default"}:
+                channel_id = "general"
+            if channel_id not in {"general", "conversational"}:
+                logging.getLogger("adaos.router.dialog").warning("unsupported dialog channel selected: %r", channel_id)
+                return
+            targets = await _resolve_webspace_ids(payload)
+            for ws in targets:
+                route_meta = {**meta, "webspace_id": ws, "route_id": str(meta.get("route_id") or "voice_chat")}
+                current = dialog_runtime.get_active_channel(ws)
+                current_id = str(current.channel_id).strip().lower() if current is not None else "general"
+                if channel_id == "general":
+                    if current is not None:
+                        dialog_runtime.deactivate_channel(
+                            webspace_id=ws,
+                            channel_id=current.channel_id,
+                            bus=self.bus,
+                            source="router.dialog",
+                            reason="manual_select_general",
+                        )
+                        await _append_voice_chat_message(
+                            ws,
+                            {
+                                "id": _make_id("m"),
+                                "from": "hub",
+                                "text": "Вернулся в общий режим.",
+                                "ts": time.time(),
+                            },
+                            _resolve_voice_target_node_id(payload, route_meta, default_local=False),
+                        )
+                    await _write_dialog_state(ws, event="selected")
+                    continue
+                if current_id == "conversational":
+                    await _write_dialog_state(ws, event="selected")
+                    continue
+                try:
+                    result = await asyncio.to_thread(
+                        _call_runtime_skill_tool,
+                        "conversation_companions",
+                        "start",
+                        {"webspace_id": ws},
+                        route_meta,
+                    )
+                except Exception:
+                    logging.getLogger("adaos.router.dialog").warning(
+                        "conversation_companions start failed during channel select webspace=%s",
+                        ws,
+                        exc_info=True,
+                    )
+                    await _write_dialog_state(ws, event="select_failed")
+                    continue
+                if isinstance(result, dict) and bool(result.get("ok")):
+                    try:
+                        dialog_runtime.apply_tool_result(
+                            result,
+                            webspace_id=ws,
+                            target="conversation_companions.start",
+                            raw_meta=route_meta,
+                            payload_meta=route_meta,
+                            bus=self.bus,
+                            source="router.dialog",
+                        )
+                    except Exception:
+                        logging.getLogger("adaos.router.dialog").debug(
+                            "conversation_companions start result state update failed",
+                            exc_info=True,
+                        )
+                await _write_dialog_state(ws, event="selected")
 
         async def _on_voice_user(ev: Event) -> None:
             payload = ev.payload or {}
@@ -2651,6 +2824,9 @@ class RouterService:
 
         self.bus.subscribe("voice.chat.open", _on_voice_open)
         self.bus.subscribe("voice.chat.user", _on_voice_user)
+        self.bus.subscribe("dialog.channel.select", _on_dialog_channel_select)
+        self.bus.subscribe("dialog.channel.activated", _on_dialog_channel_event)
+        self.bus.subscribe("dialog.channel.deactivated", _on_dialog_channel_event)
         self.bus.subscribe("io.out.chat.append", _on_io_out_chat_append)
         self.bus.subscribe("io.out.say", _on_io_out_say)
         self.bus.subscribe("io.out.media.route", _on_io_out_media_route)

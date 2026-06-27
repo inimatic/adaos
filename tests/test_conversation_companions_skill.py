@@ -80,6 +80,21 @@ def test_talk_preview_uses_local_fallback_without_llm() -> None:
     assert "Арсений" in result["message"]
 
 
+def test_talk_fallback_answers_common_factual_and_term_questions() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-talk-qa")
+
+    beirut = skill.talk("Арсений, какая столица Бейрута?", preview=True, webspace_id="test-talk-qa")
+    noise = skill.talk("Что такое шум?", preview=True, webspace_id="test-talk-qa")
+
+    assert beirut["ok"] is True
+    assert "Бейрут" in beirut["message"]
+    assert "столицей Ливана" in beirut["message"]
+    assert noise["ok"] is True
+    assert "помеха" in noise["message"]
+    assert noise["message"] != beirut["message"]
+
+
 def test_capture_feedback_stores_trial_observation() -> None:
     skill = _load_module()
     skill.reset_session(webspace_id="test-feedback")

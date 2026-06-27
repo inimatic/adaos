@@ -36,6 +36,63 @@ async def _drain_voice_chat_persist(router: RouterService) -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
+class _Txn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _Map(dict):
+    def set(self, txn, key, value):  # noqa: ARG002
+        self[key] = value
+
+    def to_json(self):
+        return dict(self)
+
+
+class _Doc:
+    def __init__(self) -> None:
+        self._maps = {"data": _Map()}
+
+    def get_map(self, name: str):
+        return self._maps.setdefault(name, _Map())
+
+    def begin_transaction(self):
+        return _Txn()
+
+
+class _AsyncDoc:
+    def __init__(self, doc: _Doc) -> None:
+        self.doc = doc
+
+    async def __aenter__(self):
+        return self.doc
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _MetaCtx:
+    async def __aenter__(self):
+        return {}
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _SkillCtx:
+    def get(self):
+        return None
+
+    def set(self, *_args, **_kwargs):
+        return None
+
+    def clear(self):
+        return None
+
+
 async def test_voice_chat_user_ignores_other_target_node(monkeypatch) -> None:
     bus = LocalEventBus()
     monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="member-local")))
@@ -473,6 +530,162 @@ async def test_voice_chat_not_obtained_exits_active_dialog(monkeypatch) -> None:
 
 def test_voice_chat_data_path_is_node_scoped() -> None:
     assert node_scope_data_path("data/voice_chat", "member-1") == "data/nodes/member-1/voice_chat"
+
+
+async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="voice.chat.open",
+            source="test",
+            ts=1.0,
+            payload={
+                "webspace_id": "desktop",
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    dialog = doc.get_map("data")["dialog"]
+    assert dialog["active_channel_id"] == "general"
+    assert [item["id"] for item in dialog["channels"][:2]] == ["general", "conversational"]
+
+
+async def test_dialog_channel_select_conversational_activates_companion(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict]] = []
+    webspace_id = "dialog-select-ws"
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(node_id="hub-node"),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **_opts):
+        calls.append((skill, tool, dict(payload)))
+        return {
+            "ok": True,
+            "message": "started",
+            "dialog": {
+                "dialog_channel_id": "conversational",
+                "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                "owner": "skill:conversation_companions",
+                "default_tool": "conversation_companions.talk",
+                "active_agent_id": "agent:conversation_companions:arseni",
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="dialog.channel.select",
+            source="test",
+            ts=1.0,
+            payload={
+                "channel_id": "conversational",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    dialog = doc.get_map("data")["dialog"]
+    assert calls[0][0:2] == ("conversation_companions", "start")
+    assert calls[0][2]["webspace_id"] == webspace_id
+    assert dialog["active_channel_id"] == "conversational"
+    assert dialog["active_channel"]["default_tool"] == "talk"
+    dialog_runtime.reset_all()
+
+
+async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "dialog-general-ws"
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        route_id="voice_chat",
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="dialog.channel.select",
+            source="test",
+            ts=1.0,
+            payload={
+                "channel_id": "general",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+    data = doc.get_map("data")
+    assert data["dialog"]["active_channel_id"] == "general"
+    assert dialog_runtime.get_active_channel(webspace_id) is None
+    assert data["voice_chat"]["messages"][-1]["text"] == "Вернулся в общий режим."
+    dialog_runtime.reset_all()
 
 
 async def test_voice_chat_user_defaults_history_to_local_node_when_target_missing(monkeypatch) -> None:

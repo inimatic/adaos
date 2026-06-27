@@ -209,9 +209,16 @@ Current status:
   active Voice turns directly to the owner default tool before NLU/Teacher
   fallback, handles explicit exit/general commands, and emits
   `dialog.channel.*` lifecycle events.
-- [ ] There is no canonical persisted/browser-visible active dialog-channel
-  registry for `general`, `conversational`, `builder`, and future skill-owned
-  channels yet.
+- [x] Router projects a compact browser-visible `data/dialog` snapshot for the
+  Voice pilot, and the Voice widget can switch `general`/`conversational` via
+  `dialog.channel.select`.
+- [ ] There is no canonical persisted active dialog-channel registry for
+  `general`, `conversational`, `builder`, and future skill-owned channels yet.
+  The current `data/dialog` shape is a UI projection, not the durable source of
+  truth.
+- [ ] Per-channel visible history is not implemented yet; the pilot still uses
+  the compact Voice compatibility tail until the conversation ledger and
+  conversation-id projections exist.
 - [x] The dispatcher now materializes a successful skill tool result `message`
   into the current Voice chat tail when the skill did not already publish a
   matching chat append.
