@@ -1521,18 +1521,32 @@ depth across several phases.
 
 ### Phase 0.25. Dialog Runtime and Tracker Contract
 
-- [ ] `[must]` Define the Dialog Runtime as the owner of turn lifecycle,
+- [x] `[must]` Define the Dialog Runtime as the owner of turn lifecycle,
   current conversation resolution, active frame, repair state, response
-  materialization, and trace continuity.
-- [ ] `[must]` Define repair states for no-match, no-input, disambiguation,
-  correction, interruption, cancel, resume, and parameter change.
-- [ ] `[must]` Define task-frame/form semantics for slot collection,
-  validation, preview, confirmation, and bounded user answers.
-- [ ] `[must]` Define how NLU outputs are consumed as evidence by the Dialog
-  Runtime rather than treated as final dialog decisions.
-- [ ] `[must]` Define response rendering targets: text tail, speech text, card,
+  materialization, and trace continuity. NLU, Voice, Builder, and skills may
+  provide evidence or actions, but Dialog Runtime is the sole authority that
+  advances `DialogTurn`, selects the active `DialogFrame`, records repair
+  state, invokes response materialization, and appends/finishes `TurnTrace`.
+- [x] `[must]` Define repair states for no-match, no-input, disambiguation,
+  correction, interruption, cancel, resume, and parameter change. These are the
+  canonical `DialogRepairState` values: `no_match`, `no_input`,
+  `disambiguation`, `correction`, `interruption`, `cancel`, `resume`, and
+  `parameter_change`; `none` means normal turn handling.
+- [x] `[must]` Define task-frame/form semantics for slot collection,
+  validation, preview, confirmation, and bounded user answers. A
+  `DialogFrame(kind="slot_collection")` owns required slots, validation state,
+  preview payload, confirmation policy, retry/answer budgets, and cancellation
+  behavior until completed, cancelled, or interrupted.
+- [x] `[must]` Define how NLU outputs are consumed as evidence by the Dialog
+  Runtime rather than treated as final dialog decisions. NLU intent/entity
+  results are `DialogAct` evidence with confidence and source refs; Dialog
+  Runtime combines them with active channel, active frame, policy, memory, and
+  user corrections before selecting an action.
+- [x] `[must]` Define response rendering targets: text tail, speech text, card,
   Pending Action, notification, Builder evidence view, and transport-native
-  affordance.
+  affordance. These are canonical `ResponseTarget` values and are materialized
+  through `ResponseEnvelope`, never by making a skill write directly to a
+  transport-specific history store.
 - [x] `[should]` Add a first policy-inspection projection for one turn:
   selected channel, conversation, owner, action target, routing reason, and
   response renderer are available in `data.dialog.last_turn_trace`.
@@ -1674,16 +1688,25 @@ depth across several phases.
   NLU or skill dispatch in the Voice compatibility path.
 - [x] `[must]` Convert `voice.chat.user` into a compatibility alias for neutral
   `dialog.user_message`.
-- [ ] `[must]` Add active dialog-channel registry per webspace.
+- [x] `[must]` Add active dialog-channel registry per webspace.
 - [x] `[must]` Add browser channel selector support for `general` and
   `conversational`.
 - [x] `[should]` In the Voice compatibility path, resolve pilot addressed-agent
   names from a core-owned registry and switch the visible channel/agent
   projection accordingly.
-- [ ] `[must]` Extend browser channel selector support to `builder` and
+- [x] `[must]` Extend browser channel selector support to `builder` and
   dynamically declared skill-owned channels.
-- [ ] `[must]` Make browser chat panels subscribe to `data.dialog` /
+- [x] `[must]` Make browser chat panels subscribe to `data.dialog` /
   conversation projections instead of transport-specific chat state.
+- [x] `[should]` Publish `data.dialog.visible_tail` from the canonical node
+  ledger, so modal and widget chat surfaces can restore the active conversation
+  after reload without treating `voice_chat.messages` as the source of truth.
+- [x] `[should]` Keep "load earlier history" compatible with both legacy
+  `voice_chat` and canonical `dialog.visible_tail` projections during the
+  migration window.
+- [x] `[should]` Keep the browser agent chip sourced from
+  `data.dialog.active_agent` and the active channel projection, including
+  `builder` and dynamically declared skill-owned channels.
 - [ ] `[should]` Make Telegram inbound messages resolve to conversations before
   NLU or skill dispatch.
 - [ ] `[should]` Make endpoint audio dialog mode resolve to conversations
@@ -1694,15 +1717,15 @@ depth across several phases.
 
 ### Phase 5. Surface Dispatch and Conversation Policies
 
-- [ ] `[must]` Route `general` conversations to the default assistant/NLU
+- [x] `[must]` Route `general` conversations to the default assistant/NLU
   surface.
-- [ ] `[must]` Route `skill` conversations to their logical skill owner through
+- [x] `[must]` Route `skill` conversations to their logical skill owner through
   owner-scoped tool dispatch.
-- [ ] `[must]` Add channel policies for entry intents, default tools, fallback
+- [x] `[must]` Add channel policies for entry intents, default tools, fallback
   behavior, and exit/switch intents.
-- [ ] `[must]` Implement Dialog Runtime handling for no-match, no-input,
+- [x] `[must]` Implement Dialog Runtime handling for no-match, no-input,
   interruption, cancel, resume, correction, and parameter-change states.
-- [ ] `[must]` Implement task-frame/form routing for multi-turn parameter
+- [x] `[must]` Implement task-frame/form routing for multi-turn parameter
   collection and validation.
 - [x] `[must]` Add `conversation_companions` as the first multi-agent skill
   conversation pilot: "let's talk" enters `conversational`, unmatched turns
@@ -1711,7 +1734,13 @@ depth across several phases.
   `active_agent_id` and browser-visible active-agent projection.
 - [x] `[should]` Attach pilot agent gender/voice hints to projections and
   emitted chat messages for browser speech synthesis.
-- [ ] `[must]` Persist agent-scoped memory as canonical `MemoryItem` records.
+- [x] `[must]` Persist agent-scoped memory as canonical `MemoryItem` records.
+- [x] `[should]` Persist `conversation_companions` profile corrections as
+  deterministic agent-scoped upserts, while keeping skill-local profile storage
+  as a compatibility cache.
+- [x] `[should]` Attach repair-state and active-frame metadata to
+  owner-scoped tool payloads, so the selected skill can handle correction,
+  cancellation, and parameter updates without re-parsing transport state.
 - [ ] `[should]` Move legacy semantic fallback out of
   `voice_chat_skill.handle_text` into conversation owner/surface policies.
 - [ ] `[should]` Add explicit fallback when a surface or owning skill is
@@ -1721,6 +1750,19 @@ depth across several phases.
   default.
 - [ ] `[could]` Add operator-visible policy inspection for one conversation:
   owner, channel, retrieval policy, memory scopes, and last dispatch.
+
+Important lacunae found during Phase 4/5 implementation:
+
+- [ ] `[must]` Persist active `DialogFrame` state in the node DB before
+  enabling multi-process runtime or restart-resumable forms. The current
+  implementation is process-local and is acceptable only for the first
+  single-process runtime slice.
+- [ ] `[must]` Promote dynamic channel declarations from ad-hoc persisted
+  rows to manifest-backed validation, including owner, default tool, policy,
+  and renderer capabilities.
+- [ ] `[should]` Add a first-class policy inspector UI for the last turn:
+  selected channel, selected agent, owner, fallback path, repair state,
+  frame id, renderer, and memory scopes.
 
 ### Phase 6. Builder and NLU Teacher Migration
 

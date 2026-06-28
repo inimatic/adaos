@@ -636,6 +636,79 @@ async def test_dialog_channel_select_conversational_activates_companion(monkeypa
     dialog_runtime.reset_all()
 
 
+async def test_dialog_channel_select_supports_builder_and_persisted_skill_channels(monkeypatch) -> None:
+    from adaos.services import conversation_store, dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "dialog-dynamic-ws"
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    conversation_store.ensure_schema()
+    conversation_store.upsert_dialog_channel(
+        webspace_id=webspace_id,
+        channel_id="research",
+        label="Research",
+        owner="skill:research_assistant",
+        conversation_id=f"conv.skill.research_assistant.default.{webspace_id}",
+        default_skill="research_assistant",
+        default_tool="chat",
+        route_id="voice_chat",
+    )
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="dialog.channel.select",
+            source="test",
+            ts=1.0,
+            payload={
+                "channel_id": "builder",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    builder_state = dialog_runtime.get_active_channel(webspace_id)
+    assert builder_state is not None
+    assert builder_state.channel_id == "builder"
+    assert builder_state.default_skill == "llm_builder"
+    assert doc.get_map("data")["dialog"]["active_channel_id"] == "builder"
+
+    bus.publish(
+        Event(
+            type="dialog.channel.select",
+            source="test",
+            ts=2.0,
+            payload={
+                "channel_id": "research",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    research_state = dialog_runtime.get_active_channel(webspace_id)
+    assert research_state is not None
+    assert research_state.channel_id == "research"
+    assert research_state.owner == "skill:research_assistant"
+    dialog = doc.get_map("data")["dialog"]
+    assert dialog["active_channel_id"] == "research"
+    assert "builder" in {item["id"] for item in dialog["channels"]}
+    assert "research" in {item["id"] for item in dialog["channels"]}
+    dialog_runtime.reset_all()
+
+
 async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) -> None:
     from adaos.services import dialog_runtime
 

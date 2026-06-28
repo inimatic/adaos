@@ -109,6 +109,84 @@ def _save_profiles(webspace_id: str, profiles: Mapping[str, Mapping[str, Any]]) 
     _mem_set(_scoped_key(PROFILES_KEY, webspace_id), copy.deepcopy(dict(profiles)))
 
 
+def _remember_agent_profile_update(
+    *,
+    webspace_id: str,
+    character_id: str,
+    instruction: str,
+    patch: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    try:
+        from adaos.sdk import memory
+    except Exception:
+        return None
+    agent_id = f"agent:{SKILL_ID}:{character_id}"
+    try:
+        policy = memory.write_policy(
+            "agent_preference",
+            owner=f"skill:{SKILL_ID}",
+            agent_id=agent_id,
+            visibility="owner_only",
+        )
+    except Exception:
+        _LOG.debug("failed to resolve conversation memory policy", exc_info=True)
+        return None
+    meta = dict(_meta or {})
+    context = meta.get("conversation_context") if isinstance(meta.get("conversation_context"), Mapping) else {}
+    conversation_id = str(
+        meta.get("conversation_id")
+        or (context or {}).get("conversation_id")
+        or f"{CONVERSATION_ID}.{webspace_id}"
+    ).strip()
+    safe_ws = re.sub(r"[^A-Za-z0-9_.:-]+", "_", webspace_id or "default").strip("_") or "default"
+    safe_character = re.sub(r"[^A-Za-z0-9_.:-]+", "_", character_id or DEFAULT_ACTIVE_CHARACTER).strip("_")
+    memory_id = f"mem.{SKILL_ID}.{safe_ws}.{safe_character}.profile"
+    value = {
+        "profile": {
+            "id": profile.get("id"),
+            "name": profile.get("name"),
+            "tone": profile.get("tone"),
+            "verbosity": profile.get("verbosity"),
+            "style_rules": list(profile.get("style_rules") or [])[:12]
+            if isinstance(profile.get("style_rules"), list)
+            else [],
+        },
+        "patch": dict(patch),
+    }
+    try:
+        stored_id = memory.remember(
+            scope=policy["scope"],
+            owner=policy["owner"],
+            subject_id=policy["subject_id"],
+            key="profile.style",
+            text=str(instruction or "").strip()[:1000],
+            value=value,
+            confidence=0.8,
+            consent_state=policy["consent_state"],
+            visibility=policy["policy"].get("visibility"),
+            policy=policy["policy"],
+            source_ref={
+                "conversation_id": conversation_id,
+                "webspace_id": webspace_id,
+                "dialog_channel_id": DIALOG_CHANNEL_ID,
+                "kind": "profile_update",
+            },
+            memory_id=memory_id,
+        )
+    except Exception:
+        _LOG.debug("failed to persist canonical agent memory", exc_info=True)
+        return None
+    return {
+        "id": stored_id or memory_id,
+        "scope": policy["scope"],
+        "owner": policy["owner"],
+        "subject_id": policy["subject_id"],
+        "key": "profile.style",
+    }
+
+
 def _session(webspace_id: str) -> dict[str, Any]:
     raw = _mem_get(_scoped_key(SESSION_KEY, webspace_id))
     if isinstance(raw, dict):
@@ -669,9 +747,18 @@ def update_profile(
         patch["note"] = "Правка сохранена как свободная заметка к стилю."
         patch["style_rules_add"] = [str(instruction).strip()[:240]]
     updated = _apply_patch(profiles[selected], patch)
+    canonical_memory = None
     if persist:
         profiles[selected] = updated
         _save_profiles(ws, profiles)
+        canonical_memory = _remember_agent_profile_update(
+            webspace_id=ws,
+            character_id=selected,
+            instruction=instruction,
+            patch=patch,
+            profile=updated,
+            _meta=_meta,
+        )
     message = (
         f"Обновил профиль {updated['name']}: "
         f"тон - {updated.get('tone')}; длина - {updated.get('verbosity')}."
@@ -688,6 +775,7 @@ def update_profile(
         "message": message,
         "patch": patch,
         "profile": updated,
+        "canonical_memory": canonical_memory,
     }
 
 

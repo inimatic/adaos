@@ -570,6 +570,50 @@ def get_dialog_channel(webspace_id: str, channel_id: str) -> dict[str, Any] | No
     }
 
 
+def list_dialog_channels(webspace_id: str, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    where = ["webspace_id=?"]
+    params: list[Any] = [webspace_id]
+    if not include_inactive:
+        where.append("status='active'")
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT * FROM conversation_dialog_channels
+            WHERE {' AND '.join(where)}
+            ORDER BY
+                CASE channel_id
+                    WHEN 'general' THEN 0
+                    WHEN 'conversational' THEN 1
+                    WHEN 'builder' THEN 2
+                    ELSE 10
+                END,
+                channel_id COLLATE NOCASE
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "webspace_id": row["webspace_id"],
+            "channel_id": row["channel_id"],
+            "id": row["channel_id"],
+            "label": row["label"],
+            "owner": row["owner"],
+            "conversation_id": row["conversation_id"],
+            "active_agent_id": row["active_agent_id"],
+            "default_skill": row["default_skill"],
+            "default_tool": row["default_tool"],
+            "route_id": row["route_id"],
+            "status": row["status"],
+            "policy": _json_load(row["policy_json"], {}),
+            "meta": _json_load(row["meta_json"], {}),
+        }
+        for row in rows
+    ]
+
+
 def set_active_dialog_channel(
     *,
     webspace_id: str,

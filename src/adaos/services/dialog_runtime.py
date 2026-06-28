@@ -34,8 +34,31 @@ class DialogChannelState:
         return asdict(self)
 
 
+@dataclass
+class DialogFrameState:
+    webspace_id: str
+    frame_id: str
+    kind: str = "slot_collection"
+    state: str = "collecting"
+    owner: str | None = None
+    conversation_id: str | None = None
+    slots: dict[str, Any] | None = None
+    required_slots: tuple[str, ...] = ()
+    validation: dict[str, Any] | None = None
+    policy: dict[str, Any] | None = None
+    updated_at: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["slots"] = dict(self.slots or {})
+        data["validation"] = dict(self.validation or {})
+        data["policy"] = dict(self.policy or {})
+        return data
+
+
 _LOCK = threading.RLock()
 _ACTIVE_BY_WEBSPACE: dict[str, DialogChannelState] = {}
+_FRAMES_BY_WEBSPACE: dict[str, DialogFrameState] = {}
 
 _EXIT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE | re.UNICODE)
@@ -45,6 +68,58 @@ _EXIT_PATTERNS = tuple(
         r"^\s*(?:\u0437\u0430\u043a\u043e\u043d\u0447\u0438|\u0437\u0430\u0432\u0435\u0440\u0448\u0438)\s+(?:\u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440|\u0434\u0438\u0430\u043b\u043e\u0433)\s*[.!?]*\s*$",
         r"^\s*(?:\u0432\u0435\u0440\u043d\u0438\u0441\u044c\s+)?\u0432\s+(?:\u043e\u0431\u0449\u0438\u0439|general)(?:\s+\u043a\u0430\u043d\u0430\u043b|\s+\u0440\u0435\u0436\u0438\u043c)?\s*[.!?]*\s*$",
     )
+)
+_REPAIR_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
+    (
+        "cancel",
+        tuple(
+            re.compile(pattern, re.IGNORECASE | re.UNICODE)
+            for pattern in (
+                r"^\s*(?:cancel|never mind|forget it)\s*[.!?]*\s*$",
+                r"^\s*(?:\u043e\u0442\u043c\u0435\u043d\u0438|\u043d\u0435\s+ надо|\u0437\u0430\u0431\u0443\u0434\u044c)\s*[.!?]*\s*$",
+            )
+        ),
+    ),
+    (
+        "resume",
+        tuple(
+            re.compile(pattern, re.IGNORECASE | re.UNICODE)
+            for pattern in (
+                r"\b(?:resume|continue|go on)\b",
+                r"(?:\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438|\u0432\u0435\u0440\u043d\u0435\u043c\u0441\u044f)",
+            )
+        ),
+    ),
+    (
+        "interruption",
+        tuple(
+            re.compile(pattern, re.IGNORECASE | re.UNICODE)
+            for pattern in (
+                r"\b(?:wait|pause|hold on)\b",
+                r"(?:\u043f\u043e\u0434\u043e\u0436\u0434\u0438|\u043f\u0430\u0443\u0437\u0430|\u0441\u0442\u043e\u043f)",
+            )
+        ),
+    ),
+    (
+        "correction",
+        tuple(
+            re.compile(pattern, re.IGNORECASE | re.UNICODE)
+            for pattern in (
+                r"\b(?:correction|I meant|not that|actually)\b",
+                r"(?:\u0438\u0441\u043f\u0440\u0430\u0432\u044c|\u044f\s+\u0438\u043c\u0435\u043b|\u043d\u0435\s+то|точнее)",
+            )
+        ),
+    ),
+    (
+        "parameter_change",
+        tuple(
+            re.compile(pattern, re.IGNORECASE | re.UNICODE)
+            for pattern in (
+                r"\b(?:change|set|use instead)\b",
+                r"(?:\u0438\u0437\u043c\u0435\u043d\u0438|\u043f\u043e\u043c\u0435\u043d\u044f\u0439|\u0432\u043c\u0435\u0441\u0442\u043e)",
+            )
+        ),
+    ),
 )
 
 
@@ -81,6 +156,7 @@ def _active_state(state: DialogChannelState, *, now: float | None = None) -> boo
 def reset_all() -> None:
     with _LOCK:
         _ACTIVE_BY_WEBSPACE.clear()
+        _FRAMES_BY_WEBSPACE.clear()
 
 
 def get_active_channel(webspace_id: str | None) -> DialogChannelState | None:
@@ -173,6 +249,102 @@ def is_exit_text(text: str) -> bool:
     if not value:
         return False
     return any(pattern.search(value) for pattern in _EXIT_PATTERNS)
+
+
+def repair_state_for_input(text: str, meta: Mapping[str, Any] | None = None) -> str:
+    explicit = _clean((meta or {}).get("dialog_repair_state") or (meta or {}).get("repair_state"))
+    if explicit:
+        return explicit
+    value = _clean(text)
+    if not value:
+        return "no_input"
+    reason = _clean((meta or {}).get("reason"))
+    if reason in {"low_confidence", "rasa_low_confidence", "no_intent_mapping", "no_match"}:
+        return "no_match"
+    if _clean((meta or {}).get("disambiguation")):
+        return "disambiguation"
+    for state, patterns in _REPAIR_PATTERNS:
+        if any(pattern.search(value) for pattern in patterns):
+            return state
+    return "none"
+
+
+def set_active_frame(
+    *,
+    webspace_id: str,
+    frame_id: str,
+    kind: str = "slot_collection",
+    owner: str | None = None,
+    conversation_id: str | None = None,
+    slots: Mapping[str, Any] | None = None,
+    required_slots: tuple[str, ...] | list[str] = (),
+    validation: Mapping[str, Any] | None = None,
+    policy: Mapping[str, Any] | None = None,
+    state: str = "collecting",
+) -> DialogFrameState:
+    ws = _webspace_id(webspace_id)
+    frame = DialogFrameState(
+        webspace_id=ws,
+        frame_id=_clean(frame_id) or f"frame.{ws}",
+        kind=_clean(kind) or "slot_collection",
+        state=_clean(state) or "collecting",
+        owner=_clean(owner) or None,
+        conversation_id=_clean(conversation_id) or None,
+        slots=dict(slots or {}),
+        required_slots=tuple(_clean(item) for item in required_slots if _clean(item)),
+        validation=dict(validation or {}),
+        policy=dict(policy or {}),
+        updated_at=time.time(),
+    )
+    with _LOCK:
+        _FRAMES_BY_WEBSPACE[ws] = frame
+    return DialogFrameState(**frame.as_dict())
+
+
+def get_active_frame(webspace_id: str | None) -> DialogFrameState | None:
+    ws = _webspace_id(webspace_id)
+    with _LOCK:
+        frame = _FRAMES_BY_WEBSPACE.get(ws)
+        return DialogFrameState(**frame.as_dict()) if frame is not None else None
+
+
+def clear_active_frame(webspace_id: str | None) -> DialogFrameState | None:
+    ws = _webspace_id(webspace_id)
+    with _LOCK:
+        frame = _FRAMES_BY_WEBSPACE.pop(ws, None)
+    return DialogFrameState(**frame.as_dict()) if frame is not None else None
+
+
+def apply_frame_input(
+    *,
+    webspace_id: str,
+    text: str,
+    slot: str | None = None,
+) -> DialogFrameState | None:
+    frame = get_active_frame(webspace_id)
+    if frame is None:
+        return None
+    slots = dict(frame.slots or {})
+    target_slot = _clean(slot)
+    if not target_slot:
+        target_slot = next((item for item in frame.required_slots if not _clean(slots.get(item))), "")
+    if target_slot:
+        slots[target_slot] = text
+    missing = [item for item in frame.required_slots if not _clean(slots.get(item))]
+    state = "collecting" if missing else "validating"
+    validation = {**dict(frame.validation or {}), "missing_slots": missing}
+    return set_active_frame(
+        webspace_id=frame.webspace_id,
+        frame_id=frame.frame_id,
+        kind=frame.kind,
+        owner=frame.owner,
+        conversation_id=frame.conversation_id,
+        slots=slots,
+        required_slots=frame.required_slots,
+        validation=validation,
+        policy=frame.policy,
+        state=state,
+    )
 
 
 def apply_tool_result(
@@ -278,16 +450,27 @@ def resolve_followup_action(
     route = _clean(route_id or (meta or {}).get("route_id") or (meta or {}).get("route"))
     if route and state.route_id and route != state.route_id:
         return None
+    repair_state = repair_state_for_input(text, meta)
     if is_exit_text(text):
         return {
             "kind": "exit",
             "channel": state.as_dict(),
             "message": "\u0412\u0435\u0440\u043d\u0443\u043b\u0441\u044f \u0432 \u043e\u0431\u0449\u0438\u0439 \u0440\u0435\u0436\u0438\u043c.",
+            "repair_state": "cancel" if repair_state == "cancel" else "none",
         }
+    frame = get_active_frame(webspace_id)
+    if frame is not None and repair_state == "cancel":
+        clear_active_frame(webspace_id)
     action_meta = dict(meta or {})
     action_meta.setdefault("dialog_channel_id", state.channel_id)
     action_meta.setdefault("conversation_id", state.conversation_id)
     action_meta.setdefault("conversation_owner", state.owner)
+    if repair_state != "none":
+        action_meta.setdefault("dialog_repair_state", repair_state)
+    if frame is not None:
+        action_meta.setdefault("dialog_frame_id", frame.frame_id)
+        action_meta.setdefault("dialog_frame_state", frame.state)
+        action_meta.setdefault("dialog_frame_kind", frame.kind)
     if state.active_agent_id:
         action_meta.setdefault("active_agent_id", state.active_agent_id)
     if state.active_agent_label:
@@ -303,6 +486,8 @@ def resolve_followup_action(
         "skill": state.default_skill,
         "tool": state.default_tool,
         "channel": state.as_dict(),
+        "repair_state": repair_state,
+        "frame": frame.as_dict() if frame is not None else None,
         "payload": {
             "text": text,
             "webspace_id": state.webspace_id,

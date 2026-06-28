@@ -108,3 +108,69 @@ def test_resolve_followup_exit_deactivates_channel() -> None:
     removed = dialog_runtime.deactivate_channel(webspace_id="desktop", channel_id="conversational")
     assert removed is not None
     assert dialog_runtime.get_active_channel("desktop") is None
+
+
+def test_repair_state_and_frame_metadata_are_attached_to_followup() -> None:
+    dialog_runtime.activate_channel(
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:llm_builder",
+        default_skill="llm_builder",
+        default_tool="chat",
+        conversation_id="conv.skill.llm_builder.default.desktop",
+        route_id="voice_chat",
+    )
+    frame = dialog_runtime.set_active_frame(
+        webspace_id="desktop",
+        frame_id="frame.create_skill",
+        owner="skill:llm_builder",
+        conversation_id="conv.skill.llm_builder.default.desktop",
+        required_slots=("skill_name", "purpose"),
+    )
+    assert frame.state == "collecting"
+
+    updated = dialog_runtime.apply_frame_input(webspace_id="desktop", text="weather helper")
+    assert updated is not None
+    assert updated.slots == {"skill_name": "weather helper"}
+    assert updated.validation == {"missing_slots": ["purpose"]}
+
+    action = dialog_runtime.resolve_followup_action(
+        webspace_id="desktop",
+        text="actually change it to calendar helper",
+        route_id="voice_chat",
+        meta={"route_id": "voice_chat"},
+    )
+
+    assert action is not None
+    assert action["repair_state"] == "correction"
+    assert action["frame"]["frame_id"] == "frame.create_skill"
+    assert action["payload"]["_meta"]["dialog_repair_state"] == "correction"
+    assert action["payload"]["_meta"]["dialog_frame_id"] == "frame.create_skill"
+
+
+def test_cancel_repair_clears_active_frame() -> None:
+    dialog_runtime.activate_channel(
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:llm_builder",
+        default_skill="llm_builder",
+        default_tool="chat",
+        conversation_id="conv.skill.llm_builder.default.desktop",
+        route_id="voice_chat",
+    )
+    dialog_runtime.set_active_frame(
+        webspace_id="desktop",
+        frame_id="frame.create_skill",
+        required_slots=("skill_name",),
+    )
+
+    action = dialog_runtime.resolve_followup_action(
+        webspace_id="desktop",
+        text="cancel",
+        route_id="voice_chat",
+        meta={"route_id": "voice_chat"},
+    )
+
+    assert action is not None
+    assert action["repair_state"] == "cancel"
+    assert dialog_runtime.get_active_frame("desktop") is None

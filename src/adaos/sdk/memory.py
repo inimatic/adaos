@@ -23,6 +23,7 @@ def remember(
     redaction_state: str = "active",
     redacted_at: float | None = None,
     redaction_reason: str | None = None,
+    memory_id: str | None = None,
 ) -> str | None:
     return conversation_store.remember(
         scope=scope,
@@ -41,6 +42,7 @@ def remember(
         redaction_state=redaction_state,
         redacted_at=redacted_at,
         redaction_reason=redaction_reason,
+        memory_id=memory_id,
     )
 
 
