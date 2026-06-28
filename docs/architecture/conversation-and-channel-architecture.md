@@ -100,6 +100,12 @@ Implemented today:
   facades for generated skills and Builder experiments. They are intentionally
   thin over the node store until response envelopes and context packets are
   frozen.
+- Canonical Phase 0 conversation contracts are now represented in
+  `adaos.domain.conversation`: record schemas, actor id grammar, initiator
+  shape, policy defaults, response envelopes, turn traces, and compact
+  `data.dialog` projection rules. Runtime tables and compatibility bridges may
+  still lag the full contract, but generated/runtime code has a stable import
+  target.
 - Telegram input is normalized enough to preserve transport reply metadata and
   enter the NLU pipeline.
 
@@ -1487,21 +1493,22 @@ depth across several phases.
 
 ### Phase 0. Contract Freeze
 
-- [ ] `[must]` Define `Conversation`, `ConversationMessage`,
+- [x] `[must]` Define `Conversation`, `ConversationMessage`,
   `ConversationThread`, `DialogChannel`, `MemoryItem`,
-  `ConversationSegment`, and `ConversationRoutingPolicy` schemas.
-- [ ] `[must]` Define `DialogTurn`, `DialogAct`, `DialogFrame`,
+  `ConversationSegment`, and `ConversationRoutingPolicy` schemas. The canonical
+  Python contract is `adaos.domain.conversation`.
+- [x] `[must]` Define `DialogTurn`, `DialogAct`, `DialogFrame`,
   `DialogPolicyState`, `ResponseEnvelope`, and `TurnTrace` schemas.
-- [ ] `[must]` Define actor ids for `core:*`, `skill:*`,
+- [x] `[must]` Define actor ids for `core:*`, `skill:*`,
   `agent:<skill_id>:<agent_id>`, users, nodes, endpoints, and transports.
-- [ ] `[must]` Define `created_by` / `initiator` shape for conversations,
+- [x] `[must]` Define `created_by` / `initiator` shape for conversations,
   threads, messages, memory items, and proactive prompts.
-- [ ] `[must]` Define node-local storage policy: physical store is node-owned,
+- [x] `[must]` Define node-local storage policy: physical store is node-owned,
   logical owner is core/skill/agent, access is policy-checked.
-- [ ] `[must]` Define `history_policy`, `retrieval_policy`,
+- [x] `[must]` Define `history_policy`, `retrieval_policy`,
   `personalization_policy`, `repair_policy`, `response_policy`, and
   `retention_policy`.
-- [ ] `[must]` Define projection rules for `data.dialog` and WebIO stream
+- [x] `[must]` Define projection rules for `data.dialog` and WebIO stream
   receivers so Yjs carries only compact active tails.
 - [ ] `[should]` Add manifest schema support for `conversations`, `history`,
   `retrieval`, `dialog_channel`, `repair`, `response`, form/frame, and agent
