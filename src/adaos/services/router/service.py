@@ -3679,6 +3679,61 @@ class RouterService:
         def _call_voice_chat_tool(text: str, meta: dict) -> Any:
             return _call_runtime_skill_tool("voice_chat_skill", "handle_text", {"text": text}, meta)
 
+        def _chat_append_matches_dialog_action(
+            payload: Mapping[str, Any],
+            *,
+            text: str,
+            meta: Mapping[str, Any],
+            webspace_id: str,
+            route_id: str,
+        ) -> bool:
+            emitted_text = payload.get("text")
+            if not isinstance(emitted_text, str) or not emitted_text.strip():
+                return False
+            payload_meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+            emitted_webspace = str(payload.get("webspace_id") or payload_meta.get("webspace_id") or "").strip()
+            if emitted_webspace and emitted_webspace != webspace_id:
+                return False
+            expected_route = str(route_id or meta.get("route_id") or meta.get("route") or "").strip()
+            emitted_route = str(payload.get("route_id") or payload_meta.get("route_id") or payload_meta.get("route") or "").strip()
+            if expected_route and emitted_route and emitted_route != expected_route:
+                return False
+            trace_id = str(meta.get("turn_trace_id") or "").strip()
+            emitted_trace_id = str(payload.get("turn_trace_id") or payload_meta.get("turn_trace_id") or "").strip()
+            if trace_id and emitted_trace_id == trace_id:
+                return True
+            if text and emitted_text.strip() == text.strip():
+                return True
+            return bool(expected_route and emitted_route == expected_route)
+
+        def _subscribe_dialog_materialization_probe() -> tuple[list[dict[str, Any]], Any | None]:
+            materialized: list[dict[str, Any]] = []
+
+            def _capture(ev: Event) -> None:
+                payload = ev.payload if isinstance(ev.payload, dict) else {}
+                text = payload.get("text")
+                if isinstance(text, str) and text.strip():
+                    materialized.append(dict(payload))
+
+            try:
+                self.bus.subscribe("io.out.chat.append", _capture)
+            except Exception:
+                return materialized, None
+            return materialized, _capture
+
+        def _unsubscribe_dialog_materialization_probe(handler: Any | None) -> None:
+            if handler is None:
+                return
+            try:
+                unsubscribe = getattr(self.bus, "unsubscribe", None)
+                if callable(unsubscribe):
+                    unsubscribe("io.out.chat.append", handler)
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").debug(
+                    "dialog materialization probe unsubscribe failed",
+                    exc_info=True,
+                )
+
         async def _handle_dialog_action(
             *,
             dialog_action: dict[str, Any],
@@ -3766,6 +3821,7 @@ class RouterService:
                     "request_id": str(request_id or "").strip(),
                 },
             )
+            materialized_chat_appends, materialization_probe = _subscribe_dialog_materialization_probe()
             try:
                 result = await asyncio.to_thread(
                     _call_runtime_skill_tool,
@@ -3793,6 +3849,8 @@ class RouterService:
                     extra_policy={"result_status": "exception"},
                 )
                 return False
+            finally:
+                _unsubscribe_dialog_materialization_probe(materialization_probe)
             if not isinstance(result, dict) or not bool(result.get("ok")):
                 logging.getLogger("adaos.router.voice_chat").warning(
                     "dialog follow-up tool returned non-ok skill=%s tool=%s result=%r",
@@ -3827,22 +3885,68 @@ class RouterService:
                     "dialog follow-up result state update failed",
                     exc_info=True,
                 )
-            await _write_dialog_state(webspace_id, event="turn")
+            result_message = str(result.get("message") or "").strip()
+            materialized_payload = None
+            if result_message:
+                materialized_payload = next(
+                    (
+                        item
+                        for item in materialized_chat_appends
+                        if _chat_append_matches_dialog_action(
+                            item,
+                            text=result_message,
+                            meta=action_meta,
+                            webspace_id=webspace_id,
+                            route_id=route_id,
+                        )
+                    ),
+                    None,
+                )
+            trace_status = "tool_ok"
+            trace_renderer: dict[str, Any] = {"receiver": "voice_chat.messages", "projection": "pending_materialization"}
+            trace_summary = f"{skill}.{tool} returned ok; waiting for visible output"
+            trace_policy: dict[str, Any] = {
+                "result_ok": True,
+                "result_status": "ok",
+                "result_has_message": bool(result_message),
+            }
+            if result_message and materialized_payload is not None:
+                trace_status = "materialized"
+                trace_renderer = {
+                    "receiver": "voice_chat.messages",
+                    "projection": "skill_emitted_message",
+                    "message_id": materialized_payload.get("id"),
+                }
+                trace_summary = f"{skill}.{tool} returned ok and materialized visible output"
+                trace_policy["materialization_status"] = "materialized"
+            elif result_message:
+                trace_status = "unmaterialized"
+                trace_renderer = {
+                    "receiver": "voice_chat.messages",
+                    "projection": "missing_materialization",
+                }
+                trace_summary = f"{skill}.{tool} returned ok message but no visible output was observed"
+                trace_policy["materialization_status"] = "missing"
+                trace_policy["diagnostic"] = "skill_result_message_not_visible"
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "dialog follow-up returned message without visible output skill=%s tool=%s webspace=%s trace_id=%s",
+                    skill,
+                    tool,
+                    webspace_id,
+                    str(action_meta.get("turn_trace_id") or "").strip(),
+                )
             _record_voice_turn_trace(
                 webspace_id,
                 action_meta,
                 text=str(action_payload.get("text") or ""),
                 selected_tool=f"{skill}.{tool}",
                 reason=str(action_meta.get("dialog_policy_reason") or meta.get("dialog_policy_reason") or "dialog_followup"),
-                status="tool_ok",
-                renderer={"receiver": "voice_chat.messages", "projection": "pending_materialization"},
-                summary=f"{skill}.{tool} returned ok; waiting for visible output",
-                extra_policy={
-                    "result_ok": True,
-                    "result_status": "ok",
-                    "result_has_message": bool(str(result.get("message") or "").strip()),
-                },
+                status=trace_status,
+                renderer=trace_renderer,
+                summary=trace_summary,
+                extra_policy=trace_policy,
             )
+            await _write_dialog_state(webspace_id, event="turn")
             if mark_request:
                 try:
                     from adaos.services.nlu.dispatcher import mark_dispatched_request

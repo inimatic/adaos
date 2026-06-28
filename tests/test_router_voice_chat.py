@@ -1398,10 +1398,14 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert trace["channel_id"] == "conversational"
     assert trace["agent_id"] == "agent:conversation_companions:nika"
     assert trace["selected_tool"] == "conversation_companions.talk"
-    assert trace["status"] == "tool_ok"
+    assert trace["status"] == "unmaterialized"
     assert trace["policy_decision"]["reason"] == "addressed_agent"
     assert trace["policy_decision"]["selected_agent_id"] == "agent:conversation_companions:nika"
-    assert trace["renderer"]["projection"] == "pending_materialization"
+    assert trace["policy_decision"]["materialization_status"] == "missing"
+    assert trace["policy_decision"]["diagnostic"] == "skill_result_message_not_visible"
+    assert trace["renderer"]["projection"] == "missing_materialization"
+    assert data["dialog"]["last_turn_trace"]["status"] == "unmaterialized"
+    assert data["dialog"]["last_turn_trace"]["renderer"]["projection"] == "missing_materialization"
     dialog_runtime.reset_all()
 
 

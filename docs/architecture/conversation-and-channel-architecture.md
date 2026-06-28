@@ -1555,8 +1555,11 @@ depth across several phases.
   implementation keeps `route_id=voice_chat` as the compatibility route while
   carrying `dialog_event_kind`, `canonical_event_kind`, and
   `input_event_kind=dialog.user_message`.
-- [ ] `[must]` Add diagnostics when a skill action returns `ok` and `message`
-  but no visible output is published.
+- [x] `[must]` Add diagnostics when a skill action returns `ok` and `message`
+  but no visible output is published. Dialog tool dispatch now probes
+  `io.out.chat.append` during the skill call and records
+  `materialized` / `unmaterialized` plus renderer diagnostics in
+  `TurnTrace` and `data.dialog.last_turn_trace`.
 - [x] `[must]` Add tests for `conversation.start` from Voice producing a
   visible reply and activating the companion dialog channel.
 - [x] `[must]` Add `turn_trace_id` to the Voice compatibility path and preserve
