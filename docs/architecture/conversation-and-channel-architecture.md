@@ -1603,18 +1603,32 @@ depth across several phases.
 
 ### Phase 2. Retrieval and Context Packets
 
-- [ ] `[must]` Implement budgeted context assembly:
-  recent turns + relevant segments + memory items + evidence refs.
-- [ ] `[must]` Add strict token/message/time budgets and deterministic fallback
-  when FTS, summaries, or model-backed retrieval are unavailable.
-- [ ] `[must]` Implement cross-owner memory reuse as deny-by-default.
-- [ ] `[must]` Attach source refs, confidence, consent, and visibility to
-  memory items.
-- [ ] `[must]` Add a memory-write policy that distinguishes immediate
+- [x] `[must]` Implement budgeted context assembly:
+  recent turns + relevant segments + memory items + evidence refs. First pass
+  is `adaos.services.conversation_context.build_context_packet(...)`: it
+  assembles recent ledger messages, node-local memory items, evidence refs, and
+  explicit diagnostics; segment summaries are represented as an unavailable
+  deterministic fallback until Phase 2 `should` indexing lands.
+- [x] `[must]` Add strict token/message/time budgets and deterministic fallback
+  when FTS, summaries, or model-backed retrieval are unavailable. Context
+  packets use local token estimation, bounded message/memory counts, a time
+  budget, and stable fallback markers (`fts_unavailable`,
+  `summaries_unavailable`, `semantic_retrieval_unavailable`).
+- [x] `[must]` Implement cross-owner memory reuse as deny-by-default. Context
+  assembly refuses `memory_owner != requester_owner` unless the caller passes
+  an explicit policy override.
+- [x] `[must]` Attach source refs, confidence, consent, and visibility to
+  memory items. Memory rows expose `source_ref`, `confidence`,
+  `consent_state`, and policy-derived `visibility` in store, SDK, and context
+  packets.
+- [x] `[must]` Add a memory-write policy that distinguishes immediate
   conversation facts, skill-scoped preferences, agent-scoped preferences, and
-  global reusable user memory.
-- [ ] `[should]` Add retrieval diagnostics: selected sources, skipped sources,
-  estimated tokens, latency, and policy denials.
+  global reusable user memory. `memory.write_policy(...)` maps these classes to
+  canonical `conversation`, `skill_user`, `agent_user`, and `global_user`
+  scopes with default consent and reuse policies.
+- [x] `[should]` Add retrieval diagnostics: selected sources, skipped sources,
+  estimated tokens, latency, and policy denials. First pass diagnostics are
+  embedded in every context packet; richer scoring waits for FTS/summary work.
 - [ ] `[should]` Add summary compaction for long conversations without losing
   message range refs.
 - [ ] `[should]` Add golden retrieval tests for long companion, Builder, and

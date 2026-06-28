@@ -925,6 +925,7 @@ def remember(
     value: Mapping[str, Any] | None = None,
     confidence: float | None = None,
     consent_state: str = "unknown",
+    visibility: str | None = None,
     policy: Mapping[str, Any] | None = None,
     source_ref: Mapping[str, Any] | None = None,
     retention_class: str = "normal",
@@ -938,6 +939,10 @@ def remember(
         return None
     mid = _normalize_id(memory_id, "mem")
     now = time.time()
+    stored_policy = dict(policy or {})
+    clean_visibility = str(visibility or stored_policy.get("visibility") or "").strip()
+    if clean_visibility:
+        stored_policy["visibility"] = clean_visibility
     with _sql().connect() as con:  # type: ignore[union-attr]
         con.execute(
             """
@@ -980,7 +985,7 @@ def remember(
                 str(redaction_state or "active").strip() or "active",
                 redacted_at,
                 str(redaction_reason or "").strip() or None,
-                _json_dump(dict(policy or {})),
+                _json_dump(stored_policy),
                 _json_dump(dict(source_ref or {})),
                 now,
                 now,
@@ -1025,6 +1030,9 @@ def list_memory(
         ).fetchall()
     result = []
     for row in rows:
+        policy = _json_load(row["policy_json"], {})
+        if not isinstance(policy, dict):
+            policy = {}
         result.append(
             {
                 "id": row["memory_id"],
@@ -1041,7 +1049,8 @@ def list_memory(
                 "redaction_state": row["redaction_state"],
                 "redacted_at": row["redacted_at"],
                 "redaction_reason": row["redaction_reason"],
-                "policy": _json_load(row["policy_json"], {}),
+                "visibility": str(policy.get("visibility") or "owner_only"),
+                "policy": policy,
                 "source_ref": _json_load(row["source_ref_json"], {}),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],

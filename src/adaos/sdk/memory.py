@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from adaos.services import conversation_store
+from adaos.services import conversation_context, conversation_store
 
 
 def remember(
@@ -15,6 +15,7 @@ def remember(
     value: Mapping[str, Any] | None = None,
     confidence: float | None = None,
     consent_state: str = "unknown",
+    visibility: str | None = None,
     policy: Mapping[str, Any] | None = None,
     source_ref: Mapping[str, Any] | None = None,
     retention_class: str = "normal",
@@ -32,6 +33,7 @@ def remember(
         value=value,
         confidence=confidence,
         consent_state=consent_state,
+        visibility=visibility,
         policy=policy,
         source_ref=source_ref,
         retention_class=retention_class,
@@ -50,3 +52,22 @@ def list(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     return conversation_store.list_memory(scope=scope, owner=owner, subject_id=subject_id, limit=limit)
+
+
+def write_policy(
+    kind: conversation_context.MemoryWriteKind,
+    *,
+    owner: str,
+    conversation_id: str | None = None,
+    agent_id: str | None = None,
+    consent_state: str | None = None,
+    visibility: str | None = None,
+) -> dict[str, Any]:
+    return conversation_context.memory_write_policy(
+        kind,
+        owner=owner,
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+        consent_state=consent_state,
+        visibility=visibility,
+    )

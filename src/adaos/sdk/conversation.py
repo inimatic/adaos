@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from adaos.services import conversation_store
+from adaos.services import conversation_context, conversation_store
 from adaos.services.yjs.webspace import default_webspace_id
 
 
@@ -98,4 +98,28 @@ def get(conversation_id: str, *, before_cursor: Any = None, limit: int = 50) -> 
         before_cursor=before_cursor,
         limit=limit,
         max_items=max(limit, 200),
+    )
+
+
+def context(
+    conversation_id: str,
+    *,
+    requester_owner: str,
+    channel_id: str | None = None,
+    agent_id: str | None = None,
+    memory_owner: str | None = None,
+    include_global_user: bool = True,
+    allow_cross_owner_memory: bool = False,
+    budgets: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a budgeted conversation context packet for LLM/runtime calls."""
+    return conversation_context.build_context_packet(
+        conversation_id=conversation_id,
+        requester_owner=requester_owner,
+        channel_id=channel_id,
+        agent_id=agent_id,
+        memory_owner=memory_owner,
+        include_global_user=include_global_user,
+        allow_cross_owner_memory=allow_cross_owner_memory,
+        budgets=budgets,
     )
