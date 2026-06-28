@@ -227,7 +227,7 @@ async def test_teacher_bridge_keeps_transient_provider_failure_teachable_when_ot
 async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services import conversation_links, conversation_store
-    from adaos.services.nlu import teacher_bridge
+    from adaos.services.nlu import teacher_bridge, teacher_events
     from adaos.services.yjs.doc import async_get_ydoc
 
     ctx = get_ctx()
@@ -277,10 +277,30 @@ async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
         thread_id=items[-1]["conversation_ref"]["thread_id"],
         limit=5,
     )
-    assert projection["messages"][-1]["text"] == "bring up the operations console"
-    assert projection["messages"][-1]["thread_id"] == items[-1]["conversation_ref"]["thread_id"]
-    assert projection["messages"][-1]["id"] == items[-1]["source_message_id"]
+    source_messages = [item for item in projection["messages"] if item.get("id") == items[-1]["source_message_id"]]
+    assert source_messages
+    assert source_messages[-1]["text"] == "bring up the operations console"
+    assert source_messages[-1]["thread_id"] == items[-1]["conversation_ref"]["thread_id"]
     assert events[-1]["kind"] == "not_obtained"
+
+    rebuilt = teacher_events.rebuild_teacher_projection_from_ledger(webspace_id)
+    rebuilt_items = [item for item in rebuilt.get("items") or [] if item.get("text") == "bring up the operations console"]
+    assert len(rebuilt_items) == 1
+    assert rebuilt_items[0]["source_message_id"] == items[-1]["source_message_id"]
+    assert any(event.get("kind") == "not_obtained" for event in rebuilt.get("events") or [])
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {})
+
+    projected = await teacher_events.write_teacher_projection_from_ledger(webspace_id)
+    assert projected["projection_source"]["kind"] == "conversation_ledger"
+    assert projected["items"][-1]["text"] == "bring up the operations console"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        restored = ydoc.get_map("data").get("nlu_teacher") or {}
+    assert restored["items"][-1]["text"] == "bring up the operations console"
+    assert restored["threads_by_request"]
 
 
 @pytest.mark.anyio

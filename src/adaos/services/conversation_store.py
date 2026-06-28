@@ -1180,6 +1180,38 @@ def list_projection(
     }
 
 
+def list_messages(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    limit: int = 500,
+    ascending: bool = True,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    safe_limit = max(1, min(int(limit or 500), 5000))
+    thread_filter = str(thread_id or "").strip()
+    where = "conversation_id=?"
+    params: list[Any] = [conversation_id]
+    if thread_filter:
+        where += " AND thread_id=?"
+        params.append(thread_filter)
+    order = "ASC" if ascending else "DESC"
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_messages
+            WHERE {where}
+            ORDER BY seq {order}
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        ).fetchall()
+    return [_row_to_message(row) for row in rows]
+
+
 def remember(
     *,
     scope: str,

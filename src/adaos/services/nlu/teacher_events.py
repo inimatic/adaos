@@ -206,6 +206,149 @@ def _compact_event_raw_for_thread(event: Mapping[str, Any]) -> Any:
     return raw
 
 
+def _append_unique(items: list[dict[str, Any]], item: Mapping[str, Any], *, fallback_key: str = "") -> None:
+    next_item = dict(item)
+    key = str(next_item.get("source_message_id") or next_item.get("id") or fallback_key or "").strip()
+    if key:
+        for index, existing in enumerate(items):
+            existing_key = str(existing.get("source_message_id") or existing.get("id") or "").strip()
+            if existing_key == key:
+                items[index] = {**existing, **next_item}
+                return
+    items.append(next_item)
+
+
+def _teacher_item_from_ledger_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
+    payload = coerce_dict(message)
+    kind = str(payload.get("kind") or "").strip()
+    if kind.startswith("event."):
+        return None
+    if kind not in {"not_obtained", "not_obtained.skipped"}:
+        return None
+    meta = coerce_dict(payload.get("_meta"))
+    classification = coerce_dict(payload.get("classification"))
+    source_message_id = str(payload.get("id") or payload.get("message_id") or "").strip()
+    try:
+        ts = float(payload.get("ts") or payload.get("created_at") or time.time())
+    except Exception:
+        ts = time.time()
+    return {
+        "id": str(payload.get("item_id") or f"teach.ledger.{source_message_id or int(ts * 1000)}"),
+        "ts": ts,
+        "text": str(payload.get("text") or "").strip(),
+        "reason": payload.get("reason"),
+        "via": payload.get("via"),
+        "request_id": payload.get("request_id"),
+        "classification": classification,
+        "status": "pending" if classification.get("teachable") else "skipped",
+        "conversation_ref": coerce_dict(meta.get("conversation_ref")),
+        "source_message_id": source_message_id or None,
+        "_meta": meta,
+    }
+
+
+def _event_from_ledger_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
+    payload = coerce_dict(message)
+    embedded = coerce_dict(payload.get("event"))
+    if embedded:
+        event = dict(embedded)
+        event.setdefault("id", f"evt.ledger.{payload.get('id') or payload.get('message_id') or int(time.time() * 1000)}")
+        event.setdefault("ts", payload.get("ts") or time.time())
+        event.setdefault("webspace_id", payload.get("webspace_id"))
+        event.setdefault("request_id", payload.get("request_id"))
+        event.setdefault("request_text", payload.get("text"))
+        meta = coerce_dict(event.get("_meta"))
+        meta.setdefault("ledger_message_id", payload.get("id") or payload.get("message_id"))
+        event["_meta"] = meta
+        return event
+
+    item = _teacher_item_from_ledger_message(message)
+    if not item:
+        return None
+    kind = "not_obtained" if item.get("status") == "pending" else "not_obtained.skipped"
+    return {
+        "id": f"evt.ledger.{item.get('source_message_id') or item.get('id')}",
+        "ts": item.get("ts"),
+        "webspace_id": payload.get("webspace_id"),
+        "request_id": item.get("request_id"),
+        "request_text": item.get("text"),
+        "kind": kind,
+        "title": "Intent not obtained" if kind == "not_obtained" else "Teacher skipped",
+        "subtitle": str(item.get("reason") or "").strip(),
+        "raw": dict(item),
+        "_meta": {**coerce_dict(item.get("_meta")), "ledger_message_id": item.get("source_message_id")},
+    }
+
+
+def _accumulate_event_projection(teacher: dict[str, Any], event: Mapping[str, Any]) -> None:
+    kind = str(event.get("kind") or "").strip()
+    raw = coerce_dict(event.get("raw"))
+    if kind in {"not_obtained", "not_obtained.skipped"} and raw:
+        item = dict(raw)
+        item.setdefault("status", "pending" if kind == "not_obtained" else "skipped")
+        _append_unique(teacher.setdefault("items", []), item, fallback_key=str(event.get("id") or ""))
+    if kind in {"candidate.proposed", "candidate.applied"} and raw:
+        _append_unique(teacher.setdefault("candidates", []), raw, fallback_key=str(event.get("id") or ""))
+    if kind in {"revision.proposed", "revision.suggested", "revision.applied"} and raw:
+        _append_unique(teacher.setdefault("revisions", []), raw, fallback_key=str(event.get("id") or ""))
+    if kind.startswith("llm.") and raw:
+        log = dict(raw)
+        if "id" not in log and log.get("log_id"):
+            log["id"] = log.get("log_id")
+        _append_unique(teacher.setdefault("llm_logs", []), log, fallback_key=str(event.get("id") or ""))
+
+
+def rebuild_teacher_projection_from_ledger(webspace_id: str, *, limit: int = 1000) -> dict[str, Any]:
+    from adaos.services import conversation_links, conversation_store
+
+    conversation_id = conversation_links.teacher_conversation_id(webspace_id)
+    messages = conversation_store.list_messages(conversation_id, limit=limit, ascending=True)
+    teacher: dict[str, Any] = {
+        "items": [],
+        "events": [],
+        "candidates": [],
+        "revisions": [],
+        "llm_logs": [],
+        "projection_source": {
+            "kind": "conversation_ledger",
+            "conversation_id": conversation_id,
+            "message_count": len(messages),
+        },
+    }
+    for message in messages:
+        item = _teacher_item_from_ledger_message(message)
+        if item:
+            _append_unique(teacher["items"], item, fallback_key=str(message.get("id") or ""))
+        event = _event_from_ledger_message(message)
+        if event:
+            _append_unique(teacher["events"], event, fallback_key=str(message.get("id") or ""))
+            _accumulate_event_projection(teacher, event)
+
+    for key in ("items", "events", "candidates", "revisions", "llm_logs"):
+        teacher[key] = sorted(
+            [dict(item) for item in iter_mappings(teacher.get(key))],
+            key=lambda item: float(item.get("ts") or item.get("created_at") or 0.0),
+        )
+    rebuild_events_by_candidate(teacher)
+    return teacher
+
+
+async def write_teacher_projection_from_ledger(webspace_id: str, *, limit: int = 1000) -> dict[str, Any]:
+    teacher = rebuild_teacher_projection_from_ledger(webspace_id, limit=limit)
+    async with _nlu_teacher_events_write_meta():
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+            data_map = ydoc.get_map("data")
+            with ydoc.begin_transaction() as txn:
+                data_map.set(txn, "nlu_teacher", teacher)
+    try:
+        from adaos.services.nlu.teacher_store import save_teacher_state
+
+        save_teacher_state(webspace_id=webspace_id, teacher=teacher)
+    except Exception:
+        pass
+    return teacher
+
+
 def _thread_log_text(
     *,
     request_id: str,
@@ -756,3 +899,20 @@ async def append_event(webspace_id: str, event: Mapping[str, Any]) -> None:
             save_teacher_state(webspace_id=webspace_id, teacher=next_teacher)
         except Exception:
             pass
+    try:
+        from adaos.services import conversation_links
+
+        event_dict = dict(event)
+        raw = coerce_dict(event_dict.get("raw"))
+        candidate_id = raw.get("id") if str(event_dict.get("kind") or "").startswith("candidate.") else event_dict.get("candidate_id")
+        conversation_links.append_teacher_event_message(
+            webspace_id=webspace_id,
+            text=str(event_dict.get("request_text") or event_dict.get("title") or event_dict.get("kind") or "NLU Teacher event"),
+            request_id=event_dict.get("request_id") if isinstance(event_dict.get("request_id"), str) else None,
+            candidate_id=candidate_id if isinstance(candidate_id, str) else None,
+            kind=f"event.{event_dict.get('kind') or 'teacher'}",
+            payload={"event": event_dict},
+            meta=coerce_dict(event_dict.get("_meta")),
+        )
+    except Exception:
+        pass

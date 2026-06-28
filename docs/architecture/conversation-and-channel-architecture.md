@@ -1808,9 +1808,13 @@ Important lacunae found during Phase 4/5 implementation:
 
 Important lacunae found during Phase 6 implementation:
 
-- [ ] `[must]` Make the NLU Teacher read model reconstructable from
+- [x] `[must]` Make the NLU Teacher read model reconstructable from
   `kind=teacher` ledger records, then treat `data.nlu_teacher` as a projection
-  rather than a second source of truth.
+  rather than a second source of truth. Teacher events are now mirrored into
+  the canonical teacher conversation ledger, and
+  `write_teacher_projection_from_ledger()` can rebuild `data.nlu_teacher`
+  threads, workbench signals, items, candidates, revisions, and LLM logs from
+  ledger messages.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a
