@@ -769,6 +769,87 @@ async def test_voice_chat_user_defaults_history_to_local_node_when_target_missin
     assert "suppress_teacher_bridge" not in seen_nlu[0].payload["_meta"]
 
 
+async def test_dialog_user_message_uses_voice_compatibility_route(monkeypatch) -> None:
+    class _Txn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Map(dict):
+        def set(self, txn, key, value):  # noqa: ARG002
+            self[key] = value
+
+        def to_json(self):
+            return dict(self)
+
+    class _Doc:
+        def __init__(self) -> None:
+            self._maps = {"data": _Map()}
+
+        def get_map(self, name: str):
+            return self._maps.setdefault(name, _Map())
+
+        def begin_transaction(self):
+            return _Txn()
+
+    class _AsyncDoc:
+        async def __aenter__(self):
+            return doc
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _MetaCtx:
+        async def __aenter__(self):
+            return {}
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    doc = _Doc()
+    bus = LocalEventBus()
+    seen_nlu: list[Event] = []
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc())
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="dialog.user_message",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "weather in Moscow",
+                "webspace_id": "desktop",
+                "_meta": {"route_id": "voice_chat", "dialog_channel_id": "general"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    messages = doc.get_map("data")["nodes"]["hub-node"]["voice_chat"]["messages"]
+    assert len(messages) == 1
+    assert messages[0]["from"] == "user"
+    assert messages[0]["text"] == "weather in Moscow"
+    assert messages[0]["_meta"]["dialog_event_kind"] == "dialog.user_message"
+    assert seen_nlu
+    assert seen_nlu[0].payload["_meta"]["route_id"] == "voice_chat"
+    assert seen_nlu[0].payload["_meta"]["dialog_channel_id"] == "general"
+    assert seen_nlu[0].payload["_meta"]["dialog_event_kind"] == "dialog.user_message"
+    assert seen_nlu[0].payload["_meta"]["canonical_event_kind"] == "dialog.user_message"
+    assert seen_nlu[0].payload["_meta"]["input_event_kind"] == "dialog.user_message"
+
+
 async def test_voice_chat_confirmation_answer_is_not_routed_to_nlu(monkeypatch) -> None:
     class _Txn:
         def __enter__(self):

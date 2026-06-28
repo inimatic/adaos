@@ -50,6 +50,8 @@ GENERAL_DIALOG_AGENT_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "Ада")
 GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
 GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
+DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
+VOICE_CHAT_USER_EVENT = "voice.chat.user"
 VOICE_CHAT_VISIBLE_TAIL = 8
 VOICE_CHAT_HISTORY_LIMIT = 200
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
@@ -1762,6 +1764,23 @@ class RouterService:
                     "requested_channel": str(meta.get("dialog_channel_id") or "").strip(),
                     "target_node_id": str(target_node_id or meta.get("target_node_id") or "").strip(),
                 }
+                dialog_event_kind = str(
+                    meta.get("dialog_event_kind")
+                    or meta.get("canonical_event_kind")
+                    or meta.get("input_event_kind")
+                    or ""
+                ).strip()
+                input_event_kind = str(meta.get("input_event_kind") or "").strip()
+                if dialog_event_kind:
+                    policy["dialog_event_kind"] = dialog_event_kind
+                elif route_id == "voice_chat":
+                    policy["dialog_event_kind"] = DIALOG_USER_MESSAGE_EVENT
+                    policy["compat_source_event"] = VOICE_CHAT_USER_EVENT
+                if input_event_kind:
+                    policy["input_event_kind"] = input_event_kind
+                compat_source_event = str(meta.get("compat_source_event") or "").strip()
+                if compat_source_event:
+                    policy["compat_source_event"] = compat_source_event
                 if meta.get("original_text") or meta.get("autocorrected_text"):
                     policy["text_correction"] = {
                         "original": meta.get("original_text"),
@@ -3946,13 +3965,14 @@ class RouterService:
             if not isinstance(text, str) or not text.strip():
                 return
             text = text.strip()
+            event_kind = str(getattr(ev, "type", "") or VOICE_CHAT_USER_EVENT).strip() or VOICE_CHAT_USER_EVENT
 
             try:
-                self._vlog.info("voice.chat.user received webspace=%s text=%r", ws, text)
+                self._vlog.info("%s received webspace=%s text=%r", event_kind, ws, text)
             except Exception:
                 pass
             try:
-                logging.getLogger("adaos.router.voice_chat").info("voice.chat.user -> append+nlp webspace=%s", ws)
+                logging.getLogger("adaos.router.voice_chat").info("%s -> append+nlp webspace=%s", event_kind, ws)
             except Exception:
                 pass
 
@@ -3960,6 +3980,10 @@ class RouterService:
             target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=True)
 
             meta = {**meta, "webspace_id": ws}
+            if event_kind == DIALOG_USER_MESSAGE_EVENT:
+                meta.setdefault("dialog_event_kind", DIALOG_USER_MESSAGE_EVENT)
+                meta.setdefault("canonical_event_kind", DIALOG_USER_MESSAGE_EVENT)
+                meta.setdefault("input_event_kind", DIALOG_USER_MESSAGE_EVENT)
             if len(target_webspaces) > 1:
                 meta["webspace_ids"] = list(target_webspaces)
             if target_node_id:
@@ -4555,6 +4579,7 @@ class RouterService:
 
         self.bus.subscribe("voice.chat.open", _on_voice_open)
         self.bus.subscribe("voice.chat.user", _on_voice_user)
+        self.bus.subscribe("dialog.user_message", _on_voice_user)
         self.bus.subscribe("dialog.channel.select", _on_dialog_channel_select)
         self.bus.subscribe("dialog.channel.activated", _on_dialog_channel_event)
         self.bus.subscribe("dialog.channel.deactivated", _on_dialog_channel_event)

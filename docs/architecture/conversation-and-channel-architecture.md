@@ -29,9 +29,10 @@ Implemented today:
 
 - `voice_chat_skill` declares the browser Voice app and a `voice_chat.messages`
   WebIO stream.
-- `RouterService` receives `voice.chat.user`, appends the user message to the
-  node-local conversation ledger, projects a compact Voice tail, and normally
-  emits `nlp.intent.detect.request`.
+- `RouterService` receives neutral `dialog.user_message` input and legacy
+  `voice.chat.user` input, appends the user message to the node-local
+  conversation ledger, projects a compact Voice tail, and normally emits
+  `nlp.intent.detect.request`.
   When a process-local dialog channel is active, Router delegates the turn to
   that channel owner before NLU/Teacher fallback.
 - `RouterService` receives `io.out.chat.append`, stores the message in the
@@ -1440,7 +1441,7 @@ Priority markers:
 This is the first practical slice. It validates the architecture with minimal
 depth across several phases.
 
-- [ ] `[must]` Keep the current Voice UI usable while adding neutral
+- [x] `[must]` Keep the current Voice UI usable while adding neutral
   `dialog.user_message` semantics behind it.
 - [x] `[must]` Preserve `dialog_channel_id`, `conversation_id`, `request_id`,
   `turn_trace_id`, and transport metadata through NLU and skill dispatch.
@@ -1549,8 +1550,11 @@ depth across several phases.
   calls.
 - [x] `[must]` Preserve current `dialog_channel_id` through the Voice
   compatibility Dialog Runtime and skill tool calls.
-- [ ] `[must]` Preserve future canonical dialog metadata through neutral
-  `dialog.*` events, NLU evidence, and skill tool calls.
+- [x] `[must]` Preserve future canonical dialog metadata through neutral
+  `dialog.*` events, NLU evidence, and skill tool calls. The first
+  implementation keeps `route_id=voice_chat` as the compatibility route while
+  carrying `dialog_event_kind`, `canonical_event_kind`, and
+  `input_event_kind=dialog.user_message`.
 - [ ] `[must]` Add diagnostics when a skill action returns `ok` and `message`
   but no visible output is published.
 - [x] `[must]` Add tests for `conversation.start` from Voice producing a
@@ -1638,9 +1642,9 @@ depth across several phases.
 
 ### Phase 4. Transport and Global Dialog Integration
 
-- [ ] `[must]` Make Voice/browser typed input resolve to conversations before
-  NLU or skill dispatch.
-- [ ] `[must]` Convert `voice.chat.user` into a compatibility alias for neutral
+- [x] `[must]` Make Voice/browser typed input resolve to conversations before
+  NLU or skill dispatch in the Voice compatibility path.
+- [x] `[must]` Convert `voice.chat.user` into a compatibility alias for neutral
   `dialog.user_message`.
 - [ ] `[must]` Add active dialog-channel registry per webspace.
 - [x] `[must]` Add browser channel selector support for `general` and

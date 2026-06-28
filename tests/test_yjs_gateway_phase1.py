@@ -1601,6 +1601,44 @@ def test_process_events_command_preserves_target_node_for_voice_chat(monkeypatch
     gateway_module._COMMAND_TRACE_SEQ = 0
 
 
+def test_process_events_command_publishes_neutral_dialog_user_message(monkeypatch) -> None:
+    published: list[object] = []
+    responses: list[dict[str, object]] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: SimpleNamespace(bus=_Bus()))
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="dialog.user_message",
+            cmd_id="cmd-dialog-1",
+            payload={"text": "hello", "node_id": "member-01", "webspace_id": "desktop"},
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert len(published) == 1
+    event = published[0]
+    assert getattr(event, "type", "") == "dialog.user_message"
+    payload = getattr(event, "payload", {})
+    assert payload["text"] == "hello"
+    assert payload["target_node_id"] == "member-01"
+    assert payload["_meta"]["target_node_id"] == "member-01"
+    assert payload["_meta"]["dialog_event_kind"] == "dialog.user_message"
+    assert payload["_meta"]["canonical_event_kind"] == "dialog.user_message"
+    assert payload["_meta"]["input_event_kind"] == "dialog.user_message"
+    assert responses[-1]["ok"] is True
+    gateway_module._COMMAND_TRACE_SEQ = 0
+
+
 def test_process_events_command_publishes_pending_action_directly(monkeypatch) -> None:
     responses: list[dict[str, object]] = []
     calls: list[dict[str, object]] = []

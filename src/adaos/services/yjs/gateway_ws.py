@@ -6294,11 +6294,17 @@ async def process_events_command(
         await _ack()
         return None
 
-    if kind == "voice.chat.user":
+    if kind in {"voice.chat.user", "dialog.user_message"}:
         event_payload = dict(payload or {})
         event_payload["text"] = payload.get("text")
         event_payload["webspace_id"] = payload.get("webspace_id")
-        _publish_bus("voice.chat.user", event_payload)
+        if kind == "dialog.user_message":
+            meta = dict(event_payload.get("_meta") or {})
+            meta.setdefault("dialog_event_kind", "dialog.user_message")
+            meta.setdefault("canonical_event_kind", "dialog.user_message")
+            meta.setdefault("input_event_kind", "dialog.user_message")
+            event_payload["_meta"] = meta
+        _publish_bus(kind, event_payload)
         await _ack()
         return None
 
