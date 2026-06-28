@@ -109,7 +109,7 @@ async def test_ui_runtime_diagnostics_preserve_unattributed_fallback_log_name(tm
 
 
 @pytest.mark.asyncio
-async def test_ui_runtime_diagnostics_drop_noisy_runtime_debug_webio_events(tmp_path: Path) -> None:
+async def test_ui_runtime_diagnostics_drop_noisy_runtime_debug_events(tmp_path: Path) -> None:
     paths = PathProvider(tmp_path)
     paths.ensure_tree()
     set_ctx(SimpleNamespace(paths=paths, skill_ctx=InprocSkillContext()))
@@ -132,6 +132,34 @@ async def test_ui_runtime_diagnostics_drop_noisy_runtime_debug_webio_events(tmp_
                                     "receiver": "slideshow_skill.session",
                                     "topic": "webio.stream.desktop.slideshow_skill.session",
                                 },
+                            }
+                        },
+                    },
+                    {
+                        "level": "info",
+                        "source": "ui.runtime_debug",
+                        "code": "webio.subscribe",
+                        "message": "webio.subscribe",
+                        "details": {
+                            "runtime_debug": {
+                                "kind": "webio.subscribe",
+                                "session_id": "brs-1",
+                                "tab_id": "tab-1",
+                                "details": {"receiver": "voice_chat.messages"},
+                            }
+                        },
+                    },
+                    {
+                        "level": "info",
+                        "source": "ui.runtime_debug",
+                        "code": "yjs.provider.status",
+                        "message": "yjs.provider.status",
+                        "details": {
+                            "runtime_debug": {
+                                "kind": "yjs.provider.status",
+                                "session_id": "brs-1",
+                                "tab_id": "tab-1",
+                                "details": {"path": "yws", "status": "connected"},
                             }
                         },
                     },

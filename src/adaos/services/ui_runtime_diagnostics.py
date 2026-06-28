@@ -71,9 +71,36 @@ def _should_persist_event(event: Mapping[str, Any]) -> bool:
     source = str(event.get("source") or "").strip()
     code = str(event.get("code") or "").strip()
     level = str(event.get("level") or "").strip().upper()
-    if source == "ui.runtime_debug" and code == "webio.event" and level == "DEBUG":
-        return False
-    return True
+    if source != "ui.runtime_debug":
+        return True
+    if code == "runtime_debug.cursor":
+        return True
+    if level in {"WARNING", "ERROR"}:
+        return True
+    if code in {
+        "control_ws.closed",
+        "yjs.provider.connection_close",
+        "yjs.materialization.degraded",
+        "yjs.materialization.empty_ui",
+    }:
+        return True
+    if code == "http.response" and _runtime_debug_http_response_is_notable(event):
+        return True
+    return False
+
+
+def _runtime_debug_http_response_is_notable(event: Mapping[str, Any]) -> bool:
+    details = _coerce_dict(event.get("details"))
+    runtime_debug = _coerce_dict(details.get("runtime_debug"))
+    runtime_details = _coerce_dict(runtime_debug.get("details"))
+    status = _int_or_none(runtime_details.get("status"))
+    duration_ms = _float_or_none(runtime_details.get("duration_ms"))
+    path = str(runtime_details.get("path") or "").strip()
+    if status is not None and status >= 400:
+        return True
+    if duration_ms is not None and duration_ms >= 2_000:
+        return True
+    return path == "/api/tools/call" or path.startswith("/api/node/infrastate/")
 
 
 async def _normalize_event(raw: Mapping[str, Any], *, webspace_id: str) -> dict[str, Any] | None:
@@ -337,6 +364,20 @@ def _first_string(*values: Any) -> str | None:
         if token:
             return token
     return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _detail_value(details: Mapping[str, Any], key: str) -> Any:
