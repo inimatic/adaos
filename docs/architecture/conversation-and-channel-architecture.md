@@ -1860,6 +1860,10 @@ Important lacunae found during Phase 6 implementation:
 - [x] `[must]` Update SDK IO docs to make conversation/memory APIs the default
   path. The LLM skill guide and WebIO overview now direct generated skills to
   `chat.send`, response envelopes, and scoped memory helpers.
+- [x] `[must]` Keep agent/channel handoff from blocking semantic routing on
+  UI projection writes. Addressing the core `general` agent now deactivates
+  the skill-owned channel and forwards the remaining text to NLU before
+  waiting on compatibility Voice tail materialization.
 - [ ] `[should]` Retire direct writes to transport-specific chat projections.
 - [ ] `[should]` Add export/delete/redaction flows for conversation and memory
   records.

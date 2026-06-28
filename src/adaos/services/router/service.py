@@ -4782,21 +4782,28 @@ class RouterService:
                         reason="general_agent_address",
                     )
                     try:
-                        await _append_voice_chat_message(
-                            ws,
-                            {
-                                "id": _make_id("m"),
-                                "from": "hub",
-                                "text": _general_agent_transition_text(text),
-                                "ts": time.time(),
-                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
-                                "active_agent_gender": "female",
-                                "active_agent_voice": "ru-female",
-                                "active_agent_icon": _general_agent_projection().get("icon"),
-                                "_meta": dict(meta),
-                            },
-                            target_node_id,
+                        transition_msg = {
+                            "id": _make_id("m"),
+                            "from": "hub",
+                            "text": _general_agent_transition_text(text),
+                            "ts": time.time(),
+                            "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+                            "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
+                            "active_agent_gender": "female",
+                            "active_agent_voice": "ru-female",
+                            "active_agent_icon": _general_agent_projection().get("icon"),
+                            "_meta": dict(meta),
+                        }
+                        self.bus.publish(
+                            Event(
+                                type="io.out.chat.append",
+                                source="router.voice",
+                                ts=time.time(),
+                                payload={
+                                    **transition_msg,
+                                    "_meta": {**dict(meta), "route_id": "voice_chat"},
+                                },
+                            )
                         )
                     except Exception:
                         pass
@@ -4806,11 +4813,11 @@ class RouterService:
                 meta["active_agent_gender"] = "female"
                 meta["active_agent_voice"] = "ru-female"
                 meta["active_agent_icon"] = _general_agent_projection().get("icon")
-                try:
-                    await _write_dialog_state(ws, event="general_agent_addressed")
-                except Exception:
-                    pass
                 if not addressed_general_text:
+                    try:
+                        await _write_dialog_state(ws, event="general_agent_addressed")
+                    except Exception:
+                        pass
                     try:
                         await _append_voice_chat_message(
                             ws,
@@ -4836,6 +4843,10 @@ class RouterService:
                         pass
                     return
                 if _is_agent_roster_question(addressed_general_text):
+                    try:
+                        await _write_dialog_state(ws, event="general_agent_addressed")
+                    except Exception:
+                        pass
                     _record_voice_turn_trace(
                         ws,
                         meta,
