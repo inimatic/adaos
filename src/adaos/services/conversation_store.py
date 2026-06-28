@@ -61,6 +61,22 @@ _SCHEMA = (
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS conversation_dialog_frames (
+        webspace_id TEXT PRIMARY KEY,
+        frame_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'slot_collection',
+        state TEXT NOT NULL DEFAULT 'collecting',
+        owner TEXT,
+        conversation_id TEXT,
+        slots_json TEXT NOT NULL DEFAULT '{}',
+        required_slots_json TEXT NOT NULL DEFAULT '[]',
+        validation_json TEXT NOT NULL DEFAULT '{}',
+        policy_json TEXT NOT NULL DEFAULT '{}',
+        updated_at REAL NOT NULL,
+        meta_json TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS conversation_agent_registry (
         agent_id TEXT PRIMARY KEY,
         label TEXT NOT NULL,
@@ -246,7 +262,16 @@ def ensure_schema(sql: Any | None = None) -> bool:
         return False
     token = id(sql)
     if token in _ENSURED_SQL_IDS:
-        return True
+        try:
+            with sql.connect() as con:
+                exists = con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_dialog_channels'"
+                ).fetchone()
+            if exists:
+                return True
+        except sqlite3.Error:
+            pass
+        _ENSURED_SQL_IDS.discard(token)
     with sql.connect() as con:
         try:
             con.execute("PRAGMA journal_mode=WAL")
@@ -612,6 +637,103 @@ def list_dialog_channels(webspace_id: str, *, include_inactive: bool = False) ->
         }
         for row in rows
     ]
+
+
+def upsert_dialog_frame(
+    *,
+    webspace_id: str,
+    frame_id: str,
+    kind: str = "slot_collection",
+    state: str = "collecting",
+    owner: str | None = None,
+    conversation_id: str | None = None,
+    slots: Mapping[str, Any] | None = None,
+    required_slots: list[str] | tuple[str, ...] = (),
+    validation: Mapping[str, Any] | None = None,
+    policy: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+    updated_at: float | None = None,
+) -> bool:
+    if not ensure_schema():
+        return False
+    now = float(updated_at or time.time())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.execute(
+            """
+            INSERT INTO conversation_dialog_frames(
+                webspace_id, frame_id, kind, state, owner, conversation_id,
+                slots_json, required_slots_json, validation_json, policy_json,
+                updated_at, meta_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(webspace_id) DO UPDATE SET
+                frame_id=excluded.frame_id,
+                kind=excluded.kind,
+                state=excluded.state,
+                owner=excluded.owner,
+                conversation_id=excluded.conversation_id,
+                slots_json=excluded.slots_json,
+                required_slots_json=excluded.required_slots_json,
+                validation_json=excluded.validation_json,
+                policy_json=excluded.policy_json,
+                updated_at=excluded.updated_at,
+                meta_json=excluded.meta_json
+            """,
+            (
+                webspace_id,
+                frame_id,
+                kind,
+                state,
+                owner,
+                conversation_id,
+                _json_dump(dict(slots or {})),
+                _json_dump([str(item) for item in required_slots if str(item or "").strip()]),
+                _json_dump(dict(validation or {})),
+                _json_dump(dict(policy or {})),
+                now,
+                _json_dump(dict(meta or {})),
+            ),
+        )
+        con.commit()
+    return True
+
+
+def get_dialog_frame(webspace_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM conversation_dialog_frames WHERE webspace_id=?",
+            (webspace_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "webspace_id": row["webspace_id"],
+        "frame_id": row["frame_id"],
+        "kind": row["kind"],
+        "state": row["state"],
+        "owner": row["owner"],
+        "conversation_id": row["conversation_id"],
+        "slots": _json_load(row["slots_json"], {}),
+        "required_slots": tuple(_json_load(row["required_slots_json"], [])),
+        "validation": _json_load(row["validation_json"], {}),
+        "policy": _json_load(row["policy_json"], {}),
+        "updated_at": row["updated_at"],
+        "meta": _json_load(row["meta_json"], {}),
+    }
+
+
+def clear_dialog_frame(webspace_id: str | None = None) -> int:
+    if not ensure_schema():
+        return 0
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        if webspace_id:
+            cur = con.execute("DELETE FROM conversation_dialog_frames WHERE webspace_id=?", (webspace_id,))
+        else:
+            cur = con.execute("DELETE FROM conversation_dialog_frames")
+        con.commit()
+        return int(cur.rowcount or 0)
 
 
 def set_active_dialog_channel(

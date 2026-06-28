@@ -684,6 +684,11 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
     assert builder_state.channel_id == "builder"
     assert builder_state.default_skill == "builder_skill"
     assert doc.get_map("data")["dialog"]["active_channel_id"] == "builder"
+    builder_row = conversation_store.get_dialog_channel(webspace_id, "builder")
+    assert builder_row is not None
+    assert builder_row["meta"]["manifest_validated"] is True
+    assert builder_row["meta"]["source"] == "skill:builder_skill.skill_yaml"
+    assert "dialog.visible_tail" in builder_row["meta"]["renderer_capabilities"]["targets"]
 
     bus.publish(
         Event(

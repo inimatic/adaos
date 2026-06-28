@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Any, Mapping
 
+from adaos.services import conversation_store
 from adaos.services.eventbus import emit as bus_emit
 
 
@@ -157,6 +158,10 @@ def reset_all() -> None:
     with _LOCK:
         _ACTIVE_BY_WEBSPACE.clear()
         _FRAMES_BY_WEBSPACE.clear()
+    try:
+        conversation_store.clear_dialog_frame()
+    except Exception:
+        pass
 
 
 def get_active_channel(webspace_id: str | None) -> DialogChannelState | None:
@@ -298,6 +303,22 @@ def set_active_frame(
     )
     with _LOCK:
         _FRAMES_BY_WEBSPACE[ws] = frame
+    try:
+        conversation_store.upsert_dialog_frame(
+            webspace_id=frame.webspace_id,
+            frame_id=frame.frame_id,
+            kind=frame.kind,
+            state=frame.state,
+            owner=frame.owner,
+            conversation_id=frame.conversation_id,
+            slots=frame.slots,
+            required_slots=frame.required_slots,
+            validation=frame.validation,
+            policy=frame.policy,
+            updated_at=frame.updated_at,
+        )
+    except Exception:
+        pass
     return DialogFrameState(**frame.as_dict())
 
 
@@ -305,13 +326,44 @@ def get_active_frame(webspace_id: str | None) -> DialogFrameState | None:
     ws = _webspace_id(webspace_id)
     with _LOCK:
         frame = _FRAMES_BY_WEBSPACE.get(ws)
-        return DialogFrameState(**frame.as_dict()) if frame is not None else None
+        if frame is not None:
+            return DialogFrameState(**frame.as_dict())
+    try:
+        row = conversation_store.get_dialog_frame(ws)
+    except Exception:
+        row = None
+    if not isinstance(row, Mapping):
+        return None
+    restored = DialogFrameState(
+        webspace_id=ws,
+        frame_id=_clean(row.get("frame_id")) or f"frame.{ws}",
+        kind=_clean(row.get("kind")) or "slot_collection",
+        state=_clean(row.get("state")) or "collecting",
+        owner=_clean(row.get("owner")) or None,
+        conversation_id=_clean(row.get("conversation_id")) or None,
+        slots=dict(row.get("slots") or {}),
+        required_slots=tuple(_clean(item) for item in row.get("required_slots") or () if _clean(item)),
+        validation=dict(row.get("validation") or {}),
+        policy=dict(row.get("policy") or {}),
+        updated_at=float(row.get("updated_at") or time.time()),
+    )
+    with _LOCK:
+        _FRAMES_BY_WEBSPACE[ws] = restored
+    return DialogFrameState(**restored.as_dict())
 
 
 def clear_active_frame(webspace_id: str | None) -> DialogFrameState | None:
     ws = _webspace_id(webspace_id)
     with _LOCK:
         frame = _FRAMES_BY_WEBSPACE.pop(ws, None)
+    if frame is None:
+        frame = get_active_frame(ws)
+        with _LOCK:
+            _FRAMES_BY_WEBSPACE.pop(ws, None)
+    try:
+        conversation_store.clear_dialog_frame(ws)
+    except Exception:
+        pass
     return DialogFrameState(**frame.as_dict()) if frame is not None else None
 
 

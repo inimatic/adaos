@@ -1753,13 +1753,23 @@ depth across several phases.
 
 Important lacunae found during Phase 4/5 implementation:
 
-- [ ] `[must]` Persist active `DialogFrame` state in the node DB before
-  enabling multi-process runtime or restart-resumable forms. The current
-  implementation is process-local and is acceptable only for the first
-  single-process runtime slice.
-- [ ] `[must]` Promote dynamic channel declarations from ad-hoc persisted
+- [x] `[must]` Persist active `DialogFrame` state in the node DB before
+  enabling multi-process runtime or restart-resumable forms. The runtime now
+  writes the active frame to `conversation_dialog_frames`, restores it after a
+  process-local cache loss, and clears the durable row when a frame completes
+  or is cancelled.
+- [x] `[must]` Promote dynamic channel declarations from ad-hoc persisted
   rows to manifest-backed validation, including owner, default tool, policy,
-  and renderer capabilities.
+  and renderer capabilities. The first implementation scans skill manifests
+  from the workspace and packaged templates, seeds node-local conversations and
+  dialog channels, and registers declared agents for addressed-name routing.
+- [ ] `[should]` Move addressed-agent payload forwarding policy into the skill
+  manifest. The compatibility slice keeps `conversation_companions` receiving
+  the original user text while Builder receives the command with the agent
+  address stripped.
+- [x] `[should]` Harden conversation-store schema initialization for local
+  debugging and runtime DB replacement. `ensure_schema()` now verifies the
+  marker dialog-channel table before trusting the process-local schema cache.
 - [ ] `[should]` Add a first-class policy inspector UI for the last turn:
   selected channel, selected agent, owner, fallback path, repair state,
   frame id, renderer, and memory scopes.

@@ -143,6 +143,73 @@ data_routes:
     first_paint: "deterministic onboarding, no LLM dependency"
     recovery: "reset_session clears local session state only"
     guard_visibility: "local skill state; no device-control side effects"
+conversation:
+  channels:
+    - id: conversational
+      label: Conversational
+      owner: skill:conversation_companions
+      route_id: voice_chat
+      default_tool: talk
+      history_policy: node_local
+      policy:
+        entry_intents:
+          - conversation.start
+          - conversation.talk
+          - conversation.switch_character
+        default_tool: conversation_companions.talk
+        fallback: ask_or_general
+  agents:
+    - id: agent:conversation_companions:arseni
+      label: "Арсений"
+      owner: skill:conversation_companions
+      kind: skill_agent
+      channel_id: conversational
+      skill: conversation_companions
+      talk_tool: talk
+      switch_tool: switch_character
+      character_id: arseni
+      gender: male
+      voice: ru-male
+      icon: male-outline
+      aliases:
+        - "Арсений"
+        - "Arseni"
+        - "Arseniy"
+        - "советник"
+        - "консультант"
+    - id: agent:conversation_companions:nika
+      label: "Ника"
+      owner: skill:conversation_companions
+      kind: skill_agent
+      channel_id: conversational
+      skill: conversation_companions
+      talk_tool: talk
+      switch_tool: switch_character
+      character_id: nika
+      gender: female
+      voice: ru-female
+      icon: female-outline
+      aliases:
+        - "Ника"
+        - "Nika"
+        - "скептик"
+    - id: agent:conversation_companions:mira
+      label: "Мира"
+      owner: skill:conversation_companions
+      kind: skill_agent
+      channel_id: conversational
+      skill: conversation_companions
+      talk_tool: talk
+      switch_tool: switch_character
+      character_id: mira
+      gender: female
+      voice: ru-female
+      icon: heart-circle-outline
+      aliases:
+        - "Мира"
+        - "Mira"
+        - "собеседник"
+        - "рассказчик"
 llm_hints:
   description: "Conversational character skill. It creates a low-friction first impression, helps users choose or tune a persona, and answers without device-control tools."
   aliases:

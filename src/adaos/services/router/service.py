@@ -262,37 +262,194 @@ def _fallback_agent_registry_records() -> list[dict[str, Any]]:
     return [dict(item) for item in _CONVERSATION_AGENT_REGISTRY]
 
 
-def _conversation_companion_manifest_agent_records() -> list[dict[str, Any]]:
+def _skill_manifest_dirs() -> list[Path]:
+    roots: list[Path] = []
     try:
-        skills_dir = Path(get_ctx().paths.skills_workspace_dir())
+        roots.append(Path(get_ctx().paths.skills_workspace_dir()))
     except Exception:
-        return []
-    skill_dir = skills_dir / "conversation_companions"
+        pass
+    try:
+        roots.append(Path(__file__).resolve().parents[2] / "skills_templates")
+    except Exception:
+        pass
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            candidates = sorted(path for path in root.iterdir() if (path / "skill.yaml").exists())
+        except Exception:
+            candidates = []
+        for path in candidates:
+            token = str(path.resolve())
+            if token in seen:
+                continue
+            seen.add(token)
+            dirs.append(path)
+    return dirs
+
+
+def _read_skill_manifest(skill_dir: Path) -> dict[str, Any]:
     manifest_path = skill_dir / "skill.yaml"
-    if not manifest_path.exists():
-        return []
     try:
         import yaml  # type: ignore
 
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     except Exception:
         manifest = {}
-    conv = manifest.get("conversation") if isinstance(manifest, dict) else {}
-    declared_agents = conv.get("agents") if isinstance(conv, dict) else []
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _conversation_manifest_agent_records() -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    if isinstance(declared_agents, list):
+    for skill_dir in _skill_manifest_dirs():
+        manifest = _read_skill_manifest(skill_dir)
+        skill_id = str(manifest.get("name") or skill_dir.name).strip()
+        if not skill_id:
+            continue
+        conv = manifest.get("conversation") if isinstance(manifest, dict) else {}
+        declared_agents = conv.get("agents") if isinstance(conv, dict) else []
+        if not isinstance(declared_agents, list):
+            continue
         for raw in declared_agents:
             if not isinstance(raw, dict):
                 continue
             record = dict(raw)
-            record.setdefault("owner", "skill:conversation_companions")
-            record.setdefault("skill", "conversation_companions")
+            channel_id = str(record.get("channel_id") or "").strip()
+            if not channel_id:
+                channel = conv.get("dialog_channel") if isinstance(conv.get("dialog_channel"), dict) else {}
+                channels = conv.get("channels") if isinstance(conv.get("channels"), list) else []
+                if channel.get("id"):
+                    channel_id = str(channel.get("id") or "").strip()
+                elif channels and isinstance(channels[0], dict):
+                    channel_id = str(channels[0].get("id") or "").strip()
+            record.setdefault("owner", f"skill:{skill_id}")
+            record.setdefault("skill", skill_id)
             record.setdefault("kind", "skill_agent")
-            record.setdefault("channel_id", CONVERSATIONAL_DIALOG_CHANNEL_ID)
-            record.setdefault("source", "skill:conversation_companions.skill_yaml")
+            if channel_id:
+                record.setdefault("channel_id", channel_id)
+            record.setdefault("source", f"skill:{skill_id}.skill_yaml")
             records.append(record)
-    if records:
-        return records
+    return records
+
+
+def _normalize_manifest_renderer_capabilities(raw: Mapping[str, Any]) -> dict[str, Any]:
+    renderer = raw.get("renderer") if isinstance(raw.get("renderer"), dict) else {}
+    capabilities = raw.get("renderer_capabilities") or renderer.get("capabilities")
+    if isinstance(capabilities, dict):
+        result = dict(capabilities)
+    elif isinstance(capabilities, list):
+        result = {"targets": [str(item).strip() for item in capabilities if str(item).strip()]}
+    else:
+        result = {}
+    targets = result.get("targets")
+    if not isinstance(targets, list) or not targets:
+        result["targets"] = ["text", "speech", "dialog.visible_tail"]
+    result.setdefault("default_projection", "dialog.visible_tail")
+    return result
+
+
+def _conversation_manifest_channel_records(webspace_id: str) -> list[dict[str, Any]]:
+    ws = str(webspace_id or "").strip() or "default"
+    channels_out: list[dict[str, Any]] = []
+    for skill_dir in _skill_manifest_dirs():
+        manifest = _read_skill_manifest(skill_dir)
+        skill_id = str(manifest.get("name") or skill_dir.name).strip()
+        if not skill_id:
+            continue
+        conv = manifest.get("conversation") if isinstance(manifest, dict) else {}
+        if not isinstance(conv, dict):
+            continue
+        raw_channels: list[dict[str, Any]] = []
+        dialog_channel = conv.get("dialog_channel")
+        if isinstance(dialog_channel, dict):
+            raw_channels.append(dict(dialog_channel))
+        channels = conv.get("channels")
+        if isinstance(channels, list):
+            raw_channels.extend(dict(item) for item in channels if isinstance(item, dict))
+        for raw in raw_channels:
+            channel_id = str(raw.get("id") or raw.get("channel_id") or "").strip()
+            if not channel_id or not re.match(r"^[a-zA-Z0-9_.:-]+$", channel_id):
+                continue
+            owner = str(raw.get("owner") or f"skill:{skill_id}").strip()
+            if not owner.startswith(("skill:", "core:")):
+                continue
+            default_tool_ref = str(raw.get("default_tool") or raw.get("tool") or "chat").strip() or "chat"
+            default_skill, _, default_tool = default_tool_ref.partition(".")
+            if default_tool:
+                skill = default_skill or skill_id
+                tool = default_tool
+            else:
+                skill = skill_id
+                tool = default_tool_ref
+            if not skill or not tool:
+                continue
+            conversation_id = str(raw.get("conversation_id") or _skill_conversation_id(skill, ws)).strip()
+            policy = raw.get("policy") if isinstance(raw.get("policy"), dict) else _dialog_channel_policy(channel_id, default_tool=default_tool_ref)
+            policy = dict(policy)
+            renderer_capabilities = _normalize_manifest_renderer_capabilities(raw)
+            policy.setdefault("renderer_capabilities", renderer_capabilities)
+            raw_meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+            channels_out.append(
+                {
+                    "id": channel_id,
+                    "channel_id": channel_id,
+                    "label": str(raw.get("label") or _dialog_channel_label(channel_id)).strip(),
+                    "owner": owner,
+                    "conversation_id": conversation_id,
+                    "default_skill": skill,
+                    "default_tool": tool,
+                    "route_id": str(raw.get("route_id") or "voice_chat").strip(),
+                    "policy": policy,
+                    "meta": {
+                        "source": f"skill:{skill_id}.skill_yaml",
+                        "manifest_validated": True,
+                        "renderer_capabilities": renderer_capabilities,
+                        **raw_meta,
+                    },
+                }
+            )
+    return channels_out
+
+
+def _seed_manifest_dialog_channels(webspace_id: str) -> None:
+    for channel in _conversation_manifest_channel_records(webspace_id):
+        try:
+            conversation_store.upsert_conversation(
+                conversation_id=channel["conversation_id"],
+                webspace_id=webspace_id,
+                owner=channel["owner"],
+                kind="dialog",
+                title=channel["label"],
+                meta={"channel_id": channel["id"], "source": (channel.get("meta") or {}).get("source")},
+            )
+            conversation_store.upsert_dialog_channel(
+                webspace_id=webspace_id,
+                channel_id=channel["id"],
+                label=channel["label"],
+                owner=channel["owner"],
+                conversation_id=channel["conversation_id"],
+                default_skill=channel["default_skill"],
+                default_tool=channel["default_tool"],
+                route_id=channel["route_id"],
+                policy=channel["policy"],
+                meta=channel["meta"],
+            )
+        except Exception:
+            logging.getLogger("adaos.router.dialog").debug(
+                "failed to seed manifest dialog channel webspace=%s channel=%s",
+                webspace_id,
+                channel.get("id"),
+                exc_info=True,
+            )
+
+
+def _conversation_companion_profile_agent_records() -> list[dict[str, Any]]:
+    try:
+        skills_dir = Path(get_ctx().paths.skills_workspace_dir())
+    except Exception:
+        return []
+    skill_dir = skills_dir / "conversation_companions"
+    records: list[dict[str, Any]] = []
 
     # Compatibility for the existing pilot profile file before every skill has
     # explicit conversation agent declarations in its manifest.
@@ -333,29 +490,14 @@ def _conversation_companion_manifest_agent_records() -> list[dict[str, Any]]:
 
 def _seed_conversation_registry() -> None:
     records = [_general_agent_projection()]
-    records.extend(_conversation_companion_manifest_agent_records())
-    records.append(
-        {
-            "id": "agent:builder_skill:builder",
-            "label": "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
-            "owner": "skill:builder_skill",
-            "kind": "skill_agent",
-            "channel_id": BUILDER_DIALOG_CHANNEL_ID,
-            "skill": BUILDER_SKILL_ID,
-            "talk_tool": "chat",
-            "gender": "male",
-            "voice": "ru-male",
-            "icon": "construct-outline",
-            "aliases": [
-                "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
-                "\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
-                "Builder",
-                "builder",
-                "buikder",
-                "\u0431\u0438\u043b\u0434\u0435\u0440",
-            ],
-        }
-    )
+    records.extend(_conversation_manifest_agent_records())
+    records.extend(_conversation_companion_profile_agent_records())
+    unique: dict[str, dict[str, Any]] = {}
+    for record in records:
+        agent_id = str(record.get("id") or "").strip()
+        if agent_id:
+            unique[agent_id] = record
+    records = list(unique.values())
     if len(records) <= 1:
         records = _fallback_agent_registry_records()
     try:
@@ -1530,6 +1672,9 @@ class RouterService:
             def _optional_text(value: Any) -> str | None:
                 token = str(value or "").strip()
                 return token or None
+            channel_meta = channel.get("meta") if isinstance(channel.get("meta"), dict) else {}
+            meta_payload = {k: v for k, v in channel.items() if k not in {"policy", "meta"}}
+            meta_payload.update(channel_meta)
             try:
                 conversation_store.upsert_dialog_channel(
                     webspace_id=webspace_id,
@@ -1542,7 +1687,7 @@ class RouterService:
                     default_tool=_optional_text(channel.get("default_tool")),
                     route_id=_optional_text(channel.get("route_id")) or "voice_chat",
                     policy=channel.get("policy") if isinstance(channel.get("policy"), dict) else {},
-                    meta={k: v for k, v in channel.items() if k not in {"policy"}},
+                    meta=meta_payload,
                 )
             except Exception:
                 logging.getLogger("adaos.router.dialog").debug(
@@ -2039,6 +2184,7 @@ class RouterService:
                 builder_channel,
             ]
             try:
+                _seed_manifest_dialog_channels(ws)
                 persisted_channels = conversation_store.list_dialog_channels(ws)
             except Exception:
                 persisted_channels = []
@@ -2046,6 +2192,7 @@ class RouterService:
                 pid = str(persisted.get("id") or persisted.get("channel_id") or "").strip()
                 if not pid:
                     continue
+                meta = persisted.get("meta") if isinstance(persisted.get("meta"), dict) else {}
                 normalized = {
                     "id": pid,
                     "label": str(persisted.get("label") or _dialog_channel_label(pid)).strip() or pid,
@@ -2058,9 +2205,9 @@ class RouterService:
                     "policy": persisted.get("policy")
                     if isinstance(persisted.get("policy"), dict) and persisted.get("policy")
                     else _dialog_channel_policy(pid, default_tool=str(persisted.get("default_tool") or "")),
+                    "meta": meta,
                     "active": pid == active_id,
                 }
-                meta = persisted.get("meta") if isinstance(persisted.get("meta"), dict) else {}
                 for key in (
                     "active_agent_label",
                     "active_agent_gender",
@@ -4321,6 +4468,7 @@ class RouterService:
                     continue
                 if channel_id != "conversational":
                     try:
+                        _seed_manifest_dialog_channels(ws)
                         channel = conversation_store.get_dialog_channel(ws, channel_id)
                     except Exception:
                         channel = None
@@ -4750,11 +4898,14 @@ class RouterService:
                             exc_info=True,
                         )
                     if agent_rest or channel_id != CONVERSATIONAL_DIALOG_CHANNEL_ID:
+                        forwarded_text = text if channel_id == CONVERSATIONAL_DIALOG_CHANNEL_ID else (agent_rest or text)
                         action_payload = {
-                            "text": agent_rest or text,
+                            "text": forwarded_text,
                             "webspace_id": ws,
                             "_meta": action_meta,
                         }
+                        if agent_rest:
+                            action_meta["addressed_agent_text"] = agent_rest
                         action_tool = talk_tool
                     else:
                         action_payload = {

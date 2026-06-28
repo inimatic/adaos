@@ -174,3 +174,34 @@ def test_cancel_repair_clears_active_frame() -> None:
     assert action is not None
     assert action["repair_state"] == "cancel"
     assert dialog_runtime.get_active_frame("desktop") is None
+
+
+def test_active_frame_restores_from_node_store_after_process_cache_clear() -> None:
+    from adaos.services import conversation_store
+
+    conversation_store.ensure_schema()
+    frame = dialog_runtime.set_active_frame(
+        webspace_id="desktop",
+        frame_id="frame.restartable",
+        owner="skill:builder_skill",
+        conversation_id="conv.skill.builder_skill.default.desktop",
+        required_slots=("scenario_name", "purpose"),
+        slots={"scenario_name": "shopping list"},
+        validation={"missing_slots": ["purpose"]},
+    )
+    assert frame.frame_id == "frame.restartable"
+
+    dialog_runtime._FRAMES_BY_WEBSPACE.clear()  # type: ignore[attr-defined]
+
+    restored = dialog_runtime.get_active_frame("desktop")
+    assert restored is not None
+    assert restored.frame_id == "frame.restartable"
+    assert restored.owner == "skill:builder_skill"
+    assert restored.required_slots == ("scenario_name", "purpose")
+    assert restored.slots == {"scenario_name": "shopping list"}
+    assert restored.validation == {"missing_slots": ["purpose"]}
+
+    removed = dialog_runtime.clear_active_frame("desktop")
+    assert removed is not None
+    assert removed.frame_id == "frame.restartable"
+    assert conversation_store.get_dialog_frame("desktop") is None
