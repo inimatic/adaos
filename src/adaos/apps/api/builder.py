@@ -20,6 +20,7 @@ class BuilderDraftRequest(BaseModel):
     kind: str = Field(default="skill", description="skill, scenario, or descriptor_fix")
     artifact_id: str = Field(..., min_length=1)
     source_idea: str = Field(..., min_length=1)
+    webspace_id: str | None = None
     task_id: str | None = None
     source: dict[str, Any] | None = None
     template_id: str | None = None
@@ -32,6 +33,7 @@ class BuilderDraftRequest(BaseModel):
 class BuilderPreviewRequest(BaseModel):
     draft_id: str = Field(..., min_length=1)
     approval_profile: str | None = Field(default=None, description="Builder approval profile id.")
+    webspace_id: str | None = None
 
 
 @router.get("/approval-profiles")
@@ -53,6 +55,7 @@ def create_draft(body: BuilderDraftRequest, service: BuilderWorkspaceService = D
             target_root=body.target_root,
             descriptor_changes=body.descriptor_changes,
             links=body.links,
+            webspace_id=body.webspace_id,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -69,7 +72,7 @@ def get_draft(draft_id: str, service: BuilderWorkspaceService = Depends(_get_ser
 @router.post("/preview")
 def preview(body: BuilderPreviewRequest, service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     try:
-        return service.preview(draft_id=body.draft_id, approval_profile=body.approval_profile)
+        return service.preview(draft_id=body.draft_id, approval_profile=body.approval_profile, webspace_id=body.webspace_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

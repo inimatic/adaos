@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from typing import Any, Mapping
 
 from adaos.sdk.core.decorators import subscribe
+from adaos.services import conversation_links
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.teacher_events import append_event, make_event
@@ -741,6 +742,14 @@ async def _publish_confirmation_pending_action(
         request_id = str(confirmation.get("request_id") or "").strip()
         request_text = str(confirmation.get("request_text") or "").strip()
         question = str(confirmation.get("question") or "").strip()
+        conversation_ref = conversation_links.ensure_teacher_conversation(
+            webspace_id,
+            request_id=request_id,
+            candidate_id=candidate_id,
+            title=request_text or question or candidate_id,
+            meta={"source": "nlu.teacher.confirmation", "confirmation_id": confirmation_id},
+        )
+        clean_ref = {k: v for k, v in conversation_ref.items() if k != "stored"}
         action = await publish_pending_action_async(
             ctx=get_ctx(),
             webspace_id=webspace_id,
@@ -762,6 +771,7 @@ async def _publish_confirmation_pending_action(
                 "confirmation_id": confirmation_id,
                 "candidate_id": candidate_id,
                 "request_id": request_id,
+                "conversation": clean_ref,
             },
             allowed_actions=[
                 {"id": "test", "label": "Test", "label_i18n": {"key": "pending_actions.action.test"}, "terminal": False},
@@ -776,7 +786,11 @@ async def _publish_confirmation_pending_action(
                 "topic": _PENDING_ACTION_RESPONSE_TOPIC,
                 "target": {"type": "skill", "skill_id": "nlu_teacher"},
             },
-            metadata={"source": "nlu.teacher.confirmation", "legacy_confirmation": True},
+            metadata={
+                "source": "nlu.teacher.confirmation",
+                "legacy_confirmation": True,
+                "conversation_ref": clean_ref,
+            },
         )
         return str(action.get("id") or "").strip()
     except ValueError as exc:

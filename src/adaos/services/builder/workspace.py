@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
+from adaos.services import conversation_links
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 
 
@@ -355,6 +356,7 @@ class BuilderWorkspaceService:
         descriptor_changes: dict[str, Any] | None = None,
         links: dict[str, Any] | None = None,
         target_root: str | Path | None = None,
+        webspace_id: str | None = None,
     ) -> dict[str, Any]:
         kind = str(kind or "").strip().lower()
         artifact_id = _slug(artifact_id)
@@ -365,12 +367,13 @@ class BuilderWorkspaceService:
                 artifact_id=artifact_id,
                 source_idea=source_idea,
                 task_id=task_id,
-                source=source,
-                target_kind=target_kind,
-                descriptor_changes=descriptor_changes,
-                links=links,
-                target_root=target_root,
-            )
+            source=source,
+            target_kind=target_kind,
+            descriptor_changes=descriptor_changes,
+            links=links,
+            target_root=target_root,
+            webspace_id=webspace_id,
+        )
         if kind not in {"skill", "scenario"}:
             raise ValueError("kind must be skill, scenario, or descriptor_fix")
 
@@ -390,6 +393,8 @@ class BuilderWorkspaceService:
         else:
             self._patch_scenario_template(artifact_root, artifact_id, source_idea)
 
+        builder_ref = conversation_links.ensure_builder_conversation(webspace_id)
+        context_packet = conversation_links.builder_context_packet(webspace_id)
         draft = self._draft_payload(
             draft_id=draft_id,
             task_id=task_id,
@@ -401,6 +406,8 @@ class BuilderWorkspaceService:
             artifact_root=artifact_root,
             source_idea=source_idea,
             links=links,
+            conversation_ref=builder_ref,
+            context_packet=context_packet,
             assumptions=[
                 "Draft workspace is isolated from active runtime state.",
                 "Apply/activation requires a separate approval and lifecycle step.",
@@ -422,10 +429,26 @@ class BuilderWorkspaceService:
             raise FileNotFoundError(f"Builder draft not found: {draft_id}")
         return _read_json(path)
 
-    def preview(self, *, draft_id: str, approval_profile: str | None = None) -> dict[str, Any]:
+    def preview(
+        self,
+        *,
+        draft_id: str,
+        approval_profile: str | None = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
         draft_id = str(draft_id or "").strip()
         draft_dir = self.drafts_dir() / draft_id
         draft = self.load_draft(draft_id)
+        existing_links = draft.get("links") if isinstance(draft.get("links"), dict) else {}
+        existing_conversation = existing_links.get("conversation") if isinstance(existing_links.get("conversation"), dict) else {}
+        resolved_webspace_id = str(
+            webspace_id
+            or existing_conversation.get("webspace_id")
+            or (draft.get("metadata") or {}).get("webspace_id")
+            or "default"
+        ).strip()
+        builder_ref = conversation_links.ensure_builder_conversation(resolved_webspace_id)
+        context_packet = conversation_links.builder_context_packet(resolved_webspace_id)
         profile_id = self._normalize_approval_profile(approval_profile)
         artifact = draft.get("artifact") if isinstance(draft.get("artifact"), dict) else {}
         artifact_root = self._draft_artifact_root(draft_dir, artifact)
@@ -476,6 +499,13 @@ class BuilderWorkspaceService:
             "scenario_dependency_bootstrap": bootstrap,
             "review_policy": review_policy,
             "human_review": human_review,
+            "conversation": builder_ref,
+            "context_packet": context_packet,
+            "source_refs": {
+                "conversation_id": builder_ref.get("conversation_id"),
+                "channel_id": builder_ref.get("channel_id"),
+                "builder_task_id": draft.get("task_id"),
+            },
             "summary": {
                 "changed_files": len(diff.get("files") or []),
                 "schema_ok": schemas.get("ok"),
@@ -538,6 +568,7 @@ class BuilderWorkspaceService:
         descriptor_changes: dict[str, Any] | None,
         links: dict[str, Any] | None,
         target_root: str | Path | None,
+        webspace_id: str | None,
     ) -> dict[str, Any]:
         target_kind = str(target_kind or "skill").strip().lower()
         if target_kind not in {"skill", "scenario"}:
@@ -555,6 +586,8 @@ class BuilderWorkspaceService:
             source_idea=source_idea,
             descriptor_changes=descriptor_changes or {},
         )
+        builder_ref = conversation_links.ensure_builder_conversation(webspace_id)
+        context_packet = conversation_links.builder_context_packet(webspace_id)
         draft = self._draft_payload(
             draft_id=draft_id,
             task_id=task_id,
@@ -566,6 +599,8 @@ class BuilderWorkspaceService:
             artifact_root=artifact_root,
             source_idea=source_idea,
             links=links,
+            conversation_ref=builder_ref,
+            context_packet=context_packet,
             assumptions=[
                 "Descriptor fix only updates reviewable manifest, webui, and NLU hint surfaces.",
                 "No runtime action implementation is generated by this draft.",
@@ -723,6 +758,8 @@ class BuilderWorkspaceService:
         assumptions: list[str],
         risk_notes: list[str],
         expected_tests: list[str],
+        conversation_ref: dict[str, Any] | None = None,
+        context_packet: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         task_id = task_id or f"btask.{_stable_suffix(source_idea, artifact_kind, artifact_id)}"
         source_payload = source if isinstance(source, dict) and source.get("type") else {"type": "human_idea", "text": source_idea}
@@ -731,6 +768,8 @@ class BuilderWorkspaceService:
         now = _now_iso()
         merged_links = dict(links or {})
         merged_links.setdefault("builder_task_id", task_id)
+        if conversation_ref:
+            merged_links.setdefault("conversation", {k: v for k, v in conversation_ref.items() if k != "stored"})
         return {
             "$schema": "../../../src/adaos/abi/builder.draft.v1.schema.json",
             "draft_id": draft_id,
@@ -751,6 +790,8 @@ class BuilderWorkspaceService:
                 "expected_tests": expected_tests,
                 "route_plan_required": artifact_kind == "skill",
                 "human_review_required": False,
+                "webspace_id": (conversation_ref or {}).get("webspace_id"),
+                "context_packet": context_packet,
             },
             "quality_gates": quality,
             "links": merged_links,

@@ -1,0 +1,25 @@
+{
+  "$schema": "../../abi/builder.draft.v1.schema.json",
+  "draft_id": "template.builder_scenario",
+  "schema": "adaos.builder.draft.v1",
+  "status": "template",
+  "artifact": {
+    "kind": "scenario",
+    "id": "builder-prototype",
+    "template_id": "builder_scenario"
+  },
+  "metadata": {
+    "source_idea": "Builder rapid prototype scenario.",
+    "assumptions": [
+      "builder_skill owns the rapid prototyping dialog.",
+      "webui.json is declarative preview state, not executable UI code."
+    ],
+    "risk_notes": [
+      "Runtime activation remains outside the rapid prototype loop."
+    ],
+    "expected_tests": [
+      "scenario manifest validation",
+      "Builder preview bundle"
+    ]
+  }
+}

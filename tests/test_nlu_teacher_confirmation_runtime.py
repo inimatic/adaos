@@ -82,6 +82,8 @@ async def test_voice_candidate_proposal_requests_confirmation():
     pending_action = pending_actions["by_id"][confirmations[-1]["pending_action_id"]]
     assert pending_action["kind"] == "nlu.teacher.candidate_confirmation"
     assert pending_action["domain_ref"]["confirmation_id"] == confirmations[-1]["id"]
+    assert pending_action["domain_ref"]["conversation"]["conversation_id"] == "conv.teacher.default.ws-test-teacher-confirmation-request"
+    assert pending_action["metadata"]["conversation_ref"]["thread_id"] == "thread.teacher.ws-test-teacher-confirmation-request.req.confirm.request"
     assert pending_action["response_route"]["topic"] == "nlp.teacher.candidate.confirmation.response"
     assert messages
     assert "Открыть Infrascope?" in messages[-1]["text"]

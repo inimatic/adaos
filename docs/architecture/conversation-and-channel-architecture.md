@@ -1766,14 +1766,24 @@ Important lacunae found during Phase 4/5 implementation:
 
 ### Phase 6. Builder and NLU Teacher Migration
 
-- [ ] `[must]` Create the default Builder conversation on first Builder entry.
-- [ ] `[must]` Make LLM Builder consume context packets instead of raw chat
-  history.
-- [ ] `[must]` Link Builder drafts, validation evidence, and Pending Actions to
-  conversation/thread refs.
-- [ ] `[must]` Move NLU Teacher clarification sessions into `kind=teacher`
-  conversations.
-- [ ] `[must]` Link candidate confirmations and Pending Actions to Teacher
+- [x] `[must]` Create the default Builder conversation on first Builder entry.
+  The current slice creates the `builder` conversation/channel when Builder
+  API draft/preview flows run and reuses the same ids as the browser Builder
+  channel.
+- [x] `[must]` Make LLM Builder consume context packets instead of raw chat
+  history. Builder draft and preview payloads now include a budgeted
+  `context_packet` tied to the Builder conversation; later LLM Builder calls
+  must use that packet rather than ad hoc transcript reads.
+- [x] `[must]` Link Builder drafts and preview validation evidence to
+  conversation refs. `builder.draft.json` stores `links.conversation`, and
+  preview bundles expose `conversation`, `context_packet`, and `source_refs`.
+- [ ] `[must]` Link Builder Pending Actions to conversation/thread refs when
+  Builder approval/apply actions become first-class Pending Actions.
+- [x] `[must]` Move NLU Teacher clarification sessions into `kind=teacher`
+  conversations. The first pass creates a canonical Teacher conversation and
+  per-request thread while keeping the legacy Teacher read model as a
+  projection/cache.
+- [x] `[must]` Link candidate confirmations and Pending Actions to Teacher
   conversations and source message ids.
 - [ ] `[should]` Preserve approval/apply evidence outside plain chat messages.
 - [ ] `[should]` Add acceptance tests for Builder through browser and Telegram
@@ -1782,6 +1792,14 @@ Important lacunae found during Phase 4/5 implementation:
   `general`, `teacher`, and `builder` contexts.
 - [ ] `[could]` Add Builder repair conversations that span generated files,
   validation runs, CI logs, and user review.
+
+Important lacunae found during Phase 6 implementation:
+
+- [ ] `[must]` Make the NLU Teacher read model reconstructable from
+  `kind=teacher` ledger records, then treat `data.nlu_teacher` as a projection
+  rather than a second source of truth.
+- [ ] `[must]` Add Builder approval Pending Actions with `source_refs` before
+  enabling browser apply/approve flows.
 
 ### Phase 7. Subnet Federation
 

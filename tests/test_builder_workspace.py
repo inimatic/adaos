@@ -426,12 +426,15 @@ def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:
             "kind": "scenario",
             "artifact_id": "api_scene",
             "source_idea": "Build a small API preview scenario.",
+            "webspace_id": "builder-api-ws",
         },
     )
 
     assert response.status_code == 200
     draft: dict[str, Any] = response.json()["draft"]
     assert draft["artifact"]["id"] == "api_scene"
+    assert draft["links"]["conversation"]["conversation_id"] == "conv.skill.builder_skill.default.builder-api-ws"
+    assert draft["metadata"]["context_packet"]["conversation_id"] == "conv.skill.builder_skill.default.builder-api-ws"
 
     profiles_response = client.get("/api/builder/approval-profiles")
     assert profiles_response.status_code == 200
@@ -439,10 +442,12 @@ def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:
 
     response = client.post(
         "/api/builder/preview",
-        json={"draft_id": draft["draft_id"], "approval_profile": "low_risk_auto_apply"},
+        json={"draft_id": draft["draft_id"], "approval_profile": "low_risk_auto_apply", "webspace_id": "builder-api-ws"},
     )
     assert response.status_code == 200
     preview = response.json()["preview"]
     assert preview["draft_id"] == draft["draft_id"]
     assert preview["summary"]["changed_files"] >= 1
     assert preview["summary"]["approval_profile"] == "low_risk_auto_apply"
+    assert preview["conversation"]["conversation_id"] == "conv.skill.builder_skill.default.builder-api-ws"
+    assert preview["source_refs"]["conversation_id"] == "conv.skill.builder_skill.default.builder-api-ws"

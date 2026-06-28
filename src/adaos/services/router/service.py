@@ -50,6 +50,8 @@ GENERAL_DIALOG_AGENT_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "Ада")
 GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
 GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
+BUILDER_DIALOG_CHANNEL_ID = "builder"
+BUILDER_SKILL_ID = "builder_skill"
 DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
 VOICE_CHAT_USER_EVENT = "voice.chat.user"
 VOICE_CHAT_VISIBLE_TAIL = 8
@@ -110,6 +112,26 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
         "voice": "ru-female",
         "icon": "heart-circle-outline",
         "aliases": ("Мира", "Mira", "собеседник", "рассказчик"),
+    },
+    {
+        "id": "agent:builder_skill:builder",
+        "label": "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
+        "owner": "skill:builder_skill",
+        "kind": "skill_agent",
+        "channel_id": BUILDER_DIALOG_CHANNEL_ID,
+        "skill": BUILDER_SKILL_ID,
+        "talk_tool": "chat",
+        "gender": "male",
+        "voice": "ru-male",
+        "icon": "construct-outline",
+        "aliases": (
+            "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
+            "\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
+            "Builder",
+            "builder",
+            "buikder",
+            "\u0431\u0438\u043b\u0434\u0435\u0440",
+        ),
     },
 )
 _GENERAL_AGENT_ADDRESS_RE = re.compile(
@@ -222,7 +244,7 @@ def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) 
     if token == "builder":
         return {
             "entry_intents": ["builder.start", "builder.agent_addressed"],
-            "default_tool": default_tool or "llm_builder.chat",
+            "default_tool": default_tool or f"{BUILDER_SKILL_ID}.chat",
             "fallback": "owner_default_tool",
             "exit_intents": ["builder.exit", "general.agent_addressed"],
             "switch_intents": ["general.agent_addressed", "conversation.agent_addressed"],
@@ -312,6 +334,28 @@ def _conversation_companion_manifest_agent_records() -> list[dict[str, Any]]:
 def _seed_conversation_registry() -> None:
     records = [_general_agent_projection()]
     records.extend(_conversation_companion_manifest_agent_records())
+    records.append(
+        {
+            "id": "agent:builder_skill:builder",
+            "label": "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
+            "owner": "skill:builder_skill",
+            "kind": "skill_agent",
+            "channel_id": BUILDER_DIALOG_CHANNEL_ID,
+            "skill": BUILDER_SKILL_ID,
+            "talk_tool": "chat",
+            "gender": "male",
+            "voice": "ru-male",
+            "icon": "construct-outline",
+            "aliases": [
+                "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
+                "\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
+                "Builder",
+                "builder",
+                "buikder",
+                "\u0431\u0438\u043b\u0434\u0435\u0440",
+            ],
+        }
+    )
     if len(records) <= 1:
         records = _fallback_agent_registry_records()
     try:
@@ -1981,12 +2025,12 @@ class RouterService:
             builder_channel = {
                 "id": "builder",
                 "label": "Builder",
-                "owner": "skill:llm_builder",
+                "owner": f"skill:{BUILDER_SKILL_ID}",
                 "route_id": "voice_chat",
-                "conversation_id": _skill_conversation_id("llm_builder", ws),
-                "default_skill": "llm_builder",
+                "conversation_id": _skill_conversation_id(BUILDER_SKILL_ID, ws),
+                "default_skill": BUILDER_SKILL_ID,
                 "default_tool": "chat",
-                "policy": _dialog_channel_policy("builder", default_tool="llm_builder.chat"),
+                "policy": _dialog_channel_policy("builder", default_tool=f"{BUILDER_SKILL_ID}.chat"),
                 "active": active_id == "builder",
             }
             channels: list[dict[str, Any]] = [
@@ -4285,9 +4329,9 @@ class RouterService:
                             "id": "builder",
                             "channel_id": "builder",
                             "label": "Builder",
-                            "owner": "skill:llm_builder",
-                            "conversation_id": _skill_conversation_id("llm_builder", ws),
-                            "default_skill": "llm_builder",
+                            "owner": f"skill:{BUILDER_SKILL_ID}",
+                            "conversation_id": _skill_conversation_id(BUILDER_SKILL_ID, ws),
+                            "default_skill": BUILDER_SKILL_ID,
                             "default_tool": "chat",
                             "route_id": "voice_chat",
                         }
@@ -4659,7 +4703,7 @@ class RouterService:
                 talk_tool = str(agent.get("talk_tool") or "talk").strip()
                 switch_tool = str(agent.get("switch_tool") or "").strip()
                 character_id = str(agent.get("character_id") or "").strip()
-                if channel_id == CONVERSATIONAL_DIALOG_CHANNEL_ID and skill:
+                if channel_id and channel_id != GENERAL_DIALOG_CHANNEL_ID and skill:
                     action_meta = {
                         **meta,
                         "webspace_id": ws,
@@ -4705,9 +4749,9 @@ class RouterService:
                             agent.get("id"),
                             exc_info=True,
                         )
-                    if agent_rest:
+                    if agent_rest or channel_id != CONVERSATIONAL_DIALOG_CHANNEL_ID:
                         action_payload = {
-                            "text": text,
+                            "text": agent_rest or text,
                             "webspace_id": ws,
                             "_meta": action_meta,
                         }

@@ -226,6 +226,7 @@ async def test_teacher_bridge_keeps_transient_provider_failure_teachable_when_ot
 @pytest.mark.anyio
 async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
     from adaos.services.agent_context import get_ctx
+    from adaos.services import conversation_links, conversation_store
     from adaos.services.nlu import teacher_bridge
     from adaos.services.yjs.doc import async_get_ydoc
 
@@ -270,6 +271,15 @@ async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
         events = list((teacher or {}).get("events") or [])
 
     assert items[-1]["status"] == "pending"
+    assert items[-1]["conversation_ref"]["conversation_id"] == conversation_links.teacher_conversation_id(webspace_id)
+    projection = conversation_store.list_projection(
+        conversation_links.teacher_conversation_id(webspace_id),
+        thread_id=items[-1]["conversation_ref"]["thread_id"],
+        limit=5,
+    )
+    assert projection["messages"][-1]["text"] == "bring up the operations console"
+    assert projection["messages"][-1]["thread_id"] == items[-1]["conversation_ref"]["thread_id"]
+    assert projection["messages"][-1]["id"] == items[-1]["source_message_id"]
     assert events[-1]["kind"] == "not_obtained"
 
 

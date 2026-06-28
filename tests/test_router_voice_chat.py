@@ -682,7 +682,7 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
     builder_state = dialog_runtime.get_active_channel(webspace_id)
     assert builder_state is not None
     assert builder_state.channel_id == "builder"
-    assert builder_state.default_skill == "llm_builder"
+    assert builder_state.default_skill == "builder_skill"
     assert doc.get_map("data")["dialog"]["active_channel_id"] == "builder"
 
     bus.publish(
@@ -706,6 +706,101 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
     assert dialog["active_channel_id"] == "research"
     assert "builder" in {item["id"] for item in dialog["channels"]}
     assert "research" in {item["id"] for item in dialog["channels"]}
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "builder-addressed-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "builder draft created",
+            "dialog": {
+                "dialog_channel_id": "builder",
+                "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                "owner": "skill:builder_skill",
+                "default_tool": "builder_skill.chat",
+                "active_agent_id": "agent:builder_skill:builder",
+                "active_agent_label": "Строитель",
+                "active_agent": {
+                    "id": "agent:builder_skill:builder",
+                    "label": "Строитель",
+                    "owner": "skill:builder_skill",
+                    "kind": "skill_agent",
+                    "gender": "male",
+                    "voice": "ru-male",
+                    "icon": "construct-outline",
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "Строитель, создадим приложение список покупок",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls
+    assert calls[0][0:2] == ("builder_skill", "chat")
+    assert calls[0][2]["text"] == "создадим приложение список покупок"
+    assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "builder"
+    assert state.default_skill == "builder_skill"
+    assert state.active_agent_id == "agent:builder_skill:builder"
+    assert doc.get_map("data")["dialog"]["active_channel_id"] == "builder"
     dialog_runtime.reset_all()
 
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
+from adaos.services import conversation_links
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
@@ -40,6 +41,31 @@ def _resolve_webspace_id(token: Optional[str]) -> str:
 def _teacher_obj(data_map: Any) -> dict:
     current = data_map.get("nlu_teacher")
     return dict(current) if isinstance(current, dict) else {}
+
+
+def _teacher_meta(
+    *,
+    webspace_id: str,
+    source: str = "api.nlu.teacher",
+    request_id: str | None = None,
+    candidate_id: str | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    ref = conversation_links.ensure_teacher_conversation(
+        webspace_id,
+        request_id=request_id,
+        candidate_id=candidate_id,
+        title=title,
+        meta={"source": source},
+    )
+    clean_ref = {k: v for k, v in ref.items() if k != "stored"}
+    return {
+        "webspace_id": webspace_id,
+        "source": source,
+        "conversation_id": clean_ref["conversation_id"],
+        "thread_id": clean_ref["thread_id"],
+        "conversation_ref": clean_ref,
+    }
 
 
 def _request_id_from_teacher_row(row: Any) -> str:
@@ -311,7 +337,7 @@ async def apply_revision(webspace_id: str, body: ApplyRevisionRequest):
         "intent": body.intent.strip(),
         "examples": examples,
         "slots": dict(body.slots or {}),
-        "_meta": {"webspace_id": ws},
+        "_meta": _teacher_meta(webspace_id=ws, request_id=body.revision_id.strip(), title=body.intent.strip()),
     }
 
     try:
@@ -326,18 +352,27 @@ async def apply_revision(webspace_id: str, body: ApplyRevisionRequest):
 async def save_example(webspace_id: str, body: SaveExampleRequest):
     ws = _resolve_webspace_id(webspace_id)
     ctx = get_ctx()
+    request_id = body.request_id.strip() if isinstance(body.request_id, str) and body.request_id.strip() else None
+    candidate_id = body.candidate_id.strip() if isinstance(body.candidate_id, str) and body.candidate_id.strip() else None
+    source = body.source.strip() if isinstance(body.source, str) and body.source.strip() else "api.nlu.teacher"
     payload = {
         "webspace_id": ws,
         "text": body.text.strip(),
         "intent": body.intent.strip(),
         "target": body.target.model_dump(exclude_none=True),
         "slots": dict(body.slots or {}),
-        "request_id": body.request_id.strip() if isinstance(body.request_id, str) and body.request_id.strip() else None,
+        "request_id": request_id,
         "thread_id": body.thread_id.strip() if isinstance(body.thread_id, str) and body.thread_id.strip() else None,
-        "candidate_id": body.candidate_id.strip() if isinstance(body.candidate_id, str) and body.candidate_id.strip() else None,
-        "source": body.source.strip() if isinstance(body.source, str) and body.source.strip() else "api.nlu.teacher",
+        "candidate_id": candidate_id,
+        "source": source,
         "note": body.note.strip() if isinstance(body.note, str) and body.note.strip() else None,
-        "_meta": {"webspace_id": ws},
+        "_meta": _teacher_meta(
+            webspace_id=ws,
+            source=source,
+            request_id=request_id,
+            candidate_id=candidate_id,
+            title=body.text.strip(),
+        ),
     }
 
     try:
@@ -352,10 +387,11 @@ async def save_example(webspace_id: str, body: SaveExampleRequest):
 async def apply_candidate(webspace_id: str, body: ApplyCandidateRequest):
     ws = _resolve_webspace_id(webspace_id)
     ctx = get_ctx()
+    candidate_id = body.candidate_id.strip()
     payload = {
         "webspace_id": ws,
-        "candidate_id": body.candidate_id.strip(),
-        "_meta": {"webspace_id": ws, "source": "api.nlu.teacher"},
+        "candidate_id": candidate_id,
+        "_meta": _teacher_meta(webspace_id=ws, candidate_id=candidate_id, title=candidate_id),
     }
     if body.target is not None:
         payload["target"] = body.target.model_dump(exclude_none=True)
@@ -372,10 +408,11 @@ async def apply_candidate(webspace_id: str, body: ApplyCandidateRequest):
 async def rollback_candidate(webspace_id: str, body: RollbackCandidateRequest):
     ws = _resolve_webspace_id(webspace_id)
     ctx = get_ctx()
+    candidate_id = body.candidate_id.strip()
     payload = {
         "webspace_id": ws,
-        "candidate_id": body.candidate_id.strip(),
-        "_meta": {"webspace_id": ws, "source": "api.nlu.teacher"},
+        "candidate_id": candidate_id,
+        "_meta": _teacher_meta(webspace_id=ws, candidate_id=candidate_id, title=candidate_id),
     }
     if body.rule_id:
         payload["rule_id"] = body.rule_id.strip()
@@ -394,10 +431,11 @@ async def rollback_candidate(webspace_id: str, body: RollbackCandidateRequest):
 async def test_candidate(webspace_id: str, body: TestCandidateRequest):
     ws = _resolve_webspace_id(webspace_id)
     ctx = get_ctx()
+    candidate_id = body.candidate_id.strip()
     payload = {
         "webspace_id": ws,
-        "candidate_id": body.candidate_id.strip(),
-        "_meta": {"webspace_id": ws, "source": "api.nlu.teacher"},
+        "candidate_id": candidate_id,
+        "_meta": _teacher_meta(webspace_id=ws, candidate_id=candidate_id, title=candidate_id),
     }
     if body.target is not None:
         payload["target"] = body.target.model_dump(exclude_none=True)

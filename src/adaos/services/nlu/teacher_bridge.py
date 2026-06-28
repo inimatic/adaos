@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any, Dict, Mapping
 
 from adaos.sdk.core.decorators import subscribe
+from adaos.services import conversation_links
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.yjs.store import ystore_write_metadata
@@ -326,6 +327,26 @@ async def _on_not_obtained(evt: Any) -> None:
     reason = str(status.get("reason") or raw_reason or "unknown")
     via = status.get("via") if isinstance(status.get("via"), str) else None
     classification = _classify_not_obtained_for_teacher(reason=reason, via=via, meta=meta)
+    conversation_ref = conversation_links.ensure_teacher_conversation(
+        webspace_id,
+        request_id=request_id,
+        title=text[:120],
+        meta={"source": "nlu.teacher_bridge", "reason": reason, "via": via},
+    )
+    source_message_id = None
+    try:
+        source_message = conversation_links.append_teacher_event_message(
+            webspace_id=webspace_id,
+            text=text,
+            request_id=request_id,
+            kind="not_obtained" if classification.get("teachable") else "not_obtained.skipped",
+            payload={"reason": reason, "via": via, "classification": dict(classification)},
+            meta=meta,
+        )
+        if isinstance(source_message, Mapping):
+            source_message_id = str(source_message.get("id") or "").strip() or None
+    except Exception:
+        _log.debug("failed to append teacher conversation message webspace=%s", webspace_id, exc_info=True)
 
     item = {
         "id": f"teach.{int(time.time()*1000)}",
@@ -339,6 +360,8 @@ async def _on_not_obtained(evt: Any) -> None:
         "request_id": request_id,
         "classification": dict(classification),
         "status": "pending" if classification.get("teachable") else "skipped",
+        "conversation_ref": {k: v for k, v in conversation_ref.items() if k != "stored"},
+        "source_message_id": source_message_id,
         "_meta": dict(meta),
     }
 
@@ -358,7 +381,11 @@ async def _on_not_obtained(evt: Any) -> None:
                 title="Intent not obtained" if classification.get("teachable") else "Teacher skipped",
                 subtitle=f"{reason} via={via}" if via else reason,
                 raw=item,
-                meta=meta,
+                meta={
+                    **dict(meta),
+                    "conversation_ref": {k: v for k, v in conversation_ref.items() if k != "stored"},
+                    "source_message_id": source_message_id,
+                },
             ),
         )
     except Exception:
