@@ -51,6 +51,12 @@ Implemented today:
   state with `active_channel_id`, known channels, owner, default tool, active
   agent, agent icon, memory scope summary, and update metadata; the durable
   state lives in the node SQLite conversation tables.
+- The selected dialog channel is persisted in the node SQLite conversation
+  store. After an `adaos api serve` restart, Router restores the active
+  process-local dialog runtime from that durable pointer before publishing
+  `data/dialog` or the Voice chat projection. If the pointer does not exist yet
+  on an upgraded node, Router can bootstrap the active projection from the
+  latest ledger message.
 - The `general` channel has a core-owned default agent identity:
   `agent:core:general`, displayed as `Ada`/`Ада` unless configured otherwise.
   Addressing that agent by name while another channel is active deactivates the
@@ -132,10 +138,10 @@ Implemented companion pilot scenarios:
 - Manual channel switch: the Voice selector can switch `general` ->
   `conversational` through the same skill-owned start contract and
   `conversational` -> `general` through core-owned deactivation.
-- History: the pilot can page older messages from a bounded process-local
-  compatibility cache through the `Еще истории` control. Per-channel durable
-  history must wait for the canonical conversation ledger and conversation-id
-  based projection.
+- History: the pilot pages older messages from the node-local conversation
+  ledger through the `Еще истории` control. The browser sends the current
+  `conversation_id` / `dialog_channel_id`, so `general` and `conversational`
+  histories stay isolated while Yjs/WebIO remains a compact projection.
 
 ## Design Rules
 

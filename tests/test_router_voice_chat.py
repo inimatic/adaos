@@ -1268,7 +1268,11 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
             payload={
                 "text": user_text,
                 "webspace_id": webspace_id,
-                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "dialog_channel_id": "general",
+                },
             },
         )
     )
@@ -1301,6 +1305,8 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert data["dialog"]["active_agent"]["label"] == "Ника"
     assert data["dialog"]["active_agent"]["gender"] == "female"
     assert data["dialog"]["active_agent"]["icon"] == "female-outline"
+    assert data["voice_chat"]["messages"][0]["dialog_channel_id"] == "conversational"
+    assert data["voice_chat"]["messages"][-1]["dialog_channel_id"] == "conversational"
     dialog_runtime.reset_all()
 
 
@@ -1328,6 +1334,145 @@ async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_histo
     await bus.wait_for_idle(timeout=1.0)
 
     assert seen_stream == []
+
+
+async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(monkeypatch) -> None:
+    from adaos.services import conversation_store, dialog_runtime
+    from adaos.services.agent_context import get_ctx as real_get_ctx
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    async_get_calls: list[dict[str, object]] = []
+    ctx = real_get_ctx()
+    webspace_id = "restore-ledger-ws"
+    conversation_id = f"conv.skill.conversation_companions.default.{webspace_id}"
+    conversation_store.ensure_schema()
+    conversation_store.seed_agents(
+        [
+            {
+                "id": "agent:conversation_companions:arseni",
+                "label": "Арсений",
+                "owner": "skill:conversation_companions",
+                "channel_id": "conversational",
+                "skill": "conversation_companions",
+                "kind": "skill_agent",
+                "aliases": ["Арсений"],
+                "gender": "male",
+                "voice": "ru-male",
+                "icon": "male-outline",
+                "talk_tool": "talk",
+            }
+        ],
+        source="test",
+    )
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id=webspace_id,
+        owner="skill:conversation_companions",
+        kind="dialog",
+        title="Conversational",
+        active_agent_id="agent:conversation_companions:arseni",
+    )
+    conversation_store.upsert_dialog_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        label="Conversational",
+        owner="skill:conversation_companions",
+        conversation_id=conversation_id,
+        active_agent_id="agent:conversation_companions:arseni",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        route_id="voice_chat",
+        meta={
+            "active_agent_label": "Арсений",
+            "active_agent_owner": "skill:conversation_companions",
+            "active_agent_kind": "skill_agent",
+            "active_agent_gender": "male",
+            "active_agent_voice": "ru-male",
+            "active_agent_icon": "male-outline",
+        },
+    )
+    for index in range(9):
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            webspace_id=webspace_id,
+            channel_id="conversational",
+            owner="skill:conversation_companions",
+            role="hub",
+            text=f"turn {index}",
+            payload={"id": f"restore.{index}", "from": "hub", "text": f"turn {index}"},
+            actor_id="agent:conversation_companions:arseni",
+            actor_label="Арсений",
+            actor_icon="male-outline",
+            route_id="voice_chat",
+            ts=100.0 + index,
+        )
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=ctx.paths,
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=ctx.sql,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    def _fake_async_get_ydoc(*_args, **kwargs):
+        async_get_calls.append(dict(kwargs))
+        return _AsyncDoc(doc)
+
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", _fake_async_get_ydoc)
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.open",
+            source="test",
+            ts=1.0,
+            payload={
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "conversational"
+    assert state.active_agent_id == "agent:conversation_companions:arseni"
+    data = doc.get_map("data")
+    assert data["dialog"]["active_channel_id"] == "conversational"
+    assert data["dialog"]["active_agent"]["label"] == "Арсений"
+    assert seen_stream
+    stream = seen_stream[-1].payload["data"]
+    assert stream["conversation_id"] == conversation_id
+    assert stream["dialog_channel_id"] == "conversational"
+    assert stream["message_count"] == 8
+    assert stream["total_message_count"] == 9
+    assert stream["has_more_before"] is True
+    assert stream["messages"][0]["text"] == "turn 1"
+    assert data["voice_chat"]["conversation_id"] == conversation_id
+    assert data["voice_chat"]["dialog_channel_id"] == "conversational"
+    assert any(call.get("publish_live_room") is True for call in async_get_calls)
+    dialog_runtime.reset_all()
 
 
 async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> None:

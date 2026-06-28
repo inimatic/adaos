@@ -45,6 +45,17 @@ _SCHEMA = (
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS conversation_active_dialog_channels (
+        webspace_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        conversation_id TEXT,
+        active_agent_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        updated_at REAL NOT NULL,
+        meta_json TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS conversation_agent_registry (
         agent_id TEXT PRIMARY KEY,
         label TEXT NOT NULL,
@@ -411,6 +422,112 @@ def get_dialog_channel(webspace_id: str, channel_id: str) -> dict[str, Any] | No
         "status": row["status"],
         "policy": _json_load(row["policy_json"], {}),
         "meta": _json_load(row["meta_json"], {}),
+    }
+
+
+def set_active_dialog_channel(
+    *,
+    webspace_id: str,
+    channel_id: str,
+    conversation_id: str | None = None,
+    active_agent_id: str | None = None,
+    status: str = "active",
+    meta: Mapping[str, Any] | None = None,
+    ts: float | None = None,
+) -> bool:
+    if not ensure_schema():
+        return False
+    ws = str(webspace_id or "").strip() or "default"
+    cid = str(channel_id or "").strip() or "general"
+    now = float(ts or time.time())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.execute(
+            """
+            INSERT INTO conversation_active_dialog_channels(
+                webspace_id, channel_id, conversation_id, active_agent_id,
+                status, updated_at, meta_json
+            ) VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(webspace_id) DO UPDATE SET
+                channel_id=excluded.channel_id,
+                conversation_id=COALESCE(excluded.conversation_id, conversation_active_dialog_channels.conversation_id),
+                active_agent_id=COALESCE(excluded.active_agent_id, conversation_active_dialog_channels.active_agent_id),
+                status=excluded.status,
+                updated_at=excluded.updated_at,
+                meta_json=excluded.meta_json
+            """,
+            (
+                ws,
+                cid,
+                str(conversation_id or "").strip() or None,
+                str(active_agent_id or "").strip() or None,
+                str(status or "active").strip() or "active",
+                now,
+                _json_dump(dict(meta or {})),
+            ),
+        )
+        con.commit()
+    return True
+
+
+def get_active_dialog_channel(webspace_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    ws = str(webspace_id or "").strip() or "default"
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            """
+            SELECT * FROM conversation_active_dialog_channels
+            WHERE webspace_id=? AND status='active'
+            """,
+            (ws,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "webspace_id": row["webspace_id"],
+        "channel_id": row["channel_id"],
+        "id": row["channel_id"],
+        "conversation_id": row["conversation_id"],
+        "active_agent_id": row["active_agent_id"],
+        "status": row["status"],
+        "updated_at": row["updated_at"],
+        "meta": _json_load(row["meta_json"], {}),
+    }
+
+
+def latest_dialog_channel_for_webspace(webspace_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    ws = str(webspace_id or "").strip() or "default"
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            """
+            SELECT webspace_id, channel_id, conversation_id, owner, actor_id,
+                   actor_label, actor_icon, route_id, ts
+            FROM conversation_messages
+            WHERE webspace_id=? AND COALESCE(channel_id, '') <> ''
+            ORDER BY ts DESC, created_at DESC
+            LIMIT 1
+            """,
+            (ws,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "webspace_id": row["webspace_id"],
+        "channel_id": row["channel_id"],
+        "id": row["channel_id"],
+        "conversation_id": row["conversation_id"],
+        "owner": row["owner"],
+        "active_agent_id": row["actor_id"],
+        "active_agent_label": row["actor_label"],
+        "active_agent_icon": row["actor_icon"],
+        "route_id": row["route_id"],
+        "ts": row["ts"],
+        "status": "active",
+        "meta": {"source": "latest_message"},
     }
 
 

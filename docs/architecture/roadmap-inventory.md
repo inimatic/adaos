@@ -208,11 +208,12 @@ Current status:
 - [ ] Skill/agent personalization is still early. Scoped memory item records
   now exist with consent/source/policy fields, but extraction, approval, search,
   and retrieval policies are not implemented.
-- [x] There is a minimal process-local active dialog-channel registry for the
+- [x] There is a minimal active dialog-channel registry for the
   `conversation_companions` Voice pilot. It activates `conversational`, routes
   active Voice turns directly to the owner default tool before NLU/Teacher
-  fallback, handles explicit exit/general commands, and emits
-  `dialog.channel.*` lifecycle events.
+  fallback, handles explicit exit/general commands, persists the selected
+  channel in the node conversation store, restores it after API restart, and
+  emits `dialog.channel.*` lifecycle events.
 - [x] Router projects a compact browser-visible `data/dialog` snapshot for the
   Voice pilot, including current channel, owner, active agent, and projected
   memory scopes. The Voice widget can switch `general`/`conversational` via
@@ -236,8 +237,9 @@ Current status:
   `conversational`; `builder` and future dynamic skill-owned channels remain
   pending.
 - [x] Per-conversation durable visible history is implemented for the Voice
-  slice. `Еще истории` pages from the node-local ledger, while Yjs/WebIO carries
-  only the compact active projection.
+  slice. `Еще истории` pages from the node-local ledger by `conversation_id` /
+  `dialog_channel_id`, survives API restart, and keeps Yjs/WebIO as only the
+  compact active projection.
 - [x] Voice input has a conservative pre-NLU autocorrection stage for common
   local typing/recognition errors, with the original text preserved in request
   diagnostics metadata.
