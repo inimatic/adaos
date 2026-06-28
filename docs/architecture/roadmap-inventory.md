@@ -195,10 +195,11 @@ Current status:
 - [ ] Conversation identity, thread identity, owner, surface, context policy,
   and routing policy schemas are not frozen.
 - [ ] There is no first-class Dialog Runtime / Tracker yet; current text input
-  flows from transport into NLU and skill dispatch without an explicit turn
-  lifecycle, active frame, repair state, response planner, or trace envelope.
-- [ ] Dialog act, task-frame/form, response envelope, and turn trace schemas are
-  not frozen.
+  still flows through Voice compatibility routing before the future
+  conversation-owned lifecycle. The first durable turn trace envelope exists,
+  but active frame, repair state, and response planner ownership are not frozen.
+- [ ] Dialog act, task-frame/form, response envelope, and final turn trace
+  schemas are not frozen.
 - [ ] The node-local conversation/memory store still lacks FTS, segment
   summaries, delivery attempts, redaction/export flows, and strict
   policy-checked retrieval. The append-only ledger and memory item tables exist
@@ -246,15 +247,20 @@ Current status:
 - [x] The Voice toolbox has an initial read-only `Memory` inspector for the
   current agent/channel projection and node-store memory preview. Canonical
   memory editing, search, and policy-checked retrieval remain future work.
+- [x] The Voice debug panel can now inspect the latest durable turn trace from
+  `data.dialog.last_turn_trace`: selected channel, active agent, action target,
+  routing reason, and renderer/materialization status.
 - [x] The dispatcher now materializes a successful skill tool result `message`
   into the current Voice chat tail when the skill did not already publish a
   matching chat append.
 - [ ] The dispatcher/conversation service does not yet provide the same
   guarantee for canonical conversations, typed content, and non-Voice dialog
   surfaces.
-- [ ] There is no dialog-level golden conversation suite for channel switching,
-  companion agent switching, profile correction, Builder isolation, Teacher
-  clarification, endpoint audio dialog mode, or long-context retrieval.
+- [ ] A broad dialog-level golden conversation suite is still missing for
+  Builder isolation, Teacher clarification, endpoint audio dialog mode, and
+  long-context retrieval. The first companion Voice golden flow now covers
+  start, follow-up, addressed agent switch, skill-owned profile correction, and
+  return to `general`.
 - [ ] Response planning is not centralized yet; skills and compatibility paths
   can still choose user-visible rendering directly.
 - [x] Skill-owned pilot chats are declarable in the

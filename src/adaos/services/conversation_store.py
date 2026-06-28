@@ -965,6 +965,24 @@ def list_memory(
     return result
 
 
+def _row_to_turn_trace(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "turn_trace_id": row["turn_trace_id"],
+        "conversation_id": row["conversation_id"],
+        "message_id": row["message_id"],
+        "webspace_id": row["webspace_id"],
+        "channel_id": row["channel_id"],
+        "agent_id": row["agent_id"],
+        "selected_tool": row["selected_tool"],
+        "policy_decision": _json_load(row["policy_decision_json"], {}),
+        "renderer": _json_load(row["renderer_json"], {}),
+        "status": row["status"],
+        "summary": row["summary"],
+        "created_at": row["created_at"],
+        "completed_at": row["completed_at"],
+    }
+
+
 def start_turn_trace(
     *,
     webspace_id: str,
@@ -1022,6 +1040,19 @@ def start_turn_trace(
     return trace_id
 
 
+def get_turn_trace(turn_trace_id: str) -> dict[str, Any] | None:
+    trace_id = str(turn_trace_id or "").strip()
+    if not trace_id or not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM conversation_turn_traces WHERE turn_trace_id=?",
+            (trace_id,),
+        ).fetchone()
+    return _row_to_turn_trace(row) if row else None
+
+
 def finish_turn_trace(
     turn_trace_id: str,
     *,
@@ -1071,18 +1102,4 @@ def latest_turn_trace(*, webspace_id: str, conversation_id: str | None = None) -
         ).fetchone()
     if not row:
         return None
-    return {
-        "turn_trace_id": row["turn_trace_id"],
-        "conversation_id": row["conversation_id"],
-        "message_id": row["message_id"],
-        "webspace_id": row["webspace_id"],
-        "channel_id": row["channel_id"],
-        "agent_id": row["agent_id"],
-        "selected_tool": row["selected_tool"],
-        "policy_decision": _json_load(row["policy_decision_json"], {}),
-        "renderer": _json_load(row["renderer_json"], {}),
-        "status": row["status"],
-        "summary": row["summary"],
-        "created_at": row["created_at"],
-        "completed_at": row["completed_at"],
-    }
+    return _row_to_turn_trace(row)

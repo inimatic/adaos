@@ -1714,6 +1714,101 @@ class RouterService:
                 "channel": channel,
             }
 
+        def _record_voice_turn_trace(
+            webspace_id: str,
+            meta: dict[str, Any],
+            *,
+            text: str = "",
+            message_id: str | None = None,
+            selected_tool: str | None = None,
+            reason: str = "voice_turn",
+            renderer: Mapping[str, Any] | None = None,
+            summary: str | None = None,
+            status: str | None = None,
+            target_node_id: str | None = None,
+            extra_policy: Mapping[str, Any] | None = None,
+        ) -> str:
+            ws = str(webspace_id or "default").strip() or "default"
+            trace_id = str(meta.get("turn_trace_id") or "").strip()
+            if not trace_id:
+                trace_id = _make_id("trace")
+                meta["turn_trace_id"] = trace_id
+            try:
+                context = _voice_message_dialog_context(
+                    ws,
+                    {"id": message_id or "", "from": "user", "text": text, "_meta": meta},
+                )
+                channel_id = str(context.get("channel_id") or GENERAL_DIALOG_CHANNEL_ID).strip() or GENERAL_DIALOG_CHANNEL_ID
+                conversation_id = str(context.get("conversation_id") or "").strip()
+                route_id = str(context.get("route_id") or meta.get("route_id") or "voice_chat").strip() or "voice_chat"
+                owner = str(context.get("owner") or "").strip()
+                agent = context.get("agent") if isinstance(context.get("agent"), dict) else {}
+                channel = context.get("channel") if isinstance(context.get("channel"), dict) else {}
+                tool = str(selected_tool or "").strip()
+                if not tool:
+                    default_skill = str(channel.get("default_skill") or "").strip()
+                    default_tool = str(channel.get("default_tool") or "").strip()
+                    tool = f"{default_skill}.{default_tool}".strip(".") if default_skill or default_tool else ""
+                agent_id = str(meta.get("active_agent_id") or agent.get("id") or "").strip()
+                policy: dict[str, Any] = {
+                    "reason": str(reason or "voice_turn"),
+                    "source": "router.voice",
+                    "route_id": route_id,
+                    "selected_channel": channel_id,
+                    "selected_conversation": conversation_id,
+                    "selected_owner": owner,
+                    "selected_agent_id": agent_id,
+                    "selected_agent_label": str(meta.get("active_agent_label") or agent.get("label") or "").strip(),
+                    "requested_channel": str(meta.get("dialog_channel_id") or "").strip(),
+                    "target_node_id": str(target_node_id or meta.get("target_node_id") or "").strip(),
+                }
+                if meta.get("original_text") or meta.get("autocorrected_text"):
+                    policy["text_correction"] = {
+                        "original": meta.get("original_text"),
+                        "autocorrected": meta.get("autocorrected_text"),
+                    }
+                for key in ("addressed_agent_id", "character_id", "conversation_owner"):
+                    value = str(meta.get(key) or "").strip()
+                    if value:
+                        policy[key] = value
+                if extra_policy:
+                    policy.update(dict(extra_policy))
+                trace_renderer = dict(renderer or {"receiver": "voice_chat.messages", "projection": "compact_tail"})
+                if status == "tool_ok":
+                    try:
+                        existing = conversation_store.get_turn_trace(trace_id)
+                    except Exception:
+                        existing = None
+                    if isinstance(existing, dict) and str(existing.get("status") or "") == "materialized":
+                        return trace_id
+                conversation_store.start_turn_trace(
+                    turn_trace_id=trace_id,
+                    webspace_id=ws,
+                    conversation_id=conversation_id or None,
+                    channel_id=channel_id,
+                    agent_id=agent_id or None,
+                    selected_tool=tool or None,
+                    policy_decision=policy,
+                    renderer=trace_renderer,
+                    message_id=message_id,
+                    summary=summary,
+                )
+                if status:
+                    conversation_store.finish_turn_trace(
+                        trace_id,
+                        status=status,
+                        summary=summary,
+                        renderer=trace_renderer,
+                    )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").debug(
+                    "voice turn trace update failed webspace=%s trace_id=%s",
+                    ws,
+                    trace_id,
+                    exc_info=True,
+                )
+            return trace_id
+
         def _fallback_publish_voice_chat_message(
             webspace_id: str,
             target_node_id: str | None,
@@ -2433,9 +2528,16 @@ class RouterService:
             clean_msg["dialog_channel_id"] = channel_id
             clean_msg["conversation_id"] = conversation_id
             turn_trace_id = str(meta.get("turn_trace_id") or clean_msg.get("turn_trace_id") or "").strip()
-            if not turn_trace_id:
+            existing_trace = None
+            if turn_trace_id:
+                try:
+                    existing_trace = conversation_store.get_turn_trace(turn_trace_id)
+                except Exception:
+                    existing_trace = None
+            if not turn_trace_id or existing_trace is None:
                 try:
                     turn_trace_id = conversation_store.start_turn_trace(
+                        turn_trace_id=turn_trace_id or None,
                         webspace_id=str(webspace_id or "default").strip() or "default",
                         conversation_id=conversation_id,
                         channel_id=channel_id,
@@ -3570,6 +3672,18 @@ class RouterService:
             kind = str(dialog_action.get("kind") or "").strip()
             if kind == "exit":
                 channel = dialog_action.get("channel") if isinstance(dialog_action.get("channel"), dict) else {}
+                _record_voice_turn_trace(
+                    webspace_id,
+                    meta,
+                    selected_tool="router.voice.dialog_exit",
+                    reason="dialog_exit",
+                    status="completed",
+                    summary="Dialog channel exited",
+                    extra_policy={
+                        "dialog_action_kind": "exit",
+                        "previous_channel": str(channel.get("channel_id") or "").strip(),
+                    },
+                )
                 dialog_runtime.deactivate_channel(
                     webspace_id=webspace_id,
                     channel_id=str(channel.get("channel_id") or "").strip() or None,
@@ -3619,6 +3733,20 @@ class RouterService:
             action_meta = action_payload.get("_meta") if isinstance(action_payload.get("_meta"), dict) else meta
             if not skill or not tool:
                 return False
+            _record_voice_turn_trace(
+                webspace_id,
+                action_meta,
+                text=str(action_payload.get("text") or ""),
+                selected_tool=f"{skill}.{tool}",
+                reason=str(action_meta.get("dialog_policy_reason") or meta.get("dialog_policy_reason") or "dialog_followup"),
+                renderer={"receiver": "skill_runtime", "tool": f"{skill}.{tool}", "projection": "tool_result"},
+                summary=f"Routed dialog turn to {skill}.{tool}",
+                extra_policy={
+                    "dialog_action_kind": "skill_tool",
+                    "mark_request": bool(mark_request),
+                    "request_id": str(request_id or "").strip(),
+                },
+            )
             try:
                 result = await asyncio.to_thread(
                     _call_runtime_skill_tool,
@@ -3634,6 +3762,17 @@ class RouterService:
                     tool,
                     exc_info=True,
                 )
+                _record_voice_turn_trace(
+                    webspace_id,
+                    action_meta,
+                    text=str(action_payload.get("text") or ""),
+                    selected_tool=f"{skill}.{tool}",
+                    reason=str(action_meta.get("dialog_policy_reason") or meta.get("dialog_policy_reason") or "dialog_followup"),
+                    status="failed",
+                    renderer={"receiver": "skill_runtime", "tool": f"{skill}.{tool}", "projection": "exception"},
+                    summary=f"{skill}.{tool} raised during dialog turn",
+                    extra_policy={"result_status": "exception"},
+                )
                 return False
             if not isinstance(result, dict) or not bool(result.get("ok")):
                 logging.getLogger("adaos.router.voice_chat").warning(
@@ -3641,6 +3780,17 @@ class RouterService:
                     skill,
                     tool,
                     result,
+                )
+                _record_voice_turn_trace(
+                    webspace_id,
+                    action_meta,
+                    text=str(action_payload.get("text") or ""),
+                    selected_tool=f"{skill}.{tool}",
+                    reason=str(action_meta.get("dialog_policy_reason") or meta.get("dialog_policy_reason") or "dialog_followup"),
+                    status="failed",
+                    renderer={"receiver": "skill_runtime", "tool": f"{skill}.{tool}", "projection": "tool_result"},
+                    summary=f"{skill}.{tool} returned non-ok dialog result",
+                    extra_policy={"result_ok": False, "result_status": "non_ok"},
                 )
                 return False
             try:
@@ -3659,6 +3809,21 @@ class RouterService:
                     exc_info=True,
                 )
             await _write_dialog_state(webspace_id, event="turn")
+            _record_voice_turn_trace(
+                webspace_id,
+                action_meta,
+                text=str(action_payload.get("text") or ""),
+                selected_tool=f"{skill}.{tool}",
+                reason=str(action_meta.get("dialog_policy_reason") or meta.get("dialog_policy_reason") or "dialog_followup"),
+                status="tool_ok",
+                renderer={"receiver": "voice_chat.messages", "projection": "pending_materialization"},
+                summary=f"{skill}.{tool} returned ok; waiting for visible output",
+                extra_policy={
+                    "result_ok": True,
+                    "result_status": "ok",
+                    "result_has_message": bool(str(result.get("message") or "").strip()),
+                },
+            )
             if mark_request:
                 try:
                     from adaos.services.nlu.dispatcher import mark_dispatched_request
@@ -3848,6 +4013,17 @@ class RouterService:
                 "ts": time.time(),
                 "_meta": dict(meta),
             }
+            _record_voice_turn_trace(
+                ws,
+                meta,
+                text=text,
+                message_id=str(msg["id"]),
+                selected_tool="router.voice.receive",
+                reason="voice_user_received",
+                renderer={"receiver": "voice_chat.messages", "projection": "user_append"},
+                target_node_id=target_node_id,
+            )
+            msg["_meta"] = dict(meta)
             try:
                 await _append_voice_chat_message(ws, msg, target_node_id)
             except Exception:
@@ -3910,6 +4086,15 @@ class RouterService:
             if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
                 addressed_general_text = addressed_agent[1]
                 _persist_general_dialog_channel(ws, event="general_agent_addressed")
+                _record_voice_turn_trace(
+                    ws,
+                    meta,
+                    text=text,
+                    selected_tool="router.voice.general_agent",
+                    reason="general_agent_addressed",
+                    renderer={"receiver": "voice_chat.messages", "projection": "general_agent"},
+                    target_node_id=target_node_id,
+                )
                 current_dialog_channel = dialog_runtime.get_active_channel(ws)
                 if current_dialog_channel is not None:
                     dialog_runtime.deactivate_channel(
@@ -3932,6 +4117,7 @@ class RouterService:
                                 "active_agent_gender": "female",
                                 "active_agent_voice": "ru-female",
                                 "active_agent_icon": _general_agent_projection().get("icon"),
+                                "_meta": dict(meta),
                             },
                             target_node_id,
                         )
@@ -3961,6 +4147,7 @@ class RouterService:
                                 "active_agent_gender": "female",
                                 "active_agent_voice": "ru-female",
                                 "active_agent_icon": _general_agent_projection().get("icon"),
+                                "_meta": dict(meta),
                             },
                             target_node_id,
                         )
@@ -3972,6 +4159,15 @@ class RouterService:
                         pass
                     return
                 if _is_agent_roster_question(addressed_general_text):
+                    _record_voice_turn_trace(
+                        ws,
+                        meta,
+                        text=text,
+                        selected_tool="router.voice.agent_roster",
+                        reason="agent_roster_question",
+                        renderer={"receiver": "voice_chat.messages", "projection": "agent_roster"},
+                        target_node_id=target_node_id,
+                    )
                     try:
                         await _append_voice_chat_message(
                             ws,
@@ -3985,6 +4181,7 @@ class RouterService:
                                 "active_agent_gender": "female",
                                 "active_agent_voice": "ru-female",
                                 "active_agent_icon": _general_agent_projection().get("icon"),
+                                "_meta": dict(meta),
                             },
                             target_node_id,
                         )
@@ -4008,6 +4205,8 @@ class RouterService:
                         **meta,
                         "webspace_id": ws,
                         "route_id": "voice_chat",
+                        "dialog_policy_reason": "addressed_agent",
+                        "addressed_agent_id": str(agent.get("id") or "").strip(),
                         "dialog_channel_id": channel_id,
                         "active_agent_id": str(agent.get("id") or "").strip(),
                         "active_agent_label": str(agent.get("label") or "").strip(),
@@ -4089,6 +4288,15 @@ class RouterService:
                 else GENERAL_DIALOG_CHANNEL_ID
             )
             if current_channel_id_for_roster == GENERAL_DIALOG_CHANNEL_ID and _is_agent_roster_question(text):
+                _record_voice_turn_trace(
+                    ws,
+                    meta,
+                    text=text,
+                    selected_tool="router.voice.agent_roster",
+                    reason="agent_roster_question",
+                    renderer={"receiver": "voice_chat.messages", "projection": "agent_roster"},
+                    target_node_id=target_node_id,
+                )
                 try:
                     await _append_voice_chat_message(
                         ws,
@@ -4102,6 +4310,7 @@ class RouterService:
                             "active_agent_gender": "female",
                             "active_agent_voice": "ru-female",
                             "active_agent_icon": _general_agent_projection().get("icon"),
+                            "_meta": dict(meta),
                         },
                         target_node_id,
                     )
@@ -4117,14 +4326,14 @@ class RouterService:
                     webspace_id=ws,
                     text=text,
                     route_id="voice_chat",
-                    meta={**meta, "route_id": "voice_chat"},
+                    meta={**meta, "route_id": "voice_chat", "dialog_policy_reason": "active_dialog_followup"},
                 )
             except Exception:
                 dialog_action = None
             if isinstance(dialog_action, dict) and await _handle_dialog_action(
                 dialog_action=dialog_action,
                 webspace_id=ws,
-                meta={**meta, "route_id": "voice_chat"},
+                meta={**meta, "route_id": "voice_chat", "dialog_policy_reason": "active_dialog_followup"},
                 route_id="voice_chat",
                 mark_request=False,
             ):
@@ -4135,6 +4344,17 @@ class RouterService:
                 return
             # Fire-and-forget NLU detection so that text commands can be
             # mapped to scenario/skill actions via an external interpreter.
+            _record_voice_turn_trace(
+                ws,
+                meta,
+                text=text,
+                selected_tool="nlp.intent.detect.request",
+                reason="nlu_fallback",
+                renderer={"receiver": "nlp.intent.detect.request", "projection": "event_bus"},
+                summary="Published voice text to NLU interpreter",
+                status="routed",
+                target_node_id=target_node_id,
+            )
             try:
                 self.bus.publish(
                     Event(

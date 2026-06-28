@@ -91,6 +91,11 @@ Implemented today:
   channel, active agent, conversation id, projected memory scopes, and a small
   node-store memory preview. It is an observability surface, not a memory
   editor.
+- Each Voice turn now carries a durable `turn_trace_id`. Router records the
+  selected channel, conversation, owner, agent, action target, routing reason,
+  and renderer/materialization status in the node conversation store, and
+  projects the latest trace through `data/dialog.last_turn_trace` for the Voice
+  debug panel.
 - `adaos.sdk.conversation` and `adaos.sdk.memory` expose the first low-level
   facades for generated skills and Builder experiments. They are intentionally
   thin over the node store until response envelopes and context packets are
@@ -129,8 +134,9 @@ Implemented companion pilot scenarios:
 - Agent switch/profile correction: addressing `Арсений`, `Ника`, or `Мира`
   from the Voice shell is resolved by the core pilot registry, delegated to
   `conversation_companions`, switches to `conversational` when needed, and
-  updates `active_agent_id`. Richer in-channel profile correction remains a
-  follow-up for the skill.
+  updates `active_agent_id`. In-channel style corrections such as "говори
+  короче и теплее" are handled by the skill owner policy through
+  `conversation_companions.talk` delegating to `update_profile`.
 - Exit: explicit "general"/"back to general" style commands deactivate the
   pilot channel and return unmatched turns to the general Voice fallback.
   Addressing the general agent by name, for example "Ада, ...", performs the
@@ -142,6 +148,9 @@ Implemented companion pilot scenarios:
   ledger through the `Еще истории` control. The browser sends the current
   `conversation_id` / `dialog_channel_id`, so `general` and `conversational`
   histories stay isolated while Yjs/WebIO remains a compact projection.
+- Observability: the Voice debug panel can show the last turn policy decision,
+  selected tool, selected channel/agent, and renderer/materialization path from
+  the durable turn trace.
 
 ## Design Rules
 
@@ -1465,11 +1474,11 @@ depth across several phases.
   inside the Voice dialog surface.
 - [x] `[should]` Add conservative pre-NLU autocorrection for common local text
   input mistakes while preserving the original text in diagnostics metadata.
-- [ ] `[must]` Move in-channel profile-correction commands fully under the
+- [x] `[must]` Move in-channel profile-correction commands fully under the
   `conversation_companions` owner policy.
 - [x] `[must]` Keep `voice_chat.messages` as a compatibility projection, not
   the canonical design.
-- [ ] `[must]` Add a golden conversation test for "pogovorim" -> reply ->
+- [x] `[must]` Add a golden conversation test for "pogovorim" -> reply ->
   follow-up -> switch character -> style correction -> back to `general`.
 - [x] `[should]` Add initial diagnostics showing active channel, conversation,
   owner, active agent, and projected memory scopes.
@@ -1516,9 +1525,11 @@ depth across several phases.
 - [ ] `[must]` Define response rendering targets: text tail, speech text, card,
   Pending Action, notification, Builder evidence view, and transport-native
   affordance.
-- [ ] `[should]` Add a small policy-inspection API for one turn:
-  selected channel, conversation, owner, NLU result, frame, repair state,
-  action target, and response renderer.
+- [x] `[should]` Add a first policy-inspection projection for one turn:
+  selected channel, conversation, owner, action target, routing reason, and
+  response renderer are available in `data.dialog.last_turn_trace`.
+- [ ] `[should]` Promote the projection into a small policy-inspection API that
+  also includes NLU evidence, frame state, repair state, and replay/debug links.
 - [ ] `[could]` Add a simulator API that replays golden conversations without a
   browser or real transport.
 
@@ -1543,8 +1554,8 @@ depth across several phases.
   introducing neutral `dialog.*` events and metadata.
 - [x] `[could]` Add a temporary Voice debug panel that shows NLU logs,
   runtime flags, active dialog/memory projection, and current owner/agent.
-- [ ] `[could]` Add last dispatch result and renderer/materialization status
-  to the Voice debug panel.
+- [x] `[could]` Add last dispatch result and renderer/materialization status
+  to the Voice debug panel through `data.dialog.last_turn_trace`.
 
 ### Phase 1. Node Conversation/Memory Store
 

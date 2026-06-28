@@ -78,6 +78,18 @@ def test_update_profile_applies_bounded_style_patch() -> None:
     assert any("Не заканчивает ответ вопросом" in rule for rule in result["profile"]["style_rules"])
 
 
+def test_talk_routes_style_correction_to_profile_update() -> None:
+    skill = _load_module()
+    skill.reset_session(webspace_id="test-talk-profile")
+
+    result = skill.talk("говори короче и теплее", preview=True, webspace_id="test-talk-profile")
+
+    assert result["ok"] is True
+    assert result["character_id"] == "arseni"
+    assert result["patch"]["verbosity"] == "коротко, одна-две главные мысли"
+    assert "Обновил профиль" in result["message"]
+
+
 def test_talk_preview_uses_local_fallback_without_llm() -> None:
     skill = _load_module()
     skill.reset_session(webspace_id="test-talk")
