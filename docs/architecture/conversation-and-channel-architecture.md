@@ -1822,14 +1822,22 @@ Important lacunae found during Phase 6 implementation:
 
 ### Phase 7. Subnet Federation
 
-- [ ] `[must]` Define a policy-checked federated search/read request shape for
-  node-to-node conversation and memory retrieval.
-- [ ] `[must]` Keep federation timeout-bound and partial-result-friendly.
-- [ ] `[must]` Return fragments, summaries, refs, and scores, not direct remote
-  database access.
+- [x] `[must]` Define a policy-checked federated search/read request shape for
+  node-to-node conversation and memory retrieval. The first contract is
+  `adaos.conversation_federated_retrieval.request.v1`, normalized by
+  `conversation_federation.normalize_request()`, with requester owner, scopes,
+  limits, target nodes, and deny-by-default cross-owner policy.
+- [x] `[must]` Keep federation timeout-bound and partial-result-friendly.
+  `conversation_federation.execute_local_request()` enforces per-node timeout
+  budgets and returns `status=partial` plus denials instead of blocking.
+- [x] `[must]` Return fragments, summaries, refs, and scores, not direct remote
+  database access. The response schema returns `fragments[]` with text,
+  summary, score, source refs, and `remote_sql=false`.
 - [ ] `[should]` Add node-local retrieval health and index-status diagnostics.
 - [ ] `[should]` Add cross-node query audit events with requesting actor,
   target node, owner scope, and denied/returned counts.
+- [ ] `[should]` Add the actual node-to-node transport adapter for federated
+  retrieval after the local executor contract is stable.
 - [ ] `[could]` Add subnet-level search UI after local-node retrieval and policy
   gates are stable.
 
