@@ -134,3 +134,26 @@ def test_memory_write_policy_distinguishes_supported_scopes() -> None:
     assert agent_preference["subject_id"] == "agent:test:nika"
     assert global_user["scope"] == "global_user"
     assert global_user["policy"]["reuse"] == "cross_owner_with_consent"
+
+
+def test_memory_search_and_forget_are_scoped_and_redaction_aware() -> None:
+    memory_id = sdk_memory.remember(
+        scope="skill_user",
+        owner="skill:test",
+        subject_id="skill:test",
+        key="answer_style",
+        text="prefers compact answers",
+        consent_state="skill_scoped",
+        visibility="owner_only",
+    )
+    assert memory_id
+
+    found = sdk_memory.search("compact", scope="skill_user", owner="skill:test")
+    assert [item["id"] for item in found] == [memory_id]
+
+    assert sdk_memory.forget(memory_id=memory_id, reason="test_cleanup") == 1
+    assert sdk_memory.list(scope="skill_user", owner="skill:test") == []
+    redacted = sdk_memory.list(scope="skill_user", owner="skill:test", include_redacted=True)
+    assert redacted[0]["id"] == memory_id
+    assert redacted[0]["redaction_state"] == "redacted"
+    assert redacted[0]["redaction_reason"] == "test_cleanup"

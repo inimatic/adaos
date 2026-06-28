@@ -35,7 +35,7 @@ from adaos.services.scenario.projection_service import _merge_nested_path
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
-from adaos.services import conversation_store, dialog_runtime
+from adaos.services import conversation_context, conversation_response, conversation_store, dialog_runtime
 from adaos.services.nlu.text_correction import correct_light_text
 
 
@@ -2593,6 +2593,7 @@ class RouterService:
                 _store_dialog_channel_projection(str(webspace_id or "default").strip() or "default", context.get("channel") or {})
                 stored = conversation_store.append_message(
                     conversation_id=conversation_id,
+                    thread_id=str(clean_msg.get("thread_id") or meta.get("thread_id") or "").strip() or None,
                     webspace_id=str(webspace_id or "default").strip() or "default",
                     channel_id=channel_id,
                     owner=owner,
@@ -2653,8 +2654,13 @@ class RouterService:
                         turn_trace_id,
                         status="materialized",
                         summary=f"Rendered to voice_chat.messages via {route_id}",
-                        renderer={"receiver": "voice_chat.messages", "message_id": clean_msg.get("id")},
+                        renderer={
+                            "receiver": "voice_chat.messages",
+                            "projection": "compact_tail",
+                            "message_id": clean_msg.get("id"),
+                        },
                     )
+                    await _write_dialog_state(webspace_id, event="turn_materialized")
                 except Exception:
                     pass
 
@@ -3377,6 +3383,9 @@ class RouterService:
                 raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():
                     msg[key] = raw_value.strip()
+            raw_thread_id = payload.get("thread_id") if payload.get("thread_id") is not None else meta.get("thread_id")
+            if isinstance(raw_thread_id, str) and raw_thread_id.strip():
+                msg["thread_id"] = raw_thread_id.strip()
             for key in (
                 "voice",
                 "voice_gender",
@@ -3734,6 +3743,58 @@ class RouterService:
                     exc_info=True,
                 )
 
+        def _attach_dialog_context_payload(
+            payload: dict[str, Any],
+            *,
+            webspace_id: str,
+            channel_id: str,
+            conversation_id: str,
+            owner: str,
+            agent_id: str | None,
+            route_id: str,
+        ) -> None:
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            payload["_meta"] = {
+                **dict(meta),
+                "webspace_id": webspace_id,
+                "dialog_channel_id": channel_id,
+                "conversation_id": conversation_id,
+                "conversation_owner": owner,
+                "route_id": route_id,
+            }
+            if agent_id:
+                payload["_meta"].setdefault("active_agent_id", agent_id)
+            payload.setdefault("conversation_id", conversation_id)
+            payload.setdefault("dialog_channel_id", channel_id)
+            payload.setdefault("conversation_owner", owner)
+            try:
+                payload["conversation_context"] = conversation_context.build_context_packet(
+                    conversation_id=conversation_id,
+                    requester_owner=owner,
+                    channel_id=channel_id,
+                    agent_id=agent_id,
+                    budgets={
+                        "max_tokens": 4_000,
+                        "max_messages": 20,
+                        "max_memory_items": 12,
+                        "timeout_ms": 250,
+                    },
+                )
+            except Exception as exc:
+                payload["conversation_context"] = {
+                    "schema": "adaos.context.packet.v1",
+                    "conversation_id": conversation_id,
+                    "requester_owner": owner,
+                    "channel_id": channel_id,
+                    "agent_id": agent_id,
+                    "messages": [],
+                    "memory": [],
+                    "diagnostics": {
+                        "fallbacks": ["context_packet_unavailable"],
+                        "error": type(exc).__name__,
+                    },
+                }
+
         async def _handle_dialog_action(
             *,
             dialog_action: dict[str, Any],
@@ -3807,6 +3868,44 @@ class RouterService:
             action_meta = action_payload.get("_meta") if isinstance(action_payload.get("_meta"), dict) else meta
             if not skill or not tool:
                 return False
+            action_channel = dialog_action.get("channel") if isinstance(dialog_action.get("channel"), dict) else {}
+            conversation_id = str(
+                action_meta.get("conversation_id")
+                or action_payload.get("conversation_id")
+                or action_channel.get("conversation_id")
+                or ""
+            ).strip()
+            channel_id = str(
+                action_meta.get("dialog_channel_id")
+                or action_meta.get("channel_id")
+                or action_payload.get("dialog_channel_id")
+                or action_channel.get("channel_id")
+                or CONVERSATIONAL_DIALOG_CHANNEL_ID
+            ).strip() or CONVERSATIONAL_DIALOG_CHANNEL_ID
+            owner = str(
+                action_meta.get("conversation_owner")
+                or action_payload.get("conversation_owner")
+                or action_channel.get("owner")
+                or f"skill:{skill}"
+            ).strip() or f"skill:{skill}"
+            agent_id = str(
+                action_meta.get("active_agent_id")
+                or action_payload.get("active_agent_id")
+                or action_channel.get("active_agent_id")
+                or ""
+            ).strip() or None
+            if not conversation_id:
+                conversation_id = _skill_conversation_id(skill, webspace_id)
+            _attach_dialog_context_payload(
+                action_payload,
+                webspace_id=webspace_id,
+                channel_id=channel_id,
+                conversation_id=conversation_id,
+                owner=owner,
+                agent_id=agent_id,
+                route_id=route_id,
+            )
+            action_meta = action_payload.get("_meta") if isinstance(action_payload.get("_meta"), dict) else action_meta
             _record_voice_turn_trace(
                 webspace_id,
                 action_meta,
@@ -3885,6 +3984,25 @@ class RouterService:
                     "dialog follow-up result state update failed",
                     exc_info=True,
                 )
+            materialization = conversation_response.materialize_tool_result(
+                result,
+                webspace_id=webspace_id,
+                conversation_id=conversation_id,
+                channel_id=channel_id,
+                owner=owner,
+                bus=self.bus,
+                route_id=route_id,
+                actor_id=agent_id,
+                actor_label=str(action_meta.get("active_agent_label") or "").strip() or None,
+                actor_icon=str(action_meta.get("active_agent_icon") or action_meta.get("agent_icon") or "").strip() or None,
+                request_id=str(request_id or action_meta.get("request_id") or "").strip() or None,
+                turn_trace_id=str(action_meta.get("turn_trace_id") or "").strip() or None,
+                thread_id=str(action_meta.get("thread_id") or action_payload.get("thread_id") or "").strip() or None,
+                raw_meta=meta,
+                payload_meta=action_meta,
+                source="router.voice_chat",
+                materialized_chat_appends=materialized_chat_appends,
+            )
             result_message = str(result.get("message") or "").strip()
             materialized_payload = None
             if result_message:
@@ -3902,6 +4020,10 @@ class RouterService:
                     ),
                     None,
                 )
+            if materialized_payload is None:
+                published = materialization.get("published_chat") if isinstance(materialization, dict) else None
+                if isinstance(published, list) and published:
+                    materialized_payload = next((item for item in published if isinstance(item, dict)), None)
             trace_status = "tool_ok"
             trace_renderer: dict[str, Any] = {"receiver": "voice_chat.messages", "projection": "pending_materialization"}
             trace_summary = f"{skill}.{tool} returned ok; waiting for visible output"
@@ -3909,12 +4031,15 @@ class RouterService:
                 "result_ok": True,
                 "result_status": "ok",
                 "result_has_message": bool(result_message),
+                "response_envelope_materialized": bool(
+                    isinstance(materialization, dict) and materialization.get("materialized")
+                ),
             }
-            if result_message and materialized_payload is not None:
+            if materialized_payload is not None:
                 trace_status = "materialized"
                 trace_renderer = {
                     "receiver": "voice_chat.messages",
-                    "projection": "skill_emitted_message",
+                    "projection": "skill_emitted_message" if result_message else "response_envelope",
                     "message_id": materialized_payload.get("id"),
                 }
                 trace_summary = f"{skill}.{tool} returned ok and materialized visible output"

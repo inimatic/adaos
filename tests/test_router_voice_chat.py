@@ -429,26 +429,22 @@ async def test_voice_chat_not_obtained_routes_active_dialog_followup(monkeypatch
     await bus.wait_for_idle(timeout=1.0)
     turn_trace_id = calls[0][2]["_meta"]["turn_trace_id"]
     assert str(turn_trace_id).startswith("trace.")
-    assert calls == [
-        (
-            "conversation_companions",
-            "talk",
-            {
-                "text": "let us discuss my launch plan",
-                "webspace_id": webspace_id,
-                "_meta": {
-                    "route_id": "voice_chat",
-                    "webspace_id": webspace_id,
-                    "turn_trace_id": turn_trace_id,
-                    "dialog_channel_id": "conversational",
-                    "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
-                    "conversation_owner": "skill:conversation_companions",
-                    "active_agent_id": "agent:conversation_companions:arseni",
-                },
-            },
-            {"bypass_yjs_guard": True},
-        )
-    ]
+    assert calls[0][0:2] == ("conversation_companions", "talk")
+    assert calls[0][3] == {"bypass_yjs_guard": True}
+    assert calls[0][2]["text"] == "let us discuss my launch plan"
+    assert calls[0][2]["webspace_id"] == webspace_id
+    assert calls[0][2]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
+    assert calls[0][2]["dialog_channel_id"] == "conversational"
+    assert calls[0][2]["conversation_context"]["conversation_id"] == calls[0][2]["conversation_id"]
+    assert calls[0][2]["_meta"] == {
+        "route_id": "voice_chat",
+        "webspace_id": webspace_id,
+        "turn_trace_id": turn_trace_id,
+        "dialog_channel_id": "conversational",
+        "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+        "conversation_owner": "skill:conversation_companions",
+        "active_agent_id": "agent:conversation_companions:arseni",
+    }
     dialog_runtime.reset_all()
 
 
@@ -1168,28 +1164,24 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     assert seen_nlu == []
     turn_trace_id = calls[0][2]["_meta"]["turn_trace_id"]
     assert str(turn_trace_id).startswith("trace.")
-    assert calls == [
-        (
-            "conversation_companions",
-            "talk",
-            {
-                "text": "free form companion turn",
-                "webspace_id": webspace_id,
-                "_meta": {
-                    "route_id": "voice_chat",
-                    "voice_chat_scope": "shared",
-                    "webspace_id": webspace_id,
-                    "turn_trace_id": turn_trace_id,
-                    "dialog_policy_reason": "active_dialog_followup",
-                    "dialog_channel_id": "conversational",
-                    "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
-                    "conversation_owner": "skill:conversation_companions",
-                    "active_agent_id": "agent:conversation_companions:arseni",
-                },
-            },
-            {"bypass_yjs_guard": True},
-        )
-    ]
+    assert calls[0][0:2] == ("conversation_companions", "talk")
+    assert calls[0][3] == {"bypass_yjs_guard": True}
+    assert calls[0][2]["text"] == "free form companion turn"
+    assert calls[0][2]["webspace_id"] == webspace_id
+    assert calls[0][2]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
+    assert calls[0][2]["dialog_channel_id"] == "conversational"
+    assert calls[0][2]["conversation_context"]["conversation_id"] == calls[0][2]["conversation_id"]
+    assert calls[0][2]["_meta"] == {
+        "route_id": "voice_chat",
+        "voice_chat_scope": "shared",
+        "webspace_id": webspace_id,
+        "turn_trace_id": turn_trace_id,
+        "dialog_policy_reason": "active_dialog_followup",
+        "dialog_channel_id": "conversational",
+        "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+        "conversation_owner": "skill:conversation_companions",
+        "active_agent_id": "agent:conversation_companions:arseni",
+    }
     assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "free form companion turn"
     dialog_runtime.reset_all()
 
@@ -1376,6 +1368,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert calls[0][2]["_meta"]["voice_gender"] == "female"
     assert calls[0][2]["_meta"]["voice"] == "ru-female"
     assert calls[0][2]["_meta"]["active_agent_icon"] == "female-outline"
+    assert calls[0][2]["conversation_context"]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
     state = dialog_runtime.get_active_channel(webspace_id)
     assert state is not None
     assert state.channel_id == "conversational"
@@ -1398,14 +1391,13 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert trace["channel_id"] == "conversational"
     assert trace["agent_id"] == "agent:conversation_companions:nika"
     assert trace["selected_tool"] == "conversation_companions.talk"
-    assert trace["status"] == "unmaterialized"
+    assert trace["status"] == "materialized"
     assert trace["policy_decision"]["reason"] == "addressed_agent"
     assert trace["policy_decision"]["selected_agent_id"] == "agent:conversation_companions:nika"
-    assert trace["policy_decision"]["materialization_status"] == "missing"
-    assert trace["policy_decision"]["diagnostic"] == "skill_result_message_not_visible"
-    assert trace["renderer"]["projection"] == "missing_materialization"
-    assert data["dialog"]["last_turn_trace"]["status"] == "unmaterialized"
-    assert data["dialog"]["last_turn_trace"]["renderer"]["projection"] == "missing_materialization"
+    assert trace["policy_decision"]["materialization_status"] == "materialized"
+    assert trace["renderer"]["projection"] in {"skill_emitted_message", "compact_tail"}
+    assert data["dialog"]["last_turn_trace"]["status"] == "materialized"
+    assert data["dialog"]["last_turn_trace"]["renderer"]["projection"] in {"skill_emitted_message", "compact_tail"}
     dialog_runtime.reset_all()
 
 

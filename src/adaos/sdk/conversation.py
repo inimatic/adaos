@@ -59,6 +59,7 @@ def append(
     conversation_id: str,
     text: str,
     role: str,
+    thread_id: str | None = None,
     webspace_id: str | None = None,
     channel_id: str = "general",
     owner: str = "core",
@@ -75,6 +76,7 @@ def append(
     ws = str(webspace_id or default_webspace_id()).strip() or default_webspace_id()
     return conversation_store.append_message(
         conversation_id=conversation_id,
+        thread_id=thread_id,
         webspace_id=ws,
         channel_id=channel_id,
         owner=owner,
@@ -92,12 +94,36 @@ def append(
     )
 
 
-def get(conversation_id: str, *, before_cursor: Any = None, limit: int = 50) -> dict[str, Any]:
+def get(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    before_cursor: Any = None,
+    limit: int = 50,
+) -> dict[str, Any]:
     return conversation_store.list_projection(
         conversation_id,
+        thread_id=thread_id,
         before_cursor=before_cursor,
         limit=limit,
         max_items=max(limit, 200),
+    )
+
+
+def start_thread(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    title: str | None = None,
+    created_by: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    return conversation_store.start_thread(
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        title=title,
+        created_by=created_by,
+        meta=meta,
     )
 
 

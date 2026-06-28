@@ -85,6 +85,7 @@ _SCHEMA = (
     CREATE TABLE IF NOT EXISTS conversation_messages (
         message_id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL,
+        thread_id TEXT,
         seq INTEGER NOT NULL,
         webspace_id TEXT NOT NULL,
         channel_id TEXT,
@@ -110,6 +111,22 @@ _SCHEMA = (
         UNIQUE (conversation_id, seq),
         UNIQUE (conversation_id, idempotency_key)
     );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_threads (
+        thread_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        title TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        created_by_json TEXT NOT NULL DEFAULT '{}',
+        meta_json TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_threads_conversation
+    ON conversation_threads(conversation_id, updated_at);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_seq
@@ -172,9 +189,10 @@ _RETENTION_REDACTION_COLUMNS = (
     ("redacted_at", "REAL"),
     ("redaction_reason", "TEXT"),
 )
+_MESSAGE_THREAD_COLUMNS = (("thread_id", "TEXT"),)
 _SCHEMA_COLUMN_MIGRATIONS = {
     "conversation_conversations": _RETENTION_REDACTION_COLUMNS,
-    "conversation_messages": _RETENTION_REDACTION_COLUMNS,
+    "conversation_messages": _MESSAGE_THREAD_COLUMNS + _RETENTION_REDACTION_COLUMNS,
     "conversation_memory_items": _RETENTION_REDACTION_COLUMNS,
 }
 _ENSURED_SQL_IDS: set[int] = set()
@@ -265,6 +283,7 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
         keys = [
             "message_id",
             "conversation_id",
+            "thread_id",
             "seq",
             "webspace_id",
             "channel_id",
@@ -291,6 +310,8 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
     msg["ts"] = float(_row_value(row, "ts") or msg.get("ts") or 0.0)
     msg["seq"] = int(_row_value(row, "seq") or 0)
     msg["conversation_id"] = str(_row_value(row, "conversation_id") or "")
+    if _row_value(row, "thread_id"):
+        msg["thread_id"] = str(_row_value(row, "thread_id"))
     msg["dialog_channel_id"] = str(_row_value(row, "channel_id") or "")
     if _row_value(row, "actor_id"):
         msg.setdefault("active_agent_id", str(_row_value(row, "actor_id")))
@@ -389,6 +410,74 @@ def upsert_conversation(
         )
         con.commit()
     return True
+
+
+def start_thread(
+    *,
+    conversation_id: str,
+    thread_id: str | None = None,
+    title: str | None = None,
+    created_by: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+    status: str = "active",
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    tid = _normalize_id(thread_id, "thread")
+    now = float(ts or time.time())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute(
+            """
+            INSERT INTO conversation_threads(
+                thread_id, conversation_id, title, status, created_at,
+                updated_at, created_by_json, meta_json
+            ) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(thread_id) DO UPDATE SET
+                conversation_id=excluded.conversation_id,
+                title=COALESCE(excluded.title, conversation_threads.title),
+                status=excluded.status,
+                updated_at=excluded.updated_at,
+                created_by_json=excluded.created_by_json,
+                meta_json=excluded.meta_json
+            """,
+            (
+                tid,
+                cid,
+                str(title or "").strip() or None,
+                str(status or "active").strip() or "active",
+                now,
+                now,
+                _json_dump(dict(created_by or {})),
+                _json_dump(dict(meta or {})),
+            ),
+        )
+        con.commit()
+        row = con.execute(
+            "SELECT * FROM conversation_threads WHERE thread_id=?",
+            (tid,),
+        ).fetchone()
+    if not row:
+        return None
+    return _row_to_thread(row)
+
+
+def _row_to_thread(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "thread_id": row["thread_id"],
+        "id": row["thread_id"],
+        "conversation_id": row["conversation_id"],
+        "title": row["title"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "created_by": _json_load(row["created_by_json"], {}),
+        "meta": _json_load(row["meta_json"], {}),
+    }
 
 
 def upsert_dialog_channel(
@@ -713,6 +802,7 @@ def list_agents(*, channel_id: str | None = None, include_inactive: bool = False
 def append_message(
     *,
     conversation_id: str,
+    thread_id: str | None = None,
     webspace_id: str,
     channel_id: str,
     owner: str,
@@ -775,16 +865,17 @@ def append_message(
             con.execute(
                 """
                 INSERT INTO conversation_messages(
-                    message_id, conversation_id, seq, webspace_id, channel_id, owner,
+                    message_id, conversation_id, thread_id, seq, webspace_id, channel_id, owner,
                     actor_id, actor_label, actor_icon, role, text, route_id, ts,
                     request_id, turn_trace_id, idempotency_key, retention_class,
                     retention_until, redaction_state, redacted_at, redaction_reason,
                     payload_json, meta_json, created_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     message_id,
                     conversation_id,
+                    str(thread_id or "").strip() or None,
                     seq,
                     webspace_id,
                     channel_id,
@@ -821,6 +912,7 @@ def append_message(
             "ts": now,
             "seq": seq,
             "conversation_id": conversation_id,
+            "thread_id": str(thread_id or "").strip() or None,
             "dialog_channel_id": channel_id,
             "retention_class": str(retention_class or "normal").strip() or "normal",
             "retention_until": retention_until,
@@ -845,6 +937,7 @@ def append_message(
 def list_projection(
     conversation_id: str,
     *,
+    thread_id: str | None = None,
     before_cursor: Any = None,
     limit: int = 8,
     max_items: int = 200,
@@ -863,12 +956,18 @@ def list_projection(
         cursor = int(str(before_cursor or "").strip()) if str(before_cursor or "").strip() else None
     except Exception:
         cursor = None
+    thread_filter = str(thread_id or "").strip()
+    where = "conversation_id=?"
+    params_base: list[Any] = [conversation_id]
+    if thread_filter:
+        where += " AND thread_id=?"
+        params_base.append(thread_filter)
     with _sql().connect() as con:  # type: ignore[union-attr]
         con.row_factory = sqlite3.Row
         total = int(
             con.execute(
-                "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=?",
-                (conversation_id,),
+                f"SELECT COUNT(*) FROM conversation_messages WHERE {where}",
+                params_base,
             ).fetchone()[0]
             or 0
         )
@@ -876,33 +975,33 @@ def list_projection(
             older = con.execute(
                 """
                 SELECT seq FROM conversation_messages
-                WHERE conversation_id=? AND seq <= ?
+                WHERE {where} AND seq <= ?
                 ORDER BY seq DESC
                 LIMIT ?
-                """,
-                (conversation_id, cursor, safe_limit),
+                """.format(where=where),
+                [*params_base, cursor, safe_limit],
             ).fetchall()
             start_seq = min((int(row["seq"]) for row in older), default=cursor)
             rows = con.execute(
                 """
                 SELECT *
                 FROM conversation_messages
-                WHERE conversation_id=? AND seq >= ?
+                WHERE {where} AND seq >= ?
                 ORDER BY seq ASC
                 LIMIT ?
-                """,
-                (conversation_id, start_seq, safe_max),
+                """.format(where=where),
+                [*params_base, start_seq, safe_max],
             ).fetchall()
         else:
             rows = con.execute(
                 """
                 SELECT *
                 FROM conversation_messages
-                WHERE conversation_id=?
+                WHERE {where}
                 ORDER BY seq DESC
                 LIMIT ?
-                """,
-                (conversation_id, safe_limit),
+                """.format(where=where),
+                [*params_base, safe_limit],
             ).fetchall()
             rows = list(reversed(rows))
     messages = [_row_to_message(row) for row in rows]
@@ -1001,6 +1100,7 @@ def list_memory(
     owner: str | None = None,
     subject_id: str | None = None,
     limit: int = 50,
+    include_redacted: bool = False,
 ) -> list[dict[str, Any]]:
     if not ensure_schema():
         return []
@@ -1015,6 +1115,8 @@ def list_memory(
     if subject_id:
         where.append("subject_id=?")
         params.append(subject_id)
+    if not include_redacted:
+        where.append("redaction_state!='redacted'")
     sql_where = f"WHERE {' AND '.join(where)}" if where else ""
     params.append(max(1, min(int(limit or 50), 200)))
     with _sql().connect() as con:  # type: ignore[union-attr]
@@ -1028,35 +1130,135 @@ def list_memory(
             """,
             params,
         ).fetchall()
-    result = []
-    for row in rows:
-        policy = _json_load(row["policy_json"], {})
-        if not isinstance(policy, dict):
-            policy = {}
-        result.append(
-            {
-                "id": row["memory_id"],
-                "scope": row["scope"],
-                "owner": row["owner"],
-                "subject_id": row["subject_id"],
-                "key": row["key"],
-                "text": row["text"],
-                "value": _json_load(row["value_json"], {}),
-                "confidence": row["confidence"],
-                "consent_state": row["consent_state"],
-                "retention_class": row["retention_class"],
-                "retention_until": row["retention_until"],
-                "redaction_state": row["redaction_state"],
-                "redacted_at": row["redacted_at"],
-                "redaction_reason": row["redaction_reason"],
-                "visibility": str(policy.get("visibility") or "owner_only"),
-                "policy": policy,
-                "source_ref": _json_load(row["source_ref_json"], {}),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
+    return [_row_to_memory(row) for row in rows]
+
+
+def search_memory(
+    query: str,
+    *,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    limit: int = 50,
+    include_redacted: bool = False,
+) -> list[dict[str, Any]]:
+    token = str(query or "").strip()
+    if not token:
+        return list_memory(
+            scope=scope,
+            owner=owner,
+            subject_id=subject_id,
+            limit=limit,
+            include_redacted=include_redacted,
         )
-    return result
+    if not ensure_schema():
+        return []
+    where = ["(text LIKE ? OR key LIKE ?)"]
+    params: list[Any] = [f"%{token}%", f"%{token}%"]
+    if scope:
+        where.append("scope=?")
+        params.append(scope)
+    if owner:
+        where.append("owner=?")
+        params.append(owner)
+    if subject_id:
+        where.append("subject_id=?")
+        params.append(subject_id)
+    if not include_redacted:
+        where.append("redaction_state!='redacted'")
+    params.append(max(1, min(int(limit or 50), 200)))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT * FROM conversation_memory_items
+            WHERE {' AND '.join(where)}
+            ORDER BY
+                CASE WHEN key=? THEN 0 ELSE 1 END,
+                updated_at DESC
+            LIMIT ?
+            """,
+            [*params[:-1], token, params[-1]],
+        ).fetchall()
+    return [_row_to_memory(row) for row in rows]
+
+
+def forget_memory(
+    *,
+    memory_id: str | None = None,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    key: str | None = None,
+    reason: str = "user_request",
+    hard_delete: bool = False,
+) -> int:
+    if not ensure_schema():
+        return 0
+    where: list[str] = []
+    params: list[Any] = []
+    if memory_id:
+        where.append("memory_id=?")
+        params.append(memory_id)
+    if scope:
+        where.append("scope=?")
+        params.append(scope)
+    if owner:
+        where.append("owner=?")
+        params.append(owner)
+    if subject_id:
+        where.append("subject_id=?")
+        params.append(subject_id)
+    if key:
+        where.append("key=?")
+        params.append(key)
+    if not where:
+        raise ValueError("memory_id or scoped selector is required")
+    sql_where = " AND ".join(where)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        if hard_delete:
+            cur = con.execute(f"DELETE FROM conversation_memory_items WHERE {sql_where}", params)
+        else:
+            cur = con.execute(
+                f"""
+                UPDATE conversation_memory_items
+                SET redaction_state='redacted',
+                    redacted_at=?,
+                    redaction_reason=?,
+                    updated_at=?
+                WHERE {sql_where}
+                """,
+                [time.time(), str(reason or "user_request").strip() or "user_request", time.time(), *params],
+            )
+        con.commit()
+    return int(cur.rowcount or 0)
+
+
+def _row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
+    policy = _json_load(row["policy_json"], {})
+    if not isinstance(policy, dict):
+        policy = {}
+    return {
+        "id": row["memory_id"],
+        "scope": row["scope"],
+        "owner": row["owner"],
+        "subject_id": row["subject_id"],
+        "key": row["key"],
+        "text": row["text"],
+        "value": _json_load(row["value_json"], {}),
+        "confidence": row["confidence"],
+        "consent_state": row["consent_state"],
+        "retention_class": row["retention_class"],
+        "retention_until": row["retention_until"],
+        "redaction_state": row["redaction_state"],
+        "redacted_at": row["redacted_at"],
+        "redaction_reason": row["redaction_reason"],
+        "visibility": str(policy.get("visibility") or "owner_only"),
+        "policy": policy,
+        "source_ref": _json_load(row["source_ref_json"], {}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def _row_to_turn_trace(row: sqlite3.Row) -> dict[str, Any]:

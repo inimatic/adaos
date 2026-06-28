@@ -1641,17 +1641,25 @@ depth across several phases.
 - [x] `[must]` Implement `adaos.sdk.conversation.current()`,
   `open(...)`, and `get(...)` as the first low-level SDK facade. Manifest-driven
   default conversation creation remains pending.
-- [ ] `[must]` Implement `chat.send`, `chat.ask`, `chat.history`,
-  `chat.context`, and `chat.start_thread`.
-- [ ] `[must]` Implement structured `ResponseEnvelope` handling so generated
+- [x] `[must]` Implement `chat.send`, `chat.ask`, `chat.history`,
+  `chat.context`, and `chat.start_thread`. `adaos.sdk.chat` now wraps the
+  canonical ledger, bounded history, context packets, durable threads, and
+  visible response materialization.
+- [x] `[must]` Implement structured `ResponseEnvelope` handling so generated
   skills can return user-visible content without directly calling
-  `io.out.chat.append`.
-- [ ] `[must]` Implement scoped memory helpers:
+  `io.out.chat.append`. `conversation_response.materialize_response(...)`
+  accepts `ResponseEnvelope`-style dict/dataclass values and legacy tool
+  `message` results, then publishes chat/speech targets and persists the
+  ledger record.
+- [x] `[must]` Implement scoped memory helpers:
   `memory.search`, `memory.remember`, `memory.list`, and `memory.forget`.
-  Current MVP exposes `adaos.sdk.memory.remember` and `list`; search and forget
-  remain pending.
-- [ ] `[must]` Propagate current conversation context into skill tool calls.
-- [ ] `[must]` Teach LLM skill-development docs to prefer conversation/memory
+  The first pass uses node-local store search plus soft-redaction by default;
+  FTS scoring remains Phase 2 `should` work.
+- [x] `[must]` Propagate current conversation context into skill tool calls.
+  Router dialog turns and NLU skill-tool actions now include
+  `conversation_context` in the payload when a canonical conversation id is
+  available.
+- [x] `[must]` Teach LLM skill-development docs to prefer conversation/memory
   APIs over `io.out.chat.append` and direct `skill_memory` transcript storage.
 - [ ] `[should]` Add generated-skill templates for skill-owned conversations,
   multi-agent skill conversations, and bounded `chat.ask` flows.

@@ -18,6 +18,7 @@ from adaos.services.yjs.doc import async_read_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.nlu.baseline_content import merge_default_desktop_nlu
 from adaos.services.nlu.voice_surface import decode_activation_plan
+from adaos.services import conversation_context, conversation_response
 
 _log = logging.getLogger("adaos.nlu.dispatcher")
 _CONFIDENCE_MIN = float(os.getenv("ADAOS_NLU_CONFIDENCE_MIN", "0.7") or "0.7")
@@ -931,6 +932,72 @@ def _execute_skill_tool_action(
         raw=raw,
     )
     payload.setdefault("webspace_id", webspace_id)
+    raw_meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    payload_meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    conversation_id = str(
+        payload.get("conversation_id")
+        or payload_meta.get("conversation_id")
+        or raw_meta.get("conversation_id")
+        or ""
+    ).strip()
+    channel_id = str(
+        payload.get("dialog_channel_id")
+        or payload_meta.get("dialog_channel_id")
+        or raw_meta.get("dialog_channel_id")
+        or raw_meta.get("channel_id")
+        or "general"
+    ).strip() or "general"
+    owner = str(
+        payload.get("conversation_owner")
+        or payload_meta.get("conversation_owner")
+        or raw_meta.get("conversation_owner")
+        or f"skill:{skill}"
+    ).strip() or f"skill:{skill}"
+    agent_id = str(
+        payload.get("active_agent_id")
+        or payload_meta.get("active_agent_id")
+        or raw_meta.get("active_agent_id")
+        or ""
+    ).strip()
+    if conversation_id:
+        meta = {**dict(raw_meta), **dict(payload_meta)}
+        meta.setdefault("webspace_id", webspace_id)
+        meta.setdefault("conversation_id", conversation_id)
+        meta.setdefault("dialog_channel_id", channel_id)
+        meta.setdefault("conversation_owner", owner)
+        if agent_id:
+            meta.setdefault("active_agent_id", agent_id)
+        payload["_meta"] = meta
+        payload.setdefault("conversation_id", conversation_id)
+        payload.setdefault("dialog_channel_id", channel_id)
+        payload.setdefault("conversation_owner", owner)
+        try:
+            payload["conversation_context"] = conversation_context.build_context_packet(
+                conversation_id=conversation_id,
+                requester_owner=owner,
+                channel_id=channel_id,
+                agent_id=agent_id or None,
+                budgets={
+                    "max_tokens": 4_000,
+                    "max_messages": 20,
+                    "max_memory_items": 12,
+                    "timeout_ms": 250,
+                },
+            )
+        except Exception as exc:
+            payload["conversation_context"] = {
+                "schema": "adaos.context.packet.v1",
+                "conversation_id": conversation_id,
+                "requester_owner": owner,
+                "channel_id": channel_id,
+                "agent_id": agent_id or None,
+                "messages": [],
+                "memory": [],
+                "diagnostics": {
+                    "fallbacks": ["context_packet_unavailable"],
+                    "error": type(exc).__name__,
+                },
+            }
     materialized_chat_appends, materialization_probe = _subscribe_chat_materialization_probe(ctx)
     try:
         result = _run_skill_tool(ctx, skill, tool, payload)
@@ -975,15 +1042,37 @@ def _execute_skill_tool_action(
         )
         return
 
-    _emit_skill_tool_result_message(
-        ctx,
-        result=result,
-        target=target,
-        webspace_id=webspace_id,
-        raw=raw,
-        payload=payload,
-        materialized_chat_appends=materialized_chat_appends,
-    )
+    materialization: dict[str, Any] | None = None
+    if conversation_id:
+        materialization = conversation_response.materialize_tool_result(
+            result,
+            webspace_id=webspace_id,
+            conversation_id=conversation_id,
+            channel_id=channel_id,
+            owner=owner,
+            bus=ctx.bus,
+            route_id=_route_id(raw) or "voice_chat",
+            actor_id=agent_id or None,
+            actor_label=str((payload.get("_meta") or {}).get("active_agent_label") or "").strip() or None,
+            actor_icon=str((payload.get("_meta") or {}).get("active_agent_icon") or "").strip() or None,
+            request_id=str(raw.get("request_id") or (payload.get("_meta") or {}).get("request_id") or "").strip() or None,
+            turn_trace_id=str((payload.get("_meta") or {}).get("turn_trace_id") or "").strip() or None,
+            thread_id=str((payload.get("_meta") or {}).get("thread_id") or payload.get("thread_id") or "").strip() or None,
+            raw_meta=raw_meta,
+            payload_meta=payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {},
+            source="nlu.dispatcher",
+            materialized_chat_appends=materialized_chat_appends,
+        )
+    if not (isinstance(materialization, dict) and materialization.get("materialized")):
+        _emit_skill_tool_result_message(
+            ctx,
+            result=result,
+            target=target,
+            webspace_id=webspace_id,
+            raw=raw,
+            payload=payload,
+            materialized_chat_appends=materialized_chat_appends,
+        )
     _apply_skill_tool_dialog_result(
         ctx,
         result=result,

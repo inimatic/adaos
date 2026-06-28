@@ -50,8 +50,55 @@ def list(
     owner: str | None = None,
     subject_id: str | None = None,
     limit: int = 50,
+    include_redacted: bool = False,
 ) -> list[dict[str, Any]]:
-    return conversation_store.list_memory(scope=scope, owner=owner, subject_id=subject_id, limit=limit)
+    return conversation_store.list_memory(
+        scope=scope,
+        owner=owner,
+        subject_id=subject_id,
+        limit=limit,
+        include_redacted=include_redacted,
+    )
+
+
+def search(
+    query: str,
+    *,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    limit: int = 50,
+    include_redacted: bool = False,
+) -> list[dict[str, Any]]:
+    return conversation_store.search_memory(
+        query,
+        scope=scope,
+        owner=owner,
+        subject_id=subject_id,
+        limit=limit,
+        include_redacted=include_redacted,
+    )
+
+
+def forget(
+    *,
+    memory_id: str | None = None,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    key: str | None = None,
+    reason: str = "user_request",
+    hard_delete: bool = False,
+) -> int:
+    return conversation_store.forget_memory(
+        memory_id=memory_id,
+        scope=scope,
+        owner=owner,
+        subject_id=subject_id,
+        key=key,
+        reason=reason,
+        hard_delete=hard_delete,
+    )
 
 
 def write_policy(

@@ -295,6 +295,82 @@ tools:
         type: object
 ```
 
+## Conversation and memory APIs
+
+Generated skills should use the conversation SDK for user-visible dialog
+instead of publishing `io.out.chat.append` directly. The runtime can then
+persist the ledger, render speech/chat targets, attach trace diagnostics, and
+keep browser history durable.
+
+Preferred:
+
+```python
+from adaos.sdk import chat, memory
+
+
+def talk(payload: dict) -> dict:
+    meta = payload.get("_meta") or {}
+    conversation_id = meta["conversation_id"]
+    context = payload.get("conversation_context") or chat.context(
+        conversation_id,
+        requester_owner="skill:example",
+        channel_id=meta.get("dialog_channel_id"),
+        agent_id=meta.get("active_agent_id"),
+    )
+
+    chat.send(
+        "I can help with that.",
+        conversation_id=conversation_id,
+        webspace_id=payload.get("webspace_id"),
+        channel_id=meta.get("dialog_channel_id") or "general",
+        owner="skill:example",
+        actor_id=meta.get("active_agent_id"),
+        actor_label=meta.get("active_agent_label"),
+        turn_trace_id=meta.get("turn_trace_id"),
+    )
+    return {"ok": True, "used_context_tokens": context.get("token_estimate", 0)}
+```
+
+A tool may also return a structured response and let the runtime materialize it:
+
+```python
+return {
+    "ok": True,
+    "response_envelope": {
+        "conversation_id": meta["conversation_id"],
+        "content": [{"type": "text", "text": "Done."}],
+        "render_targets": ["text_tail", "speech_text"],
+    },
+}
+```
+
+Use scoped memory helpers instead of arbitrary transcript files:
+
+```python
+policy = memory.write_policy(
+    "agent_preference",
+    owner="skill:example",
+    agent_id=meta.get("active_agent_id"),
+)
+memory.remember(
+    scope=policy["scope"],
+    owner=policy["owner"],
+    subject_id=policy["subject_id"],
+    key="style",
+    text="prefers concise answers",
+    confidence=0.8,
+    consent_state=policy["consent_state"],
+    policy=policy["policy"],
+    source_ref={"conversation_id": meta["conversation_id"]},
+)
+```
+
+Avoid:
+
+- direct `io.out.chat.append` for ordinary replies
+- writing raw chat history to skill-local files
+- reading cross-owner memory without an explicit policy decision
+
 ## Browser-visible Yjs writes
 
 Use logical slots, not raw paths, in handler code.
