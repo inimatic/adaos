@@ -66,6 +66,11 @@ def append(
     actor_label: str | None = None,
     payload: Mapping[str, Any] | None = None,
     meta: Mapping[str, Any] | None = None,
+    retention_class: str = "normal",
+    retention_until: float | None = None,
+    redaction_state: str = "active",
+    redacted_at: float | None = None,
+    redaction_reason: str | None = None,
 ) -> dict[str, Any] | None:
     ws = str(webspace_id or default_webspace_id()).strip() or default_webspace_id()
     return conversation_store.append_message(
@@ -79,6 +84,11 @@ def append(
         actor_label=actor_label,
         payload=payload,
         meta=meta,
+        retention_class=retention_class,
+        retention_until=retention_until,
+        redaction_state=redaction_state,
+        redacted_at=redacted_at,
+        redaction_reason=redaction_reason,
     )
 
 

@@ -1585,8 +1585,11 @@ depth across several phases.
   pending.
 - [x] `[must]` Implement idempotency for inbound platform message ids and skill
   action result materialization at the ledger write level.
-- [ ] `[must]` Implement retention/redaction fields even if the first pass only
-  enforces conservative defaults.
+- [x] `[must]` Implement retention/redaction fields even if the first pass only
+  enforces conservative defaults. Conversations, messages, and memory items now
+  carry `retention_class`, `retention_until`, `redaction_state`, `redacted_at`,
+  and `redaction_reason`; export/delete enforcement remains a later hardening
+  flow.
 - [x] `[must]` Publish bounded Yjs/WebIO projections from the node store for
   active browser consumers.
 - [ ] `[should]` Add FTS5 indexes for messages, segment summaries, and memory

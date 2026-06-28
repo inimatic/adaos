@@ -17,6 +17,11 @@ def remember(
     consent_state: str = "unknown",
     policy: Mapping[str, Any] | None = None,
     source_ref: Mapping[str, Any] | None = None,
+    retention_class: str = "normal",
+    retention_until: float | None = None,
+    redaction_state: str = "active",
+    redacted_at: float | None = None,
+    redaction_reason: str | None = None,
 ) -> str | None:
     return conversation_store.remember(
         scope=scope,
@@ -29,6 +34,11 @@ def remember(
         consent_state=consent_state,
         policy=policy,
         source_ref=source_ref,
+        retention_class=retention_class,
+        retention_until=retention_until,
+        redaction_state=redaction_state,
+        redacted_at=redacted_at,
+        redaction_reason=redaction_reason,
     )
 
 

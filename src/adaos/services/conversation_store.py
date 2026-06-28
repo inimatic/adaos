@@ -19,6 +19,11 @@ _SCHEMA = (
         title TEXT,
         active_agent_id TEXT,
         status TEXT NOT NULL DEFAULT 'active',
+        retention_class TEXT NOT NULL DEFAULT 'normal',
+        retention_until REAL,
+        redaction_state TEXT NOT NULL DEFAULT 'active',
+        redacted_at REAL,
+        redaction_reason TEXT,
         created_at REAL NOT NULL,
         updated_at REAL NOT NULL,
         initiator_json TEXT NOT NULL DEFAULT '{}',
@@ -94,6 +99,11 @@ _SCHEMA = (
         request_id TEXT,
         turn_trace_id TEXT,
         idempotency_key TEXT,
+        retention_class TEXT NOT NULL DEFAULT 'normal',
+        retention_until REAL,
+        redaction_state TEXT NOT NULL DEFAULT 'active',
+        redacted_at REAL,
+        redaction_reason TEXT,
         payload_json TEXT NOT NULL DEFAULT '{}',
         meta_json TEXT NOT NULL DEFAULT '{}',
         created_at REAL NOT NULL,
@@ -120,6 +130,11 @@ _SCHEMA = (
         value_json TEXT NOT NULL DEFAULT '{}',
         confidence REAL,
         consent_state TEXT NOT NULL DEFAULT 'unknown',
+        retention_class TEXT NOT NULL DEFAULT 'normal',
+        retention_until REAL,
+        redaction_state TEXT NOT NULL DEFAULT 'active',
+        redacted_at REAL,
+        redaction_reason TEXT,
         policy_json TEXT NOT NULL DEFAULT '{}',
         source_ref_json TEXT NOT NULL DEFAULT '{}',
         created_at REAL NOT NULL,
@@ -150,6 +165,18 @@ _SCHEMA = (
 )
 
 
+_RETENTION_REDACTION_COLUMNS = (
+    ("retention_class", "TEXT NOT NULL DEFAULT 'normal'"),
+    ("retention_until", "REAL"),
+    ("redaction_state", "TEXT NOT NULL DEFAULT 'active'"),
+    ("redacted_at", "REAL"),
+    ("redaction_reason", "TEXT"),
+)
+_SCHEMA_COLUMN_MIGRATIONS = {
+    "conversation_conversations": _RETENTION_REDACTION_COLUMNS,
+    "conversation_messages": _RETENTION_REDACTION_COLUMNS,
+    "conversation_memory_items": _RETENTION_REDACTION_COLUMNS,
+}
 _ENSURED_SQL_IDS: set[int] = set()
 
 
@@ -167,6 +194,20 @@ def _json_load(value: Any, fallback: Any) -> Any:
         return json.loads(value)
     except Exception:
         return fallback
+
+
+def _ensure_columns(con: sqlite3.Connection, table: str, columns: tuple[tuple[str, str], ...]) -> None:
+    try:
+        existing = {str(row[1]) for row in con.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return
+    for name, ddl in columns:
+        if name in existing:
+            continue
+        try:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        except sqlite3.OperationalError:
+            pass
 
 
 def _sql() -> Any | None:
@@ -196,6 +237,8 @@ def ensure_schema(sql: Any | None = None) -> bool:
         cur = con.cursor()
         for stmt in _SCHEMA:
             cur.execute(stmt)
+        for table, columns in _SCHEMA_COLUMN_MIGRATIONS.items():
+            _ensure_columns(con, table, columns)
         con.commit()
     _ENSURED_SQL_IDS.add(token)
     return True
@@ -206,6 +249,15 @@ def _normalize_id(value: Any, fallback_prefix: str) -> str:
     if token:
         return token
     return f"{fallback_prefix}.{uuid.uuid4().hex}"
+
+
+def _row_value(row: sqlite3.Row | dict[str, Any], key: str, default: Any = None) -> Any:
+    if isinstance(row, sqlite3.Row):
+        try:
+            return row[key] if key in row.keys() else default
+        except Exception:
+            return default
+    return row.get(key, default)
 
 
 def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
@@ -230,25 +282,29 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
             "meta_json",
         ]
         row = dict(zip(keys, row, strict=False))  # type: ignore[assignment]
-    payload = _json_load(row["payload_json"], {}) if isinstance(row, sqlite3.Row) else _json_load(row.get("payload_json"), {})
-    meta = _json_load(row["meta_json"], {}) if isinstance(row, sqlite3.Row) else _json_load(row.get("meta_json"), {})
-    get_value = row.__getitem__ if isinstance(row, sqlite3.Row) else row.get
+    payload = _json_load(_row_value(row, "payload_json"), {})
+    meta = _json_load(_row_value(row, "meta_json"), {})
     msg = dict(payload) if isinstance(payload, dict) else {}
-    msg["id"] = str(get_value("message_id") or msg.get("id") or "")
-    msg["from"] = str(msg.get("from") or get_value("role") or "")
-    msg["text"] = str(get_value("text") or msg.get("text") or "")
-    msg["ts"] = float(get_value("ts") or msg.get("ts") or 0.0)
-    msg["seq"] = int(get_value("seq") or 0)
-    msg["conversation_id"] = str(get_value("conversation_id") or "")
-    msg["dialog_channel_id"] = str(get_value("channel_id") or "")
-    if get_value("actor_id"):
-        msg.setdefault("active_agent_id", str(get_value("actor_id")))
-    if get_value("actor_label"):
-        msg.setdefault("active_agent_label", str(get_value("actor_label")))
-    if get_value("actor_icon"):
-        msg.setdefault("active_agent_icon", str(get_value("actor_icon")))
-    if get_value("turn_trace_id"):
-        msg["turn_trace_id"] = str(get_value("turn_trace_id"))
+    msg["id"] = str(_row_value(row, "message_id") or msg.get("id") or "")
+    msg["from"] = str(msg.get("from") or _row_value(row, "role") or "")
+    msg["text"] = str(_row_value(row, "text") or msg.get("text") or "")
+    msg["ts"] = float(_row_value(row, "ts") or msg.get("ts") or 0.0)
+    msg["seq"] = int(_row_value(row, "seq") or 0)
+    msg["conversation_id"] = str(_row_value(row, "conversation_id") or "")
+    msg["dialog_channel_id"] = str(_row_value(row, "channel_id") or "")
+    if _row_value(row, "actor_id"):
+        msg.setdefault("active_agent_id", str(_row_value(row, "actor_id")))
+    if _row_value(row, "actor_label"):
+        msg.setdefault("active_agent_label", str(_row_value(row, "actor_label")))
+    if _row_value(row, "actor_icon"):
+        msg.setdefault("active_agent_icon", str(_row_value(row, "actor_icon")))
+    if _row_value(row, "turn_trace_id"):
+        msg["turn_trace_id"] = str(_row_value(row, "turn_trace_id"))
+    msg["retention_class"] = str(_row_value(row, "retention_class", "normal") or "normal")
+    msg["retention_until"] = _row_value(row, "retention_until")
+    msg["redaction_state"] = str(_row_value(row, "redaction_state", "active") or "active")
+    msg["redacted_at"] = _row_value(row, "redacted_at")
+    msg["redaction_reason"] = _row_value(row, "redaction_reason")
     if isinstance(meta, dict) and meta:
         msg["_meta"] = meta
     return msg
@@ -671,6 +727,11 @@ def append_message(
     request_id: str | None = None,
     turn_trace_id: str | None = None,
     idempotency_key: str | None = None,
+    retention_class: str = "normal",
+    retention_until: float | None = None,
+    redaction_state: str = "active",
+    redacted_at: float | None = None,
+    redaction_reason: str | None = None,
     ts: float | None = None,
 ) -> dict[str, Any] | None:
     if not ensure_schema():
@@ -686,9 +747,7 @@ def append_message(
             if idem:
                 existing = con.execute(
                     """
-                    SELECT message_id, conversation_id, seq, webspace_id, channel_id, owner,
-                           actor_id, actor_label, actor_icon, role, text, route_id, ts,
-                           request_id, turn_trace_id, payload_json, meta_json
+                    SELECT *
                     FROM conversation_messages
                     WHERE conversation_id=? AND idempotency_key=?
                     """,
@@ -699,9 +758,7 @@ def append_message(
                     return _row_to_message(existing)
             existing_id = con.execute(
                 """
-                SELECT message_id, conversation_id, seq, webspace_id, channel_id, owner,
-                       actor_id, actor_label, actor_icon, role, text, route_id, ts,
-                       request_id, turn_trace_id, payload_json, meta_json
+                SELECT *
                 FROM conversation_messages
                 WHERE message_id=?
                 """,
@@ -720,9 +777,10 @@ def append_message(
                 INSERT INTO conversation_messages(
                     message_id, conversation_id, seq, webspace_id, channel_id, owner,
                     actor_id, actor_label, actor_icon, role, text, route_id, ts,
-                    request_id, turn_trace_id, idempotency_key, payload_json,
-                    meta_json, created_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    request_id, turn_trace_id, idempotency_key, retention_class,
+                    retention_until, redaction_state, redacted_at, redaction_reason,
+                    payload_json, meta_json, created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     message_id,
@@ -741,6 +799,11 @@ def append_message(
                     request_id,
                     turn_trace_id,
                     idem,
+                    str(retention_class or "normal").strip() or "normal",
+                    retention_until,
+                    str(redaction_state or "active").strip() or "active",
+                    redacted_at,
+                    str(redaction_reason or "").strip() or None,
                     _json_dump(message_payload),
                     _json_dump(dict(meta or {})),
                     now,
@@ -759,6 +822,11 @@ def append_message(
             "seq": seq,
             "conversation_id": conversation_id,
             "dialog_channel_id": channel_id,
+            "retention_class": str(retention_class or "normal").strip() or "normal",
+            "retention_until": retention_until,
+            "redaction_state": str(redaction_state or "active").strip() or "active",
+            "redacted_at": redacted_at,
+            "redaction_reason": str(redaction_reason or "").strip() or None,
         }
     )
     if actor_id:
@@ -817,9 +885,7 @@ def list_projection(
             start_seq = min((int(row["seq"]) for row in older), default=cursor)
             rows = con.execute(
                 """
-                SELECT message_id, conversation_id, seq, webspace_id, channel_id, owner,
-                       actor_id, actor_label, actor_icon, role, text, route_id, ts,
-                       request_id, turn_trace_id, payload_json, meta_json
+                SELECT *
                 FROM conversation_messages
                 WHERE conversation_id=? AND seq >= ?
                 ORDER BY seq ASC
@@ -830,9 +896,7 @@ def list_projection(
         else:
             rows = con.execute(
                 """
-                SELECT message_id, conversation_id, seq, webspace_id, channel_id, owner,
-                       actor_id, actor_label, actor_icon, role, text, route_id, ts,
-                       request_id, turn_trace_id, payload_json, meta_json
+                SELECT *
                 FROM conversation_messages
                 WHERE conversation_id=?
                 ORDER BY seq DESC
@@ -863,6 +927,11 @@ def remember(
     consent_state: str = "unknown",
     policy: Mapping[str, Any] | None = None,
     source_ref: Mapping[str, Any] | None = None,
+    retention_class: str = "normal",
+    retention_until: float | None = None,
+    redaction_state: str = "active",
+    redacted_at: float | None = None,
+    redaction_reason: str | None = None,
     memory_id: str | None = None,
 ) -> str | None:
     if not ensure_schema():
@@ -874,9 +943,10 @@ def remember(
             """
             INSERT INTO conversation_memory_items(
                 memory_id, scope, owner, subject_id, key, text, value_json,
-                confidence, consent_state, policy_json, source_ref_json,
-                created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                confidence, consent_state, retention_class, retention_until,
+                redaction_state, redacted_at, redaction_reason, policy_json,
+                source_ref_json, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(memory_id) DO UPDATE SET
                 scope=excluded.scope,
                 owner=excluded.owner,
@@ -886,6 +956,11 @@ def remember(
                 value_json=excluded.value_json,
                 confidence=excluded.confidence,
                 consent_state=excluded.consent_state,
+                retention_class=excluded.retention_class,
+                retention_until=excluded.retention_until,
+                redaction_state=excluded.redaction_state,
+                redacted_at=excluded.redacted_at,
+                redaction_reason=excluded.redaction_reason,
                 policy_json=excluded.policy_json,
                 source_ref_json=excluded.source_ref_json,
                 updated_at=excluded.updated_at
@@ -900,6 +975,11 @@ def remember(
                 _json_dump(dict(value or {})),
                 confidence,
                 consent_state,
+                str(retention_class or "normal").strip() or "normal",
+                retention_until,
+                str(redaction_state or "active").strip() or "active",
+                redacted_at,
+                str(redaction_reason or "").strip() or None,
                 _json_dump(dict(policy or {})),
                 _json_dump(dict(source_ref or {})),
                 now,
@@ -956,6 +1036,11 @@ def list_memory(
                 "value": _json_load(row["value_json"], {}),
                 "confidence": row["confidence"],
                 "consent_state": row["consent_state"],
+                "retention_class": row["retention_class"],
+                "retention_until": row["retention_until"],
+                "redaction_state": row["redaction_state"],
+                "redacted_at": row["redacted_at"],
+                "redaction_reason": row["redaction_reason"],
                 "policy": _json_load(row["policy_json"], {}),
                 "source_ref": _json_load(row["source_ref_json"], {}),
                 "created_at": row["created_at"],
