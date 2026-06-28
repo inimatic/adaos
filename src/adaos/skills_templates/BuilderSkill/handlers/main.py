@@ -153,6 +153,100 @@ def _chat_meta(_meta: Mapping[str, Any] | None, *, webspace_id: str) -> dict[str
     return meta
 
 
+def _source_refs(
+    *,
+    webspace_id: str,
+    session: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None = None,
+    patch: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    meta = _chat_meta(_meta, webspace_id=webspace_id)
+    refs: dict[str, Any] = {
+        "conversation_id": meta.get("conversation_id") or _conversation_id(webspace_id),
+        "dialog_channel_id": DIALOG_CHANNEL_ID,
+        "owner": f"skill:{SKILL_ID}",
+        "session_id": session.get("id"),
+        "scenario_id": session.get("scenario_id"),
+    }
+    for key in ("thread_id", "turn_trace_id", "request_id", "message_id", "input_event_kind"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            refs[key] = value
+    draft_id = str(session.get("draft_id") or "").strip()
+    if draft_id:
+        refs["draft_id"] = draft_id
+    if patch:
+        patch_id = str(patch.get("id") or "").strip()
+        if patch_id:
+            refs["patch_id"] = patch_id
+        operation = str(patch.get("operation") or "").strip()
+        if operation:
+            refs["operation"] = operation
+    return refs
+
+
+def _publish_review_pending_action(
+    *,
+    webspace_id: str,
+    session: Mapping[str, Any],
+    request_text: str,
+    kind: str,
+    summary: str,
+    _meta: Mapping[str, Any] | None = None,
+    patch: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    refs = _source_refs(webspace_id=webspace_id, session=session, _meta=_meta, patch=patch)
+    try:
+        from adaos.services.pending_actions import publish_pending_action
+
+        return publish_pending_action(
+            webspace_id=webspace_id,
+            kind=kind,
+            title="Review Builder change",
+            summary=summary,
+            request_text=request_text,
+            producer={"type": "skill", "skill_id": SKILL_ID},
+            owner_scope={
+                "owner": f"skill:{SKILL_ID}",
+                "webspace_id": webspace_id,
+                "conversation_id": refs.get("conversation_id"),
+                "thread_id": refs.get("thread_id"),
+            },
+            domain_ref={
+                "skill_id": SKILL_ID,
+                "session_id": refs.get("session_id"),
+                "scenario_id": refs.get("scenario_id"),
+                "draft_id": refs.get("draft_id"),
+                "patch_id": refs.get("patch_id"),
+                "conversation_id": refs.get("conversation_id"),
+                "thread_id": refs.get("thread_id"),
+            },
+            actions=["preview", "approve", "refuse", "postpone"],
+            response_topic="builder.pending_action.response",
+            payload_ref={
+                "kind": "builder.session",
+                "session_id": refs.get("session_id"),
+                "scenario_id": refs.get("scenario_id"),
+            },
+            metadata={
+                "source": "builder_skill",
+                "source_refs": refs,
+                "patch": dict(patch or {}),
+                "approval_policy": {
+                    "decision": "human_review_required",
+                    "reason": "builder_review_pending_action",
+                },
+            },
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "pending_action_publish_failed",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "metadata": {"source_refs": refs},
+        }
+
+
 def _safe_emit_chat(text: str, *, webspace_id: str, _meta: Mapping[str, Any] | None = None) -> None:
     try:
         from adaos.sdk.io.out import chat_append
@@ -427,6 +521,17 @@ def create_scenario_draft(
     message = _message_created(session)
     if session.get("draft_error"):
         message += f" \u041f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u0435: dev draft \u043d\u0435 \u0441\u043e\u0437\u0434\u0430\u043d ({session['draft_error']})."
+    pending_action = _publish_review_pending_action(
+        webspace_id=ws,
+        session=session,
+        request_text=source_idea,
+        kind="builder.scenario_draft.review",
+        summary=f"Review Builder draft {sid}",
+        _meta=_meta,
+    )
+    if pending_action and pending_action.get("id"):
+        session["pending_action_id"] = pending_action.get("id")
+        _save_session(ws, session)
     return {
         "ok": True,
         "session_id": session_id,
@@ -434,6 +539,7 @@ def create_scenario_draft(
         "draft_id": session.get("draft_id"),
         "artifact_root": session.get("artifact_root"),
         "preview_state": preview,
+        "pending_action": pending_action,
         "message": message,
         "dialog": _dialog_state(ws),
     }
@@ -491,6 +597,20 @@ def update_current_scenario(
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
     _save_session(ws, session)
+    pending_action = _publish_review_pending_action(
+        webspace_id=ws,
+        session=session,
+        request_text=text,
+        kind="builder.scenario_patch.review",
+        summary=f"Review Builder patch {patch['operation']} for {session.get('scenario_id')}",
+        _meta=_meta,
+        patch=patch,
+    )
+    if pending_action and pending_action.get("id"):
+        patch["pending_action_id"] = pending_action.get("id")
+        session["patches"][-1] = patch
+        session["pending_action_id"] = pending_action.get("id")
+        _save_session(ws, session)
     message = (
         f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f "
         f"{session.get('scenario_id')}. \u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {patch['operation']}."
@@ -501,6 +621,7 @@ def update_current_scenario(
         "scenario_id": session.get("scenario_id"),
         "patch": patch,
         "preview_state": preview,
+        "pending_action": pending_action,
         "message": message,
         "dialog": _dialog_state(ws),
     }

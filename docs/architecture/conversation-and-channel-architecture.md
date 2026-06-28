@@ -1787,8 +1787,11 @@ Important lacunae found during Phase 4/5 implementation:
 - [x] `[must]` Link Builder drafts and preview validation evidence to
   conversation refs. `builder.draft.json` stores `links.conversation`, and
   preview bundles expose `conversation`, `context_packet`, and `source_refs`.
-- [ ] `[must]` Link Builder Pending Actions to conversation/thread refs when
-  Builder approval/apply actions become first-class Pending Actions.
+- [x] `[must]` Link Builder Pending Actions to conversation/thread refs when
+  Builder approval/apply actions become first-class Pending Actions. The
+  Builder skill now publishes draft and patch review Pending Actions with
+  `domain_ref` and `metadata.source_refs` containing conversation, thread,
+  trace, request, draft, session, scenario, and patch ids where available.
 - [x] `[must]` Move NLU Teacher clarification sessions into `kind=teacher`
   conversations. The first pass creates a canonical Teacher conversation and
   per-request thread while keeping the legacy Teacher read model as a
@@ -1808,8 +1811,10 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[must]` Make the NLU Teacher read model reconstructable from
   `kind=teacher` ledger records, then treat `data.nlu_teacher` as a projection
   rather than a second source of truth.
-- [ ] `[must]` Add Builder approval Pending Actions with `source_refs` before
-  enabling browser apply/approve flows.
+- [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
+  enabling browser apply/approve flows. Current responses route to
+  `builder.pending_action.response`; applying approved changes and writing a
+  release/rollback record remains in the Builder runtime roadmap.
 
 ### Phase 7. Subnet Federation
 

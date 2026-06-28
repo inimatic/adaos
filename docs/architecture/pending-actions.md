@@ -44,10 +44,12 @@ Current implemented slice:
   restart/stop/shutdown failures publish Pending Actions and route
   `retry/open_diagnostics/postpone/dismiss` responses back to the runtime
   recovery handler.
+- [x] Builder draft and patch review publish Pending Actions with
+  conversation/thread/source refs before browser apply/approve flows.
 - [ ] NLU Teacher clarification sessions still use the legacy chat-local flow
   and should be migrated separately if they need cross-channel response.
-- [ ] Builder, pairing, broader runtime recovery, capability elevation, and
-  guarded skill-action producer migrations.
+- [ ] Builder runtime apply/release responses, pairing, broader runtime
+  recovery, capability elevation, and guarded skill-action producer migrations.
 - [ ] Full Pending Actions workbench/modal with filtering, history, and direct
   links to source evidence.
 - [ ] Notification deep links to Pending Actions without making notifications

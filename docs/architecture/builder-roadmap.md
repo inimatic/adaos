@@ -270,6 +270,11 @@ Open work:
   actions, and the remaining NLU Teacher clarification flow to produce and
   consume Pending Actions. NLU Teacher candidate confirmations and
   service-supervisor runtime recovery failures have initial migrations.
+- [x] `[must]` Make Builder draft and patch review produce Pending Actions
+  before browser apply/approve flows. The current Builder skill publishes
+  `builder.scenario_draft.review` and `builder.scenario_patch.review` actions
+  with conversation/thread/source refs and routes responses to
+  `builder.pending_action.response`.
 - [x] `[must]` Make Pending Actions node-aware: producer and response handler
   identity must include `node_id` plus skill/scenario/system actor identity.
 - [x] `[must]` Define Pending Actions localization contract: every system title,
@@ -284,7 +289,8 @@ Open work:
   `data.pending_actions` and responds through the event command plane.
 - [ ] `[should]` Add review UI/workbench for Builder tasks and previews.
 - [ ] `[must]` Attach policy evidence and approval identity to every applied Builder
-  change.
+  runtime change. Draft/patch review actions already carry source refs; the
+  apply/release step still needs to persist the approval identity.
 - [ ] `[should]` Support reject/redirect feedback that becomes new Builder context instead
   of being lost as chat history.
 - [ ] `[deferred]` Support delegated Pending Actions subscription handshake where
