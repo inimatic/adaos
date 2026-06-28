@@ -584,22 +584,30 @@ either `payload.webspace_id` or `payload._meta.webspace_id`. This ensures:
 destined for UI-integrated skills, include a `_meta.webspace_id` hint so
 runtimes can reply into the proper doc.
 
-For chat/TTS in webspaces prefer the dedicated "web IO" topics:
+For chat/TTS in webspaces prefer the dedicated conversation and web IO
+contracts:
 
-* `io.out.chat.append` -> append into `data.voice_chat.messages`
+* `adaos.sdk.chat.send(...)` or a `response_envelope` -> append into the
+  node-local conversation ledger and project the bounded browser tail into
+  `data.dialog.visible_tail`
+* `io.out.chat.append` -> compatibility append for legacy Voice/chat surfaces
 * `io.out.say` -> enqueue into `data.tts.queue`
 * `io.out.media.route` -> write the normalized media route contract into
   `data.media.route`
 
-These events are routed purely by `_meta.webspace_id`, so different
-devices/webspaces can receive replies independently. `data.media.route` stays
-a plain JSON subtree so browser widgets can observe one router-owned view of
+The SDK path is the default for ordinary skill dialog because it records
+conversation id, channel, owner, agent, memory policy, and turn trace before
+rendering to browser surfaces. Low-level Web IO events are still routed by
+`_meta.webspace_id`, so different devices/webspaces can receive replies
+independently. `data.media.route` stays a plain JSON subtree so browser
+widgets can observe one router-owned view of
 need/capability/ability/attempt/degradation/observed-failure state without
 depending on a specific transport adapter.
 
 For node-owned skills, the effective shared-desktop branches are now:
 
-* `data/nodes/<node_id>/voice_chat`
+* `data/nodes/<node_id>/dialog`
+* `data/nodes/<node_id>/voice_chat` (compatibility projection)
 * `data/nodes/<node_id>/tts`
 * `data/nodes/<node_id>/media`
 
@@ -610,21 +618,25 @@ For `voice.chat.*` the runtime should also preserve `target_node_id`
 end-to-end so a member-targeted browser session cannot leak requests into the
 hub or another member's chat flow.
 
-The `voice_chat_skill` desktop widget observes the node-scoped
-`data/voice_chat` branch. `voice.chat.user` always appends the user message and
-still runs the normal `nlp.intent.detect.request` pipeline. When
-`ADAOS_VOICE_CHAT_INTENT_DEMO=1`, it also appends a non-dispatching Neural NLU
-probe summary into that same history and suppresses the voice-chat
-`nlp.intent.not_obtained` display fallback so old skill-specific fallback
-handlers do not obscure the detector result.
+The current `voice_chat_skill` desktop widget still observes the node-scoped
+`data/voice_chat` compatibility branch, while the canonical history is the
+conversation ledger projected as `data.dialog.visible_tail`. `voice.chat.user`
+always records the user message in the ledger, updates the compatibility tail
+for existing browser code, and still runs the normal
+`nlp.intent.detect.request` pipeline. When `ADAOS_VOICE_CHAT_INTENT_DEMO=1`, it
+also appends a non-dispatching Neural NLU probe summary into the same rendered
+tail and suppresses the voice-chat `nlp.intent.not_obtained` display fallback
+so old skill-specific fallback handlers do not obscure the detector result.
 
 For browser observability, `voice.chat.user` command acknowledgement must be
 treated only as "the runtime accepted the command", not as "the chat history is
 already materialized in the browser". Member-owned chat flows add one more hop
 (`member local YDoc -> hub/shared desktop -> browser sync`), so the browser now
-falls back to `voice_chat_skill.get_snapshot` whenever node-scoped chat history
-is remote or the current Yjs runtime reports a recent semantic recovery
-failure (`first_sync_timeout`, failed resync, and similar states).
+falls back to the router snapshot bridge whenever node-scoped chat history is
+remote or the current Yjs runtime reports a recent semantic recovery failure
+(`first_sync_timeout`, failed resync, and similar states). The bridge must read
+from the conversation ledger first and only use `voice_chat_skill.get_snapshot`
+for legacy compatibility recovery.
 
 Operational node-scoped snapshots such as `infrastate` and `subnet_env`
 should stay responsive on members. Member-side snapshot generation must not

@@ -35,9 +35,12 @@ Implemented today:
   `nlp.intent.detect.request`.
   When a process-local dialog channel is active, Router delegates the turn to
   that channel owner before NLU/Teacher fallback.
-- `RouterService` receives `io.out.chat.append`, stores the message in the
-  same ledger, and projects the browser-visible Voice tail from the active
-  conversation.
+- `RouterService` receives `io.out.chat.append` as a compatibility event,
+  stores the message in the same ledger when conversation metadata is present,
+  and projects the browser-visible Voice tail from the active conversation.
+- `adaos.sdk.chat.send(...)`, `chat.ask(...)`, and response-envelope
+  materialization default to the neutral `dialog` route; generated skills
+  should use these APIs instead of direct Voice/chat projection writes.
 - The NLU pipeline can load skill-declared regex rules and dispatch matching
   intents to skill tools.
 - The NLU dispatcher has a Voice compatibility bridge: when a skill tool returns
@@ -119,9 +122,11 @@ Important gaps:
 - The dialog-channel and agent registry is persisted for the current pilot, but
   full manifest schema validation, dynamic skill-owned channels, and Builder /
   Teacher channel registration are still missing.
-- `route_id=voice_chat` remains a UI/transport compatibility route.
-- There is no canonical conversation output contract beyond the current Voice
-  compatibility bridge.
+- `route_id=voice_chat` remains a UI/transport compatibility route for the
+  current Voice surface.
+- The canonical conversation output contract exists for the SDK and response
+  envelope path, but remaining browser Voice code still needs compatibility
+  projection cleanup.
 - LLM Builder and skill runtimes do not yet receive budgeted context packets
   assembled from recent turns, summaries, memory items, and evidence refs.
 - `voice_chat_skill.handle_text` still owns legacy semantic fallback behavior.
@@ -1142,7 +1147,7 @@ Minimal compatibility rule for the current Voice path:
 
 ```text
 skill tool result {ok: true, message: "..."}
-  + incoming _meta.route_id == "voice_chat"
+  + incoming turn resolves to the Voice/dialog surface
   -> dispatcher publishes io.out.chat.append with original _meta
   -> router projects into the current Voice/dialog tail
 ```
@@ -1843,12 +1848,18 @@ Important lacunae found during Phase 6 implementation:
 
 ### Phase 8. Cleanup and Hardening
 
-- [ ] `[must]` Remove public dependency on `voice_chat` as the canonical chat
-  state.
-- [ ] `[must]` Replace `route_id == "voice_chat"` semantic checks with
-  conversation, channel, and surface routing.
-- [ ] `[must]` Update SDK IO docs to make conversation/memory APIs the default
-  path.
+- [x] `[must]` Remove public dependency on `voice_chat` as the canonical chat
+  state. Public docs now describe `adaos.sdk.chat` / response envelopes,
+  node-local conversation ledger, and `data.dialog.visible_tail` as the
+  default path; `voice_chat` is documented as a compatibility projection.
+- [x] `[must]` Replace `route_id == "voice_chat"` semantic checks with
+  conversation, channel, and surface routing. Router semantic fallback checks
+  now use `_is_dialog_surface_route(...)`, which considers canonical dialog
+  event kind, conversation id, dialog channel id, and only then the legacy
+  Voice route for compatibility.
+- [x] `[must]` Update SDK IO docs to make conversation/memory APIs the default
+  path. The LLM skill guide and WebIO overview now direct generated skills to
+  `chat.send`, response envelopes, and scoped memory helpers.
 - [ ] `[should]` Retire direct writes to transport-specific chat projections.
 - [ ] `[should]` Add export/delete/redaction flows for conversation and memory
   records.

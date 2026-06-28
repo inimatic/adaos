@@ -5,8 +5,14 @@ This section describes AdaOS I/O routing and integrations.
 ## Outgoing events
 
 - Outgoing UI events (legacy): skills publish `ui.notify` and `ui.say`. The RouterService reads `.adaos/route_rules.yaml` and delivers to targets by `io_type` (e.g., `stdout`, `telegram`).
-- Outgoing Web IO events (webspaces): skills/tools can publish `io.out.chat.append` and `io.out.say`. The RouterService projects these into the Yjs doc selected by `_meta.webspace_id`:
-  - `io.out.chat.append` -> `data.voice_chat.messages`
+- Outgoing Web IO events (webspaces): skills/tools can publish `io.out.say`
+  and, for compatibility, `io.out.chat.append`. Ordinary user-visible dialog
+  should go through the conversation SDK (`adaos.sdk.chat`) so the
+  RouterService records the node-local ledger and projects a bounded tail into
+  `data.dialog.visible_tail` for browser surfaces selected by
+  `_meta.webspace_id`:
+  - `chat.send(...)` / response envelopes -> conversation ledger -> `data.dialog.visible_tail`
+  - `io.out.chat.append` -> compatibility chat projection for legacy Voice surfaces
   - `io.out.say` -> `data.tts.queue`
 
 ## Telegram integration

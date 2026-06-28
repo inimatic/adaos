@@ -24,6 +24,7 @@ def test_chat_send_materializes_visible_message_and_ledger() -> None:
 
     assert result["materialized"] is True
     assert seen and seen[0].payload["text"] == "visible reply"
+    assert seen[0].payload["_meta"]["route_id"] == "dialog"
     history = chat.history("conv.chat", limit=5)
     assert history["messages"][0]["text"] == "visible reply"
     assert history["messages"][0]["active_agent_id"] == "agent:core:general"

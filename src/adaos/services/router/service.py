@@ -258,6 +258,32 @@ def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) 
     }
 
 
+def _is_dialog_surface_route(
+    meta: Mapping[str, Any] | None,
+    payload: Mapping[str, Any] | None = None,
+    *,
+    route_id: str | None = None,
+) -> bool:
+    meta = meta if isinstance(meta, Mapping) else {}
+    payload = payload if isinstance(payload, Mapping) else {}
+    for source in (meta, payload):
+        if str(source.get("dialog_channel_id") or source.get("conversation_id") or "").strip():
+            return True
+    event_kind = str(
+        meta.get("canonical_event_kind")
+        or meta.get("input_event_kind")
+        or meta.get("dialog_event_kind")
+        or payload.get("canonical_event_kind")
+        or payload.get("input_event_kind")
+        or payload.get("dialog_event_kind")
+        or ""
+    ).strip()
+    if event_kind in {DIALOG_USER_MESSAGE_EVENT, VOICE_CHAT_USER_EVENT}:
+        return True
+    token = str(route_id or meta.get("route_id") or meta.get("route") or payload.get("route_id") or payload.get("route") or "").strip()
+    return token == "voice_chat"
+
+
 def _fallback_agent_registry_records() -> list[dict[str, Any]]:
     return [dict(item) for item in _CONVERSATION_AGENT_REGISTRY]
 
@@ -2008,7 +2034,7 @@ class RouterService:
                 input_event_kind = str(meta.get("input_event_kind") or "").strip()
                 if dialog_event_kind:
                     policy["dialog_event_kind"] = dialog_event_kind
-                elif route_id == "voice_chat":
+                elif _is_dialog_surface_route(meta, {"route_id": route_id}, route_id=route_id):
                     policy["dialog_event_kind"] = DIALOG_USER_MESSAGE_EVENT
                     policy["compat_source_event"] = VOICE_CHAT_USER_EVENT
                 if input_event_kind:
@@ -5065,7 +5091,7 @@ class RouterService:
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 text = ""
-            if route_id.strip() == "voice_chat" and text:
+            if _is_dialog_surface_route(meta, payload, route_id=route_id.strip()) and text:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=webspace_id,
                     text=text,
@@ -5160,7 +5186,7 @@ class RouterService:
             req_text = cand.get("text") if isinstance(cand.get("text"), str) else ""
             kind = cand.get("kind") if isinstance(cand.get("kind"), str) else "skill"
             status = cand.get("status") if isinstance(cand.get("status"), str) else ""
-            if route_id.strip() == "voice_chat" and kind == "regex_rule" and cand.get("status") == "pending":
+            if _is_dialog_surface_route(meta, payload, route_id=route_id.strip()) and kind == "regex_rule" and cand.get("status") == "pending":
                 return
             cdef = cand.get("candidate") if isinstance(cand.get("candidate"), dict) else {}
             name = cdef.get("name") if isinstance(cdef.get("name"), str) else ""

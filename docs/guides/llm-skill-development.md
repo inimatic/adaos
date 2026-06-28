@@ -521,7 +521,13 @@ messages can be missed during reconnect, subscriptions can flap, and duplicate
 or out-of-order payloads can happen around recovery. Design every stream as a
 bounded replace or append channel with explicit recovery.
 
-Declare receivers in `webui.json`:
+For ordinary chat replies do not declare a custom message stream. Use
+`adaos.sdk.chat.send(...)` or a response envelope so the runtime writes the
+conversation ledger, updates `data.dialog.visible_tail`, and keeps memory/trace
+metadata attached to the turn. Declare streams only for volatile status,
+telemetry, progress, or media-style payloads.
+
+Compatibility Voice surfaces may still declare a bounded receiver such as:
 
 ```json
 {
@@ -539,7 +545,7 @@ Declare receivers in `webui.json`:
 }
 ```
 
-Publish from the skill:
+Publish volatile state from the skill:
 
 ```python
 from adaos.sdk.io import stream_publish, stream_variable_publish
@@ -553,8 +559,8 @@ stream_variable_publish(
 )
 
 stream_publish(
-    "voice_chat.messages",
-    {"items": [message]},
+    "example.progress",
+    {"items": [{"id": "step-1", "state": "running"}]},
     _meta={"webspace_id": webspace_id, "target_node_id": target_node_id},
 )
 ```
@@ -1184,8 +1190,9 @@ The current workspace audit suggests this priority order:
 3. make `browsers_skill` and `infra_access_skill` projection refreshes
    idempotent, avoid all-webspace fanout for routine events, and add cleanup
    for owned executors, threads, and caches
-4. migrate `voice_chat_skill` away from direct Yjs reads/writes to declared
-   projection/stream contracts with bounded chat history
+4. migrate remaining `voice_chat_skill` direct Yjs reads/writes behind the
+   conversation ledger projection bridge; keep bounded compatibility history
+   only for existing Voice surfaces
 5. add explicit cache/model/playback lifecycle budgets to
    `new_face_vision_skill`
 6. decide whether `mediaserver` and `prompt_engineer_skill` should remain
