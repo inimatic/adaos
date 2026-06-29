@@ -65,6 +65,11 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert selected["active_draft_id"] is None
     assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
 
+    opened = await service.open_dev_webspace_ready("desktop", base_url="http://localhost:8100")
+    assert opened["url"] == "http://localhost:8100/?webspace=desktop-dev"
+    assert opened["binding"]["runtime_scenario_id"] == "demo_scenario"
+    assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
+
 
 def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
@@ -140,9 +145,18 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["binding"]["active_draft_id"] == "draft.one"
 
-    response = client.get("/api/builder/workbench/open", params={"webspace_id": "desktop", "base_url": "http://localhost:8100"})
+    response = client.get(
+        "/api/builder/workbench/open",
+        params={
+            "webspace_id": "desktop",
+            "base_url": "http://localhost:8100",
+            "runtime_scenario_id": "demo_scenario",
+        },
+    )
     assert response.status_code == 200
     assert response.json()["url"] == "http://localhost:8100/?webspace=desktop-dev"
+    assert response.json()["binding"]["runtime_scenario_id"] == "demo_scenario"
+    assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
 
     response = client.get("/api/builder/workbench/dialog-widget", params={"webspace_id": "desktop"})
     assert response.status_code == 200

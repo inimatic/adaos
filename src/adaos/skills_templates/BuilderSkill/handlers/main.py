@@ -906,14 +906,26 @@ def get_workspace_binding(
     return {"ok": True, "binding": binding, "dialog": _dialog_state(ws)}
 
 
-@tool(summary="Return URL for paired Builder Prompt IDE dev webspace.", side_effects="none")
+@tool(summary="Return URL for paired Builder Prompt IDE dev webspace.", side_effects="local_write")
 def open_dev_webspace(
     webspace_id: str | None = None,
     base_url: str | None = None,
     _meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ws = _webspace_id(webspace_id, _meta)
-    return {**_workbench_service().open_dev_webspace(ws, base_url=base_url), "dialog": _dialog_state(ws)}
+    session = _load_session(ws)
+    try:
+        result = _run_async(
+            _workbench_service().open_dev_webspace_ready(
+                ws,
+                base_url=base_url,
+                active_draft_id=_active_draft_id(session),
+                runtime_scenario_id=_runtime_scenario_id(session),
+            )
+        )
+    except Exception as exc:
+        return {"ok": False, "error": "workbench_unavailable", "detail": f"{type(exc).__name__}: {exc}", "dialog": _dialog_state(ws)}
+    return {**result, "dialog": _dialog_state(ws)}
 
 
 @tool(summary="Return embedded Voice Chat widget config for Builder workbench.", side_effects="none")

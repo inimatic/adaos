@@ -254,6 +254,25 @@ class BuilderWorkbenchService:
         url = f"{base}/?webspace={dev_id}" if base else f"/?webspace={dev_id}"
         return {"ok": True, "url": url, "webspace_id": dev_id, "binding": binding}
 
+    async def open_dev_webspace_ready(
+        self,
+        source_webspace_id: str | None = None,
+        *,
+        base_url: str | None = None,
+        active_draft_id: str | None = None,
+        runtime_scenario_id: str | None = None,
+    ) -> dict[str, Any]:
+        existing = self.get_workspace_binding(source_webspace_id)
+        binding = await self.ensure_dev_webspace(
+            source_webspace_id,
+            active_draft_id=active_draft_id if active_draft_id is not None else existing.get("active_draft_id"),
+            runtime_scenario_id=runtime_scenario_id or existing.get("runtime_scenario_id"),
+        )
+        return {
+            **self.open_dev_webspace(source_webspace_id, base_url=base_url),
+            "binding": binding,
+        }
+
     def dialog_widget_config(self, source_webspace_id: str | None = None) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
         return {

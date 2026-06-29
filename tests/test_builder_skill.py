@@ -295,6 +295,15 @@ def test_workbench_tool_wrappers_use_voice_widget_and_active_draft(monkeypatch) 
         def open_dev_webspace(self, webspace_id, *, base_url=None):
             return {"ok": True, "url": f"{base_url}/?webspace={webspace_id}-dev", "webspace_id": f"{webspace_id}-dev"}
 
+        async def open_dev_webspace_ready(self, webspace_id, *, base_url=None, active_draft_id=None, runtime_scenario_id=None):
+            calls.append({
+                "method": "open_ready",
+                "webspace_id": webspace_id,
+                "active_draft_id": active_draft_id,
+                "runtime_scenario_id": runtime_scenario_id,
+            })
+            return {"ok": True, "url": f"{base_url}/?webspace={webspace_id}-dev", "webspace_id": f"{webspace_id}-dev"}
+
         def dialog_widget_config(self, webspace_id):
             return {"widget": "voice_chat", "dialog_channel_id": "builder", "source_webspace_id": webspace_id}
 

@@ -43,11 +43,13 @@ class BuilderPreviewRequest(BaseModel):
 class BuilderWorkbenchEnsureRequest(BaseModel):
     webspace_id: str | None = None
     active_draft_id: str | None = None
+    runtime_scenario_id: str | None = None
 
 
 class BuilderActiveDraftRequest(BaseModel):
     webspace_id: str | None = None
     draft_id: str | None = None
+    runtime_scenario_id: str | None = None
 
 
 @router.get("/approval-profiles")
@@ -111,6 +113,7 @@ async def ensure_workbench(
         "binding": await service.ensure_dev_webspace(
             body.webspace_id,
             active_draft_id=body.active_draft_id,
+            runtime_scenario_id=body.runtime_scenario_id,
         ),
     }
 
@@ -124,12 +127,17 @@ def get_workbench_binding(
 
 
 @router.get("/workbench/open")
-def open_workbench_dev_webspace(
+async def open_workbench_dev_webspace(
     webspace_id: str | None = None,
     base_url: str | None = None,
+    runtime_scenario_id: str | None = None,
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
-    return service.open_dev_webspace(webspace_id, base_url=base_url)
+    return await service.open_dev_webspace_ready(
+        webspace_id,
+        base_url=base_url,
+        runtime_scenario_id=runtime_scenario_id,
+    )
 
 
 @router.get("/workbench/dialog-widget")
@@ -150,6 +158,7 @@ async def set_workbench_active_draft(
         "binding": await service.ensure_dev_webspace(
             body.webspace_id,
             active_draft_id=body.draft_id,
+            runtime_scenario_id=body.runtime_scenario_id,
         ),
     }
 
