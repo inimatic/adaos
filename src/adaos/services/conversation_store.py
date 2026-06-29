@@ -191,6 +191,11 @@ _SCHEMA = (
         renderer_json TEXT NOT NULL DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'started',
         summary TEXT,
+        retention_class TEXT NOT NULL DEFAULT 'normal',
+        retention_until REAL,
+        redaction_state TEXT NOT NULL DEFAULT 'active',
+        redacted_at REAL,
+        redaction_reason TEXT,
         created_at REAL NOT NULL,
         completed_at REAL
     );
@@ -210,6 +215,7 @@ _SCHEMA_COLUMN_MIGRATIONS = {
     "conversation_conversations": _RETENTION_REDACTION_COLUMNS,
     "conversation_messages": _MESSAGE_THREAD_COLUMNS + _RETENTION_REDACTION_COLUMNS,
     "conversation_memory_items": _RETENTION_REDACTION_COLUMNS,
+    "conversation_turn_traces": _RETENTION_REDACTION_COLUMNS,
 }
 _ENSURED_SQL_IDS: set[int] = set()
 
@@ -356,6 +362,31 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
     return msg
 
 
+def _row_to_conversation(row: sqlite3.Row) -> dict[str, Any]:
+    initiator = _json_load(row["initiator_json"], {})
+    policy = _json_load(row["policy_json"], {})
+    meta = _json_load(row["meta_json"], {})
+    return {
+        "conversation_id": row["conversation_id"],
+        "webspace_id": row["webspace_id"],
+        "kind": row["kind"],
+        "owner": row["owner"],
+        "title": row["title"],
+        "active_agent_id": row["active_agent_id"],
+        "status": row["status"],
+        "retention_class": _row_value(row, "retention_class", "normal"),
+        "retention_until": _row_value(row, "retention_until"),
+        "redaction_state": _row_value(row, "redaction_state", "active"),
+        "redacted_at": _row_value(row, "redacted_at"),
+        "redaction_reason": _row_value(row, "redaction_reason"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "initiator": initiator if isinstance(initiator, dict) else {},
+        "policy": policy if isinstance(policy, dict) else {},
+        "meta": meta if isinstance(meta, dict) else {},
+    }
+
+
 def _row_to_agent(row: sqlite3.Row) -> dict[str, Any]:
     aliases = _json_load(row["aliases_json"], [])
     voice_profile = _json_load(row["voice_profile_json"], {})
@@ -435,6 +466,23 @@ def upsert_conversation(
         )
         con.commit()
     return True
+
+
+def get_conversation(conversation_id: str, *, include_redacted: bool = False) -> dict[str, Any] | None:
+    cid = str(conversation_id or "").strip()
+    if not cid or not ensure_schema():
+        return None
+    where = ["conversation_id=?"]
+    params: list[Any] = [cid]
+    if not include_redacted:
+        where.append("redaction_state!='redacted'")
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            f"SELECT * FROM conversation_conversations WHERE {' AND '.join(where)}",
+            params,
+        ).fetchone()
+    return _row_to_conversation(row) if row else None
 
 
 def start_thread(
@@ -1472,6 +1520,11 @@ def _row_to_turn_trace(row: sqlite3.Row) -> dict[str, Any]:
         "renderer": _json_load(row["renderer_json"], {}),
         "status": row["status"],
         "summary": row["summary"],
+        "retention_class": _row_value(row, "retention_class", "normal"),
+        "retention_until": _row_value(row, "retention_until"),
+        "redaction_state": _row_value(row, "redaction_state", "active"),
+        "redacted_at": _row_value(row, "redacted_at"),
+        "redaction_reason": _row_value(row, "redaction_reason"),
         "created_at": row["created_at"],
         "completed_at": row["completed_at"],
     }
@@ -1605,6 +1658,7 @@ def list_turn_traces(
     webspace_id: str | None = None,
     limit: int = 500,
     ascending: bool = True,
+    include_redacted: bool = False,
 ) -> list[dict[str, Any]]:
     if not ensure_schema():
         return []
@@ -1616,6 +1670,8 @@ def list_turn_traces(
     if webspace_id:
         where.append("webspace_id=?")
         params.append(webspace_id)
+    if not include_redacted:
+        where.append("redaction_state!='redacted'")
     sql_where = f"WHERE {' AND '.join(where)}" if where else ""
     order = "ASC" if ascending else "DESC"
     safe_limit = max(1, min(int(limit or 500), 5000))
@@ -1632,3 +1688,151 @@ def list_turn_traces(
             [*params, safe_limit],
         ).fetchall()
     return [_row_to_turn_trace(row) for row in rows]
+
+
+def export_conversation(
+    conversation_id: str,
+    *,
+    include_redacted: bool = False,
+    include_memory: bool = True,
+    include_traces: bool = True,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    conversation = get_conversation(cid, include_redacted=include_redacted)
+    messages = [
+        item
+        for item in list_messages(cid, limit=limit)
+        if include_redacted or str(item.get("redaction_state") or "active") != "redacted"
+    ]
+    memory: list[dict[str, Any]] = []
+    if include_memory:
+        memory = list_memory(
+            scope="conversation",
+            subject_id=cid,
+            limit=limit,
+            include_redacted=include_redacted,
+        )
+    traces = (
+        list_turn_traces(conversation_id=cid, limit=limit, include_redacted=include_redacted)
+        if include_traces
+        else []
+    )
+    return {
+        "schema": "adaos.conversation.export.v1",
+        "conversation_id": cid,
+        "conversation": conversation,
+        "messages": messages,
+        "memory": memory,
+        "turn_traces": traces,
+        "include_redacted": bool(include_redacted),
+        "counts": {
+            "messages": len(messages),
+            "memory": len(memory),
+            "turn_traces": len(traces),
+        },
+    }
+
+
+def redact_conversation(
+    conversation_id: str,
+    *,
+    reason: str = "user_request",
+    hard_delete: bool = False,
+    include_memory: bool = True,
+    include_traces: bool = True,
+) -> dict[str, Any]:
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    if not ensure_schema():
+        return {"ok": False, "conversation_id": cid, "error": "conversation_store_unavailable"}
+    now = time.time()
+    clean_reason = str(reason or "user_request").strip() or "user_request"
+    counts: dict[str, int] = {"conversation": 0, "messages": 0, "memory": 0, "turn_traces": 0}
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        if hard_delete:
+            counts["turn_traces"] = int(
+                con.execute("DELETE FROM conversation_turn_traces WHERE conversation_id=?", (cid,)).rowcount or 0
+            )
+            counts["messages"] = int(
+                con.execute("DELETE FROM conversation_messages WHERE conversation_id=?", (cid,)).rowcount or 0
+            )
+            if include_memory:
+                counts["memory"] = int(
+                    con.execute(
+                        "DELETE FROM conversation_memory_items WHERE scope='conversation' AND subject_id=?",
+                        (cid,),
+                    ).rowcount
+                    or 0
+                )
+            counts["conversation"] = int(
+                con.execute("DELETE FROM conversation_conversations WHERE conversation_id=?", (cid,)).rowcount or 0
+            )
+        else:
+            counts["conversation"] = int(
+                con.execute(
+                    """
+                    UPDATE conversation_conversations
+                    SET redaction_state='redacted',
+                        redacted_at=?,
+                        redaction_reason=?,
+                        updated_at=?
+                    WHERE conversation_id=?
+                    """,
+                    (now, clean_reason, now, cid),
+                ).rowcount
+                or 0
+            )
+            counts["messages"] = int(
+                con.execute(
+                    """
+                    UPDATE conversation_messages
+                    SET redaction_state='redacted',
+                        redacted_at=?,
+                        redaction_reason=?
+                    WHERE conversation_id=?
+                    """,
+                    (now, clean_reason, cid),
+                ).rowcount
+                or 0
+            )
+            if include_memory:
+                counts["memory"] = int(
+                    con.execute(
+                        """
+                        UPDATE conversation_memory_items
+                        SET redaction_state='redacted',
+                            redacted_at=?,
+                            redaction_reason=?,
+                            updated_at=?
+                        WHERE scope='conversation' AND subject_id=?
+                        """,
+                        (now, clean_reason, now, cid),
+                    ).rowcount
+                    or 0
+                )
+            if include_traces:
+                counts["turn_traces"] = int(
+                    con.execute(
+                        """
+                        UPDATE conversation_turn_traces
+                        SET redaction_state='redacted',
+                            redacted_at=?,
+                            redaction_reason=?
+                        WHERE conversation_id=?
+                        """,
+                        (now, clean_reason, cid),
+                    ).rowcount
+                    or 0
+                )
+        con.commit()
+    return {
+        "ok": True,
+        "conversation_id": cid,
+        "hard_delete": bool(hard_delete),
+        "redaction_reason": clean_reason,
+        "counts": counts,
+    }

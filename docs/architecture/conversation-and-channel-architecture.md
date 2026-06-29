@@ -1941,8 +1941,13 @@ Important lacunae found during Phase 6 implementation:
   device-control, credential, and cross-node effects. The first contract is
   `adaos.conversation.action_risk.v1` from
   `conversation_safety.classify_action_risk(...)`.
-- [ ] `[must]` Add consent/export/delete/redaction APIs for conversations,
-  messages, memory items, and traces, backed by durable audit events.
+- [x] `[must]` Add first export/delete/redaction APIs for conversations,
+  messages, conversation-scoped memory items, and traces.
+  `conversation_store.export_conversation(...)` and
+  `redact_conversation(...)` support redaction-aware export, soft redaction,
+  and hard delete for a conversation bundle.
+- [ ] `[must]` Back consent/export/delete/redaction operations with durable
+  audit events and user-visible consent controls.
 - [x] `[must]` Add action risk classes for tools with filesystem, network,
   device-control, credential, or cross-node effects.
 - [ ] `[must]` Wire action-risk classes into approval gates before executing

@@ -203,11 +203,35 @@ def test_conversation_store_migrates_retention_and_redaction_columns() -> None:
             )
             """
         )
+        con.execute(
+            """
+            CREATE TABLE conversation_turn_traces (
+                turn_trace_id TEXT PRIMARY KEY,
+                conversation_id TEXT,
+                message_id TEXT,
+                webspace_id TEXT NOT NULL,
+                channel_id TEXT,
+                agent_id TEXT,
+                selected_tool TEXT,
+                policy_decision_json TEXT NOT NULL DEFAULT '{}',
+                renderer_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'started',
+                summary TEXT,
+                created_at REAL NOT NULL,
+                completed_at REAL
+            )
+            """
+        )
         con.commit()
 
     assert conversation_store.ensure_schema()
     with sql.connect() as con:
-        for table in ("conversation_conversations", "conversation_messages", "conversation_memory_items"):
+        for table in (
+            "conversation_conversations",
+            "conversation_messages",
+            "conversation_memory_items",
+            "conversation_turn_traces",
+        ):
             columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
             assert {
                 "retention_class",
@@ -216,6 +240,86 @@ def test_conversation_store_migrates_retention_and_redaction_columns() -> None:
                 "redacted_at",
                 "redaction_reason",
             }.issubset(columns)
+
+
+def test_conversation_store_exports_and_redacts_conversation_bundle() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.export",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    conversation_store.append_message(
+        conversation_id="conv.export",
+        webspace_id="desktop",
+        channel_id="general",
+        owner="skill:test",
+        role="user",
+        text="private detail",
+        payload={"id": "export.msg.1", "from": "user", "text": "private detail"},
+    )
+    memory_id = conversation_store.remember(
+        scope="conversation",
+        owner="skill:test",
+        subject_id="conv.export",
+        key="fact",
+        text="private memory",
+        consent_state="session",
+    )
+    trace_id = conversation_store.start_turn_trace(
+        webspace_id="desktop",
+        conversation_id="conv.export",
+        channel_id="general",
+        selected_tool="skill:test.tool",
+        policy_decision={"reason": "test"},
+    )
+    assert memory_id and trace_id
+    assert conversation_store.finish_turn_trace(trace_id, status="completed")
+
+    exported = conversation_store.export_conversation("conv.export")
+    assert exported["schema"] == "adaos.conversation.export.v1"
+    assert exported["counts"] == {"messages": 1, "memory": 1, "turn_traces": 1}
+    assert exported["conversation"]["conversation_id"] == "conv.export"
+
+    result = conversation_store.redact_conversation("conv.export", reason="test_redaction")
+    assert result["ok"] is True
+    assert result["counts"] == {"conversation": 1, "messages": 1, "memory": 1, "turn_traces": 1}
+
+    visible = conversation_store.export_conversation("conv.export")
+    assert visible["conversation"] is None
+    assert visible["messages"] == []
+    assert visible["memory"] == []
+    assert visible["turn_traces"] == []
+
+    redacted = conversation_store.export_conversation("conv.export", include_redacted=True)
+    assert redacted["conversation"]["redaction_state"] == "redacted"
+    assert redacted["messages"][0]["redaction_reason"] == "test_redaction"
+    assert redacted["memory"][0]["redaction_reason"] == "test_redaction"
+    assert redacted["turn_traces"][0]["redaction_reason"] == "test_redaction"
+
+
+def test_conversation_store_hard_deletes_conversation_bundle() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.delete",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    conversation_store.append_message(
+        conversation_id="conv.delete",
+        webspace_id="desktop",
+        channel_id="general",
+        owner="skill:test",
+        role="user",
+        text="remove me",
+        payload={"id": "delete.msg.1", "from": "user", "text": "remove me"},
+    )
+    result = conversation_store.redact_conversation("conv.delete", hard_delete=True)
+
+    assert result["ok"] is True
+    assert result["counts"]["conversation"] == 1
+    assert conversation_store.export_conversation("conv.delete", include_redacted=True)["conversation"] is None
+    assert conversation_store.export_conversation("conv.delete", include_redacted=True)["messages"] == []
 
 
 def test_conversation_store_persists_active_dialog_channel() -> None:
