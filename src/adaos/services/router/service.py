@@ -54,6 +54,7 @@ BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
 DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
 VOICE_CHAT_USER_EVENT = "voice.chat.user"
+VOICE_CHAT_STREAM_RECEIVER = "voice_chat.messages"
 VOICE_CHAT_VISIBLE_TAIL = 8
 VOICE_CHAT_HISTORY_LIMIT = 200
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
@@ -758,6 +759,24 @@ def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
     return owner
 
 
+def _static_webio_receiver_metadata(receiver: str) -> dict[str, Any]:
+    receiver_id = str(receiver or "").strip()
+    if receiver_id != VOICE_CHAT_STREAM_RECEIVER:
+        return {}
+    return {
+        "origin": "skill:voice_chat_skill",
+        "owner": "skill:voice_chat_skill",
+        "mode": "stream",
+        "snapshotPolicy": "compact_tail",
+        "budget": {"maxPayloadBytes": 65536},
+        "route": {
+            "kind": "stream",
+            "surface": "voice_chat",
+            "owner": "skill:voice_chat_skill",
+        },
+    }
+
+
 def _webio_stream_stats_key(webspace_id: str, receiver: str, owner: str) -> str:
     return "\0".join(
         [
@@ -1110,6 +1129,8 @@ class RouterService:
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
         self._voice_chat_persist_tasks: set[asyncio.Task[None]] = set()
+        self._dialog_state_tasks: dict[str, asyncio.Task[None]] = {}
+        self._dialog_state_pending_events: dict[str, str] = {}
         self._webio_receiver_metadata_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
     def _router_yjs_write_meta(self):
@@ -1125,6 +1146,9 @@ class RouterService:
         receiver_id = str(receiver or "").strip()
         if not receiver_id:
             return {}
+        static_metadata = _static_webio_receiver_metadata(receiver_id)
+        if static_metadata:
+            return dict(static_metadata)
         now = time.monotonic()
         key = (ws, receiver_id)
         cached = self._webio_receiver_metadata_cache.get(key)
@@ -2475,6 +2499,53 @@ class RouterService:
                     exc_info=True,
                 )
 
+        def _schedule_dialog_state_write(webspace_id: str, *, event: str = "snapshot") -> None:
+            ws = str(webspace_id or "default").strip() or "default"
+            event_name = str(event or "snapshot").strip() or "snapshot"
+            self._dialog_state_pending_events[ws] = event_name
+            existing = self._dialog_state_tasks.get(ws)
+            if existing is not None and not existing.done():
+                return
+
+            async def _run() -> None:
+                try:
+                    while True:
+                        next_event = self._dialog_state_pending_events.pop(ws, event_name)
+                        await _write_dialog_state(ws, event=next_event)
+                        if ws not in self._dialog_state_pending_events:
+                            break
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logging.getLogger("adaos.router.dialog").warning(
+                        "dialog.state background write failed webspace=%s event=%s",
+                        ws,
+                        event_name,
+                        exc_info=True,
+                    )
+
+            try:
+                task = asyncio.create_task(_run(), name=f"dialog-state:{ws}")
+            except RuntimeError:
+                return
+            self._dialog_state_tasks[ws] = task
+
+            def _forget(done: asyncio.Task[None]) -> None:
+                if self._dialog_state_tasks.get(ws) is done:
+                    self._dialog_state_tasks.pop(ws, None)
+                try:
+                    done.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logging.getLogger("adaos.router.dialog").warning(
+                        "dialog.state background task failed webspace=%s",
+                        ws,
+                        exc_info=True,
+                    )
+
+            task.add_done_callback(_forget)
+
         async def _ensure_voice_chat_state(webspace_id: str, target_node_id: str | None = None) -> None:
             def _mutator(data_map: Any, txn: Any) -> None:
                 current = _read_voice_chat_state(data_map, target_node_id)
@@ -3010,7 +3081,7 @@ class RouterService:
                             "message_id": clean_msg.get("id"),
                         },
                     )
-                    await _write_dialog_state(webspace_id, event="turn_materialized")
+                    _schedule_dialog_state_write(webspace_id, event="turn_materialized")
                 except Exception:
                     pass
 
@@ -4022,7 +4093,17 @@ class RouterService:
                 if target_node_id:
                     tool_payload.setdefault("target_node_id", target_node_id)
                 with io_meta(route_meta):
-                    return mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
+                    try:
+                        return mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
+                    except Exception:
+                        if skill != BUILDER_SKILL_ID or not hasattr(mgr, "run_dev_tool"):
+                            raise
+                        logging.getLogger("adaos.router.voice_chat").info(
+                            "workspace builder skill unavailable; trying dev runtime tool=%s",
+                            tool,
+                            exc_info=True,
+                        )
+                        return mgr.run_dev_tool(skill, tool, tool_payload)
             finally:
                 if prev is None:
                     try:
@@ -4421,7 +4502,7 @@ class RouterService:
                 summary=trace_summary,
                 extra_policy=trace_policy,
             )
-            await _write_dialog_state(webspace_id, event="turn")
+            _schedule_dialog_state_write(webspace_id, event="turn")
             if mark_request:
                 try:
                     from adaos.services.nlu.dispatcher import mark_dispatched_request
@@ -4602,6 +4683,92 @@ class RouterService:
                             exc_info=True,
                         )
                 await _write_dialog_state(ws, event="selected")
+
+        async def _activate_requested_dialog_channel(
+            webspace_id: str,
+            channel_id: str,
+            meta: Mapping[str, Any],
+        ) -> bool:
+            ws = str(webspace_id or "default").strip() or "default"
+            cid = str(channel_id or "").strip().lower()
+            if not cid or cid == GENERAL_DIALOG_CHANNEL_ID:
+                return False
+            try:
+                active = dialog_runtime.get_active_channel(ws)
+            except Exception:
+                active = None
+            if active is not None and str(active.channel_id or "").strip().lower() == cid:
+                return True
+            try:
+                channel = next(
+                    (
+                        item
+                        for item in _conversation_manifest_channel_records(ws)
+                        if str(item.get("id") or item.get("channel_id") or "").strip().lower() == cid
+                    ),
+                    None,
+                )
+            except Exception:
+                channel = None
+            if not isinstance(channel, dict):
+                return False
+            try:
+                dialog_runtime.activate_channel(
+                    webspace_id=ws,
+                    channel_id=cid,
+                    owner=str(channel.get("owner") or f"channel:{cid}").strip() or f"channel:{cid}",
+                    default_skill=str(channel.get("default_skill") or "").strip(),
+                    default_tool=str(channel.get("default_tool") or "").strip(),
+                    conversation_id=str(channel.get("conversation_id") or f"conv.{cid}.{ws}").strip(),
+                    active_agent_id=str(meta.get("active_agent_id") or "").strip() or None,
+                    active_agent_label=str(meta.get("active_agent_label") or "").strip() or None,
+                    active_agent_owner=str(meta.get("active_agent_owner") or channel.get("owner") or "").strip() or None,
+                    active_agent_kind=str(meta.get("active_agent_kind") or "skill_agent").strip() or None,
+                    active_agent_gender=str(meta.get("active_agent_gender") or meta.get("voice_gender") or "").strip() or None,
+                    active_agent_voice=str(meta.get("active_agent_voice") or meta.get("voice") or "").strip() or None,
+                    active_agent_icon=str(meta.get("active_agent_icon") or meta.get("agent_icon") or "").strip() or None,
+                    route_id=str(channel.get("route_id") or meta.get("route_id") or "voice_chat").strip() or "voice_chat",
+                    bus=self.bus,
+                    source="router.voice.requested_channel",
+                )
+                await _write_dialog_state(ws, event="requested_channel")
+            except Exception:
+                logging.getLogger("adaos.router.dialog").debug(
+                    "requested dialog channel activation failed webspace=%s channel=%s",
+                    ws,
+                    cid,
+                    exc_info=True,
+                )
+                return False
+            return True
+
+        async def _append_dialog_tool_unavailable(
+            webspace_id: str,
+            channel_id: str,
+            meta: Mapping[str, Any],
+            target_node_id: str | None,
+        ) -> None:
+            label = str(meta.get("active_agent_label") or _dialog_channel_label(channel_id)).strip()
+            if str(channel_id or "").strip().lower() == "builder":
+                text = (
+                    "Builder channel selected, but builder_skill.chat is not available in runtime yet. "
+                    "Install/activate builder_skill, then repeat the request."
+                )
+            else:
+                text = f"{label} channel selected, but its runtime tool is not available yet."
+            await _append_voice_chat_message(
+                webspace_id,
+                {
+                    "id": _make_id("m"),
+                    "from": "hub",
+                    "text": text,
+                    "ts": time.time(),
+                    "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
+                    "active_agent_label": label or None,
+                    "_meta": dict(meta),
+                },
+                target_node_id,
+            )
 
         async def _on_voice_user(ev: Event) -> None:
             payload = ev.payload or {}
@@ -5013,6 +5180,13 @@ class RouterService:
                     pass
                 return
             try:
+                requested_non_general_channel = (
+                    requested_dialog_channel_id
+                    if requested_dialog_channel_id and requested_dialog_channel_id != GENERAL_DIALOG_CHANNEL_ID
+                    else ""
+                )
+                if requested_non_general_channel:
+                    await _activate_requested_dialog_channel(ws, requested_non_general_channel, meta)
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,
                     text=text,
@@ -5028,6 +5202,31 @@ class RouterService:
                 route_id="voice_chat",
                 mark_request=False,
             ):
+                try:
+                    await _ensure_tts_state(ws)
+                except Exception:
+                    pass
+                return
+            if requested_dialog_channel_id and requested_dialog_channel_id != GENERAL_DIALOG_CHANNEL_ID:
+                _record_voice_turn_trace(
+                    ws,
+                    meta,
+                    text=text,
+                    selected_tool="dialog.requested_channel.unavailable",
+                    reason="requested_dialog_tool_unavailable",
+                    renderer={"receiver": "voice_chat.messages", "projection": "tool_unavailable"},
+                    status="failed",
+                    target_node_id=target_node_id,
+                )
+                try:
+                    await _append_dialog_tool_unavailable(ws, requested_dialog_channel_id, meta, target_node_id)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").debug(
+                        "requested dialog tool unavailable message failed webspace=%s channel=%s",
+                        ws,
+                        requested_dialog_channel_id,
+                        exc_info=True,
+                    )
                 try:
                     await _ensure_tts_state(ws)
                 except Exception:
@@ -5315,5 +5514,22 @@ class RouterService:
             except Exception:
                 pass
             self._voice_chat_persist_tasks.clear()
+        if self._dialog_state_tasks:
+            try:
+                timeout_s = max(0.0, float(os.getenv("ADAOS_DIALOG_STATE_DRAIN_TIMEOUT_S") or "1.0"))
+            except Exception:
+                timeout_s = 1.0
+            pending = [task for task in self._dialog_state_tasks.values() if not task.done()]
+            try:
+                if pending:
+                    await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+            except Exception:
+                pass
+            self._dialog_state_tasks.clear()
+            self._dialog_state_pending_events.clear()
         self._media_route_webspaces.clear()
         self._started = False

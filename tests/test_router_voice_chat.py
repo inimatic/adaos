@@ -809,6 +809,245 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     dialog_runtime.reset_all()
 
 
+async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "builder-requested-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "builder handled",
+            "dialog": {
+                "dialog_channel_id": "builder",
+                "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                "owner": "skill:builder_skill",
+                "default_tool": "builder_skill.chat",
+                "active_agent_id": "agent:builder_skill:builder",
+            },
+        }
+
+    monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: SimpleNamespace(run_tool=_run_tool))
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "создадим приложение список покупок",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls
+    assert calls[0][0:2] == ("builder_skill", "chat")
+    assert calls[0][2]["text"] == "создадим приложение список покупок"
+    assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "builder"
+    assert state.default_skill == "builder_skill"
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, str]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "builder-dev-runtime-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    class _Mgr:
+        def run_tool(self, skill, tool, payload, **_opts):
+            calls.append((skill, tool, dict(payload), "workspace"))
+            raise RuntimeError("no installed workspace runtime")
+
+        def run_dev_tool(self, skill, tool, payload):
+            calls.append((skill, tool, dict(payload), "dev"))
+            return {
+                "ok": True,
+                "message": "dev builder handled",
+                "dialog": {
+                    "dialog_channel_id": "builder",
+                    "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                    "owner": "skill:builder_skill",
+                    "default_tool": "builder_skill.chat",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            }
+
+    monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: _Mgr())
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "создадим приложение список покупок",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert [call[3] for call in calls] == ["workspace", "dev"]
+    assert calls[1][0:2] == ("builder_skill", "chat")
+    assert calls[1][2]["text"] == "создадим приложение список покупок"
+    messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert any(item["text"] == "dev builder handled" for item in messages)
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_requested_builder_channel_does_not_fall_back_to_nlu_when_tool_missing(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    seen_nlu: list[Event] = []
+    webspace_id = "builder-missing-runtime-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(*_args, **_kwargs):
+        raise RuntimeError("no versions installed")
+
+    monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: SimpleNamespace(run_tool=_run_tool))
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "создадим приложение список покупок",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert any("builder_skill.chat is not available" in item["text"] for item in messages)
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "builder"
+    dialog_runtime.reset_all()
+
+
 async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) -> None:
     from adaos.services import dialog_runtime
 
