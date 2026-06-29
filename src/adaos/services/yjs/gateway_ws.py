@@ -358,7 +358,7 @@ _YWS_GUARD_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_COOLDOWN_S", 300.0, minimum=
 _YWS_GUARD_MAX_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_MAX_COOLDOWN_S", 1800.0, minimum=0.0)
 _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0, minimum=1.0)
 _YWS_GUARD_NOTIFY_INTERVAL_S = _env_float("ADAOS_YWS_GUARD_NOTIFY_INTERVAL_S", 30.0, minimum=1.0)
-_YWS_GUARD_REJECT_HOLD_MAX_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_MAX_SEC", 30.0, minimum=0.0)
+_YWS_GUARD_REJECT_HOLD_MAX_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_MAX_SEC", 0.0, minimum=0.0)
 _YWS_GUARD_REJECT_HOLD_STEP_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_STEP_SEC", 1.0, minimum=0.05)
 _YWS_GUARD_MIN_STABLE_SESSION_S = _env_float("ADAOS_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0, minimum=0.0)
 _YWS_GUARD_SHORT_SESSION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0, minimum=1.0)
@@ -3314,7 +3314,7 @@ async def _hold_yws_guard_reject(
         _YWS_GUARD_DIAG["last_reject_hold_reason"] = guard_reason
         _YWS_GUARD_DIAG["last_reject_hold_seconds"] = hold_s
         _YWS_GUARD_DIAG["last_reject_hold_attempt_id"] = attempt_id
-    _ylog.warning(
+    _ylog.debug(
         "yws guard holding rejected connection webspace=%s dev=%s attempt=%s client_attempt=%s reason=%s hold_s=%.1f",
         webspace_id,
         dev_id,
@@ -3361,7 +3361,7 @@ async def _reject_yws_guard_connection(
 ) -> None:
     state_token = f"yws_guard_{guard_reason}"
     _remember_yws_attempt(attempt_id, "guard_reject")
-    _ylog.warning(
+    _ylog.debug(
         "yws guard rejected connection webspace=%s dev=%s attempt=%s client_attempt=%s reason=%s active=%s recent_open_10s=%s client_open_15s=%s",
         webspace_id,
         dev_id,
