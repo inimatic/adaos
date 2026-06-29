@@ -200,6 +200,25 @@ _SCHEMA = (
         completed_at REAL
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_audit_events (
+        audit_event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed',
+        conversation_id TEXT,
+        actor_owner TEXT,
+        actor_id TEXT,
+        reason TEXT,
+        counts_json TEXT NOT NULL DEFAULT '{}',
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_audit_conversation_created
+    ON conversation_audit_events(conversation_id, created_at);
+    """,
 )
 
 
@@ -271,7 +290,7 @@ def ensure_schema(sql: Any | None = None) -> bool:
         try:
             with sql.connect() as con:
                 exists = con.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_dialog_channels'"
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_audit_events'"
                 ).fetchone()
             if exists:
                 return True
@@ -1530,6 +1549,24 @@ def _row_to_turn_trace(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _row_to_audit_event(row: sqlite3.Row) -> dict[str, Any]:
+    counts = _json_load(row["counts_json"], {})
+    meta = _json_load(row["meta_json"], {})
+    return {
+        "audit_event_id": row["audit_event_id"],
+        "event_type": row["event_type"],
+        "action": row["action"],
+        "status": row["status"],
+        "conversation_id": row["conversation_id"],
+        "actor_owner": row["actor_owner"],
+        "actor_id": row["actor_id"],
+        "reason": row["reason"],
+        "counts": counts if isinstance(counts, dict) else {},
+        "meta": meta if isinstance(meta, dict) else {},
+        "created_at": row["created_at"],
+    }
+
+
 def start_turn_trace(
     *,
     webspace_id: str,
@@ -1690,6 +1727,123 @@ def list_turn_traces(
     return [_row_to_turn_trace(row) for row in rows]
 
 
+def append_audit_event(
+    *,
+    event_type: str,
+    action: str,
+    conversation_id: str | None = None,
+    status: str = "completed",
+    actor_owner: str | None = None,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    counts: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+    audit_event_id: str | None = None,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        return _append_audit_event_with_connection(
+            con,
+            event_type=event_type,
+            action=action,
+            conversation_id=conversation_id,
+            status=status,
+            actor_owner=actor_owner,
+            actor_id=actor_id,
+            reason=reason,
+            counts=counts,
+            meta=meta,
+            audit_event_id=audit_event_id,
+        )
+
+
+def _append_audit_event_with_connection(
+    con: sqlite3.Connection,
+    *,
+    event_type: str,
+    action: str,
+    conversation_id: str | None = None,
+    status: str = "completed",
+    actor_owner: str | None = None,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    counts: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+    audit_event_id: str | None = None,
+) -> dict[str, Any]:
+    event_id = _normalize_id(audit_event_id, "audit.conversation")
+    now = time.time()
+    con.execute(
+        """
+        INSERT INTO conversation_audit_events(
+            audit_event_id, event_type, action, status, conversation_id,
+            actor_owner, actor_id, reason, counts_json, meta_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            str(event_type or "conversation.audit").strip() or "conversation.audit",
+            str(action or "unknown").strip() or "unknown",
+            str(status or "completed").strip() or "completed",
+            str(conversation_id or "").strip() or None,
+            str(actor_owner or "").strip() or None,
+            str(actor_id or "").strip() or None,
+            str(reason or "").strip() or None,
+            _json_dump(dict(counts or {})),
+            _json_dump(dict(meta or {})),
+            now,
+        ),
+    )
+    con.commit()
+    row = con.execute(
+        "SELECT * FROM conversation_audit_events WHERE audit_event_id=?",
+        (event_id,),
+    ).fetchone()
+    return _row_to_audit_event(row)
+
+
+def list_audit_events(
+    *,
+    conversation_id: str | None = None,
+    event_type: str | None = None,
+    action: str | None = None,
+    limit: int = 500,
+    ascending: bool = False,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    where: list[str] = []
+    params: list[Any] = []
+    if conversation_id:
+        where.append("conversation_id=?")
+        params.append(conversation_id)
+    if event_type:
+        where.append("event_type=?")
+        params.append(event_type)
+    if action:
+        where.append("action=?")
+        params.append(action)
+    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
+    order = "ASC" if ascending else "DESC"
+    safe_limit = max(1, min(int(limit or 500), 5000))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_audit_events
+            {sql_where}
+            ORDER BY created_at {order}
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        ).fetchall()
+    return [_row_to_audit_event(row) for row in rows]
+
+
 def export_conversation(
     conversation_id: str,
     *,
@@ -1720,7 +1874,7 @@ def export_conversation(
         if include_traces
         else []
     )
-    return {
+    result = {
         "schema": "adaos.conversation.export.v1",
         "conversation_id": cid,
         "conversation": conversation,
@@ -1734,6 +1888,22 @@ def export_conversation(
             "turn_traces": len(traces),
         },
     }
+    audit = append_audit_event(
+        event_type="conversation.privacy",
+        action="export_conversation",
+        conversation_id=cid,
+        status="completed",
+        counts=result["counts"],
+        meta={
+            "include_redacted": bool(include_redacted),
+            "include_memory": bool(include_memory),
+            "include_traces": bool(include_traces),
+            "limit": max(1, min(int(limit or 5000), 5000)),
+        },
+    )
+    if audit:
+        result["audit_event_id"] = audit["audit_event_id"]
+    return result
 
 
 def redact_conversation(
@@ -1752,7 +1922,9 @@ def redact_conversation(
     now = time.time()
     clean_reason = str(reason or "user_request").strip() or "user_request"
     counts: dict[str, int] = {"conversation": 0, "messages": 0, "memory": 0, "turn_traces": 0}
+    audit_event_id: str | None = None
     with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
         if hard_delete:
             counts["turn_traces"] = int(
                 con.execute("DELETE FROM conversation_turn_traces WHERE conversation_id=?", (cid,)).rowcount or 0
@@ -1828,11 +2000,25 @@ def redact_conversation(
                     ).rowcount
                     or 0
                 )
+        audit = _append_audit_event_with_connection(
+            con,
+            event_type="conversation.privacy",
+            action="hard_delete_conversation" if hard_delete else "redact_conversation",
+            conversation_id=cid,
+            status="completed",
+            reason=clean_reason,
+            counts=counts,
+            meta={"include_memory": bool(include_memory), "include_traces": bool(include_traces)},
+        )
+        audit_event_id = str(audit.get("audit_event_id") or "") or None
         con.commit()
-    return {
+    result = {
         "ok": True,
         "conversation_id": cid,
         "hard_delete": bool(hard_delete),
         "redaction_reason": clean_reason,
         "counts": counts,
     }
+    if audit_event_id:
+        result["audit_event_id"] = audit_event_id
+    return result

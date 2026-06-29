@@ -240,6 +240,10 @@ def test_conversation_store_migrates_retention_and_redaction_columns() -> None:
                 "redacted_at",
                 "redaction_reason",
             }.issubset(columns)
+        audit_columns = {row[1] for row in con.execute("PRAGMA table_info(conversation_audit_events)")}
+        assert {"audit_event_id", "event_type", "action", "conversation_id", "counts_json"}.issubset(
+            audit_columns
+        )
 
 
 def test_conversation_store_exports_and_redacts_conversation_bundle() -> None:
@@ -280,10 +284,16 @@ def test_conversation_store_exports_and_redacts_conversation_bundle() -> None:
     assert exported["schema"] == "adaos.conversation.export.v1"
     assert exported["counts"] == {"messages": 1, "memory": 1, "turn_traces": 1}
     assert exported["conversation"]["conversation_id"] == "conv.export"
+    assert exported["audit_event_id"]
 
     result = conversation_store.redact_conversation("conv.export", reason="test_redaction")
     assert result["ok"] is True
     assert result["counts"] == {"conversation": 1, "messages": 1, "memory": 1, "turn_traces": 1}
+    assert result["audit_event_id"]
+    audit = conversation_store.list_audit_events(conversation_id="conv.export", ascending=True)
+    assert [item["action"] for item in audit[:2]] == ["export_conversation", "redact_conversation"]
+    assert audit[1]["reason"] == "test_redaction"
+    assert audit[1]["counts"] == {"conversation": 1, "messages": 1, "memory": 1, "turn_traces": 1}
 
     visible = conversation_store.export_conversation("conv.export")
     assert visible["conversation"] is None
@@ -318,8 +328,11 @@ def test_conversation_store_hard_deletes_conversation_bundle() -> None:
 
     assert result["ok"] is True
     assert result["counts"]["conversation"] == 1
+    assert result["audit_event_id"]
     assert conversation_store.export_conversation("conv.delete", include_redacted=True)["conversation"] is None
     assert conversation_store.export_conversation("conv.delete", include_redacted=True)["messages"] == []
+    audit = conversation_store.list_audit_events(conversation_id="conv.delete", action="hard_delete_conversation")
+    assert audit and audit[0]["counts"]["conversation"] == 1
 
 
 def test_conversation_store_persists_active_dialog_channel() -> None:
