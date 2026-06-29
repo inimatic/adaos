@@ -253,6 +253,11 @@ Current implementation slices:
   `restricted_maintenance_repair`.
 - [x] `[must]` Builder preview emits `review_policy` with profile, mandatory
   review classes, policy blocks, auto-apply eligibility, decision, and evidence.
+- [x] `[must]` Builder preview and Builder skill Pending Actions carry
+  conversation action-risk evidence. The preview gate uses
+  `conversation_safety.classify_action_risk(...)` and blocks auto-apply when
+  filesystem, network, device-control, credential, or cross-node classes
+  require review.
 - [x] `[must]` CLI/API expose approval profiles through
   `adaos builder approval-profiles` and `GET /api/builder/approval-profiles`.
 - [x] `[must]` Legacy draft metadata with `human_review_required=true` is treated
@@ -414,14 +419,17 @@ conversation-native skills.
 
 Open work:
 
+- [x] `[must]` Add the first Builder review-handoff golden fixture to the
+  conversation golden suite. It covers addressed Builder entry, draft creation,
+  and Pending Action review handoff.
 - [ ] `[must]` Treat `builder_skill` as the semantic owner of Builder
   conversations across browser, Voice/global dialog, Telegram, and Prompt IDE.
 - [ ] `[must]` Make `builder_skill` consume conversation context packets,
   retrieved evidence refs, scoped memory, and Pending Actions instead of raw
   UI chat state.
-- [ ] `[must]` Add Builder golden conversations for first idea, clarification,
-  draft creation, mockup patching, validation failure, review approval,
-  rejection, and repair.
+- [ ] `[must]` Broaden Builder golden conversations for first idea,
+  clarification, draft creation, mockup patching, validation failure, review
+  approval, rejection, and repair.
 - [ ] `[must]` Link Builder eval failures to repair tasks with conversation,
   trace, draft, validation, and file refs.
 - [ ] `[must]` Validate generated skills against conversation-native rules:

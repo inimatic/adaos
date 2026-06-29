@@ -1277,6 +1277,66 @@ Known missing architecture elements now promoted into the roadmap:
 - Safety policy for memory writes, cross-owner retrieval, prompt-injection
   through memory/history, PII redaction, export, delete, and consent.
 
+## LLM Threat Model
+
+This threat model applies to Dialog Runtime, Builder, generated skills, memory
+retrieval, and user-facing assistants. It is intentionally practical: every
+class below must map to a runtime control, a trace/audit artifact, and at least
+one regression test before broad rollout.
+
+Threat classes:
+
+- Prompt injection through retrieved memory, history, remote node fragments,
+  web content, or skill-owned notes. Retrieved text is evidence, not
+  instruction. It must be separated from system/developer policy, labelled with
+  a trust boundary, and inspected for instruction-like or exfiltration-like
+  content before it enters a context packet.
+- Sensitive information disclosure. User profile memory, skill memory,
+  credentials, system prompts, hidden policy, transport ids, and cross-owner
+  fragments must be redacted or denied by policy before they become prompt
+  context, export bundles, diagnostics, or model output.
+- Excessive agency. LLM-generated or LLM-selected actions that touch files,
+  networks, credentials, devices, browsers, runtime lifecycle, cross-node
+  retrieval, or destructive operations require an explicit action-risk class
+  and must pass an approval gate before execution.
+- Insecure output handling. Model output must not be treated as trusted code,
+  SQL, shell, routing policy, NLU regex, or UI schema until it passes schema
+  validation, static checks, route-budget checks, preview review, and, where
+  required, Pending Action approval.
+- Unbounded consumption. Long histories, retrieval fan-out, generated routes,
+  streams, TTS, model calls, and retries must have budgets, latency limits,
+  idempotency keys, and cancellation/recovery states. No UI projection or
+  browser tail should become the unbounded source of truth.
+
+Controls already present in the current slice:
+
+- Retrieved memory/history is annotated as
+  `trust_boundary=retrieved_untrusted_evidence` and inspected by
+  `conversation_safety.inspect_retrieved_text(...)`.
+- `conversation_safety.classify_action_risk(...)` produces the shared
+  `adaos.conversation.action_risk.v1` contract.
+- Builder preview policy now includes action-risk evidence and blocks
+  auto-apply when filesystem, network, device-control, credential, or
+  cross-node risk requires review.
+- Builder draft/patch Pending Actions carry source refs and action-risk
+  metadata.
+- Conversation export, soft redaction, and hard delete write durable
+  node-local audit events with counts and reasons.
+- Initial golden datasets cover `general`, `conversation_companions`,
+  `builder`, and `teacher` conversation flows.
+
+Open controls:
+
+- Consent grant/revoke UI and durable consent audit events.
+- Runtime enforcement of action-risk gates for every filesystem, network,
+  device-control, credential, cross-node, and destructive action outside
+  Builder preview.
+- Policy inspector UI that explains context sources, trust boundaries,
+  memory access, redaction state, action-risk class, approval identity, and
+  denial reason for a turn.
+- Full migration gate that runs the golden suite before removing compatibility
+  Voice projections or enabling broad generated-skill rollout.
+
 ## Verifiable Milestones and User Stories
 
 These milestones are phrased as acceptance scenarios rather than implementation
@@ -1913,9 +1973,14 @@ Important lacunae found during Phase 6 implementation:
   `conversation_eval.evaluate_golden_conversation()` scores ledger messages,
   turn traces, required/forbidden text, required agents/channels, success
   rate, fallback rate, repair rate, no-match rate, and latency summary.
-- [ ] `[must]` Add golden datasets for `general`, `conversation_companions`,
-  `builder`, and `teacher` flows, including agent handoff, profile correction,
-  no-match repair, and Builder review/apply handoff.
+- [x] `[must]` Add first checked-in golden datasets for `general`,
+  `conversation_companions`, `builder`, and `teacher` flows. The initial
+  fixtures cover general no-match repair, companion agent handoff, Builder
+  review handoff, and Teacher candidate repair through
+  `tests/fixtures/conversation/*`.
+- [ ] `[must]` Broaden the golden datasets to include companion profile
+  correction, no-input repair, Builder apply/reject handoff, memory-write
+  consent, and long-context retrieval.
 - [ ] `[must]` Make golden evaluation a migration gate before broad removal of
   compatibility Voice projections or broad generated-skill rollout.
 - [ ] `[should]` Add optional model-backed graders for answer quality,
@@ -1926,9 +1991,11 @@ Important lacunae found during Phase 6 implementation:
 
 ### Phase 10. Security, Privacy, and Governance
 
-- [ ] `[must]` Add an LLM threat model aligned with prompt injection, sensitive
+- [x] `[must]` Add an LLM threat model aligned with prompt injection, sensitive
   information disclosure, excessive agency, insecure output handling, and
-  unbounded consumption risks.
+  unbounded consumption risks. This document now defines the threat classes,
+  current controls, and open controls for Dialog Runtime, Builder, generated
+  skills, memory retrieval, and assistants.
 - [x] `[must]` Treat retrieved memory/history as untrusted evidence by default:
   retrieved text must be separated from system/developer instructions and
   flagged when it contains instruction-like or exfiltration-like content. The
@@ -1946,12 +2013,20 @@ Important lacunae found during Phase 6 implementation:
   `conversation_store.export_conversation(...)` and
   `redact_conversation(...)` support redaction-aware export, soft redaction,
   and hard delete for a conversation bundle.
-- [ ] `[must]` Back consent/export/delete/redaction operations with durable
-  audit events and user-visible consent controls.
+- [x] `[must]` Back export/delete/redaction operations with durable audit
+  events. `conversation_audit_events` records export, soft redaction, and hard
+  delete events with counts, reasons, and operation metadata.
+- [ ] `[must]` Add user-visible consent controls and durable consent
+  grant/revoke audit events for reusable global, core, skill, and agent memory.
 - [x] `[must]` Add action risk classes for tools with filesystem, network,
   device-control, credential, or cross-node effects.
-- [ ] `[must]` Wire action-risk classes into approval gates before executing
-  filesystem, network, device-control, credential, or cross-node effects.
+- [x] `[must]` Wire action-risk classes into Builder preview and Builder
+  Pending Action approval gates. Preview policy includes
+  `adaos.builder.action_risk_review.v1` evidence and blocks auto-apply for
+  mandatory action-risk classes.
+- [ ] `[must]` Enforce action-risk approval gates in the runtime path before
+  executing filesystem, network, device-control, credential, destructive, or
+  cross-node effects outside Builder preview.
 - [ ] `[should]` Add a policy inspector UI that explains memory access,
   retrieved evidence, action approval class, redaction state, and denial
   reasons for the last turn.
