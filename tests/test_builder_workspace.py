@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -194,6 +195,38 @@ def test_preview_policy_blocks_external_io_for_auto_apply(tmp_path: Path) -> Non
     assert "mandatory_review_class" in blocks
     assert preview["review_policy"]["auto_apply_eligible"] is False
     assert preview["summary"]["human_review_required"] is True
+
+
+def test_preview_policy_wires_action_risk_to_approval_gate(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    result = service.create_draft(
+        kind="skill",
+        artifact_id="network_action_skill",
+        source_idea="Send a webhook when an event happens.",
+    )
+    skill_yaml = Path(result["artifact_root"]) / "skill.yaml"
+    manifest = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
+    manifest.setdefault("llm_hints", {})["primary_actions"] = [
+        {
+            "id": "send_webhook",
+            "title": "Send webhook",
+            "target": "https://example.com/hook",
+            "side_effect_class": "network",
+        }
+    ]
+    skill_yaml.write_text(yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    preview = service.preview(
+        draft_id=result["draft"]["draft_id"],
+        approval_profile="low_risk_auto_apply",
+    )["preview"]
+
+    action_risk = preview["review_policy"]["evidence"]["action_risk"]
+    classes = {item["class"] for item in preview["review_policy"]["mandatory_classes"]}
+    assert action_risk["approval_required"] is True
+    assert action_risk["max_risk_class"] == "network"
+    assert "network" in classes
+    assert preview["review_policy"]["auto_apply_eligible"] is False
 
 
 def test_builder_artifacts_live_under_existing_devspace(tmp_path: Path) -> None:

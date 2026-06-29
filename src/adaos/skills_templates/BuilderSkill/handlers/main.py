@@ -197,6 +197,25 @@ def _publish_review_pending_action(
     patch: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     refs = _source_refs(webspace_id=webspace_id, session=session, _meta=_meta, patch=patch)
+    action_input: dict[str, Any] = {
+        "kind": kind,
+        "request_text": request_text,
+        "side_effect_class": "local_write",
+    }
+    if patch:
+        action_input.update({key: value for key, value in dict(patch).items() if key in {"target", "operation", "summary", "side_effect_class"}})
+    try:
+        from adaos.services.conversation_safety import classify_action_risk
+
+        action_risk = classify_action_risk(action_input)
+    except Exception:
+        action_risk = {
+            "schema": "adaos.conversation.action_risk.v1",
+            "risk_class": "local_write",
+            "approval_required": False,
+            "mandatory_review": False,
+            "reasons": [{"risk_class": "local_write", "reason": "fallback"}],
+        }
     try:
         from adaos.services.pending_actions import publish_pending_action
 
@@ -236,6 +255,7 @@ def _publish_review_pending_action(
                 "approval_policy": {
                     "decision": "human_review_required",
                     "reason": "builder_review_pending_action",
+                    "action_risk": action_risk,
                 },
             },
         )

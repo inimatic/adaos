@@ -132,6 +132,9 @@ def test_create_draft_publishes_pending_action_with_conversation_refs(monkeypatc
     assert refs["draft_id"] == "draft.shopping"
     assert refs["turn_trace_id"] == "trace.builder.1"
     assert refs["message_id"] == "msg.builder.1"
+    risk = published[0]["metadata"]["approval_policy"]["action_risk"]
+    assert risk["schema"] == "adaos.conversation.action_risk.v1"
+    assert risk["risk_class"] == "local_write"
 
 
 def test_update_current_scenario_adds_card_view(monkeypatch, tmp_path) -> None:
@@ -196,6 +199,7 @@ def test_update_current_scenario_publishes_patch_pending_action(monkeypatch, tmp
     assert action["domain_ref"]["patch_id"] == result["patch"]["id"]
     assert action["metadata"]["source_refs"]["patch_id"] == result["patch"]["id"]
     assert action["metadata"]["source_refs"]["turn_trace_id"] == "trace.patch.1"
+    assert action["metadata"]["approval_policy"]["action_risk"]["risk_class"] == "local_write"
     assert result["patch"]["pending_action_id"] == "pa.builder.2"
 
 

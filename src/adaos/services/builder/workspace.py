@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
-from adaos.services import conversation_links
+from adaos.services import conversation_links, conversation_safety
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 
 
@@ -90,6 +90,11 @@ _MANDATORY_REVIEW_CLASSES: dict[str, str] = {
     "secrets": "Secrets or credential-like material changed.",
     "new_permissions": "Permissions or capability declarations changed.",
     "external_io": "Generated code may call external networks, filesystems, processes, or sockets.",
+    "filesystem": "Generated code or tool hints may read or write local files outside a preview-only context.",
+    "network": "Generated code or tool hints may call external networks or send data outside the node.",
+    "cross_node": "Generated code or tool hints may read from or mutate another node.",
+    "device_control": "Generated code or tool hints may control devices, endpoints, browsers, or relays.",
+    "credential": "Generated code or tool hints may handle credentials, secrets, or tokens.",
     "destructive_actions": "Action hints include destructive or lifecycle-changing operations.",
     "endpoint_control": "Generated code or metadata may control endpoints, tunnels, browsers, or runtime routes.",
     "high_rate_streams": "Streams or projections can exceed low-risk event budgets.",
@@ -1164,7 +1169,12 @@ class BuilderWorkspaceService:
             data = _read_json(manifest_path) if manifest_path and manifest_path.suffix == ".json" else _read_yaml(manifest_path) if manifest_path else {}
             hints.extend(self._hint_actions(data.get("llm_hints")))
             hints.extend(self._hint_actions(data.get("nlu")))
-        return {"actions": hints, "count": len(hints)}
+        actions: list[dict[str, Any]] = []
+        for item in hints:
+            action = dict(item)
+            action["action_risk"] = conversation_safety.classify_action_risk(action)
+            actions.append(action)
+        return {"actions": actions, "count": len(actions)}
 
     def _hint_actions(self, raw: Any) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
@@ -1322,6 +1332,7 @@ class BuilderWorkspaceService:
         bootstrap: dict[str, Any],
     ) -> dict[str, Any]:
         profile = dict(_APPROVAL_PROFILES[profile_id])
+        action_risk = self._action_risk_report(draft=draft, action_preview=action_preview)
         mandatory = self._mandatory_review_findings(
             draft=draft,
             diff=diff,
@@ -1330,6 +1341,7 @@ class BuilderWorkspaceService:
             action_preview=action_preview,
             nlu_probe=nlu_probe,
             bootstrap=bootstrap,
+            action_risk=action_risk,
         )
         policy_blocks = self._approval_policy_blocks(
             profile=profile,
@@ -1358,7 +1370,51 @@ class BuilderWorkspaceService:
                 "route_plan_ok": route_plan.get("ok"),
                 "static_ok": static_checks.get("ok"),
                 "scenario_dependency_status": bootstrap.get("status"),
+                "action_risk": action_risk,
             },
+        }
+
+    def _action_risk_report(
+        self,
+        *,
+        draft: dict[str, Any],
+        action_preview: dict[str, Any],
+    ) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        source = draft.get("source") if isinstance(draft.get("source"), dict) else {}
+        if source:
+            items.append(
+                {
+                    "source": "draft.source",
+                    "action": {key: source.get(key) for key in ("type", "side_effect_class") if source.get(key) is not None},
+                    "risk": conversation_safety.classify_action_risk(source),
+                }
+            )
+        for idx, action in enumerate(action_preview.get("actions") or []):
+            if not isinstance(action, dict):
+                continue
+            risk = action.get("action_risk")
+            if not isinstance(risk, dict):
+                risk = conversation_safety.classify_action_risk(action)
+            items.append(
+                {
+                    "source": "action_preview",
+                    "index": idx,
+                    "action": {key: action.get(key) for key in ("id", "name", "title", "tool", "target", "side_effect_class") if action.get(key) is not None},
+                    "risk": risk,
+                }
+            )
+        order = {"safe": 0, "ui_navigation": 1, "local_write": 2, "filesystem": 3, "network": 3, "cross_node": 4, "device_control": 4, "credential": 5}
+        max_risk = "safe"
+        for item in items:
+            risk_class = str((item.get("risk") or {}).get("risk_class") or "safe")
+            if order.get(risk_class, 0) > order.get(max_risk, 0):
+                max_risk = risk_class
+        return {
+            "schema": "adaos.builder.action_risk_review.v1",
+            "max_risk_class": max_risk,
+            "approval_required": any(bool((item.get("risk") or {}).get("approval_required")) for item in items),
+            "items": items,
         }
 
     def _mandatory_review_findings(
@@ -1371,6 +1427,7 @@ class BuilderWorkspaceService:
         action_preview: dict[str, Any],
         nlu_probe: dict[str, Any],
         bootstrap: dict[str, Any],
+        action_risk: dict[str, Any],
     ) -> list[dict[str, Any]]:
         findings: dict[str, dict[str, Any]] = {}
 
@@ -1436,6 +1493,16 @@ class BuilderWorkspaceService:
                 add("destructive_actions", text[:160])
             if _ENDPOINT_RE.search(text):
                 add("endpoint_control", text[:160])
+
+        for item in action_risk.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            risk = item.get("risk") if isinstance(item.get("risk"), dict) else {}
+            if not risk.get("mandatory_review"):
+                continue
+            risk_class = str(risk.get("risk_class") or "").strip()
+            if risk_class:
+                add(risk_class, {"source": item.get("source"), "action": item.get("action"), "reasons": risk.get("reasons")})
 
         for example in nlu_probe.get("candidate_examples") or []:
             text = str(example or "").strip()
