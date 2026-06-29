@@ -403,8 +403,8 @@ Canonical conversation record:
   "id": "conv.builder.default",
   "node_id": "node.local",
   "kind": "builder",
-  "owner": "skill:builder",
-  "logical_owner": "skill:builder",
+  "owner": "skill:builder_skill",
+  "logical_owner": "skill:builder_skill",
   "surface": "builder",
   "webspace_id": "default",
   "title": "Builder",
@@ -417,7 +417,7 @@ Canonical conversation record:
   },
   "participants": [
     {"type": "user", "id": "user.local"},
-    {"type": "skill", "id": "builder"}
+    {"type": "skill", "id": "builder_skill"}
   ],
   "context_policy": {
     "strategy": "isolated",
@@ -899,6 +899,10 @@ Target behavior:
   audio status, and browser recovery.
 - Semantic work moves out of `voice_chat_skill` into conversation owners,
   surfaces, NLU actions, and channel fallback policies.
+- The same dialog shell is available as an embeddable Voice Chat widget for
+  workbench scenarios. Prompt IDE embeds this widget instead of implementing a
+  private chat; it configures the widget with `dialog_channel_id=builder` and
+  the source Builder conversation while the dev webspace renders the mockup.
 
 Example channel policy:
 
@@ -916,7 +920,7 @@ Example channel policy:
   },
   "builder": {
     "surface": "builder",
-    "default_tool": "builder.handle_dialog_turn",
+    "default_tool": "builder_skill.chat",
     "decision_source": "pending_actions"
   }
 }
@@ -951,8 +955,20 @@ Why:
 Target behavior:
 
 - A user can enter Builder through browser, Telegram, or another transport.
-- The runtime resolves the message to the Builder conversation.
+- Addressed messages to `builder` / `Builder` / `Строитель` / `строитель`
+  resolve to the Builder channel. The runtime strips the agent address before
+  sending the turn to `builder_skill`, so the initial Builder chat starts with
+  the actual user request.
+- The Builder conversation owner is `skill:builder_skill`; Prompt IDE is a
+  workbench surface, not the conversation owner.
+- Prompt IDE uses the shared Voice Chat widget for Builder turns. The widget is
+  a reusable dialog transport/view, while `builder_skill` remains the semantic
+  owner of the conversation.
 - Builder reads and writes through the conversation SDK.
+- Builder context includes the source webspace id, the paired dev webspace id,
+  and the active draft id. The paired dev webspace is derived as
+  `dev_webspace_id = f"{safe_source_webspace_id}-dev"` and reused for all
+  drafts opened from that source webspace.
 - Approval and apply decisions use Pending Actions, not plain chat messages as
   the durable decision source.
 
@@ -1061,14 +1077,21 @@ Builder-like skills use:
 conversations:
   builder:
     kind: builder
+    owner: skill:builder_skill
     title: Builder
     context:
       strategy: isolated
       memory_scope: skill_user
       include_general_history: false
+      include_workspace_binding: true
     routing:
       default_transports: ["web", "telegram"]
-      allow_voice: false
+      allow_voice: true
+      addressed_agents:
+        - builder
+        - Builder
+        - Строитель
+        - строитель
 ```
 
 Manifest rules:
@@ -1804,6 +1827,9 @@ Important lacunae found during Phase 4/5 implementation:
 - [x] `[must]` Link candidate confirmations and Pending Actions to Teacher
   conversations and source message ids.
 - [ ] `[should]` Preserve approval/apply evidence outside plain chat messages.
+- [ ] `[must]` Add Builder workspace binding to context packets and browser
+  projections: source webspace id, paired `*-dev` webspace id, workbench
+  scenario id, and active draft id.
 - [ ] `[should]` Add acceptance tests for Builder through browser and Telegram
   transport.
 - [ ] `[should]` Add tests for multi-turn NLU correction with separate
@@ -1875,6 +1901,89 @@ Important lacunae found during Phase 6 implementation:
   summaries, and active WebIO/Yjs projections.
 - [ ] `[could]` Add model-backed memory extraction and summarization quality
   evaluation datasets.
+
+### Phase 9. Quality and Evaluation Gate
+
+- [ ] `[must]` Define a conversation evaluation result schema for golden
+  dialogs, trace-derived metrics, routing expectations, repair expectations,
+  latency, fallback rate, and context-budget evidence.
+- [ ] `[must]` Add a reusable evaluator that can score a stored conversation
+  ledger plus durable turn traces without depending on the browser surface.
+- [ ] `[must]` Add golden datasets for `general`, `conversation_companions`,
+  `builder`, and `teacher` flows, including agent handoff, profile correction,
+  no-match repair, and Builder review/apply handoff.
+- [ ] `[must]` Make golden evaluation a migration gate before broad removal of
+  compatibility Voice projections or broad generated-skill rollout.
+- [ ] `[should]` Add optional model-backed graders for answer quality,
+  unsupported claims, memory-write quality, and persona consistency after the
+  deterministic evaluator is stable.
+- [ ] `[should]` Publish evaluation summaries into diagnostics / Pending
+  Actions so Builder repair tasks can link failing traces and fixtures.
+
+### Phase 10. Security, Privacy, and Governance
+
+- [ ] `[must]` Add an LLM threat model aligned with prompt injection, sensitive
+  information disclosure, excessive agency, insecure output handling, and
+  unbounded consumption risks.
+- [ ] `[must]` Treat retrieved memory/history as untrusted evidence by default:
+  retrieved text must be separated from system/developer instructions and
+  flagged when it contains instruction-like or exfiltration-like content.
+- [ ] `[must]` Add safety tests for prompt injection through memory/history,
+  cross-owner memory denial, redaction filtering, and action-risk escalation.
+- [ ] `[must]` Add consent/export/delete/redaction APIs for conversations,
+  messages, memory items, and traces, backed by durable audit events.
+- [ ] `[must]` Add action risk classes and approval gates for tools with
+  filesystem, network, device-control, credential, or cross-node effects.
+- [ ] `[should]` Add a policy inspector UI that explains memory access,
+  retrieved evidence, action approval class, redaction state, and denial
+  reasons for the last turn.
+
+### Phase 11. Memory and Retrieval Maturity
+
+- [ ] `[must]` Add FTS indexes for conversation messages and memory items with
+  index health diagnostics and rebuild status.
+- [ ] `[must]` Add segment summaries for long conversations with source refs,
+  retention/redaction awareness, and summary freshness diagnostics.
+- [ ] `[must]` Add memory provenance, conflict handling, confidence decay,
+  stale-memory filtering, and explicit memory review/edit flows.
+- [ ] `[must]` Add memory extraction proposals that default to Pending Action
+  or user-visible approval before broad reusable memory is written.
+- [ ] `[should]` Add hybrid semantic retrieval / embeddings after deterministic
+  FTS and summary retrieval are stable and measured.
+- [ ] `[should]` Add retrieval regression tests for long companion,
+  Builder, Teacher, and federated-node histories.
+
+### Phase 12. Production Voice
+
+- [ ] `[must]` Make the non-blocking Voice widget a reusable dialog component
+  that can be embedded by Prompt IDE and other workbenches.
+- [ ] `[must]` Add explicit no-input, barge-in, interruption, TTS-cancel,
+  transcript-confidence, and end-of-speech states to the dialog policy model.
+- [ ] `[must]` Add per-agent voice profile contract, gender/language hints,
+  preview controls, and fallback policy when a requested voice is unavailable.
+- [ ] `[must]` Keep semantic routing independent from STT/TTS projection
+  latency and browser recovery paths.
+- [ ] `[should]` Add optional OpenAI TTS generation/cache for character voices,
+  with cache lifecycle, consent, and local fallback.
+- [ ] `[should]` Add voice-latency and interruption golden tests.
+
+### Phase 13. Builder and Skill Runtime Reference
+
+- [ ] `[must]` Treat `builder_skill` as the reference conversation-native skill:
+  it owns the Builder dialog, uses context packets, writes Pending Actions,
+  stores review/apply evidence, and never reads raw UI chat state.
+- [ ] `[must]` Add generated-skill templates for skill-owned conversations,
+  multi-agent skill conversations, bounded `chat.ask` flows, and memory
+  extraction proposal flows.
+- [ ] `[must]` Add validation/lint warnings that block direct transcript files,
+  direct Yjs chat writes, unbounded in-process histories, and transport-owned
+  memory in generated LLM skills.
+- [ ] `[must]` Add browser acceptance tests for Builder through Voice/global
+  dialog, Prompt IDE, and Pending Actions.
+- [ ] `[should]` Add Builder repair conversations that connect validation
+  failures, CI/test logs, user review comments, and generated-file diffs.
+- [ ] `[should]` Use the first reference Builder skill as a public-quality
+  example for third-party skill authors.
 
 ## Acceptance Criteria
 

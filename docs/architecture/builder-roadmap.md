@@ -54,7 +54,8 @@ gate easy to read by priority.
 | 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, NLU Teacher candidate-confirmation, and initial service-supervisor runtime recovery slices exist; Builder/pairing/broader runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
-| 8. Product Experience | Open: first entrypoint, dedicated Builder conversation, phrase-level build flow, non-specialist preview language. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
+| 8. Product Experience | Open: addressed Builder entrypoint, dedicated Builder conversation, one paired Prompt IDE dev webspace per source webspace, phrase-level build flow, non-specialist preview language. | Open: guided clarification, Builder Workbench controls, and developer evidence views. | Open: catalog/scenario/skill history. | None. |
+| 9. Reference Runtime | Open: `builder_skill` as the canonical conversation-native Builder owner with eval, memory, Pending Actions, and Prompt IDE integration. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -363,10 +364,37 @@ Goal: a non-specialist can say what they want and safely become a creator.
 
 Open work:
 
-- [ ] `[must]` Define the first user-facing Builder entrypoint.
+- [ ] `[must]` Define the first user-facing Builder entrypoint: addressed
+  messages to `builder` / `Builder` / `Строитель` / `строитель` enter the
+  Builder channel and route to `builder_skill` with the address stripped.
 - [ ] `[must]` Give Builder a dedicated conversation with isolated context,
   linked threads for draft/preview/repair work, and Pending Action evidence
   backlinks.
+- [ ] `[must]` Treat `prompt_engineer_scenario` as the Builder Workbench UI:
+  it renders active draft state, mockup preview, validation evidence, and
+  actions while `builder_skill` owns LLM dialogue, patching, validation, and
+  lifecycle decisions.
+- [ ] `[must]` Reuse the Voice/global-dialog UI as an embeddable Voice Chat
+  widget inside Prompt IDE. Prompt IDE must configure the widget for the
+  `builder` channel and source Builder conversation instead of implementing a
+  second chat/transcript surface.
+- [ ] `[must]` Add source-to-dev webspace binding for Prompt IDE:
+  `dev_webspace_id = f"{safe_source_webspace_id}-dev"`. Reuse one paired dev
+  webspace per source webspace instead of creating a new webspace per draft.
+- [ ] `[must]` Store Builder Workbench projections under `data/builder/*`,
+  including active draft, draft list, preview snapshot, validation evidence,
+  and workspace binding. Keep `data/prompt/*` only for migration or
+  compatibility.
+- [ ] `[must]` Add workbench commands:
+  `builder.ensure_dev_webspace`, `builder.get_workspace_binding`,
+  `builder.open_dev_webspace`, `builder.set_active_draft`,
+  `builder.list_development_skills`, and
+  `builder.delete_development_skill`.
+- [ ] `[must]` Support "skills in development": list drafts/development skills,
+  switch the active draft in the paired dev webspace, and delete the current
+  draft through governed Builder lifecycle paths.
+- [ ] `[must]` Render the first mockup from LLM-authored `webui.json` and apply
+  user comments as patches against the current draft and current `webui.json`.
 - [ ] `[must]` Support the phrase-level flow: "I have an idea. Let's build it."
 - [ ] `[should]` Provide guided clarification when the idea is underspecified.
 - [ ] `[must]` Show assumptions, preview, risks, and expected behavior in non-specialist
@@ -375,6 +403,30 @@ Open work:
   for developers.
 - [ ] `[could]` Make completed Builder work visible in catalog, scenario, and skill
   history.
+
+## Phase 9. Reference Runtime And Evaluation
+
+Goal: Builder becomes the reference implementation for modern AdaOS
+conversation-native skills.
+
+Open work:
+
+- [ ] `[must]` Treat `builder_skill` as the semantic owner of Builder
+  conversations across browser, Voice/global dialog, Telegram, and Prompt IDE.
+- [ ] `[must]` Make `builder_skill` consume conversation context packets,
+  retrieved evidence refs, scoped memory, and Pending Actions instead of raw
+  UI chat state.
+- [ ] `[must]` Add Builder golden conversations for first idea, clarification,
+  draft creation, mockup patching, validation failure, review approval,
+  rejection, and repair.
+- [ ] `[must]` Link Builder eval failures to repair tasks with conversation,
+  trace, draft, validation, and file refs.
+- [ ] `[must]` Validate generated skills against conversation-native rules:
+  no direct transcript files, no direct Yjs chat writes, bounded context
+  access, declared memory policy, and explicit action risk class.
+- [ ] `[should]` Publish a public-quality Builder-generated skill example that
+  demonstrates skill-owned conversation, memory proposal, Pending Action, and
+  browser widget patterns.
 
 ## Cross-Document Anchors
 

@@ -258,6 +258,84 @@ This facade is intentionally not a new storage layer. It exists so Builder
 work can be driven from one command branch while source ownership remains in
 the current dev workspace and lifecycle tools.
 
+## Prompt IDE And Dev Webspace
+
+The rapid-prototyping Builder experience uses two cooperating surfaces:
+
+- `builder_skill` owns dialogue, draft lifecycle, LLM planning, `webui.json`
+  patching, validation, preview evidence, and apply/review handoffs.
+- `prompt_engineer_scenario` is the Builder Workbench UI. It renders active
+  draft state, mockup preview, validation output, file/status views, and
+  actions, but it is not the LLM brain.
+- Prompt IDE does not own a separate chat implementation. It embeds the shared
+  Voice/global-dialog widget configured for the `builder` channel, so voice
+  input, typed input, channel selection, transcript rendering, STT/TTS state,
+  and browser recovery stay in one reusable dialog component.
+
+Prompt IDE may be loaded in any source webspace. For each source webspace,
+Builder creates or reuses exactly one paired development webspace. The paired
+webspace id is derived from the source id:
+
+```python
+dev_webspace_id = f"{safe_source_webspace_id}-dev"
+```
+
+Examples: `desktop` maps to `desktop-dev`; `lab` maps to `lab-dev`.
+`safe_source_webspace_id` is the normalized, UI-safe source id already used by
+the runtime for webspace identity. Builder must not create a new dev webspace
+for every draft. Draft switching changes the active draft binding inside the
+same paired dev webspace.
+
+The source webspace owns the user's conversation and requirements context. The
+paired dev webspace owns the visual workbench and live mockup projection. The
+binding is explicit service state, for example:
+
+```yaml
+builder_workspace_binding:
+  source_webspace_id: desktop
+  dev_webspace_id: desktop-dev
+  scenario_id: prompt_engineer_scenario
+  purpose: builder_prompt_ide
+  active_draft_id: shopping_list_skill
+```
+
+Builder state should use `data/builder/*` projections for workbench state,
+active draft, draft list, preview snapshots, and validation evidence. Legacy
+`data/prompt/*` paths may be read only for migration or compatibility, not as
+the canonical Builder state.
+
+The workbench-facing control surface should include:
+
+- `builder.ensure_dev_webspace`: create or reuse the paired dev webspace and
+  load `prompt_engineer_scenario`.
+- `builder.attach_dialog_widget`: configure the embedded Voice/global-dialog
+  widget for the source conversation and the `builder` channel.
+- `builder.get_workspace_binding`: return source/dev webspace ids, workbench
+  scenario id, and active draft.
+- `builder.open_dev_webspace`: return the browser/open URL for the paired
+  dev webspace.
+- `builder.set_active_draft`: switch the paired dev webspace to another draft
+  without creating another workbench.
+- `builder.list_development_skills`: list drafts and development skills
+  available to the current source webspace.
+- `builder.delete_development_skill`: remove a development draft through the
+  governed draft lifecycle.
+
+The first-turn flow is:
+
+1. The user addresses `builder` / `Builder` / `Строитель` / `строитель` and
+   asks to create or change a capability.
+2. The router enters the Builder channel and strips the address before sending
+   the request to `builder_skill`.
+3. `builder_skill` creates or selects a draft, ensures the paired dev webspace,
+   sets the active draft binding, and writes an initial `webui.json` draft.
+4. Prompt IDE renders the active draft preview in the paired dev webspace and
+   shows the embedded Voice/global-dialog widget bound to the source Builder
+   conversation.
+5. Follow-up comments are processed as patches against the current draft and
+   current `webui.json`, preserving conversation history and validation
+   evidence.
+
 ## Relationship To Web UI
 
 Builder may create browser-facing UI descriptors, but the browser runtime owns
