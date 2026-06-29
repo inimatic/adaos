@@ -2601,6 +2601,8 @@ class RouterService:
                 conversation_id = str(channel.get("conversation_id") or "").strip()
                 if conversation_id:
                     return conversation_id
+            if cid == BUILDER_DIALOG_CHANNEL_ID:
+                return _skill_conversation_id(BUILDER_SKILL_ID, ws)
             return ""
 
         def _resolve_voice_chat_conversation_id(
@@ -2675,6 +2677,14 @@ class RouterService:
             cached_messages = [dict(item) for item in messages if isinstance(item, dict)]
             total_count = int(total_message_count if total_message_count is not None else len(cached_messages))
             conversation_id, dialog_channel_id = _voice_chat_projection_identity(cached_messages)
+            stream_params = {
+                key: value
+                for key, value in {
+                    "conversation_id": conversation_id,
+                    "dialog_channel_id": dialog_channel_id,
+                }.items()
+                if str(value or "").strip()
+            }
             _voice_chat_stream_cache[(str(webspace_id or "").strip(), str(target_node_id or "").strip())] = {
                 "messages": cached_messages,
                 "last_refresh_ts": last_refresh_ts,
@@ -2708,6 +2718,9 @@ class RouterService:
                     "dialog_channel_id": dialog_channel_id,
                 },
             }
+            if stream_params:
+                payload["params"] = dict(stream_params)
+                payload["_meta"]["params"] = dict(stream_params)
             if target_node_id:
                 payload["node_id"] = target_node_id
                 payload["source_node_id"] = target_node_id
@@ -3995,13 +4008,27 @@ class RouterService:
                 if action == "unsubscribed":
                     return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            stream_params: dict[str, Any] = {}
+            if isinstance(meta.get("params"), dict):
+                stream_params.update(dict(meta.get("params") or {}))
+            if isinstance(payload.get("params"), dict):
+                stream_params.update(dict(payload.get("params") or {}))
             target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=False)
-            conversation_id = payload.get("conversation_id") or meta.get("conversation_id")
+            conversation_id = (
+                payload.get("conversation_id")
+                or meta.get("conversation_id")
+                or stream_params.get("conversation_id")
+                or stream_params.get("conversationId")
+            )
             dialog_channel_id = (
                 payload.get("dialog_channel_id")
                 or payload.get("channel_id")
                 or meta.get("dialog_channel_id")
                 or meta.get("channel_id")
+                or stream_params.get("dialog_channel_id")
+                or stream_params.get("dialogChannelId")
+                or stream_params.get("channel_id")
+                or stream_params.get("channelId")
             )
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
@@ -4021,14 +4048,28 @@ class RouterService:
             if not self._event_targets_local_node(payload):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            stream_params: dict[str, Any] = {}
+            if isinstance(meta.get("params"), dict):
+                stream_params.update(dict(meta.get("params") or {}))
+            if isinstance(payload.get("params"), dict):
+                stream_params.update(dict(payload.get("params") or {}))
             target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=False)
             before_cursor = payload.get("before_cursor") or payload.get("older_cursor")
-            conversation_id = payload.get("conversation_id") or meta.get("conversation_id")
+            conversation_id = (
+                payload.get("conversation_id")
+                or meta.get("conversation_id")
+                or stream_params.get("conversation_id")
+                or stream_params.get("conversationId")
+            )
             dialog_channel_id = (
                 payload.get("dialog_channel_id")
                 or payload.get("channel_id")
                 or meta.get("dialog_channel_id")
                 or meta.get("channel_id")
+                or stream_params.get("dialog_channel_id")
+                or stream_params.get("dialogChannelId")
+                or stream_params.get("channel_id")
+                or stream_params.get("channelId")
             )
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:

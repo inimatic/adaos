@@ -162,6 +162,96 @@ def test_update_current_scenario_adds_card_view(monkeypatch, tmp_path) -> None:
     assert any(item["type"] == "card_list" for item in result["preview_state"]["current_ui"]["children"])
 
 
+def test_update_current_scenario_handles_layout_column_and_date_requests(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "shopping_list"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"shopping_list","version":"0.1.0","name":"shopping_list","steps":[]}',
+        encoding="utf-8",
+    )
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {
+                "source_webspace_id": webspace_id,
+                "dev_webspace_id": f"{webspace_id}-dev",
+                "active_draft_id": "draft.shopping",
+                "runtime_scenario_id": "shopping_list",
+            }
+
+        def set_active_draft(self, **kwargs):
+            return {
+                "source_webspace_id": kwargs.get("source_webspace_id"),
+                "dev_webspace_id": f"{kwargs.get('source_webspace_id')}-dev",
+                "active_draft_id": kwargs.get("active_draft_id"),
+                "runtime_scenario_id": kwargs.get("runtime_scenario_id"),
+            }
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.layout"})
+    skill._save_session(
+        "builder-layout",
+        {
+            "id": "builder_session_layout",
+            "webspace_id": "builder-layout",
+            "status": "drafting",
+            "title": "Shopping list",
+            "scenario_id": "shopping_list",
+            "draft_id": "draft.shopping",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "shopping_items",
+            "fields": [
+                {"id": "item", "type": "string", "label": "Товар", "required": True},
+                {"id": "quantity", "type": "number", "label": "Кол-во", "required": False},
+                {"id": "category", "type": "string", "label": "Категория", "required": False},
+                {"id": "done", "type": "boolean", "label": "Куплено", "required": False},
+            ],
+            "patches": [],
+            "version": "v1",
+        },
+    )
+
+    moved = skill.update_current_scenario("Переместим кнопку Add над формой", webspace_id="builder-layout")
+    assert moved["patch"]["operation"] == "move_form_action"
+    form = next(item for item in moved["preview_state"]["current_ui"]["children"] if item["id"] == "editor")
+    assert form["action_position"] == "top"
+    scenario = yaml.safe_load((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    page_schema = scenario["ui"]["application"]["desktop"]["pageSchema"]
+    page_form = next(item for item in page_schema["widgets"] if item["id"] == "prototype-form")
+    assert page_form["inputs"]["submitPlacement"] == "top"
+
+    checkbox = skill.update_current_scenario("Сделаем первой колонкой таблицы чекбокс (куплено)", webspace_id="builder-layout")
+    assert checkbox["patch"]["operation"] == "set_checkbox_column"
+    assert checkbox["preview_state"]["datasources"][0]["fields"][0]["id"] == "done"
+    page_schema = yaml.safe_load((artifact_root / "scenario.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]
+    page_table = next(item for item in page_schema["widgets"] if item["id"] == "prototype-table")
+    assert page_table["inputs"]["columns"][0] == {"key": "done", "label": "Куплено", "kind": "boolean", "width": "72px"}
+
+    date_result = skill.update_current_scenario("Добвь данные в поле дата в таблицу", webspace_id="builder-layout")
+    assert date_result["patch"]["operation"] == "add_field"
+    assert any(item["id"] == "date" and item["type"] == "date" for item in date_result["preview_state"]["datasources"][0]["fields"])
+    rows = date_result["preview_state"]["mock_data"]["shopping_items"]
+    assert [row["date"] for row in rows] == ["2026-07-01", "2026-07-02", "2026-07-03"]
+
+    filled = skill.update_current_scenario(
+        'Заполни колонку дата не словом "дата", а произвольными значениями типа дата',
+        webspace_id="builder-layout",
+    )
+    assert filled["patch"]["operation"] == "update_mock_data"
+    assert [row["date"] for row in filled["preview_state"]["mock_data"]["shopping_items"]] == [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+    ]
+
+
 def test_update_current_scenario_publishes_patch_pending_action(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "shopping_list"

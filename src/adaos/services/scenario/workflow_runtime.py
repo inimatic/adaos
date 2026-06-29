@@ -695,7 +695,7 @@ class ScenarioWorkflowRuntime:
           - Workflow stage (human-readable label from scenario.workflow.states),
           - LLM status (opens last request/response),
           - LLM profile (model selection),
-          - Dev webspace id.
+          - Dev webspace launcher.
         """
         state_key = (state_id or "").strip()
         state_meta = states.get(state_key) or {}
@@ -729,7 +729,8 @@ class ScenarioWorkflowRuntime:
             },
             {
                 "id": "dev-webspace",
-                "label": f"dev webspace: {webspace_id}",
+                "label": "Dev webspace",
+                "title": f"Dev webspace: {webspace_id}",
             },
         ]
 
