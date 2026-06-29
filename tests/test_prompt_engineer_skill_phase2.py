@@ -142,3 +142,48 @@ def test_prompt_payload_helpers_accept_kwargs(monkeypatch, tmp_path: Path) -> No
 
     assert len(items) == 1
     assert items[0]["object_type"] == "scenario"
+
+
+def test_prompt_lists_json_only_dev_scenario(monkeypatch, tmp_path: Path) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    skills_root = tmp_path / "skills"
+    scenarios_root = tmp_path / "scenarios"
+    skills_root.mkdir()
+    scenario_root = scenarios_root / "demo_scenario"
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "scenario.json").write_text(
+        '{"id":"demo_scenario","name":"Demo JSON","version":"0.2.0","depends":["demo_skill"]}',
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return skills_root
+
+        def dev_scenarios_dir(self) -> Path:
+            return scenarios_root
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths()))
+
+    objects = module.prompt_list_dev_objects()
+    assert objects[0]["object_id"] == "demo_scenario"
+    assert objects[0]["title"] == "Demo JSON"
+    project_objects = module.prompt_list_project_objects({"project_type": "scenario", "project_id": "demo_scenario"})
+    assert project_objects[0]["object_id"] == "demo_scenario"
+    files = module.prompt_list_project_files({"object_type": "scenario", "object_id": "demo_scenario"})
+    assert [item["path"] for item in files] == ["prompt_state.json", "scenario.json"]
+
+
+def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    emitted: list[tuple[str, dict, str]] = []
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(module, "bus_emit", lambda bus, topic, payload, source: emitted.append((topic, payload, source)))
+
+    result = module.prompt_select_project({"object_type": "scenario", "object_id": "demo_scenario"})
+
+    assert result == {"ok": True, "object_type": "scenario", "object_id": "demo_scenario"}
+    assert emitted[0][0] == "prompt.project.changed"
+    assert emitted[1][0] == "builder.preview.selected"
+    assert emitted[1][1]["scenario_id"] == "demo_scenario"

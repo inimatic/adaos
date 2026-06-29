@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from adaos.sdk.core.decorators import subscribe
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.webspace_id import coerce_webspace_id
 
@@ -363,3 +364,18 @@ class BuilderWorkbenchService:
             return asyncio.run(self.publish_projection(source_webspace_id, preview_state=preview_state))
         snapshot = self.snapshot(source_webspace_id, preview_state=preview_state)
         return {"ok": True, "snapshot": snapshot, "published_webspaces": [], "deferred": True}
+
+
+@subscribe("builder.preview.selected")
+async def _on_builder_preview_selected(evt: Mapping[str, Any]) -> None:
+    payload = evt.get("payload") if isinstance(evt.get("payload"), Mapping) else evt
+    scenario_id = str(payload.get("scenario_id") or payload.get("object_id") or "").strip()
+    object_type = str(payload.get("object_type") or "scenario").strip().lower()
+    if object_type != "scenario" or not scenario_id:
+        return
+    source_webspace_id = str(payload.get("source_webspace_id") or payload.get("webspace_id") or "").strip() or None
+    await BuilderWorkbenchService().ensure_dev_webspace(
+        source_webspace_id,
+        active_draft_id=str(payload.get("draft_id") or "").strip() or None,
+        runtime_scenario_id=scenario_id,
+    )

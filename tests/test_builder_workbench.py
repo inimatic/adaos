@@ -58,6 +58,12 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert reused["created"] is False
     assert reused["active_draft_id"] == "draft.next"
     assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
+    assert service.webspace_service.items["desktop-dev"].home_scenario == "web_desktop"
+
+    selected = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
+    assert selected["runtime_scenario_id"] == "demo_scenario"
+    assert selected["active_draft_id"] is None
+    assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
 
 
 def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> None:
