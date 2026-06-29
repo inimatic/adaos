@@ -422,6 +422,34 @@ def test_get_workspace_backfills_legacy_manifest_defaults() -> None:
     assert stored == ("dev", "dev")
 
 
+def test_get_workspace_repairs_stale_ystore_path() -> None:
+    webspace_id = "legacy-path-manifest"
+    ctx = get_ctx()
+    expected_path = str(workspace_index_module.ystore_path_for_webspace(webspace_id))
+
+    with ctx.sql.connect() as con:
+        workspace_index_module._ensure_schema(con)
+        con.execute("DELETE FROM y_workspaces WHERE workspace_id=?", (webspace_id,))
+        con.execute(
+            "INSERT INTO y_workspaces(workspace_id, path, created_at, display_name) VALUES(?,?,?,?)",
+            (webspace_id, "D:/old/adaos/.adaos/state/ystores/legacy-path-manifest.sqlite3", 123456, "Legacy Path"),
+        )
+        con.commit()
+
+    row = get_workspace(webspace_id)
+
+    assert row is not None
+    assert row.path == expected_path
+
+    with ctx.sql.connect() as con:
+        stored = con.execute(
+            "SELECT path FROM y_workspaces WHERE workspace_id=?",
+            (webspace_id,),
+        ).fetchone()
+
+    assert stored == (expected_path,)
+
+
 def test_ensure_workspace_persists_default_home_scenario_for_new_rows() -> None:
     webspace_id = "implicit-home-space"
     row = ensure_workspace(webspace_id)

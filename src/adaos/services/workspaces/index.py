@@ -354,7 +354,7 @@ class WebspaceManifest:
     def with_defaults(self) -> "WebspaceManifest":
         return WebspaceManifest(
             workspace_id=self.workspace_id,
-            path=self.path,
+            path=str(ystore_path_for_webspace(self.workspace_id)),
             created_at=self.created_at,
             display_name=self.title,
             kind=self.effective_kind,
@@ -506,6 +506,7 @@ def _manifest_needs_persisted_defaults(manifest: WebspaceManifest) -> bool:
     normalized = manifest.with_defaults()
     return any(
         (
+            manifest.path != normalized.path,
             manifest.display_name != normalized.display_name,
             manifest.kind != normalized.kind,
             manifest.source_mode != normalized.source_mode,
@@ -524,11 +525,12 @@ def _persist_manifest_defaults(con, manifest: WebspaceManifest) -> WebspaceManif
     con.execute(
         """
         UPDATE y_workspaces
-        SET display_name=?, kind=?, home_scenario=?, source_mode=?,
+        SET path=?, display_name=?, kind=?, home_scenario=?, source_mode=?,
             owner_scope=?, profile_scope=?, device_binding=?, ui_overlay_json=?
         WHERE workspace_id=?
         """,
         (
+            normalized.path,
             normalized.display_name,
             normalized.kind,
             manifest.home_scenario,
@@ -664,7 +666,12 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
         )
         row = cur.fetchone()
         if row:
-            return _row_from_db(row)
+            raw_manifest = _row_from_db(row, apply_defaults=False)
+            dirty = _manifest_needs_persisted_defaults(raw_manifest)
+            manifest = _persist_manifest_defaults(con, raw_manifest)
+            if dirty:
+                con.commit()
+            return manifest
 
         p: Path = ystore_path_for_webspace(workspace_id)
         import time as _time

@@ -112,6 +112,7 @@ class BuilderWorkbenchService:
         active_draft_id: str | None = None,
         scenario_id: str | None = None,
         runtime_scenario_id: str | None = None,
+        preview_state: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
         dev_id = dev_webspace_id_for_source(source_id)
@@ -193,7 +194,7 @@ class BuilderWorkbenchService:
         binding["created"] = created
         binding["dev_webspace"] = info_payload
         binding["runtime"] = runtime_payload
-        await self.publish_projection(source_id)
+        await self.publish_projection(source_id, preview_state=preview_state)
         return binding
 
     def get_workspace_binding(self, source_webspace_id: str | None = None) -> dict[str, Any]:
@@ -339,8 +340,7 @@ class BuilderWorkbenchService:
                 removed_artifact = False
         binding = self.get_workspace_binding(source_id)
         if binding.get("active_draft_id") == token:
-            self.set_active_draft(source_webspace_id=source_id, active_draft_id=None)
-        self.publish_projection_sync(source_id)
+            self.set_active_draft(source_webspace_id=source_id, active_draft_id=None, persist_projection=False)
         return {"ok": True, "draft_id": token, "removed_artifact": removed_artifact}
 
     def snapshot(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -385,9 +385,33 @@ class BuilderWorkbenchService:
         return {"ok": True, "snapshot": snapshot, "published_webspaces": [], "deferred": True}
 
 
+def _payload_from_event(evt: Any) -> dict[str, Any]:
+    if isinstance(evt, Mapping):
+        payload = evt.get("payload") if isinstance(evt.get("payload"), Mapping) else evt
+        return dict(payload)
+    payload = getattr(evt, "payload", None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return {}
+
+
+@subscribe("builder.workbench.ensure_requested")
+async def _on_builder_workbench_ensure_requested(evt: Any) -> None:
+    payload = _payload_from_event(evt)
+    source_webspace_id = str(payload.get("source_webspace_id") or payload.get("webspace_id") or "").strip() or None
+    if not source_webspace_id:
+        return
+    await BuilderWorkbenchService().ensure_dev_webspace(
+        source_webspace_id,
+        active_draft_id=str(payload.get("active_draft_id") or "").strip() or None,
+        runtime_scenario_id=str(payload.get("runtime_scenario_id") or "").strip() or None,
+        preview_state=payload.get("preview_state") if isinstance(payload.get("preview_state"), Mapping) else None,
+    )
+
+
 @subscribe("builder.preview.selected")
-async def _on_builder_preview_selected(evt: Mapping[str, Any]) -> None:
-    payload = evt.get("payload") if isinstance(evt.get("payload"), Mapping) else evt
+async def _on_builder_preview_selected(evt: Any) -> None:
+    payload = _payload_from_event(evt)
     scenario_id = str(payload.get("scenario_id") or payload.get("object_id") or "").strip()
     object_type = str(payload.get("object_type") or "scenario").strip().lower()
     if object_type != "scenario" or not scenario_id:
@@ -397,4 +421,5 @@ async def _on_builder_preview_selected(evt: Mapping[str, Any]) -> None:
         source_webspace_id,
         active_draft_id=str(payload.get("draft_id") or "").strip() or None,
         runtime_scenario_id=scenario_id,
+        preview_state=payload.get("preview_state") if isinstance(payload.get("preview_state"), Mapping) else None,
     )

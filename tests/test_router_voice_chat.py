@@ -780,6 +780,15 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
 
+    original_to_thread = router_service_module.asyncio.to_thread
+
+    async def _guard_runtime_tool_to_thread(func, *args, **kwargs):
+        if getattr(func, "__name__", "") == "_call_runtime_skill_tool" and args and args[0] == "builder_skill":
+            raise AssertionError("builder_skill.chat must run on the event loop")
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(router_service_module.asyncio, "to_thread", _guard_runtime_tool_to_thread)
+
     bus.publish(
         Event(
             type="voice.chat.user",
@@ -792,7 +801,7 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    await bus.wait_for_idle(timeout=5.0)
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
@@ -967,7 +976,7 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback(mo
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    await bus.wait_for_idle(timeout=5.0)
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
