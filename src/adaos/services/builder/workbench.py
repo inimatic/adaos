@@ -155,19 +155,44 @@ class BuilderWorkbenchService:
             info_payload = _info_to_dict(existing)
             if runtime_scenario and self.webspace_service is None:
                 try:
-                    from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario
+                    from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario, switch_webspace_scenario
 
-                    runtime_payload = await reload_webspace_from_scenario(
+                    event_payload = {
+                        "source": "builder.workbench",
+                        "source_webspace_id": source_id,
+                        "active_draft_id": active_draft_id,
+                    }
+                    switch_payload = await switch_webspace_scenario(
                         dev_id,
-                        scenario_id=runtime_scenario,
-                        action="reload",
-                        event_payload={
-                            "source": "builder.workbench",
-                            "source_webspace_id": source_id,
-                            "active_draft_id": active_draft_id,
-                        },
+                        runtime_scenario,
+                        set_home=True,
+                        wait_for_rebuild=True,
                     )
-                except Exception as exc:
+                    runtime_payload = {
+                        "ok": bool(switch_payload.get("ok", True)) if isinstance(switch_payload, dict) else True,
+                        "webspace_id": dev_id,
+                        "scenario_id": runtime_scenario,
+                        "switch": switch_payload,
+                    }
+                    if isinstance(switch_payload, dict) and (
+                        bool(switch_payload.get("switch_skipped")) or str(switch_payload.get("skip_reason") or "").strip()
+                    ):
+                        reload_payload = await reload_webspace_from_scenario(
+                            dev_id,
+                            scenario_id=runtime_scenario,
+                            action="reload",
+                            event_payload=event_payload,
+                        )
+                        runtime_payload = {
+                            "ok": bool(reload_payload.get("ok", True)) if isinstance(reload_payload, dict) else True,
+                            "webspace_id": dev_id,
+                            "scenario_id": runtime_scenario,
+                            "switch": switch_payload,
+                            "reload": reload_payload,
+                        }
+                except BaseException as exc:
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        raise
                     runtime_payload = {
                         "ok": False,
                         "error": "dev_runtime_reload_failed",

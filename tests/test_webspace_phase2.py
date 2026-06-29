@@ -4376,7 +4376,11 @@ def test_phase3_reload_reuses_live_runtime_without_reset(monkeypatch) -> None:
     async def _fake_listing() -> None:
         listing_syncs.append("default")
 
-    async def _fake_reset_live_room(_webspace_id: str, close_reason: str = "webspace_reset") -> dict[str, object]:
+    async def _fake_reset_live_room(
+        _webspace_id: str,
+        close_reason: str = "webspace_reset",
+        persist_ystore_snapshot: bool = True,
+    ) -> dict[str, object]:
         reset_calls.append(("room", close_reason))
         return {"accepted": True}
 
@@ -4431,7 +4435,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     fake_ctx = SimpleNamespace(bus=SimpleNamespace(publish=lambda _event: None))
     project_calls: list[tuple[str, str, bool]] = []
     seed_calls: list[tuple[str, str, bool]] = []
-    reset_calls: list[tuple[str, str]] = []
+    reset_calls: list[tuple[str, str, bool | None]] = []
     emitted: list[tuple[str, dict[str, object], str]] = []
 
     async def _fake_project(
@@ -4475,12 +4479,16 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     async def _fake_listing() -> None:
         return None
 
-    async def _fake_reset_live_room(_webspace_id: str, close_reason: str = "webspace_reset") -> dict[str, object]:
-        reset_calls.append(("room", close_reason))
+    async def _fake_reset_live_room(
+        _webspace_id: str,
+        close_reason: str = "webspace_reset",
+        persist_ystore_snapshot: bool = True,
+    ) -> dict[str, object]:
+        reset_calls.append(("room", close_reason, persist_ystore_snapshot))
         return {"accepted": True}
 
     def _fake_reset_ystore(_webspace_id: str) -> None:
-        reset_calls.append(("ystore", "reset"))
+        reset_calls.append(("ystore", "reset", None))
 
     monkeypatch.setattr(webspace_runtime_module, "async_get_ydoc", lambda _webspace_id: _FakeAsyncDoc(fake_state))
     monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: fake_ctx)
@@ -4519,7 +4527,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
 
     assert project_calls == []
     assert seed_calls == [("phase3-hard-reset", "prompt_engineer_scenario", False)]
-    assert reset_calls == [("room", "webspace_reset"), ("ystore", "reset")]
+    assert reset_calls == [("room", "webspace_reset", False), ("ystore", "reset", None)]
     assert emitted == [
         (
             "desktop.webspace.reloaded",

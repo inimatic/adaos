@@ -4167,7 +4167,9 @@ async def reset_live_webspace_room(
                     compact_runtime=True,
                     backup_kind=f"room_reset:{close_reason}",
                 )
-            except Exception:
+            except BaseException as exc:
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
                 eviction = {
                     "ok": False,
                     "persisted": False,

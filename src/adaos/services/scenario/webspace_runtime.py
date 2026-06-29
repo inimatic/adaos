@@ -6051,6 +6051,26 @@ async def rebuild_webspace_from_sources(
     ystore_reset = False
     fresh_doc_rebuild = False
 
+    async def _write_reseed_pointer() -> None:
+        try:
+            async with _webspace_runtime_async_write_meta(
+                root_names=["ui"],
+                source="webspace_runtime.reseed_pointer",
+            ):
+                async with async_get_ydoc(webspace_id) as ydoc:
+                    ui_map = ydoc.get_map("ui")
+                    with ydoc.begin_transaction() as txn:
+                        ui_map.set(txn, "current_scenario", target_scenario)
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            _log.warning(
+                "failed to write reseed current_scenario pointer webspace=%s scenario=%s",
+                webspace_id,
+                target_scenario,
+                exc_info=True,
+            )
+
     if requested_action == "scenario_switch_rebuild" and _fresh_doc_on_scenario_switch_enabled():
         if not target_scenario:
             raise ValueError("scenario_id is required for scenario switch rebuild")
@@ -6092,19 +6112,10 @@ async def rebuild_webspace_from_sources(
     if reseed_from_scenario:
         if not target_scenario:
             raise ValueError("scenario_id is required when reseed_from_scenario is enabled")
-        stage_started = time.perf_counter()
-        try:
-            async with _webspace_runtime_async_write_meta(
-                root_names=["ui"],
-                source="webspace_runtime.reseed_pointer",
-            ):
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    ui_map = ydoc.get_map("ui")
-                    with ydoc.begin_transaction() as txn:
-                        ui_map.set(txn, "current_scenario", target_scenario)
-        except Exception:
-            pass
-        _record_timing(timings_ms, "reseed_pointer", stage_started)
+        if requested_action != "reset":
+            stage_started = time.perf_counter()
+            await _write_reseed_pointer()
+            _record_timing(timings_ms, "reseed_pointer", stage_started)
 
         stage_started = time.perf_counter()
         try:
@@ -6124,6 +6135,7 @@ async def rebuild_webspace_from_sources(
                     reset_room_result = await reset_live_webspace_room(
                         webspace_id,
                         close_reason="webspace_reset",
+                        persist_ystore_snapshot=False,
                     )
                 except Exception:
                     pass
@@ -6143,6 +6155,10 @@ async def rebuild_webspace_from_sources(
                 emit_event=False,
             )
             _record_timing(timings_ms, "seed_from_scenario", stage_started)
+
+            stage_started = time.perf_counter()
+            await _write_reseed_pointer()
+            _record_timing(timings_ms, "reseed_pointer_after_reset", stage_started)
         else:
             stage_started = time.perf_counter()
             await _project_webspace_from_scenario(

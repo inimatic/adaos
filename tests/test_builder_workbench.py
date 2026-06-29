@@ -71,6 +71,91 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
 
 
+@pytest.mark.asyncio
+async def test_ensure_dev_webspace_switches_current_and_reloads_skipped_switch(monkeypatch, tmp_path: Path) -> None:
+    class _Webspaces:
+        def __init__(self) -> None:
+            self.items: dict[str, SimpleNamespace] = {}
+
+        def list(self, mode: str = "mixed"):
+            return list(self.items.values())
+
+        async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
+            info = SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
+            self.items[requested_id] = info
+            return info
+
+        async def set_home_scenario(self, webspace_id: str, scenario_id: str):
+            info = self.items[webspace_id]
+            info.home_scenario = scenario_id
+            return info
+
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    fake_webspaces = _Webspaces()
+    switch_calls: list[tuple[str, str, bool | None, bool]] = []
+    reload_calls: list[tuple[str, str | None, str]] = []
+    switch_results = [
+        {"ok": True, "scenario_id": "demo_scenario"},
+        {"ok": True, "switch_skipped": True, "skip_reason": "already_current_ready", "scenario_id": "demo_scenario"},
+    ]
+
+    async def _switch(webspace_id: str, scenario_id: str, *, set_home=None, wait_for_rebuild=True):
+        switch_calls.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
+        return switch_results.pop(0)
+
+    async def _reload(webspace_id: str, *, scenario_id=None, action="reload", event_payload=None):
+        reload_calls.append((webspace_id, scenario_id, action))
+        return {"ok": True, "scenario_id": scenario_id, "action": action}
+
+    monkeypatch.setattr(webspace_runtime, "WebspaceService", lambda: fake_webspaces)
+    monkeypatch.setattr(webspace_runtime, "switch_webspace_scenario", _switch)
+    monkeypatch.setattr(webspace_runtime, "reload_webspace_from_scenario", _reload)
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+
+    first = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
+    assert first["runtime"]["switch"]["scenario_id"] == "demo_scenario"
+    assert reload_calls == []
+
+    second = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
+    assert second["runtime"]["switch"]["skip_reason"] == "already_current_ready"
+    assert second["runtime"]["reload"]["action"] == "reload"
+    assert switch_calls == [
+        ("desktop-dev", "demo_scenario", True, True),
+        ("desktop-dev", "demo_scenario", True, True),
+    ]
+    assert reload_calls == [("desktop-dev", "demo_scenario", "reload")]
+
+
+@pytest.mark.asyncio
+async def test_ensure_dev_webspace_reports_yjs_panic_without_raising(monkeypatch, tmp_path: Path) -> None:
+    class _YjsPanic(BaseException):
+        pass
+
+    class _Webspaces:
+        def list(self, mode: str = "mixed"):
+            return []
+
+        async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
+            return SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
+
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    async def _switch(*args, **kwargs):
+        raise _YjsPanic("Defect: parent points to a block which is not a shared type")
+
+    monkeypatch.setattr(webspace_runtime, "WebspaceService", lambda: _Webspaces())
+    monkeypatch.setattr(webspace_runtime, "switch_webspace_scenario", _switch)
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    result = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
+
+    assert result["runtime"]["ok"] is False
+    assert result["runtime"]["error"] == "dev_runtime_reload_failed"
+    assert "_YjsPanic" in result["runtime"]["detail"]
+
+
 def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     artifact_root = tmp_path / "dev" / "scenarios" / "shopping"

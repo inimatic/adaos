@@ -203,6 +203,103 @@ def test_update_current_scenario_publishes_patch_pending_action(monkeypatch, tmp
     assert result["patch"]["pending_action_id"] == "pa.builder.2"
 
 
+def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "shopping_list"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"shopping_list","version":"0.1.0","name":"shopping_list","steps":[]}',
+        encoding="utf-8",
+    )
+    emitted: list[dict] = []
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            assert webspace_id == "desktop"
+            return {
+                "source_webspace_id": "desktop",
+                "dev_webspace_id": "desktop-dev",
+                "active_draft_id": "draft.shopping",
+                "runtime_scenario_id": "shopping_list",
+            }
+
+        def set_active_draft(self, **kwargs):
+            return {
+                "source_webspace_id": kwargs.get("source_webspace_id"),
+                "dev_webspace_id": "desktop-dev",
+                "active_draft_id": kwargs.get("active_draft_id"),
+                "runtime_scenario_id": kwargs.get("runtime_scenario_id"),
+            }
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    import adaos.sdk.io.out as io_out
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.sample"})
+    monkeypatch.setattr(
+        io_out,
+        "chat_append",
+        lambda text, *, from_="hub", msg_id=None, ts=None, _meta=None: emitted.append({"text": text, "meta": dict(_meta or {})}) or {"ok": True},
+    )
+    skill._save_session(
+        "desktop",
+        {
+            "id": "builder_session_test",
+            "webspace_id": "desktop",
+            "status": "drafting",
+            "title": "Shopping list",
+            "scenario_id": "shopping_list",
+            "draft_id": "draft.shopping",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "shopping_items",
+            "fields": [
+                {"id": "item", "type": "string", "label": "Товар", "required": True},
+                {"id": "quantity", "type": "number", "label": "Кол-во", "required": False},
+                {"id": "category", "type": "string", "label": "Категория", "required": False},
+                {"id": "done", "type": "boolean", "label": "Куплено", "required": False},
+                {"id": "price", "type": "number", "label": "Цена", "required": False},
+            ],
+            "patches": [],
+            "version": "v1",
+        },
+    )
+
+    result = skill.chat("Сделай пример данных на основе продуктов питания", webspace_id="desktop-dev")
+
+    assert result["ok"] is True
+    assert result["patch"]["operation"] == "update_mock_data"
+    rows = result["preview_state"]["mock_data"]["shopping_items"]
+    assert rows[0]["item"] == "Молоко"
+    assert {item["meta"]["webspace_id"] for item in emitted} == {"desktop", "desktop-dev"}
+
+
+def test_chat_requires_selected_builder_target(monkeypatch) -> None:
+    skill = _load_module()
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {
+                "source_webspace_id": webspace_id,
+                "dev_webspace_id": f"{webspace_id}-dev",
+                "active_draft_id": None,
+                "runtime_scenario_id": "demo_scenario",
+            }
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda *args, **kwargs: None)
+
+    result = skill.chat("добавь поле цена", webspace_id="desktop")
+
+    assert result["ok"] is True
+    assert result["status"] == "target_required"
+    assert result["needs_selection"] is True
+    assert "demo_scenario" in result["message"]
+
+
 def test_builder_skill_exposes_workbench_tools() -> None:
     manifest = yaml.safe_load((SKILL_ROOT / "skill.yaml").read_text(encoding="utf-8"))
 

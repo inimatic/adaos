@@ -1261,7 +1261,9 @@ async def evict_ystore_for_webspace(
             snapshot = target.runtime_snapshot()
             persisted = bool(snapshot.get("snapshot_file_exists"))
             backup_skipped = bool(snapshot.get("persisted_up_to_date"))
-        except Exception as exc:
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             backup_error = f"{type(exc).__name__}: {exc}"
             _log.warning("failed to persist YStore before eviction webspace=%s", key, exc_info=True)
 
