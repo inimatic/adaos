@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ import typer
 from adaos.apps.cli.commands.dev import _load_dev_scenario_model, _resolve_dev_scenario_file
 from adaos.apps.cli.commands.skill import _mgr
 from adaos.services.agent_context import get_ctx
-from adaos.services.builder import BuilderWorkspaceService
+from adaos.services.builder import BuilderWorkbenchService, BuilderWorkspaceService
 from adaos.services.node_config import displayable_path
 from adaos.services.root.service import (
     ArtifactCreateResult,
@@ -149,6 +150,17 @@ def _echo_approval_profiles(profiles: list[dict[str, Any]], json_output: bool) -
         typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
 
 
+def _echo_payload(payload: dict[str, Any], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    for key, value in payload.items():
+        if isinstance(value, (dict, list)):
+            typer.echo(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+        else:
+            typer.echo(f"{key}: {value}")
+
+
 def _resolve_dev_artifact_path(kind: str, artifact_id: str) -> Path | None:
     try:
         service = _service()
@@ -215,6 +227,85 @@ def approval_profiles(
     """List Builder approval profiles used by preview/review policy."""
     service = BuilderWorkspaceService.from_context()
     _echo_approval_profiles(service.approval_profiles(), json_output)
+
+
+@app.command("workbench-ensure")
+def workbench_ensure(
+    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    active_draft_id: str | None = typer.Option(None, "--active-draft", help="Draft id to select in Prompt IDE."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Create or reuse the paired Prompt IDE dev webspace."""
+    service = BuilderWorkbenchService.from_context()
+    result = asyncio.run(service.ensure_dev_webspace(webspace_id, active_draft_id=active_draft_id))
+    _echo_payload({"ok": True, "binding": result}, json_output)
+
+
+@app.command("workbench-binding")
+def workbench_binding(
+    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Return Builder source/dev webspace binding."""
+    service = BuilderWorkbenchService.from_context()
+    _echo_payload({"ok": True, "binding": service.get_workspace_binding(webspace_id)}, json_output)
+
+
+@app.command("workbench-open")
+def workbench_open(
+    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    base_url: str | None = typer.Option(None, "--base-url", help="Browser base URL, for example http://localhost:8100."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Return URL for the paired Prompt IDE dev webspace."""
+    service = BuilderWorkbenchService.from_context()
+    _echo_payload(service.open_dev_webspace(webspace_id, base_url=base_url), json_output)
+
+
+@app.command("workbench-set-active")
+def workbench_set_active(
+    draft_id: str | None = typer.Argument(None, help="Draft id to select; omit to clear."),
+    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Switch the active Builder development draft."""
+    service = BuilderWorkbenchService.from_context()
+    binding = service.set_active_draft(source_webspace_id=webspace_id, active_draft_id=draft_id)
+    _echo_payload({"ok": True, "binding": binding}, json_output)
+
+
+@app.command("workbench-list")
+def workbench_list(
+    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """List Builder drafts and development skills/scenarios for Prompt IDE."""
+    service = BuilderWorkbenchService.from_context()
+    result = service.list_development_skills(webspace_id)
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    items = list(result.get("items") or [])
+    if not items:
+        typer.echo("No Builder development drafts found.")
+        return
+    for item in items:
+        active = "*" if item.get("active") else " "
+        typer.echo(f"{active} {item.get('draft_id')}  {item.get('kind')}:{item.get('id')}  {item.get('root')}")
+
+
+@app.command("workbench-delete")
+def workbench_delete(
+    draft_id: str = typer.Argument(..., help="Builder draft id to delete."),
+    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Delete a Builder development draft."""
+    service = BuilderWorkbenchService.from_context()
+    result = service.delete_development_skill(draft_id, webspace_id)
+    _echo_payload(result, json_output)
+    if not result.get("ok"):
+        raise typer.Exit(1)
 
 
 @app.command("push")

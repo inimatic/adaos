@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
-from adaos.services.builder import BuilderWorkspaceService
+from adaos.services.builder import BuilderWorkbenchService, BuilderWorkspaceService
 
 
 router = APIRouter(dependencies=[Depends(require_token)])
@@ -14,6 +14,10 @@ router = APIRouter(dependencies=[Depends(require_token)])
 
 def _get_service() -> BuilderWorkspaceService:
     return BuilderWorkspaceService.from_context()
+
+
+def _get_workbench_service() -> BuilderWorkbenchService:
+    return BuilderWorkbenchService.from_context()
 
 
 class BuilderDraftRequest(BaseModel):
@@ -34,6 +38,16 @@ class BuilderPreviewRequest(BaseModel):
     draft_id: str = Field(..., min_length=1)
     approval_profile: str | None = Field(default=None, description="Builder approval profile id.")
     webspace_id: str | None = None
+
+
+class BuilderWorkbenchEnsureRequest(BaseModel):
+    webspace_id: str | None = None
+    active_draft_id: str | None = None
+
+
+class BuilderActiveDraftRequest(BaseModel):
+    webspace_id: str | None = None
+    draft_id: str | None = None
 
 
 @router.get("/approval-profiles")
@@ -85,3 +99,70 @@ def get_preview(preview_id: str, service: BuilderWorkspaceService = Depends(_get
         return {"ok": True, "preview": service.load_preview(preview_id)}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/workbench/ensure")
+async def ensure_workbench(
+    body: BuilderWorkbenchEnsureRequest,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "binding": await service.ensure_dev_webspace(
+            body.webspace_id,
+            active_draft_id=body.active_draft_id,
+        ),
+    }
+
+
+@router.get("/workbench/binding")
+def get_workbench_binding(
+    webspace_id: str | None = None,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return {"ok": True, "binding": service.get_workspace_binding(webspace_id)}
+
+
+@router.get("/workbench/open")
+def open_workbench_dev_webspace(
+    webspace_id: str | None = None,
+    base_url: str | None = None,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return service.open_dev_webspace(webspace_id, base_url=base_url)
+
+
+@router.get("/workbench/dialog-widget")
+def get_workbench_dialog_widget(
+    webspace_id: str | None = None,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return {"ok": True, "widget": service.dialog_widget_config(webspace_id)}
+
+
+@router.post("/workbench/active-draft")
+def set_workbench_active_draft(
+    body: BuilderActiveDraftRequest,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return {"ok": True, "binding": service.set_active_draft(source_webspace_id=body.webspace_id, active_draft_id=body.draft_id)}
+
+
+@router.get("/workbench/development-skills")
+def list_workbench_development_skills(
+    webspace_id: str | None = None,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return service.list_development_skills(webspace_id)
+
+
+@router.delete("/workbench/development-skills/{draft_id}")
+def delete_workbench_development_skill(
+    draft_id: str,
+    webspace_id: str | None = None,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    result = service.delete_development_skill(draft_id, webspace_id)
+    if not result.get("ok") and result.get("error") == "draft_not_found":
+        raise HTTPException(status_code=404, detail=f"Builder draft not found: {draft_id}")
+    return result
