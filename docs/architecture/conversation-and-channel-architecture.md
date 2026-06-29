@@ -1929,11 +1929,16 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[must]` Add an LLM threat model aligned with prompt injection, sensitive
   information disclosure, excessive agency, insecure output handling, and
   unbounded consumption risks.
-- [ ] `[must]` Treat retrieved memory/history as untrusted evidence by default:
+- [x] `[must]` Treat retrieved memory/history as untrusted evidence by default:
   retrieved text must be separated from system/developer instructions and
-  flagged when it contains instruction-like or exfiltration-like content.
-- [ ] `[must]` Add safety tests for prompt injection through memory/history,
-  cross-owner memory denial, redaction filtering, and action-risk escalation.
+  flagged when it contains instruction-like or exfiltration-like content. The
+  first implementation annotates context-packet messages and memory with
+  `trust_boundary=retrieved_untrusted_evidence` and
+  `adaos.conversation.retrieved_evidence_safety.v1` diagnostics.
+- [x] `[must]` Add first safety tests for prompt injection through
+  memory/history, cross-owner memory denial, and redaction filtering.
+- [ ] `[must]` Add action-risk escalation tests for filesystem, network,
+  device-control, credential, and cross-node effects.
 - [ ] `[must]` Add consent/export/delete/redaction APIs for conversations,
   messages, memory items, and traces, backed by durable audit events.
 - [ ] `[must]` Add action risk classes and approval gates for tools with

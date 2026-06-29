@@ -5,7 +5,7 @@ import math
 import time
 from typing import Any, Literal, Mapping
 
-from adaos.services import conversation_store
+from adaos.services import conversation_safety, conversation_store
 
 
 MemoryWriteKind = Literal["conversation_fact", "skill_preference", "agent_preference", "global_user"]
@@ -81,6 +81,7 @@ def build_context_packet(
             "summaries_unavailable",
             "semantic_retrieval_unavailable",
         ],
+        "safety_flags": [],
         "budget_exhausted": False,
     }
     packet: dict[str, Any] = {
@@ -114,6 +115,7 @@ def build_context_packet(
             continue
         remaining_tokens -= cost
         item = _context_message(message, cost)
+        _attach_safety(item, diagnostics)
         selected_messages.append(item)
         diagnostics["selected_sources"].append(item["source_ref"])
         packet["evidence_refs"].append(item["source_ref"])
@@ -161,6 +163,7 @@ def build_context_packet(
                 continue
             remaining_tokens -= cost
             item = _context_memory(row, cost)
+            _attach_safety(item, diagnostics)
             selected_memory.append(item)
             if memory_id:
                 selected_memory_ids.add(memory_id)
@@ -258,6 +261,7 @@ def _context_message(message: Mapping[str, Any], token_estimate: int) -> dict[st
         "actor_id": message.get("active_agent_id"),
         "actor_label": message.get("active_agent_label"),
         "token_estimate": token_estimate,
+        "trust_boundary": "retrieved_untrusted_evidence",
         "source_ref": _source_ref("message", message),
     }
 
@@ -332,6 +336,7 @@ def _context_memory(row: Mapping[str, Any], token_estimate: int) -> dict[str, An
         "visibility": str(row.get("visibility") or policy.get("visibility") or "owner_only"),
         "source_ref": source_ref,
         "token_estimate": token_estimate,
+        "trust_boundary": "retrieved_untrusted_evidence",
     }
 
 
@@ -351,3 +356,19 @@ def _memory_ref(row: Mapping[str, Any], *, reason: str | None = None) -> dict[st
 
 def _timed_out(started: float, timeout_ms: int) -> bool:
     return (time.monotonic() - started) * 1000 > max(1, timeout_ms)
+
+
+def _attach_safety(item: dict[str, Any], diagnostics: dict[str, Any]) -> None:
+    safety = conversation_safety.inspect_retrieved_text(
+        item.get("text"),
+        source_ref=item.get("source_ref") if isinstance(item.get("source_ref"), Mapping) else {},
+    )
+    item["safety"] = safety
+    if safety.get("flags"):
+        diagnostics.setdefault("safety_flags", []).append(
+            {
+                "risk_level": safety.get("risk_level"),
+                "flags": list(safety.get("flags") or []),
+                "source_ref": dict(safety.get("source_ref") or {}),
+            }
+        )
