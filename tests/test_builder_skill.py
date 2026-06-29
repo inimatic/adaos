@@ -181,3 +181,105 @@ def test_update_current_scenario_publishes_patch_pending_action(monkeypatch, tmp
     assert action["metadata"]["source_refs"]["patch_id"] == result["patch"]["id"]
     assert action["metadata"]["source_refs"]["turn_trace_id"] == "trace.patch.1"
     assert result["patch"]["pending_action_id"] == "pa.builder.2"
+
+
+def test_builder_skill_exposes_workbench_tools() -> None:
+    manifest = yaml.safe_load((SKILL_ROOT / "skill.yaml").read_text(encoding="utf-8"))
+
+    tools = {item["name"] for item in manifest["tools"]}
+    assert {
+        "ensure_dev_webspace",
+        "get_workspace_binding",
+        "open_dev_webspace",
+        "attach_dialog_widget",
+        "set_active_draft",
+        "list_development_skills",
+        "delete_development_skill",
+    }.issubset(tools)
+    routes = {item["path"] for item in manifest["data_routes"]}
+    assert "data.builder" in routes
+
+
+def test_create_scenario_draft_updates_builder_workbench(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "shopping_list"
+    calls: list[dict] = []
+
+    class _DraftService:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            return {"ok": True, "draft": {"draft_id": "draft.shopping"}, "artifact_root": str(artifact_root), "kwargs": kwargs}
+
+    class _Workbench:
+        async def ensure_dev_webspace(self, webspace_id, active_draft_id=None):
+            calls.append({"method": "ensure", "webspace_id": webspace_id, "active_draft_id": active_draft_id})
+            return {
+                "source_webspace_id": webspace_id,
+                "dev_webspace_id": f"{webspace_id}-dev",
+                "scenario_id": "prompt_engineer_scenario",
+                "active_draft_id": active_draft_id,
+                "dialog": {"widget": "voice_chat", "dialog_channel_id": "builder"},
+            }
+
+        def publish_projection_sync(self, webspace_id, *, preview_state=None):
+            calls.append({"method": "publish", "webspace_id": webspace_id, "preview_state": preview_state})
+            return {"ok": True, "published_webspaces": [webspace_id, f"{webspace_id}-dev"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _DraftService)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+
+    result = skill.create_scenario_draft("Builder, create a shopping list app", webspace_id="desktop")
+
+    assert result["ok"] is True
+    assert result["workbench"]["binding"]["dev_webspace_id"] == "desktop-dev"
+    assert result["workbench"]["binding"]["active_draft_id"] == "draft.shopping"
+    assert calls[0] == {"method": "ensure", "webspace_id": "desktop", "active_draft_id": "draft.shopping"}
+    assert calls[1]["method"] == "publish"
+    assert calls[1]["preview_state"]["current_ui"]["type"] == "page"
+
+
+def test_workbench_tool_wrappers_use_voice_widget_and_active_draft(monkeypatch) -> None:
+    skill = _load_module()
+    calls: list[dict] = []
+
+    class _Workbench:
+        async def ensure_dev_webspace(self, webspace_id, active_draft_id=None):
+            calls.append({"method": "ensure", "webspace_id": webspace_id, "active_draft_id": active_draft_id})
+            return {"source_webspace_id": webspace_id, "dev_webspace_id": f"{webspace_id}-dev", "active_draft_id": active_draft_id}
+
+        def get_workspace_binding(self, webspace_id):
+            return {"source_webspace_id": webspace_id, "dev_webspace_id": f"{webspace_id}-dev", "active_draft_id": "draft.one"}
+
+        def open_dev_webspace(self, webspace_id, *, base_url=None):
+            return {"ok": True, "url": f"{base_url}/?webspace={webspace_id}-dev", "webspace_id": f"{webspace_id}-dev"}
+
+        def dialog_widget_config(self, webspace_id):
+            return {"widget": "voice_chat", "dialog_channel_id": "builder", "source_webspace_id": webspace_id}
+
+        def set_active_draft(self, *, source_webspace_id=None, active_draft_id=None):
+            return {"source_webspace_id": source_webspace_id, "active_draft_id": active_draft_id}
+
+        def list_development_skills(self, webspace_id):
+            return {"ok": True, "items": [{"draft_id": "draft.one", "active": True}], "active_draft_id": "draft.one"}
+
+        def delete_development_skill(self, draft_id, webspace_id):
+            calls.append({"method": "delete", "webspace_id": webspace_id, "draft_id": draft_id})
+            return {"ok": True, "draft_id": draft_id}
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+
+    assert skill.ensure_dev_webspace(webspace_id="desktop", active_draft_id="draft.one")["binding"]["dev_webspace_id"] == "desktop-dev"
+    assert skill.get_workspace_binding(webspace_id="desktop")["binding"]["active_draft_id"] == "draft.one"
+    assert skill.open_dev_webspace(webspace_id="desktop", base_url="http://localhost:8100")["url"] == "http://localhost:8100/?webspace=desktop-dev"
+    assert skill.attach_dialog_widget(webspace_id="desktop")["widget"]["widget"] == "voice_chat"
+    assert skill.set_active_draft("draft.two", webspace_id="desktop")["binding"]["active_draft_id"] == "draft.two"
+    assert skill.list_development_skills(webspace_id="desktop")["items"][0]["draft_id"] == "draft.one"
+    assert skill.delete_development_skill("draft.one", webspace_id="desktop")["ok"] is True
+    assert calls[0] == {"method": "ensure", "webspace_id": "desktop", "active_draft_id": "draft.one"}
+    assert calls[-1] == {"method": "delete", "webspace_id": "desktop", "draft_id": "draft.one"}
