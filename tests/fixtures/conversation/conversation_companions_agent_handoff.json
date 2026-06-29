@@ -1,0 +1,97 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "conversation_companions_agent_handoff",
+  "conversation_id": "conv.golden.companions",
+  "description": "Conversation Companions starts a skill-owned channel and switches the active assistant by addressed name.",
+  "messages": [
+    {
+      "id": "golden.companions.msg.1",
+      "conversation_id": "conv.golden.companions",
+      "seq": 1,
+      "from": "user",
+      "text": "Let's talk",
+      "dialog_channel_id": "general"
+    },
+    {
+      "id": "golden.companions.msg.2",
+      "conversation_id": "conv.golden.companions",
+      "seq": 2,
+      "from": "hub",
+      "text": "Arseny is ready to discuss the next step.",
+      "dialog_channel_id": "conversational",
+      "active_agent_id": "agent:conversation_companions:arseni"
+    },
+    {
+      "id": "golden.companions.msg.3",
+      "conversation_id": "conv.golden.companions",
+      "seq": 3,
+      "from": "user",
+      "text": "Nika, check the weak point",
+      "dialog_channel_id": "conversational"
+    },
+    {
+      "id": "golden.companions.msg.4",
+      "conversation_id": "conv.golden.companions",
+      "seq": 4,
+      "from": "hub",
+      "text": "Nika: the weak point is the assumption you have not validated yet.",
+      "dialog_channel_id": "conversational",
+      "active_agent_id": "agent:conversation_companions:nika"
+    }
+  ],
+  "turn_traces": [
+    {
+      "turn_trace_id": "trace.golden.companions.1",
+      "conversation_id": "conv.golden.companions",
+      "channel_id": "conversational",
+      "agent_id": "agent:conversation_companions:arseni",
+      "selected_tool": "conversation_companions.start",
+      "policy_decision": {
+        "reason": "conversation_start",
+        "repair_state": "none"
+      },
+      "renderer": {
+        "projection": "dialog.visible_tail"
+      },
+      "status": "completed",
+      "created_at": 1100.0,
+      "completed_at": 1100.35
+    },
+    {
+      "turn_trace_id": "trace.golden.companions.2",
+      "conversation_id": "conv.golden.companions",
+      "channel_id": "conversational",
+      "agent_id": "agent:conversation_companions:nika",
+      "selected_tool": "conversation_companions.talk",
+      "policy_decision": {
+        "reason": "addressed_agent_switch",
+        "repair_state": "none"
+      },
+      "renderer": {
+        "projection": "dialog.visible_tail"
+      },
+      "status": "completed",
+      "created_at": 1101.0,
+      "completed_at": 1101.44
+    }
+  ],
+  "expectations": {
+    "required_text": [
+      "Arseny",
+      "Nika"
+    ],
+    "forbidden_text": [
+      "low_confidence"
+    ],
+    "required_agents": [
+      "agent:conversation_companions:arseni",
+      "agent:conversation_companions:nika"
+    ],
+    "required_channels": [
+      "conversational"
+    ],
+    "min_success_rate": 1.0,
+    "max_fallback_rate": 0.0,
+    "max_latency_ms_p95": 1000
+  }
+}

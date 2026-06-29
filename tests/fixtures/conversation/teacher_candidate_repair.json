@@ -1,0 +1,62 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "teacher_candidate_repair",
+  "conversation_id": "conv.golden.teacher",
+  "description": "NLU Teacher clarification session turns a low-confidence utterance into a candidate repair task.",
+  "messages": [
+    {
+      "id": "golden.teacher.msg.1",
+      "conversation_id": "conv.golden.teacher",
+      "seq": 1,
+      "from": "user",
+      "text": "Teach this phrase for the new action",
+      "dialog_channel_id": "teacher"
+    },
+    {
+      "id": "golden.teacher.msg.2",
+      "conversation_id": "conv.golden.teacher",
+      "seq": 2,
+      "from": "hub",
+      "text": "NLU Teacher proposed a descriptor fix candidate and requested confirmation.",
+      "dialog_channel_id": "teacher",
+      "active_agent_id": "agent:nlu_teacher:teacher"
+    }
+  ],
+  "turn_traces": [
+    {
+      "turn_trace_id": "trace.golden.teacher.1",
+      "conversation_id": "conv.golden.teacher",
+      "channel_id": "teacher",
+      "agent_id": "agent:nlu_teacher:teacher",
+      "selected_tool": "nlu_teacher.propose_candidate",
+      "policy_decision": {
+        "reason": "low_confidence_repair",
+        "repair_state": "clarification",
+        "candidate_kind": "descriptor_fix"
+      },
+      "renderer": {
+        "projection": "data.nlu_teacher"
+      },
+      "status": "completed",
+      "created_at": 1300.0,
+      "completed_at": 1300.48
+    }
+  ],
+  "expectations": {
+    "required_text": [
+      "descriptor fix candidate",
+      "requested confirmation"
+    ],
+    "forbidden_text": [
+      "ignored"
+    ],
+    "required_agents": [
+      "agent:nlu_teacher:teacher"
+    ],
+    "required_channels": [
+      "teacher"
+    ],
+    "min_success_rate": 1.0,
+    "max_latency_ms_p95": 1000
+  }
+}

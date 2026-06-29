@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from adaos.services import conversation_eval, conversation_store
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "conversation"
+
+
+def _load_fixture(name: str) -> dict:
+    return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
 def _seed_eval_conversation() -> str:
@@ -113,3 +123,25 @@ def test_conversation_eval_counts_fallback_repair_and_no_match_traces() -> None:
     assert metrics["no_match_count"] == 1
     assert metrics["repair_count"] == 1
     assert metrics["latency_ms"]["count"] == 2
+
+
+def test_conversation_eval_replays_initial_golden_datasets() -> None:
+    fixture_names = [
+        "general_no_match_repair.json",
+        "conversation_companions_agent_handoff.json",
+        "builder_review_handoff.json",
+        "teacher_candidate_repair.json",
+    ]
+    for name in fixture_names:
+        fixture = _load_fixture(name)
+        result = conversation_eval.evaluate_golden_conversation(
+            conversation_id=fixture["conversation_id"],
+            messages=fixture["messages"],
+            traces=fixture["turn_traces"],
+            expectations=fixture["expectations"],
+        )
+        assert result["status"] == "passed", {
+            "fixture": name,
+            "failures": result["failures"],
+            "metrics": result["metrics"],
+        }

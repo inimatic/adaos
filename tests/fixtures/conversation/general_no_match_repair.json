@@ -1,0 +1,62 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "general_no_match_repair",
+  "conversation_id": "conv.golden.general",
+  "description": "General assistant records an unsupported request and exposes a repair path instead of silently failing.",
+  "messages": [
+    {
+      "id": "golden.general.msg.1",
+      "conversation_id": "conv.golden.general",
+      "seq": 1,
+      "from": "user",
+      "text": "Add a slideshow skill",
+      "dialog_channel_id": "general"
+    },
+    {
+      "id": "golden.general.msg.2",
+      "conversation_id": "conv.golden.general",
+      "seq": 2,
+      "from": "hub",
+      "text": "Ada recorded the request for Builder review and NLU Teacher repair.",
+      "dialog_channel_id": "general",
+      "active_agent_id": "agent:core:general"
+    }
+  ],
+  "turn_traces": [
+    {
+      "turn_trace_id": "trace.golden.general.1",
+      "conversation_id": "conv.golden.general",
+      "channel_id": "general",
+      "agent_id": "agent:core:general",
+      "selected_tool": "nlu_teacher.record_candidate",
+      "policy_decision": {
+        "reason": "no_match_repair",
+        "repair_state": "candidate_recorded"
+      },
+      "renderer": {
+        "projection": "dialog.visible_tail"
+      },
+      "status": "completed",
+      "summary": "Candidate recorded for review.",
+      "created_at": 1000.0,
+      "completed_at": 1000.42
+    }
+  ],
+  "expectations": {
+    "required_text": [
+      "Builder review",
+      "NLU Teacher repair"
+    ],
+    "forbidden_text": [
+      "Unhandled exception"
+    ],
+    "required_agents": [
+      "agent:core:general"
+    ],
+    "required_channels": [
+      "general"
+    ],
+    "min_success_rate": 1.0,
+    "max_latency_ms_p95": 1000
+  }
+}
