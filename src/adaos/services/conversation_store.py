@@ -1597,3 +1597,38 @@ def latest_turn_trace(*, webspace_id: str, conversation_id: str | None = None) -
     if not row:
         return None
     return _row_to_turn_trace(row)
+
+
+def list_turn_traces(
+    *,
+    conversation_id: str | None = None,
+    webspace_id: str | None = None,
+    limit: int = 500,
+    ascending: bool = True,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    where: list[str] = []
+    params: list[Any] = []
+    if conversation_id:
+        where.append("conversation_id=?")
+        params.append(conversation_id)
+    if webspace_id:
+        where.append("webspace_id=?")
+        params.append(webspace_id)
+    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
+    order = "ASC" if ascending else "DESC"
+    safe_limit = max(1, min(int(limit or 500), 5000))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_turn_traces
+            {sql_where}
+            ORDER BY created_at {order}
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        ).fetchall()
+    return [_row_to_turn_trace(row) for row in rows]

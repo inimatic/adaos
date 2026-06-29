@@ -1904,11 +1904,15 @@ Important lacunae found during Phase 6 implementation:
 
 ### Phase 9. Quality and Evaluation Gate
 
-- [ ] `[must]` Define a conversation evaluation result schema for golden
+- [x] `[must]` Define a conversation evaluation result schema for golden
   dialogs, trace-derived metrics, routing expectations, repair expectations,
-  latency, fallback rate, and context-budget evidence.
-- [ ] `[must]` Add a reusable evaluator that can score a stored conversation
+  latency, fallback rate, and context-budget evidence. The first deterministic
+  schema is `adaos.conversation.eval.result.v1`.
+- [x] `[must]` Add a reusable evaluator that can score a stored conversation
   ledger plus durable turn traces without depending on the browser surface.
+  `conversation_eval.evaluate_golden_conversation()` scores ledger messages,
+  turn traces, required/forbidden text, required agents/channels, success
+  rate, fallback rate, repair rate, no-match rate, and latency summary.
 - [ ] `[must]` Add golden datasets for `general`, `conversation_companions`,
   `builder`, and `teacher` flows, including agent handoff, profile correction,
   no-match repair, and Builder review/apply handoff.
