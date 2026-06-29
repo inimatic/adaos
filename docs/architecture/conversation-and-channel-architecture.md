@@ -1937,11 +1937,15 @@ Important lacunae found during Phase 6 implementation:
   `adaos.conversation.retrieved_evidence_safety.v1` diagnostics.
 - [x] `[must]` Add first safety tests for prompt injection through
   memory/history, cross-owner memory denial, and redaction filtering.
-- [ ] `[must]` Add action-risk escalation tests for filesystem, network,
-  device-control, credential, and cross-node effects.
+- [x] `[must]` Add action-risk escalation tests for filesystem, network,
+  device-control, credential, and cross-node effects. The first contract is
+  `adaos.conversation.action_risk.v1` from
+  `conversation_safety.classify_action_risk(...)`.
 - [ ] `[must]` Add consent/export/delete/redaction APIs for conversations,
   messages, memory items, and traces, backed by durable audit events.
-- [ ] `[must]` Add action risk classes and approval gates for tools with
+- [x] `[must]` Add action risk classes for tools with filesystem, network,
+  device-control, credential, or cross-node effects.
+- [ ] `[must]` Wire action-risk classes into approval gates before executing
   filesystem, network, device-control, credential, or cross-node effects.
 - [ ] `[should]` Add a policy inspector UI that explains memory access,
   retrieved evidence, action approval class, redaction state, and denial
