@@ -48,15 +48,16 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert binding["source_webspace_id"] == "desktop"
     assert binding["dev_webspace_id"] == "desktop-dev"
     assert binding["scenario_id"] == "prompt_engineer_scenario"
+    assert binding["runtime_scenario_id"] == "web_desktop"
     assert binding["active_draft_id"] == "draft.shopping"
     assert binding["dialog"]["widget"] == "voice_chat"
     assert binding["dialog"]["dialog_channel_id"] == "builder"
-    assert calls == [("desktop-dev", "DEV: desktop", "prompt_engineer_scenario", True)]
+    assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
 
     reused = await service.ensure_dev_webspace("desktop", active_draft_id="draft.next")
     assert reused["created"] is False
     assert reused["active_draft_id"] == "draft.next"
-    assert calls == [("desktop-dev", "DEV: desktop", "prompt_engineer_scenario", True)]
+    assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
 
 
 def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> None:
@@ -101,7 +102,24 @@ def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> 
 
 
 def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
-    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    class _Webspaces:
+        def __init__(self) -> None:
+            self.items: dict[str, SimpleNamespace] = {}
+
+        def list(self, mode: str = "mixed"):
+            return list(self.items.values())
+
+        async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
+            info = SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
+            self.items[requested_id] = info
+            return info
+
+        async def set_home_scenario(self, webspace_id: str, scenario_id: str):
+            info = self.items[webspace_id]
+            info.home_scenario = scenario_id
+            return info
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", webspace_service=_Webspaces())
     app = FastAPI()
     app.include_router(builder_api.router, prefix="/api/builder")
     app.dependency_overrides[require_token] = lambda: None

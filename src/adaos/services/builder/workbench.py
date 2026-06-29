@@ -15,6 +15,7 @@ from adaos.services.webspace_id import coerce_webspace_id
 
 
 BUILDER_WORKBENCH_SCENARIO_ID = "prompt_engineer_scenario"
+BUILDER_RUNTIME_FALLBACK_SCENARIO_ID = "web_desktop"
 BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
 BUILDER_OWNER = f"skill:{BUILDER_SKILL_ID}"
@@ -69,6 +70,19 @@ def _info_to_dict(info: Any) -> dict[str, Any]:
     return out
 
 
+def _draft_runtime_scenario_id(state_dir: Path | None, draft_id: str | None) -> str | None:
+    token = str(draft_id or "").strip()
+    if not token:
+        return None
+    draft_path = Path(state_dir or current_state_dir()) / "builder" / "drafts" / token / "builder.draft.json"
+    draft = _read_json(draft_path)
+    artifact = draft.get("artifact") if isinstance(draft.get("artifact"), dict) else {}
+    if str(artifact.get("kind") or "").strip() != "scenario":
+        return None
+    scenario_id = str(artifact.get("id") or "").strip()
+    return scenario_id or None
+
+
 @dataclass(slots=True)
 class BuilderWorkbenchService:
     state_dir: Path | None = None
@@ -95,13 +109,20 @@ class BuilderWorkbenchService:
         source_webspace_id: str | None = None,
         *,
         active_draft_id: str | None = None,
-        scenario_id: str = BUILDER_WORKBENCH_SCENARIO_ID,
+        scenario_id: str | None = None,
+        runtime_scenario_id: str | None = None,
     ) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
         dev_id = dev_webspace_id_for_source(source_id)
-        scenario = str(scenario_id or "").strip() or BUILDER_WORKBENCH_SCENARIO_ID
+        workbench_scenario = str(scenario_id or "").strip() or BUILDER_WORKBENCH_SCENARIO_ID
+        runtime_scenario = (
+            str(runtime_scenario_id or "").strip()
+            or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
+            or BUILDER_RUNTIME_FALLBACK_SCENARIO_ID
+        )
         created = False
         info_payload: dict[str, Any] = {}
+        runtime_payload: dict[str, Any] = {}
         try:
             svc = self.webspace_service
             if svc is None:
@@ -117,7 +138,7 @@ class BuilderWorkbenchService:
                 existing = await svc.create(
                     dev_id,
                     f"DEV: {source_id}",
-                    scenario_id=scenario,
+                    scenario_id=runtime_scenario,
                     dev=True,
                 )
                 created = True
@@ -126,22 +147,51 @@ class BuilderWorkbenchService:
                 if kind and kind != "dev":
                     raise ValueError(f"paired webspace {dev_id!r} exists but is not a dev webspace")
                 home = str(getattr(existing, "home_scenario", "") or "").strip()
-                if home != scenario:
-                    updated = await svc.set_home_scenario(dev_id, scenario)
+                if home != runtime_scenario:
+                    updated = await svc.set_home_scenario(dev_id, runtime_scenario)
                     existing = updated or existing
             info_payload = _info_to_dict(existing)
+            if runtime_scenario and self.webspace_service is None:
+                try:
+                    from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario
+
+                    runtime_payload = await reload_webspace_from_scenario(
+                        dev_id,
+                        scenario_id=runtime_scenario,
+                        action="reload",
+                        event_payload={
+                            "source": "builder.workbench",
+                            "source_webspace_id": source_id,
+                            "active_draft_id": active_draft_id,
+                        },
+                    )
+                except Exception as exc:
+                    runtime_payload = {
+                        "ok": False,
+                        "error": "dev_runtime_reload_failed",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                    }
+            elif runtime_scenario:
+                runtime_payload = {
+                    "ok": True,
+                    "skipped": "injected_webspace_service",
+                    "webspace_id": dev_id,
+                    "scenario_id": runtime_scenario,
+                }
         except Exception as exc:
             info_payload = {"ok": False, "error": "dev_webspace_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
 
         binding = self.set_active_draft(
             source_webspace_id=source_id,
             active_draft_id=active_draft_id,
-            scenario_id=scenario,
+            scenario_id=workbench_scenario,
             dev_webspace_id=dev_id,
+            runtime_scenario_id=runtime_scenario,
             persist_projection=False,
         )
         binding["created"] = created
         binding["dev_webspace"] = info_payload
+        binding["runtime"] = runtime_payload
         await self.publish_projection(source_id)
         return binding
 
@@ -154,6 +204,7 @@ class BuilderWorkbenchService:
             "source_webspace_id": source_id,
             "dev_webspace_id": dev_webspace_id_for_source(source_id),
             "scenario_id": BUILDER_WORKBENCH_SCENARIO_ID,
+            "runtime_scenario_id": None,
             "purpose": "builder_prompt_ide",
             "active_draft_id": None,
             "dialog": self.dialog_widget_config(source_id),
@@ -168,6 +219,7 @@ class BuilderWorkbenchService:
         active_draft_id: str | None,
         scenario_id: str = BUILDER_WORKBENCH_SCENARIO_ID,
         dev_webspace_id: str | None = None,
+        runtime_scenario_id: str | None = None,
         persist_projection: bool = True,
     ) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
@@ -177,6 +229,12 @@ class BuilderWorkbenchService:
             "source_webspace_id": source_id,
             "dev_webspace_id": str(dev_webspace_id or existing.get("dev_webspace_id") or dev_webspace_id_for_source(source_id)).strip(),
             "scenario_id": str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip(),
+            "runtime_scenario_id": (
+                str(runtime_scenario_id or "").strip()
+                or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
+                or existing.get("runtime_scenario_id")
+                or None
+            ),
             "purpose": "builder_prompt_ide",
             "active_draft_id": str(active_draft_id or "").strip() or None,
             "dialog": self.dialog_widget_config(source_id),

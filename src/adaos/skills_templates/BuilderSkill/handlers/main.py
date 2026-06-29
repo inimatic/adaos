@@ -383,6 +383,129 @@ def _write_webui(artifact_root: str | None, preview_state: Mapping[str, Any]) ->
         },
     }
     (root / "webui.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_scenario_page_schema(root, preview_state)
+
+
+def _form_field_type(field: Mapping[str, Any]) -> str:
+    field_type = str(field.get("type") or "string")
+    if field_type == "boolean":
+        return "toggle"
+    if field_type == "number":
+        return "number"
+    return "text"
+
+
+def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any]:
+    ui = preview_state.get("current_ui") if isinstance(preview_state.get("current_ui"), Mapping) else {}
+    title = str(preview_state.get("title") or ui.get("title") or "Prototype").strip() or "Prototype"
+    datasources = preview_state.get("datasources") if isinstance(preview_state.get("datasources"), list) else []
+    datasource = datasources[0] if datasources and isinstance(datasources[0], Mapping) else {}
+    fields = [dict(item) for item in datasource.get("fields", []) if isinstance(item, Mapping)]
+    datasource_id = str(datasource.get("id") or "items").strip() or "items"
+    mock_data = preview_state.get("mock_data") if isinstance(preview_state.get("mock_data"), Mapping) else {}
+    rows = mock_data.get(datasource_id) if isinstance(mock_data.get(datasource_id), list) else []
+    has_card_view = any(
+        isinstance(child, Mapping) and str(child.get("type") or "") == "card_list"
+        for child in (ui.get("children") if isinstance(ui.get("children"), list) else [])
+    )
+    widgets: list[dict[str, Any]] = [
+        {
+            "id": "prototype-form",
+            "type": "ui.form",
+            "area": "main",
+            "title": "Input",
+            "inputs": {
+                "fields": [
+                    {
+                        "id": str(field.get("id") or f"field_{index}"),
+                        "type": _form_field_type(field),
+                        "label": field.get("label") or field.get("id") or f"Field {index + 1}",
+                    }
+                    for index, field in enumerate(fields)
+                ],
+                "submitLabel": "Add",
+            },
+            "actions": [{"on": "submit", "type": "updateState", "params": {"lastPrototypeSubmit": "$event.values"}}],
+        },
+        {
+            "id": "prototype-table",
+            "type": "ui.table",
+            "area": "main",
+            "title": "List",
+            "dataSource": {"kind": "static", "value": rows},
+            "inputs": {
+                "columns": [
+                    {
+                        "key": str(field.get("id") or f"field_{index}"),
+                        "label": field.get("label") or field.get("id") or f"Field {index + 1}",
+                    }
+                    for index, field in enumerate(fields)
+                ],
+                "emptyText": "No items yet",
+            },
+        },
+    ]
+    if has_card_view:
+        first = str(fields[0].get("id") if fields else "title")
+        second = str(fields[1].get("id") if len(fields) > 1 else "")
+        widgets.append(
+            {
+                "id": "prototype-cards",
+                "type": "ui.list",
+                "area": "right",
+                "title": "Cards",
+                "dataSource": {"kind": "static", "value": rows},
+                "inputs": {
+                    "variant": "cards",
+                    "titleKey": first,
+                    "subtitleKey": second,
+                    "emptyText": "No cards yet",
+                },
+            }
+        )
+    else:
+        widgets.append(
+            {
+                "id": "prototype-summary",
+                "type": "item.details",
+                "area": "right",
+                "title": "Prototype",
+                "dataSource": {"kind": "static", "value": {"title": title, "fields": [field.get("label") for field in fields]}},
+            }
+        )
+    return {
+        "id": str(ui.get("id") or preview_state.get("session_id") or "builder_prototype"),
+        "title": title,
+        "layout": {
+            "type": "split",
+            "pattern": "split",
+            "areas": [
+                {"id": "main", "role": "main"},
+                {"id": "right", "role": "aux"},
+            ],
+        },
+        "widgets": widgets,
+    }
+
+
+def _write_scenario_page_schema(root: Path, preview_state: Mapping[str, Any]) -> None:
+    manifest = root / "scenario.json"
+    if not manifest.exists():
+        return
+    try:
+        scenario = json.loads(manifest.read_text(encoding="utf-8-sig") or "{}")
+    except Exception:
+        return
+    if not isinstance(scenario, dict):
+        return
+    scenario.setdefault("type", "desktop")
+    scenario.setdefault("title", preview_state.get("title") or scenario.get("name") or scenario.get("id") or "Prototype")
+    scenario.setdefault("ui", {})
+    scenario["ui"].setdefault("application", {})
+    scenario["ui"]["application"].setdefault("version", "0.1")
+    scenario["ui"]["application"].setdefault("desktop", {})
+    scenario["ui"]["application"]["desktop"]["pageSchema"] = _page_schema_from_preview(preview_state)
+    manifest.write_text(json.dumps(scenario, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _save_session(webspace_id: str, session: dict[str, Any]) -> dict[str, Any]:
@@ -453,7 +576,17 @@ def _workbench_service():
 def _active_draft_id(session: Mapping[str, Any] | None) -> str | None:
     if not isinstance(session, Mapping):
         return None
+    if not str(session.get("artifact_root") or "").strip():
+        return None
     return str(session.get("draft_id") or session.get("id") or "").strip() or None
+
+
+def _runtime_scenario_id(session: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(session, Mapping):
+        return None
+    if not str(session.get("artifact_root") or "").strip():
+        return None
+    return str(session.get("scenario_id") or "").strip() or None
 
 
 def _ensure_workbench(
@@ -464,7 +597,13 @@ def _ensure_workbench(
 ) -> dict[str, Any]:
     svc = _workbench_service()
     try:
-        binding = _run_async(svc.ensure_dev_webspace(webspace_id, active_draft_id=_active_draft_id(session)))
+        binding = _run_async(
+            svc.ensure_dev_webspace(
+                webspace_id,
+                active_draft_id=_active_draft_id(session),
+                runtime_scenario_id=_runtime_scenario_id(session),
+            )
+        )
         projection = svc.publish_projection_sync(webspace_id, preview_state=preview_state)
     except Exception as exc:
         return {"ok": False, "error": "workbench_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
@@ -720,11 +859,18 @@ def ensure_dev_webspace(
 ) -> dict[str, Any]:
     ws = _webspace_id(webspace_id, _meta)
     session = _load_session(ws)
+    explicit_draft_id = str(active_draft_id or "").strip() or None
     if active_draft_id:
         session = dict(session or {})
-        session["draft_id"] = str(active_draft_id).strip()
+        session["draft_id"] = explicit_draft_id
     try:
-        binding = _run_async(_workbench_service().ensure_dev_webspace(ws, active_draft_id=_active_draft_id(session)))
+        binding = _run_async(
+            _workbench_service().ensure_dev_webspace(
+                ws,
+                active_draft_id=explicit_draft_id or _active_draft_id(session),
+                runtime_scenario_id=_runtime_scenario_id(session),
+            )
+        )
     except Exception as exc:
         return {"ok": False, "error": "workbench_unavailable", "detail": f"{type(exc).__name__}: {exc}", "dialog": _dialog_state(ws)}
     return {"ok": True, "binding": binding, "dialog": _dialog_state(ws)}
@@ -767,7 +913,20 @@ def set_active_draft(
     _meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ws = _webspace_id(webspace_id, _meta)
-    binding = _workbench_service().set_active_draft(source_webspace_id=ws, active_draft_id=draft_id)
+    session = _load_session(ws)
+    if draft_id and (not session or str(session.get("draft_id") or "") != str(draft_id).strip()):
+        sessions = _sessions(ws)
+        for item in sessions.values():
+            if str(item.get("draft_id") or item.get("id") or "").strip() == str(draft_id).strip():
+                session = item
+                break
+    binding = _run_async(
+        _workbench_service().ensure_dev_webspace(
+            ws,
+            active_draft_id=draft_id,
+            runtime_scenario_id=_runtime_scenario_id(session),
+        )
+    )
     return {"ok": True, "binding": binding, "dialog": _dialog_state(ws)}
 
 

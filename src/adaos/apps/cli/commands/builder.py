@@ -270,7 +270,7 @@ def workbench_set_active(
 ) -> None:
     """Switch the active Builder development draft."""
     service = BuilderWorkbenchService.from_context()
-    binding = service.set_active_draft(source_webspace_id=webspace_id, active_draft_id=draft_id)
+    binding = asyncio.run(service.ensure_dev_webspace(webspace_id, active_draft_id=draft_id))
     _echo_payload({"ok": True, "binding": binding}, json_output)
 
 

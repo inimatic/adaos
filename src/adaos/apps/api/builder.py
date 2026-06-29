@@ -141,11 +141,17 @@ def get_workbench_dialog_widget(
 
 
 @router.post("/workbench/active-draft")
-def set_workbench_active_draft(
+async def set_workbench_active_draft(
     body: BuilderActiveDraftRequest,
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
-    return {"ok": True, "binding": service.set_active_draft(source_webspace_id=body.webspace_id, active_draft_id=body.draft_id)}
+    return {
+        "ok": True,
+        "binding": await service.ensure_dev_webspace(
+            body.webspace_id,
+            active_draft_id=body.draft_id,
+        ),
+    }
 
 
 @router.get("/workbench/development-skills")
