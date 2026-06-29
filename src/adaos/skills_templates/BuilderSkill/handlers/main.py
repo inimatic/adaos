@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import time
+import asyncio
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -435,6 +436,58 @@ def _field_id(label: str) -> str:
     return ascii_id or f"field_{_hash_suffix(label)}"
 
 
+def _run_async(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("builder_skill sync tool cannot wait for async workbench call inside a running event loop")
+
+
+def _workbench_service():
+    from adaos.services.builder.workbench import BuilderWorkbenchService
+
+    return BuilderWorkbenchService.from_context()
+
+
+def _active_draft_id(session: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(session, Mapping):
+        return None
+    return str(session.get("draft_id") or session.get("id") or "").strip() or None
+
+
+def _ensure_workbench(
+    webspace_id: str,
+    *,
+    session: Mapping[str, Any] | None = None,
+    preview_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    svc = _workbench_service()
+    try:
+        binding = _run_async(svc.ensure_dev_webspace(webspace_id, active_draft_id=_active_draft_id(session)))
+        projection = svc.publish_projection_sync(webspace_id, preview_state=preview_state)
+    except Exception as exc:
+        return {"ok": False, "error": "workbench_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "binding": binding, "projection": projection}
+
+
+def _delete_sessions_for_draft(webspace_id: str, draft_id: str) -> None:
+    token = str(draft_id or "").strip()
+    if not token:
+        return
+    sessions = _sessions(webspace_id)
+    removed = [sid for sid, session in sessions.items() if str(session.get("draft_id") or session.get("id") or "") == token]
+    if not removed:
+        return
+    for sid in removed:
+        sessions.pop(sid, None)
+    _save_sessions(webspace_id, sessions)
+    current = _current_session_id(webspace_id)
+    if current in removed:
+        latest = max(sessions.values(), key=lambda item: float(item.get("updated_at") or 0), default=None)
+        _set_current_session_id(webspace_id, str(latest.get("id") if latest else ""))
+
+
 @tool(summary="Start Builder rapid prototyping dialog.", side_effects="local_write")
 def start(
     text: str | None = None,
@@ -502,6 +555,7 @@ def create_scenario_draft(
             artifact_id=sid,
             source_idea=source_idea,
             template_id="builder_scenario",
+            webspace_id=ws,
             source={
                 "type": "builder_dialog",
                 "utterance": source_idea,
@@ -518,6 +572,7 @@ def create_scenario_draft(
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
     _save_session(ws, session)
+    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
     message = _message_created(session)
     if session.get("draft_error"):
         message += f" \u041f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u0435: dev draft \u043d\u0435 \u0441\u043e\u0437\u0434\u0430\u043d ({session['draft_error']})."
@@ -539,6 +594,7 @@ def create_scenario_draft(
         "draft_id": session.get("draft_id"),
         "artifact_root": session.get("artifact_root"),
         "preview_state": preview,
+        "workbench": workbench,
         "pending_action": pending_action,
         "message": message,
         "dialog": _dialog_state(ws),
@@ -597,6 +653,7 @@ def update_current_scenario(
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
     _save_session(ws, session)
+    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
     pending_action = _publish_review_pending_action(
         webspace_id=ws,
         session=session,
@@ -621,6 +678,7 @@ def update_current_scenario(
         "scenario_id": session.get("scenario_id"),
         "patch": patch,
         "preview_state": preview,
+        "workbench": workbench,
         "pending_action": pending_action,
         "message": message,
         "dialog": _dialog_state(ws),
@@ -635,7 +693,8 @@ def get_session(
 ) -> dict[str, Any]:
     ws = _webspace_id(webspace_id, _meta)
     session = _load_session(ws, session_id)
-    return {"ok": bool(session), "session": session, "dialog": _dialog_state(ws)}
+    workbench = _ensure_workbench(ws, session=session, preview_state=(session or {}).get("preview_state") if isinstance(session, dict) else None)
+    return {"ok": bool(session), "session": session, "workbench": workbench, "dialog": _dialog_state(ws)}
 
 
 @tool(summary="Get Builder preview state.", side_effects="none")
@@ -649,7 +708,89 @@ def get_preview_state(
     if not session:
         return {"ok": False, "error": "session_not_found", "preview_state": None, "dialog": _dialog_state(ws)}
     preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
-    return {"ok": True, "session_id": session.get("id"), "preview_state": preview, "dialog": _dialog_state(ws)}
+    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
+    return {"ok": True, "session_id": session.get("id"), "preview_state": preview, "workbench": workbench, "dialog": _dialog_state(ws)}
+
+
+@tool(summary="Ensure paired Builder Prompt IDE dev webspace.", side_effects="local_write")
+def ensure_dev_webspace(
+    webspace_id: str | None = None,
+    active_draft_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    session = _load_session(ws)
+    if active_draft_id:
+        session = dict(session or {})
+        session["draft_id"] = str(active_draft_id).strip()
+    try:
+        binding = _run_async(_workbench_service().ensure_dev_webspace(ws, active_draft_id=_active_draft_id(session)))
+    except Exception as exc:
+        return {"ok": False, "error": "workbench_unavailable", "detail": f"{type(exc).__name__}: {exc}", "dialog": _dialog_state(ws)}
+    return {"ok": True, "binding": binding, "dialog": _dialog_state(ws)}
+
+
+@tool(summary="Return Builder workbench binding.", side_effects="none")
+def get_workspace_binding(
+    webspace_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    binding = _workbench_service().get_workspace_binding(ws)
+    return {"ok": True, "binding": binding, "dialog": _dialog_state(ws)}
+
+
+@tool(summary="Return URL for paired Builder Prompt IDE dev webspace.", side_effects="none")
+def open_dev_webspace(
+    webspace_id: str | None = None,
+    base_url: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    return {**_workbench_service().open_dev_webspace(ws, base_url=base_url), "dialog": _dialog_state(ws)}
+
+
+@tool(summary="Return embedded Voice Chat widget config for Builder workbench.", side_effects="none")
+def attach_dialog_widget(
+    webspace_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    widget = _workbench_service().dialog_widget_config(ws)
+    return {"ok": True, "widget": widget, "dialog": _dialog_state(ws)}
+
+
+@tool(summary="Switch active Builder development draft.", side_effects="local_write")
+def set_active_draft(
+    draft_id: str | None = None,
+    webspace_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    binding = _workbench_service().set_active_draft(source_webspace_id=ws, active_draft_id=draft_id)
+    return {"ok": True, "binding": binding, "dialog": _dialog_state(ws)}
+
+
+@tool(summary="List Builder skills/scenarios in development.", side_effects="none")
+def list_development_skills(
+    webspace_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    return {**_workbench_service().list_development_skills(ws), "dialog": _dialog_state(ws)}
+
+
+@tool(summary="Delete Builder development draft.", side_effects="local_write")
+def delete_development_skill(
+    draft_id: str,
+    webspace_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id, _meta)
+    result = _workbench_service().delete_development_skill(draft_id, ws)
+    if result.get("ok"):
+        _delete_sessions_for_draft(ws, draft_id)
+    return {**result, "dialog": _dialog_state(ws)}
 
 
 def handle(topic: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -664,4 +805,18 @@ def handle(topic: str, payload: Mapping[str, Any] | None = None) -> dict[str, An
         return get_preview_state(**data)
     if topic.endswith("get_session"):
         return get_session(**data)
+    if topic.endswith("ensure_dev_webspace"):
+        return ensure_dev_webspace(**data)
+    if topic.endswith("get_workspace_binding"):
+        return get_workspace_binding(**data)
+    if topic.endswith("open_dev_webspace"):
+        return open_dev_webspace(**data)
+    if topic.endswith("attach_dialog_widget"):
+        return attach_dialog_widget(**data)
+    if topic.endswith("set_active_draft"):
+        return set_active_draft(**data)
+    if topic.endswith("list_development_skills"):
+        return list_development_skills(**data)
+    if topic.endswith("delete_development_skill"):
+        return delete_development_skill(**data)
     return chat(**data)

@@ -18,6 +18,13 @@ exports:
     - update_current_scenario
     - get_session
     - get_preview_state
+    - ensure_dev_webspace
+    - get_workspace_binding
+    - open_dev_webspace
+    - attach_dialog_widget
+    - set_active_draft
+    - list_development_skills
+    - delete_development_skill
 tools:
   - name: start
     description: "Start or resume the Builder rapid prototyping dialog."
@@ -117,6 +124,99 @@ tools:
     output_schema:
       type: object
       required: [ok, preview_state]
+  - name: ensure_dev_webspace
+    description: "Create or reuse the paired Prompt IDE dev webspace for the current source webspace."
+    entry: "handlers.main:ensure_dev_webspace"
+    input_schema:
+      type: object
+      properties:
+        webspace_id:
+          type: string
+        active_draft_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok]
+  - name: get_workspace_binding
+    description: "Return the Builder source/dev webspace binding and active draft."
+    entry: "handlers.main:get_workspace_binding"
+    input_schema:
+      type: object
+      properties:
+        webspace_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, binding]
+  - name: open_dev_webspace
+    description: "Return the browser URL for the paired Prompt IDE dev webspace."
+    entry: "handlers.main:open_dev_webspace"
+    input_schema:
+      type: object
+      properties:
+        webspace_id:
+          type: string
+        base_url:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, url, webspace_id]
+  - name: attach_dialog_widget
+    description: "Return embedded Voice Chat widget config for Builder Prompt IDE."
+    entry: "handlers.main:attach_dialog_widget"
+    input_schema:
+      type: object
+      properties:
+        webspace_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, widget]
+  - name: set_active_draft
+    description: "Switch the active Builder development draft in the paired Prompt IDE dev webspace."
+    entry: "handlers.main:set_active_draft"
+    input_schema:
+      type: object
+      properties:
+        draft_id:
+          type: string
+        webspace_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, binding]
+  - name: list_development_skills
+    description: "List Builder drafts and skills/scenarios currently in development."
+    entry: "handlers.main:list_development_skills"
+    input_schema:
+      type: object
+      properties:
+        webspace_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, items]
+  - name: delete_development_skill
+    description: "Delete a Builder development draft and clear it from the active workbench if selected."
+    entry: "handlers.main:delete_development_skill"
+    input_schema:
+      type: object
+      required: [draft_id]
+      properties:
+        draft_id:
+          type: string
+        webspace_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok]
 data_routes:
   - surface: "builder rapid prototype preview"
     route: "skill-local"
@@ -125,6 +225,13 @@ data_routes:
     first_paint: "empty Builder session with a prompt to describe the application"
     recovery: "get_preview_state rebuilds preview from skill-local session and dev scenario files"
     guard_visibility: "Builder reports degraded preview state in tool response"
+  - surface: "builder workbench state"
+    route: "yjs"
+    path: "data.builder"
+    owner: "skill:builder_skill"
+    first_paint: "empty workbench binding with embedded Voice Chat widget config"
+    recovery: "get_workspace_binding and get_preview_state republish data.builder from state/builder/workbench"
+    guard_visibility: "Builder reports projection publication status in tool response"
 llm_hints:
   description: "Builder rapid prototyping agent. Use when the user asks Builder/Строитель to create or change an application, scenario, form, list, table, card view, or web UI prototype."
   aliases:

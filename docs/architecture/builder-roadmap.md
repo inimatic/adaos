@@ -374,23 +374,26 @@ Open work:
   it renders active draft state, mockup preview, validation evidence, and
   actions while `builder_skill` owns LLM dialogue, patching, validation, and
   lifecycle decisions.
-- [ ] `[must]` Reuse the Voice/global-dialog UI as an embeddable Voice Chat
+- [x] `[must]` Reuse the Voice/global-dialog UI as an embeddable Voice Chat
   widget inside Prompt IDE. Prompt IDE must configure the widget for the
   `builder` channel and source Builder conversation instead of implementing a
-  second chat/transcript surface.
-- [ ] `[must]` Add source-to-dev webspace binding for Prompt IDE:
+  second chat/transcript surface. `BuilderWorkbenchService.dialog_widget_config`
+  and `builder_skill.attach_dialog_widget` publish the first embedded widget
+  contract.
+- [x] `[must]` Add source-to-dev webspace binding for Prompt IDE:
   `dev_webspace_id = f"{safe_source_webspace_id}-dev"`. Reuse one paired dev
   webspace per source webspace instead of creating a new webspace per draft.
-- [ ] `[must]` Store Builder Workbench projections under `data/builder/*`,
+  `BuilderWorkbenchService.ensure_dev_webspace` creates/reuses that binding.
+- [x] `[must]` Store Builder Workbench projections under `data/builder/*`,
   including active draft, draft list, preview snapshot, validation evidence,
   and workspace binding. Keep `data/prompt/*` only for migration or
-  compatibility.
-- [ ] `[must]` Add workbench commands:
+  compatibility. The first service snapshot writes `data.builder`.
+- [x] `[must]` Add workbench commands:
   `builder.ensure_dev_webspace`, `builder.get_workspace_binding`,
   `builder.open_dev_webspace`, `builder.set_active_draft`,
   `builder.list_development_skills`, and
   `builder.delete_development_skill`.
-- [ ] `[must]` Support "skills in development": list drafts/development skills,
+- [x] `[must]` Support "skills in development": list drafts/development skills,
   switch the active draft in the paired dev webspace, and delete the current
   draft through governed Builder lifecycle paths.
 - [ ] `[must]` Render the first mockup from LLM-authored `webui.json` and apply
