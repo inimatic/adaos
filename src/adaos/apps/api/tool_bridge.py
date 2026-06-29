@@ -97,7 +97,23 @@ def _runtime_ready(mgr: SkillManager, skill_name: str) -> bool:
         status = mgr.runtime_status(skill_name)
     except Exception:
         return False
-    return bool(status.get("ready"))
+    if not bool(status.get("ready")):
+        return False
+    manifest_path = Path(str(status.get("resolved_manifest") or ""))
+    if not manifest_path.exists():
+        return False
+    runtime_skill_root = manifest_path.parent / "src" / "skills" / skill_name
+    return runtime_skill_root.exists() and any(runtime_skill_root.iterdir())
+
+
+def _runtime_repair_target(mgr: SkillManager, skill_name: str) -> tuple[str | None, str | None]:
+    try:
+        status = mgr.runtime_status(skill_name)
+    except Exception:
+        return None, None
+    slot = str(status.get("pending_slot") or "").strip().upper() or None
+    version = str(status.get("pending_version") or "").strip() or None
+    return version, slot
 
 
 def _resolve_tool_webspace_id(payload: Dict[str, Any]) -> str:
@@ -394,9 +410,17 @@ def _maybe_sync_workspace_runtime(ctx: AgentContext, mgr: SkillManager, skill_na
     if not _runtime_ready(mgr, skill_name):
         return
     try:
-        mgr.runtime_update(skill_name, space="workspace")
+        result = mgr.runtime_update(skill_name, space="workspace")
     except Exception:
         _log.debug("workspace runtime_update failed for skill=%s", skill_name, exc_info=True)
+        return
+    if isinstance(result, dict) and result.get("ok") is False:
+        _log.warning(
+            "workspace runtime_update returned not ok for skill=%s reason=%s detail=%s",
+            skill_name,
+            result.get("reason"),
+            result.get("error") or result.get("path") or result.get("source_path"),
+        )
 
 
 def _repair_workspace_runtime(
@@ -409,13 +433,22 @@ def _repair_workspace_runtime(
     if not _workspace_skill_source_exists(ctx, skill_name):
         return False
     try:
-        mgr.runtime_update(skill_name, space="workspace")
+        result = mgr.runtime_update(skill_name, space="workspace")
     except Exception:
         _log.debug("workspace runtime_update repair failed for skill=%s", skill_name, exc_info=True)
+    else:
+        if isinstance(result, dict) and result.get("ok") is False:
+            _log.warning(
+                "workspace runtime_update repair returned not ok for skill=%s reason=%s detail=%s",
+                skill_name,
+                result.get("reason"),
+                result.get("error") or result.get("path") or result.get("source_path"),
+            )
     if _runtime_ready(mgr, skill_name):
         return True
+    version, slot = _runtime_repair_target(mgr, skill_name)
     try:
-        mgr.activate_for_space(skill_name, space="default", webspace_id=webspace_id)
+        mgr.activate_for_space(skill_name, space="default", webspace_id=webspace_id, version=version, slot=slot)
         return True
     except Exception:
         _log.debug("workspace runtime activation repair failed for skill=%s", skill_name, exc_info=True)

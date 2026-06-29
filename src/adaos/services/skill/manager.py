@@ -1985,7 +1985,8 @@ class SkillManager:
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
         target_manifest: dict[str, Any] = {}
         slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
-        needs_prepare = not manifest_path.exists()
+        slot_source_root = slot_paths.src_dir / "skills" / name
+        needs_prepare = not manifest_path.exists() or not slot_source_root.exists() or not any(slot_source_root.iterdir())
         if (
             not needs_prepare
             and source_path is not None
@@ -2416,7 +2417,8 @@ class SkillManager:
         slot_root = version_root / "slots" / active_slot
         slot_meta = metadata.get("slots", {}).get(active_slot, {})
         resolved_path = Path(slot_meta.get("resolved_manifest") or (slot_root / "resolved.manifest.json"))
-        ready = resolved_path.exists()
+        slot_source_root = slot_root / "src" / "skills" / name
+        ready = resolved_path.exists() and slot_source_root.exists() and any(slot_source_root.iterdir())
         history = metadata.get("history", {})
         deactivation = env.read_deactivation()
         deactivated = bool(deactivation.get("deactivated"))
@@ -2467,7 +2469,8 @@ class SkillManager:
         slot_root = version_root / "slots" / active_slot
         slot_meta = metadata.get("slots", {}).get(active_slot, {})
         resolved_path = Path(slot_meta.get("resolved_manifest") or (slot_root / "resolved.manifest.json"))
-        ready = resolved_path.exists()
+        slot_source_root = slot_root / "src" / "skills" / name
+        ready = resolved_path.exists() and slot_source_root.exists() and any(slot_source_root.iterdir())
         history = metadata.get("history", {})
         deactivation = env.read_deactivation()
         deactivated = bool(deactivation.get("deactivated"))

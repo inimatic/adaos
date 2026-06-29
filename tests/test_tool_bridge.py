@@ -151,11 +151,17 @@ def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) 
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
+            manifest = tmp_path / "runtime" / "slots" / "A" / "resolved.manifest.json"
+            runtime_root = manifest.parent / "src" / "skills" / "prompt_engineer_skill"
+            runtime_root.mkdir(parents=True)
+            (runtime_root / "__init__.py").write_text("", encoding="utf-8")
+            manifest.write_text("{}", encoding="utf-8")
+            self.manifest = manifest
             return None
 
         def runtime_status(self, _name: str) -> dict[str, object]:
             calls.append("runtime_status")
-            return {"ready": True}
+            return {"ready": True, "resolved_manifest": str(self.manifest)}
 
         def runtime_update(self, name: str, *, space: str = "workspace") -> dict[str, object]:
             calls.append(f"update:{name}:{space}")
@@ -279,6 +285,102 @@ def test_call_tool_repairs_workspace_runtime_when_runtime_missing(monkeypatch, t
         "update:infrascope_skill:workspace",
         "activate:infrascope_skill:default:ws-1:None:None",
         "run:True:infrascope_skill:get_overview_summary:None",
+    ]
+
+
+def test_call_tool_repairs_broken_ready_workspace_runtime_to_pending_slot(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+    (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
+    broken_manifest = tmp_path / "runtime" / "slots" / "B" / "resolved.manifest.json"
+    broken_manifest.parent.mkdir(parents=True)
+    broken_manifest.write_text("{}", encoding="utf-8")
+
+    class _Paths:
+        def skills_workspace_dir(self):
+            return tmp_path / "workspace" / "skills"
+
+        def repo_root(self):
+            return tmp_path
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=_Paths(),
+        caps=None,
+        settings=None,
+        bus=None,
+    )
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            self.ready = False
+
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            if self.ready:
+                ready_manifest = tmp_path / "runtime" / "slots" / "A" / "resolved.manifest.json"
+                (ready_manifest.parent / "src" / "skills" / "prompt_engineer_skill").mkdir(parents=True)
+                ready_manifest.write_text("{}", encoding="utf-8")
+                return {"ready": True, "resolved_manifest": str(ready_manifest)}
+            return {
+                "ready": True,
+                "resolved_manifest": str(broken_manifest),
+                "pending_version": "0.6.3",
+                "pending_slot": "A",
+            }
+
+        def runtime_update(self, name: str, *, space: str = "workspace") -> dict[str, object]:
+            calls.append(f"update:{name}:{space}")
+            return {"ok": False, "reason": "runtime_src_missing", "path": str(broken_manifest.parent / "src" / "skills" / name)}
+
+        def activate_for_space(
+            self,
+            name: str,
+            *,
+            space: str = "default",
+            webspace_id: str | None = None,
+            version: str | None = None,
+            slot: str | None = None,
+        ) -> str:
+            calls.append(f"activate:{name}:{space}:{webspace_id}:{version}:{slot}")
+            self.ready = True
+            return str(slot)
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"run:{self.ready}:{skill_name}:{tool_name}")
+            if not self.ready:
+                raise RuntimeError("tool unavailable")
+            return {"ok": True}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setenv("ADAOS_LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "default_webspace_id", lambda: "default")
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="prompt_engineer_skill:prompt_list_project_objects",
+                arguments={"webspace_id": "desktop"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=ctx,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        "run:False:prompt_engineer_skill:prompt_list_project_objects",
+        "update:prompt_engineer_skill:workspace",
+        "activate:prompt_engineer_skill:default:desktop:0.6.3:A",
+        "run:True:prompt_engineer_skill:prompt_list_project_objects",
     ]
 
 

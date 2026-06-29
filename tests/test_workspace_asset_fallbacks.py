@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -483,6 +484,61 @@ def test_skill_manager_activate_runtime_refreshes_when_workspace_version_changed
     assert third_slot in {"A", "B"}
     assert status["version"] == "1.1.1"
     assert "runtime-v3" in runtime_handler.read_text(encoding="utf-8")
+
+
+def test_skill_manager_activate_runtime_reprepares_slot_missing_sources(tmp_path: Path, monkeypatch) -> None:
+    runtime_base = tmp_path / "runtime"
+    repo_root = tmp_path / "repo"
+
+    repo_skill = repo_root / ".adaos" / "workspace" / "skills" / "prompt_engineer_skill"
+    (repo_skill / "handlers").mkdir(parents=True, exist_ok=True)
+    (repo_skill / "handlers" / "main.py").write_text(
+        'MARKER = "restored-source"\n'
+        'def handle(payload=None):\n'
+        '    return payload or {}\n',
+        encoding="utf-8",
+    )
+    (repo_skill / "skill.yaml").write_text(
+        "name: prompt_engineer_skill\nversion: '0.6.3'\nentry: handlers/main.py\n",
+        encoding="utf-8",
+    )
+
+    fake_ctx = SimpleNamespace(
+        paths=_PathsStub(base_dir=runtime_base, repo_root=repo_root),
+        caps=SimpleNamespace(),
+        bus=None,
+        settings=SimpleNamespace(
+            default_wall_time_sec=30.0,
+            default_max_rss_mb=None,
+            default_cpu_time_sec=None,
+        ),
+    )
+    monkeypatch.setattr(skill_manager_module, "get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
+
+    manager = skill_manager_module.SkillManager(
+        git=SimpleNamespace(),
+        paths=fake_ctx.paths,
+        caps=fake_ctx.caps,
+        settings=fake_ctx.settings,
+        registry=None,
+        repo=None,
+        bus=None,
+    )
+    env = SkillRuntimeEnvironment(skills_root=runtime_base / "workspace" / "skills", skill_name="prompt_engineer_skill")
+
+    manager.prepare_runtime("prompt_engineer_skill", path=repo_skill, version_override="0.6.3", preferred_slot="A")
+    shutil.rmtree(env.build_slot_paths("0.6.3", "A").src_dir)
+
+    status_before = manager.runtime_status("prompt_engineer_skill")
+    assert status_before["ready"] is False
+
+    slot = manager.activate_runtime("prompt_engineer_skill", version="0.6.3", slot="A")
+    runtime_handler = env.ensure_current_link("0.6.3") / "src" / "skills" / "prompt_engineer_skill" / "handlers" / "main.py"
+
+    assert slot == "A"
+    assert manager.runtime_status("prompt_engineer_skill")["ready"] is True
+    assert "restored-source" in runtime_handler.read_text(encoding="utf-8")
 
 
 def test_skills_loader_imports_repo_workspace_handler_when_workspace_missing(tmp_path: Path, monkeypatch) -> None:
