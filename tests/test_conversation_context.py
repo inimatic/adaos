@@ -224,6 +224,67 @@ def test_memory_search_and_forget_are_scoped_and_redaction_aware() -> None:
     assert redacted[0]["redaction_reason"] == "test_cleanup"
 
 
+def test_memory_consent_records_audit_and_updates_matching_items() -> None:
+    memory_id = sdk_memory.remember(
+        scope="skill_user",
+        owner="skill:consent",
+        subject_id="skill:consent",
+        key="tone",
+        text="prefers short answers",
+        consent_state="unknown",
+    )
+    assert memory_id
+
+    event = sdk_memory.record_consent(
+        scope="skill_user",
+        owner="skill:consent",
+        subject_id="skill:consent",
+        consent_state="revoked",
+        actor_owner="core:memory",
+        actor_id="user:default",
+        reason="user_revoked",
+    )
+
+    assert event is not None
+    assert event["event_type"] == "conversation.memory.consent.v1"
+    assert event["action"] == "revoke_memory_consent"
+    assert event["counts"]["memory"] == 1
+    stored = sdk_memory.list(scope="skill_user", owner="skill:consent", subject_id="skill:consent")[0]
+    assert stored["consent_state"] == "revoked"
+    assert stored["policy"]["consent_history"][-1]["reason"] == "user_revoked"
+
+
+def test_memory_propose_write_uses_pending_action(monkeypatch) -> None:
+    published: list[dict] = []
+
+    from adaos.services import pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "publish_pending_action",
+        lambda **kwargs: published.append(dict(kwargs)) or {"id": "pa.memory.1", **kwargs},
+    )
+
+    result = sdk_memory.propose_write(
+        "agent_preference",
+        owner="skill:test",
+        agent_id="agent:test:nika",
+        key="tone",
+        text="prefers concise critique",
+        confidence=0.8,
+        webspace_id="desktop",
+        source_ref={"type": "conversation_message", "message_id": "msg.1"},
+    )
+
+    assert result["id"] == "pa.memory.1"
+    assert published[0]["kind"] == "memory.write.review"
+    assert published[0]["domain_ref"]["subject_id"] == "agent:test:nika"
+    proposal = published[0]["metadata"]["proposed_memory"]
+    assert proposal["scope"] == "agent_user"
+    assert proposal["text"] == "prefers concise critique"
+    assert published[0]["response_topic"] == "memory.pending_action.response"
+
+
 def test_context_packet_marks_retrieved_memory_as_untrusted_and_flags_injection() -> None:
     _seed_conversation()
     memory_id = conversation_store.remember(

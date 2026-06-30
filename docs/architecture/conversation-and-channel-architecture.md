@@ -2033,8 +2033,11 @@ Important lacunae found during Phase 6 implementation:
 - [x] `[must]` Back export/delete/redaction operations with durable audit
   events. `conversation_audit_events` records export, soft redaction, and hard
   delete events with counts, reasons, and operation metadata.
-- [ ] `[must]` Add user-visible consent controls and durable consent
+- [x] `[must]` Add user-visible consent controls and durable consent
   grant/revoke audit events for reusable global, core, skill, and agent memory.
+  The first service/SDK controls are `memory.record_consent(...)` and
+  `conversation_store.record_memory_consent(...)`, which update matching memory
+  items and append `conversation.memory.consent.v1` audit events.
 - [x] `[must]` Add action risk classes for tools with filesystem, network,
   device-control, credential, or cross-node effects.
 - [x] `[must]` Wire action-risk classes into Builder preview and Builder
@@ -2067,8 +2070,11 @@ Important lacunae found during Phase 6 implementation:
   packet diagnostics.
 - [ ] `[must]` Add memory provenance, conflict handling, confidence decay,
   stale-memory filtering, and explicit memory review/edit flows.
-- [ ] `[must]` Add memory extraction proposals that default to Pending Action
+- [x] `[must]` Add memory extraction proposals that default to Pending Action
   or user-visible approval before broad reusable memory is written.
+  `adaos.sdk.memory.propose_write(...)` publishes `memory.write.review`
+  Pending Actions with proposed memory, write policy, source refs, and
+  approve/refuse/postpone actions instead of writing reusable memory directly.
 - [ ] `[should]` Add hybrid semantic retrieval / embeddings after deterministic
   FTS and summary retrieval are stable and measured.
 - [ ] `[should]` Add retrieval regression tests for long companion,

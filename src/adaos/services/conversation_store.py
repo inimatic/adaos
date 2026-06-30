@@ -2144,9 +2144,77 @@ def forget_memory(
                 WHERE {sql_where}
                 """,
                 [time.time(), str(reason or "user_request").strip() or "user_request", time.time(), *params],
-            )
+        )
         con.commit()
-    return int(cur.rowcount or 0)
+        return int(cur.rowcount or 0)
+
+
+def record_memory_consent(
+    *,
+    scope: str,
+    owner: str,
+    subject_id: str | None = None,
+    consent_state: str,
+    actor_owner: str | None = None,
+    actor_id: str | None = None,
+    reason: str = "user_request",
+    policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    clean_scope = str(scope or "").strip()
+    clean_owner = str(owner or "").strip()
+    clean_subject = str(subject_id or "").strip() or None
+    clean_state = str(consent_state or "").strip()
+    if not clean_scope or not clean_owner or not clean_state:
+        raise ValueError("scope, owner and consent_state are required")
+    where = ["scope=?", "owner=?"]
+    params: list[Any] = [clean_scope, clean_owner]
+    if clean_subject is not None:
+        where.append("subject_id=?")
+        params.append(clean_subject)
+    now = time.time()
+    action = "revoke_memory_consent" if clean_state in {"revoked", "denied"} else "grant_memory_consent"
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"SELECT memory_id, policy_json FROM conversation_memory_items WHERE {' AND '.join(where)}",
+            params,
+        ).fetchall()
+        for row in rows:
+            stored_policy = _json_load(row["policy_json"], {})
+            if not isinstance(stored_policy, dict):
+                stored_policy = {}
+            stored_policy.setdefault("consent_history", [])
+            history = stored_policy["consent_history"] if isinstance(stored_policy["consent_history"], list) else []
+            history.append({"state": clean_state, "reason": reason, "ts": now, **dict(policy or {})})
+            stored_policy["consent_history"] = history[-20:]
+            con.execute(
+                """
+                UPDATE conversation_memory_items
+                SET consent_state=?, policy_json=?, updated_at=?
+                WHERE memory_id=?
+                """,
+                (clean_state, _json_dump(stored_policy), now, row["memory_id"]),
+            )
+        event = _append_audit_event_with_connection(
+            con,
+            event_type="conversation.memory.consent.v1",
+            action=action,
+            actor_owner=actor_owner or owner,
+            actor_id=actor_id,
+            reason=reason,
+            counts={"memory": len(rows)},
+            meta={
+                "scope": clean_scope,
+                "owner": clean_owner,
+                "subject_id": clean_subject,
+                "consent_state": clean_state,
+                "policy": dict(policy or {}),
+            },
+        )
+        con.commit()
+    return event
 
 
 def _row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
