@@ -1604,8 +1604,10 @@ depth across several phases.
   declarations. Runtime skill schema now accepts a `conversation` contract with
   channel, history, retrieval, repair, response, memory, forms/frames, and
   agent declarations.
-- [ ] `[should]` Add SDK design docs for `adaos.sdk.conversation` and
-  `adaos.sdk.memory`.
+- [x] `[should]` Add SDK design docs for `adaos.sdk.conversation` and
+  `adaos.sdk.memory`. `docs/sdk/io.md` now documents the conversation ledger,
+  `chat.send` / bounded `chat.ask`, topic/thread context packets, scoped
+  memory, consent/audit flows, and generated-skill manifest policy.
 - [ ] `[could]` Define optional vector-index metadata while keeping vector
   storage out of the MVP contract.
 

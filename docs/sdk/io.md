@@ -9,8 +9,9 @@ These helpers publish events onto the local bus. They do not write to Yjs direct
 These helpers are low-level IO/event primitives. For ordinary user-visible
 dialog the target API is `adaos.sdk.conversation`, described in
 [Conversation and Channel Architecture](../architecture/conversation-and-channel-architecture.md).
-Until that SDK exists, `io.out.chat.append` remains the compatibility bridge
-used by existing skills and the Voice surface.
+The `adaos.sdk.chat`, `adaos.sdk.conversation`, and `adaos.sdk.memory` modules
+are now the default path for generated skills. `io.out.chat.append` remains a
+compatibility bridge for older skills and transport adapters.
 
 - `io.out.chat.append(text, from_='hub', _meta={...})`
   - RouterService projects into `data.voice_chat.messages` of the target webspace.
@@ -32,6 +33,82 @@ This means a skill can stay stateless and "routeless":
 RouterService also supports broadcasting by setting `_meta.webspace_ids = ['w1', 'w2', ...]`.
 For dynamic runtime routing without changing skills, you can also set `_meta.route_id`
 and configure targets in Yjs: `data.routing.routes[route_id] = { webspace_ids: [...] }`.
+
+## Conversation and Memory SDKs
+
+SDK modules: `adaos.sdk.chat`, `adaos.sdk.conversation`, `adaos.sdk.memory`
+
+These modules are the skill-facing facade over the node-local conversation
+ledger, scoped memory store, response materializer, and context-packet builder.
+Skills should use them instead of keeping transcript files, writing directly to
+Yjs, or storing user-visible history in process-local collections.
+
+### `adaos.sdk.conversation`
+
+- `current(webspace_id=None, channel_id='general')` returns the persisted
+  dialog-channel pointer for the current node/webspace.
+- `open(conversation_id, owner, webspace_id=None, channel_id=None, ...)`
+  creates or updates a node-local conversation and optionally binds it to a
+  dialog channel.
+- `append(conversation_id, text, role, ...)` appends a ledger message. Prefer
+  `adaos.sdk.chat.send` for user-visible assistant responses.
+- `get(conversation_id, thread_id=None, before_cursor=None, limit=50)` returns
+  a bounded visible-tail projection with `before_cursor` and
+  `has_more_before`.
+- `start_thread(conversation_id, thread_id=None, ...)` creates a durable topic
+  or project thread inside a shared conversation.
+- `context(conversation_id, requester_owner, ...)` returns a budgeted context
+  packet: recent messages, segment summaries, memory items, evidence refs,
+  diagnostics, and policy denials.
+
+Design rules:
+
+- The physical store is owned by the node; logical ownership is expressed with
+  `owner` and `agent_id`.
+- Cross-owner memory reuse is deny-by-default unless a caller passes an
+  explicit policy override.
+- `thread_id` is the first topic/project discriminator. Builder and IDE-style
+  flows should pass it on every turn.
+- Yjs/WebIO tails are projections. The ledger remains the source of truth.
+
+### `adaos.sdk.chat`
+
+- `send(content, conversation_id, owner, ...)` materializes a structured
+  response into text tail/speech targets and appends the assistant message to
+  the ledger.
+- `ask(prompt, conversation_id, owner, ...)` is a bounded question helper. It
+  marks the response as expecting a reply and should be paired with a
+  DialogFrame/form policy in the skill manifest.
+- `history(...)`, `context(...)`, and `start_thread(...)` are convenience
+  wrappers over `adaos.sdk.conversation`.
+
+Generated skills should return the materialization result in their tool output
+when practical, so diagnostics can explain renderer and ledger status.
+
+### `adaos.sdk.memory`
+
+- `remember(scope, owner, ...)` writes a scoped memory item to the node store.
+- `list(...)` and `search(query, ...)` read owner-scoped memory with bounded
+  limits.
+- `forget(...)` soft-redacts or deletes memory by id or scope filters.
+- `record_consent(...)` appends a durable consent audit event.
+- `write_policy(kind, owner, ...)` maps high-level memory intents to canonical
+  scopes: `conversation`, `skill_user`, `agent_user`, and `global_user`.
+- `propose_write(kind, owner, ...)` publishes a `memory.write.review` Pending
+  Action instead of silently storing reusable long-term memory.
+
+Default generated-skill policy:
+
+- transient conversation facts: `conversation` scope;
+- skill preferences: `skill_user` scope;
+- character/agent preferences: `agent_user` scope;
+- reusable user profile facts: proposal first, then approved `global_user`
+  storage by policy.
+
+Skill manifests should declare a `conversation` contract and either
+`conversation.memory` policy or a skill-local memory `data_routes` entry when
+using the memory SDK. The validator warns if SDK usage and manifest policy are
+out of sync.
 
 ## WebIO data contracts (MVP)
 
