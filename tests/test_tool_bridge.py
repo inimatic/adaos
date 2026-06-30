@@ -20,6 +20,15 @@ if "ypy_websocket" not in sys.modules:
 from adaos.apps.api import tool_bridge as tool_bridge_module
 
 
+@pytest.fixture(autouse=True)
+def _reset_tool_bridge_runtime_guards() -> None:
+    tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
+    tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
+    yield
+    tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
+    tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
+
+
 def _fake_ctx() -> SimpleNamespace:
     return SimpleNamespace(
         skills_repo=None,
@@ -153,7 +162,7 @@ def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) 
         def __init__(self, **_kwargs) -> None:
             manifest = tmp_path / "runtime" / "slots" / "A" / "resolved.manifest.json"
             runtime_root = manifest.parent / "src" / "skills" / "prompt_engineer_skill"
-            runtime_root.mkdir(parents=True)
+            runtime_root.mkdir(parents=True, exist_ok=True)
             (runtime_root / "__init__.py").write_text("", encoding="utf-8")
             manifest.write_text("{}", encoding="utf-8")
             self.manifest = manifest
@@ -201,6 +210,68 @@ def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) 
         "run:prompt_engineer_skill:prompt_list_project_objects",
         "run_sync:end",
     ]
+
+
+def test_call_tool_throttles_workspace_autosync_for_repeated_skill_calls(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+    (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
+
+    class _Paths:
+        def skills_workspace_dir(self):
+            return tmp_path / "workspace" / "skills"
+
+        def repo_root(self):
+            return tmp_path
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=_Paths(),
+        caps=None,
+        settings=None,
+        bus=None,
+    )
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            manifest = tmp_path / "runtime" / "slots" / "A" / "resolved.manifest.json"
+            runtime_root = manifest.parent / "src" / "skills" / "prompt_engineer_skill"
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            (runtime_root / "__init__.py").write_text("", encoding="utf-8")
+            manifest.write_text("{}", encoding="utf-8")
+            self.manifest = manifest
+
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            calls.append("runtime_status")
+            return {"ready": True, "resolved_manifest": str(self.manifest)}
+
+        def runtime_update(self, name: str, *, space: str = "workspace") -> dict[str, object]:
+            calls.append(f"update:{name}:{space}")
+            return {"ok": True}
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"run:{skill_name}:{tool_name}")
+            return {"skill": skill_name, "tool": tool_name, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setenv("ADAOS_LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    body = tool_bridge_module.ToolCall(tool="prompt_engineer_skill:prompt_list_project_files", arguments={})
+    first = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=ctx))
+    second = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=ctx))
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert calls.count("update:prompt_engineer_skill:workspace") == 1
+    assert calls.count("run:prompt_engineer_skill:prompt_list_project_files") == 2
 
 
 def test_call_tool_repairs_workspace_runtime_when_runtime_missing(monkeypatch, tmp_path) -> None:

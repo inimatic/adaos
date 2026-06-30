@@ -35,6 +35,13 @@ _HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
 _SNAPSHOT_UNAVAILABLE_TTL_S = max(0.0, float(os.getenv("ADAOS_TOOL_BRIDGE_SNAPSHOT_UNAVAILABLE_TTL_S") or "20"))
 _SNAPSHOT_UNAVAILABLE_CACHE_LOCK = threading.RLock()
 _SNAPSHOT_UNAVAILABLE_CACHE: dict[str, tuple[float, Dict[str, Any]]] = {}
+_WORKSPACE_RUNTIME_SYNC_MIN_INTERVAL_S = max(
+    0.0,
+    float(os.getenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC_MIN_INTERVAL_S") or "10"),
+)
+_WORKSPACE_RUNTIME_LOCKS_LOCK = threading.RLock()
+_WORKSPACE_RUNTIME_LOCKS: dict[str, threading.RLock] = {}
+_WORKSPACE_RUNTIME_LAST_SYNC_AT: dict[str, float] = {}
 
 
 def _readonly_snapshot_rpc_timeout_s(requested_timeout: float | None) -> float | None:
@@ -64,6 +71,35 @@ def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
     if _is_readonly_snapshot_tool(tool_name):
         return False
     return True
+
+
+def _workspace_runtime_lock(skill_name: str) -> threading.RLock:
+    key = str(skill_name or "").strip()
+    with _WORKSPACE_RUNTIME_LOCKS_LOCK:
+        lock = _WORKSPACE_RUNTIME_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _WORKSPACE_RUNTIME_LOCKS[key] = lock
+        return lock
+
+
+def _workspace_runtime_guard_required(ctx: AgentContext, skill_name: str, *, tool_name: str) -> bool:
+    if not _should_autosync_workspace_runtime(tool_name=tool_name):
+        return False
+    return _workspace_skill_source_exists(ctx, skill_name)
+
+
+def _workspace_runtime_sync_recent(skill_name: str) -> bool:
+    if _WORKSPACE_RUNTIME_SYNC_MIN_INTERVAL_S <= 0.0:
+        return False
+    last_at = float(_WORKSPACE_RUNTIME_LAST_SYNC_AT.get(str(skill_name or "").strip()) or 0.0)
+    return last_at > 0.0 and time.monotonic() - last_at < _WORKSPACE_RUNTIME_SYNC_MIN_INTERVAL_S
+
+
+def _mark_workspace_runtime_sync_attempt(skill_name: str) -> None:
+    if _WORKSPACE_RUNTIME_SYNC_MIN_INTERVAL_S <= 0.0:
+        return
+    _WORKSPACE_RUNTIME_LAST_SYNC_AT[str(skill_name or "").strip()] = time.monotonic()
 
 
 def _repo_workspace_skill_dir(ctx: AgentContext, skill_name: str) -> Path | None:
@@ -407,8 +443,11 @@ def _maybe_sync_workspace_runtime(ctx: AgentContext, mgr: SkillManager, skill_na
         return
     if not _workspace_skill_source_exists(ctx, skill_name):
         return
+    if _workspace_runtime_sync_recent(skill_name):
+        return
     if not _runtime_ready(mgr, skill_name):
         return
+    _mark_workspace_runtime_sync_attempt(skill_name)
     try:
         result = mgr.runtime_update(skill_name, space="workspace")
     except Exception:
@@ -432,27 +471,29 @@ def _repair_workspace_runtime(
 ) -> bool:
     if not _workspace_skill_source_exists(ctx, skill_name):
         return False
-    try:
-        result = mgr.runtime_update(skill_name, space="workspace")
-    except Exception:
-        _log.debug("workspace runtime_update repair failed for skill=%s", skill_name, exc_info=True)
-    else:
-        if isinstance(result, dict) and result.get("ok") is False:
-            _log.warning(
-                "workspace runtime_update repair returned not ok for skill=%s reason=%s detail=%s",
-                skill_name,
-                result.get("reason"),
-                result.get("error") or result.get("path") or result.get("source_path"),
-            )
-    if _runtime_ready(mgr, skill_name):
-        return True
-    version, slot = _runtime_repair_target(mgr, skill_name)
-    try:
-        mgr.activate_for_space(skill_name, space="default", webspace_id=webspace_id, version=version, slot=slot)
-        return True
-    except Exception:
-        _log.debug("workspace runtime activation repair failed for skill=%s", skill_name, exc_info=True)
-        return False
+    with _workspace_runtime_lock(skill_name):
+        try:
+            result = mgr.runtime_update(skill_name, space="workspace")
+            _mark_workspace_runtime_sync_attempt(skill_name)
+        except Exception:
+            _log.debug("workspace runtime_update repair failed for skill=%s", skill_name, exc_info=True)
+        else:
+            if isinstance(result, dict) and result.get("ok") is False:
+                _log.warning(
+                    "workspace runtime_update repair returned not ok for skill=%s reason=%s detail=%s",
+                    skill_name,
+                    result.get("reason"),
+                    result.get("error") or result.get("path") or result.get("source_path"),
+                )
+        if _runtime_ready(mgr, skill_name):
+            return True
+        version, slot = _runtime_repair_target(mgr, skill_name)
+        try:
+            mgr.activate_for_space(skill_name, space="default", webspace_id=webspace_id, version=version, slot=slot)
+            return True
+        except Exception:
+            _log.debug("workspace runtime activation repair failed for skill=%s", skill_name, exc_info=True)
+            return False
 
 
 class ToolCall(BaseModel):
@@ -518,7 +559,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     # Пробуем локально; если навык отсутствует на узле-хабе — проксируем на member
     try:
         started_at = time.perf_counter()
-        def _run_local_tool() -> Any:
+        def _run_local_tool_unlocked() -> Any:
             if not body.dev and _should_autosync_workspace_runtime(tool_name=body.tool):
                 _maybe_sync_workspace_runtime(ctx, mgr, skill_name)
             if body.dev:
@@ -529,6 +570,12 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
                 if not _repair_workspace_runtime(ctx, mgr, skill_name, webspace_id=webspace_id):
                     raise
                 return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+
+        def _run_local_tool() -> Any:
+            if body.dev or not _workspace_runtime_guard_required(ctx, skill_name, tool_name=body.tool):
+                return _run_local_tool_unlocked()
+            with _workspace_runtime_lock(skill_name):
+                return _run_local_tool_unlocked()
 
         result = await anyio.to_thread.run_sync(_run_local_tool)
         took_ms = (time.perf_counter() - started_at) * 1000.0
