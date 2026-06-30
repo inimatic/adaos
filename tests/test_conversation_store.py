@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from adaos.services.agent_context import get_ctx
 from adaos.services import conversation_store
 
@@ -178,6 +180,69 @@ def test_conversation_store_rebuilds_redaction_aware_segments() -> None:
         payload={"id": "segments.msg.6", "from": "user", "text": "new unsummarized topic"},
     )
     assert conversation_store.segment_summary_health("conv.segments", thread_id="thread.alpha")["status"] == "stale"
+
+
+def test_conversation_store_reports_node_local_retrieval_health() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.retrieval.health.{suffix}"
+    thread_id = f"thread.health.{suffix}"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for index in range(1, 4):
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            webspace_id="desktop",
+            channel_id="builder",
+            owner="skill:test",
+            role="user",
+            text=f"retrieval health detail {index}",
+            payload={"id": f"retrieval.health.{suffix}.msg.{index}", "from": "user", "text": f"retrieval health detail {index}"},
+        )
+    conversation_store.remember(
+        scope="skill_user",
+        owner="skill:test",
+        subject_id="skill:test",
+        key="health_style",
+        text="show retrieval diagnostics compactly",
+        consent_state="skill_scoped",
+    )
+    conversation_store.rebuild_conversation_segments(
+        conversation_id,
+        thread_id=thread_id,
+        segment_size=2,
+    )
+    conversation_store.rebuild_search_indexes()
+
+    report = conversation_store.retrieval_health_report(conversation_id, thread_id=thread_id)
+
+    assert report["schema"] == "adaos.conversation.retrieval_health.v1"
+    assert report["conversation_id"] == conversation_id
+    assert report["thread_id"] == thread_id
+    assert report["counts"]["messages"] == 3
+    assert report["counts"]["segments"] == 2
+    assert report["counts"]["memory"] >= 1
+    assert report["segment_summary"]["status"] == "ok"
+    assert report["search_index"]["schema"] == "adaos.conversation.search_index_health.v1"
+    assert "search_index_stale" not in report["degraded_reasons"]
+
+    conversation_store.append_message(
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        role="user",
+        text="retrieval health unsummarized detail",
+        payload={"id": f"retrieval.health.{suffix}.msg.4", "from": "user", "text": "retrieval health unsummarized detail"},
+    )
+    stale = conversation_store.retrieval_health_report(conversation_id, thread_id=thread_id)
+    assert stale["status"] == "degraded"
+    assert "segment_summary_stale" in stale["degraded_reasons"]
 
 
 def test_conversation_store_records_retention_and_redaction_metadata() -> None:

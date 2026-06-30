@@ -549,6 +549,78 @@ def search_index_health() -> dict[str, Any]:
     }
 
 
+def retrieval_health_report(
+    conversation_id: str | None = None,
+    *,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.retrieval_health.v1", "status": "unavailable"}
+    cid = str(conversation_id or "").strip() or None
+    clean_thread = str(thread_id or "").strip() or None
+    search_health = search_index_health()
+    segment_health = segment_summary_health(cid, thread_id=clean_thread) if cid else None
+    counts = _retrieval_health_counts(conversation_id=cid, thread_id=clean_thread)
+    degraded_reasons: list[str] = []
+    if not search_health.get("fts_available"):
+        degraded_reasons.append("fts_unavailable")
+    elif search_health.get("status") != "ok":
+        degraded_reasons.append("search_index_stale")
+    if isinstance(segment_health, Mapping) and segment_health.get("status") not in {None, "ok"}:
+        degraded_reasons.append(f"segment_summary_{segment_health.get('status')}")
+    return {
+        "schema": "adaos.conversation.retrieval_health.v1",
+        "status": "degraded" if degraded_reasons else "ok",
+        "conversation_id": cid,
+        "thread_id": clean_thread,
+        "counts": counts,
+        "search_index": search_health,
+        "segment_summary": segment_health,
+        "degraded_reasons": degraded_reasons,
+    }
+
+
+def _retrieval_health_counts(
+    *,
+    conversation_id: str | None = None,
+    thread_id: str | None = None,
+) -> dict[str, int]:
+    where_messages = ["redaction_state!='redacted'"]
+    where_segments = ["redaction_state!='redacted'"]
+    message_params: list[Any] = []
+    segment_params: list[Any] = []
+    if conversation_id:
+        where_messages.append("conversation_id=?")
+        where_segments.append("conversation_id=?")
+        message_params.append(conversation_id)
+        segment_params.append(conversation_id)
+    if thread_id:
+        where_messages.append("thread_id=?")
+        where_segments.append("thread_id=?")
+        message_params.append(thread_id)
+        segment_params.append(thread_id)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        message_count = int(
+            con.execute(
+                f"SELECT COUNT(*) FROM conversation_messages WHERE {' AND '.join(where_messages)}",
+                message_params,
+            ).fetchone()[0]
+            or 0
+        )
+        segment_count = int(
+            con.execute(
+                f"SELECT COUNT(*) FROM conversation_segments WHERE {' AND '.join(where_segments)}",
+                segment_params,
+            ).fetchone()[0]
+            or 0
+        )
+        memory_count = int(
+            con.execute("SELECT COUNT(*) FROM conversation_memory_items WHERE redaction_state!='redacted'").fetchone()[0]
+            or 0
+        )
+    return {"messages": message_count, "segments": segment_count, "memory": memory_count}
+
+
 def _row_value(row: sqlite3.Row | dict[str, Any], key: str, default: Any = None) -> Any:
     if isinstance(row, sqlite3.Row):
         try:

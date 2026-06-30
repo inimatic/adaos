@@ -1938,7 +1938,10 @@ Important lacunae found during Phase 6 implementation:
 - [x] `[must]` Return fragments, summaries, refs, and scores, not direct remote
   database access. The response schema returns `fragments[]` with text,
   summary, score, source refs, and `remote_sql=false`.
-- [ ] `[should]` Add node-local retrieval health and index-status diagnostics.
+- [x] `[should]` Add node-local retrieval health and index-status diagnostics.
+  `conversation_store.retrieval_health_report(...)` now reports scoped message,
+  segment, and memory counts, FTS index health, segment-summary status, and
+  degraded reasons for diagnostics surfaces.
 - [ ] `[should]` Add cross-node query audit events with requesting actor,
   target node, owner scope, and denied/returned counts.
 - [ ] `[should]` Add the actual node-to-node transport adapter for federated

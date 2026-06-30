@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from adaos.sdk import conversation as sdk_conversation
 from adaos.sdk import memory as sdk_memory
 from adaos.services import conversation_context, conversation_store
@@ -323,7 +325,8 @@ def test_context_packet_marks_history_as_untrusted_evidence() -> None:
 
 
 def test_retrieval_regression_long_companion_history_uses_segments_and_search() -> None:
-    conversation_id = "conv.retrieval.companion.long.v2"
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.retrieval.companion.long.{suffix}"
     owner = "skill:conversation_companions"
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(
@@ -343,7 +346,7 @@ def test_retrieval_regression_long_companion_history_uses_segments_and_search() 
             role="hub" if index % 2 == 0 else "user",
             text=f"{marker}; durable retrieval regression sample {index:02d}",
             payload={
-                "id": f"retrieval.companion.v2.msg.{index}",
+                "id": f"retrieval.companion.{suffix}.msg.{index}",
                 "from": "hub" if index % 2 == 0 else "user",
                 "text": f"{marker}; durable retrieval regression sample {index:02d}",
             },
@@ -371,10 +374,11 @@ def test_retrieval_regression_long_companion_history_uses_segments_and_search() 
 
 
 def test_retrieval_regression_builder_topic_scope_excludes_other_project_threads() -> None:
-    conversation_id = "conv.retrieval.builder.topic"
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.retrieval.builder.topic.{suffix}"
     owner = "skill:builder_skill"
-    alpha = "thread.builder.desktop.alpha_project"
-    beta = "thread.builder.desktop.beta_project"
+    alpha = f"thread.builder.desktop.alpha_project_{suffix}"
+    beta = f"thread.builder.desktop.beta_project_{suffix}"
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(
         conversation_id=conversation_id,
@@ -395,7 +399,7 @@ def test_retrieval_regression_builder_topic_scope_excludes_other_project_threads
                 role=role,
                 text=f"{label}; builder evidence turn {index}",
                 payload={
-                    "id": f"retrieval.builder.{thread_id.rsplit('.', 1)[-1]}.{index}",
+                    "id": f"retrieval.builder.{suffix}.{thread_id.rsplit('.', 1)[-1]}.{index}",
                     "from": role,
                     "text": f"{label}; builder evidence turn {index}",
                 },
@@ -407,14 +411,14 @@ def test_retrieval_regression_builder_topic_scope_excludes_other_project_threads
         requester_owner=owner,
         channel_id="builder",
         thread_id=beta,
-        topic_ref={"topic_id": "builder:desktop:beta_project", "thread_id": beta},
+        topic_ref={"topic_id": f"builder:desktop:beta_project_{suffix}", "thread_id": beta},
         agent_id="agent:builder_skill:builder",
         budgets={"max_messages": 10, "max_segments": 4, "max_memory_items": 0, "max_tokens": 1600},
     )
 
     texts = "\n".join(item["text"] for item in packet["messages"] + packet["segments"])
     assert packet["thread_id"] == beta
-    assert packet["topic_id"] == "builder:desktop:beta_project"
+    assert packet["topic_id"] == f"builder:desktop:beta_project_{suffix}"
     assert "beta inventory schema plan" in texts
     assert "alpha checkout route plan" not in texts
     assert packet["diagnostics"]["thread_filter"] == beta
@@ -425,8 +429,9 @@ def test_retrieval_regression_builder_topic_scope_excludes_other_project_threads
 
 
 def test_retrieval_regression_teacher_memory_and_history_stay_owner_scoped() -> None:
-    conversation_id = "conv.retrieval.teacher"
-    owner = "skill:nlu_teacher"
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.retrieval.teacher.{suffix}"
+    owner = f"skill:nlu_teacher_{suffix}"
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(
         conversation_id=conversation_id,
@@ -451,7 +456,7 @@ def test_retrieval_regression_teacher_memory_and_history_stay_owner_scoped() -> 
             actor_id="agent:nlu_teacher:teacher" if role == "hub" else "user:default",
             role=role,
             text=text,
-            payload={"id": f"retrieval.teacher.msg.{index}", "from": role, "text": text},
+            payload={"id": f"retrieval.teacher.{suffix}.msg.{index}", "from": role, "text": text},
         )
     memory_id = conversation_store.remember(
         scope="skill_user",
@@ -464,8 +469,8 @@ def test_retrieval_regression_teacher_memory_and_history_stay_owner_scoped() -> 
     )
     other_memory_id = conversation_store.remember(
         scope="skill_user",
-        owner="skill:conversation_companions",
-        subject_id="skill:conversation_companions",
+        owner=f"skill:conversation_companions_{suffix}",
+        subject_id=f"skill:conversation_companions_{suffix}",
         key="private_companion_note",
         text="do not leak into teacher retrieval",
         consent_state="skill_scoped",
