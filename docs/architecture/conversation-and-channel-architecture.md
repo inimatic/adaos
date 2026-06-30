@@ -1887,9 +1887,14 @@ Important lacunae found during Phase 4/5 implementation:
 - [x] `[must]` Link candidate confirmations and Pending Actions to Teacher
   conversations and source message ids.
 - [ ] `[should]` Preserve approval/apply evidence outside plain chat messages.
-- [ ] `[must]` Add Builder workspace binding to context packets and browser
+- [x] `[must]` Add Builder workspace binding to context packets and browser
   projections: source webspace id, paired `*-dev` webspace id, workbench
-  scenario id, and active draft id.
+  scenario id, and active draft id. The current implementation adds
+  canonical Builder topic/thread refs through `conversation_links`,
+  `BuilderWorkbenchService.dialog_widget_config`, `/api/builder/workbench/dialog-widget`,
+  and `builder_skill.attach_dialog_widget`; embedded Voice Chat sends
+  `conversation_id`, `thread_id`, `topic_id`, source webspace, dev webspace,
+  runtime scenario, and active draft metadata with every turn.
 - [ ] `[should]` Add acceptance tests for Builder through browser and Telegram
   transport.
 - [ ] `[should]` Add tests for multi-turn NLU correction with separate
@@ -1910,6 +1915,12 @@ Important lacunae found during Phase 6 implementation:
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a
   release/rollback record remains in the Builder runtime roadmap.
+- [x] `[must]` Make Builder history and context topic-aware for the first
+  practical slice. `conversation_context.build_context_packet(...)`,
+  `adaos.sdk.conversation.context(...)`, Voice snapshot/load-more, and
+  ChatWidget history requests now accept/pass `thread_id`, so Builder project
+  chats can be filtered by active draft/scenario thread while still sharing the
+  node-local conversation ledger.
 
 ### Phase 7. Subnet Federation
 
@@ -2056,6 +2067,11 @@ Important lacunae found during Phase 6 implementation:
   preview controls, and fallback policy when a requested voice is unavailable.
 - [ ] `[must]` Keep semantic routing independent from STT/TTS projection
   latency and browser recovery paths.
+- [x] `[must]` Make the compatibility Voice history path thread-aware before
+  broader Voice widget extraction. `voice_chat.messages` snapshots and
+  `conversation.history.more` now preserve `thread_id` / topic identity so
+  browser recovery does not collapse separate Builder project threads into one
+  transcript.
 - [ ] `[should]` Add optional OpenAI TTS generation/cache for character voices,
   with cache lifecycle, consent, and local fallback.
 - [ ] `[should]` Add voice-latency and interruption golden tests.
@@ -2065,6 +2081,10 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[must]` Treat `builder_skill` as the reference conversation-native skill:
   it owns the Builder dialog, uses context packets, writes Pending Actions,
   stores review/apply evidence, and never reads raw UI chat state.
+- [x] `[must]` Complete the first reference-skill slice for `builder_skill`:
+  it now returns and emits canonical Builder topic/thread refs, stores them in
+  sessions, passes them to chat append metadata, and keeps Pending Action
+  `domain_ref` / `source_refs` attached to the same thread.
 - [ ] `[must]` Add generated-skill templates for skill-owned conversations,
   multi-agent skill conversations, bounded `chat.ask` flows, and memory
   extraction proposal flows.

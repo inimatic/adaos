@@ -372,9 +372,12 @@ Open work:
 - [ ] `[must]` Define the first user-facing Builder entrypoint: addressed
   messages to `builder` / `Builder` / `Строитель` / `строитель` enter the
   Builder channel and route to `builder_skill` with the address stripped.
-- [ ] `[must]` Give Builder a dedicated conversation with isolated context,
+- [x] `[must]` Give Builder a dedicated conversation with isolated context,
   linked threads for draft/preview/repair work, and Pending Action evidence
-  backlinks.
+  backlinks. The first durable slice uses the node-local conversation ledger:
+  `builder` conversation/channel, per-draft/per-scenario `thread_id`, topic
+  refs in workbench widget metadata, `conversation_context` thread filtering,
+  thread-aware Voice history, and Pending Action `domain_ref` / `source_refs`.
 - [ ] `[must]` Treat `prompt_engineer_scenario` as the Builder Workbench UI:
   it renders active draft state, mockup preview, validation evidence, and
   actions while `builder_skill` owns LLM dialogue, patching, validation, and
@@ -401,6 +404,10 @@ Open work:
 - [x] `[must]` Support "skills in development": list drafts/development skills,
   switch the active draft in the paired dev webspace, and delete the current
   draft through governed Builder lifecycle paths.
+- [x] `[must]` Keep Prompt IDE embedded chat in the selected Builder project
+  context. The workbench widget now carries active draft/scenario topic
+  metadata, ChatWidget sends it with turns and history-more requests, and the
+  router publishes only the matching thread projection.
 - [ ] `[must]` Render the first mockup from LLM-authored `webui.json` and apply
   user comments as patches against the current draft and current `webui.json`.
 - [ ] `[must]` Support the phrase-level flow: "I have an idea. Let's build it."
@@ -427,6 +434,14 @@ Open work:
 - [ ] `[must]` Make `builder_skill` consume conversation context packets,
   retrieved evidence refs, scoped memory, and Pending Actions instead of raw
   UI chat state.
+- [x] `[must]` Complete the browser/Voice/Prompt IDE ownership slice:
+  `builder_skill` returns canonical dialog/topic refs, emits chat with the same
+  thread metadata, owns draft/patch Pending Actions, and `attach_dialog_widget`
+  exposes the current workbench binding instead of a separate UI transcript.
+- [x] `[must]` Add thread-aware context packet plumbing for Builder:
+  `conversation_links.builder_context_packet`, router dialog context payloads,
+  and `adaos.sdk.conversation.context` can now select the active Builder
+  draft/scenario thread instead of the whole conversation.
 - [ ] `[must]` Broaden Builder golden conversations for first idea,
   clarification, draft creation, mockup patching, validation failure, review
   approval, rejection, and repair.
