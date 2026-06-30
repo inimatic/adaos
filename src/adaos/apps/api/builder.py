@@ -145,7 +145,9 @@ def get_workbench_dialog_widget(
     webspace_id: str | None = None,
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
-    return {"ok": True, "widget": service.dialog_widget_config(webspace_id)}
+    binding = service.get_workspace_binding(webspace_id)
+    widget = binding.get("dialog") if isinstance(binding.get("dialog"), dict) else service.dialog_widget_config(webspace_id)
+    return {"ok": True, "widget": widget, "binding": binding}
 
 
 @router.post("/workbench/active-draft")

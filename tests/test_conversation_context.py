@@ -49,6 +49,49 @@ def test_context_packet_uses_recent_messages_and_strict_budgets() -> None:
     assert "fts_unavailable" in packet["diagnostics"]["fallbacks"]
 
 
+def test_context_packet_filters_messages_by_thread_id() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.ctx.threaded",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    conversation_store.append_message(
+        conversation_id="conv.ctx.threaded",
+        thread_id="thread.builder.desktop.alpha",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        role="user",
+        text="alpha topic",
+        payload={"id": "ctx.alpha", "from": "user", "text": "alpha topic"},
+    )
+    conversation_store.append_message(
+        conversation_id="conv.ctx.threaded",
+        thread_id="thread.builder.desktop.beta",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        role="user",
+        text="beta topic",
+        payload={"id": "ctx.beta", "from": "user", "text": "beta topic"},
+    )
+
+    packet = conversation_context.build_context_packet(
+        conversation_id="conv.ctx.threaded",
+        requester_owner="skill:test",
+        channel_id="builder",
+        thread_id="thread.builder.desktop.beta",
+        topic_ref={"topic_id": "builder:desktop:beta", "thread_id": "thread.builder.desktop.beta"},
+        budgets={"max_messages": 10, "max_memory_items": 0, "max_tokens": 512},
+    )
+
+    assert packet["thread_id"] == "thread.builder.desktop.beta"
+    assert packet["topic_id"] == "builder:desktop:beta"
+    assert [item["id"] for item in packet["messages"]] == ["ctx.beta"]
+    assert packet["diagnostics"]["thread_filter"] == "thread.builder.desktop.beta"
+
+
 def test_context_packet_denies_cross_owner_memory_by_default() -> None:
     _seed_conversation()
     memory_id = conversation_store.remember(

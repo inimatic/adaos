@@ -174,9 +174,11 @@ class BuilderWorkbenchService:
                         "scenario_id": runtime_scenario,
                         "switch": switch_payload,
                     }
-                    if isinstance(switch_payload, dict) and (
-                        bool(switch_payload.get("switch_skipped")) or str(switch_payload.get("skip_reason") or "").strip()
-                    ):
+                    skip_reason = str(switch_payload.get("skip_reason") or "").strip() if isinstance(switch_payload, dict) else ""
+                    needs_recovery_reload = bool(skip_reason) and skip_reason not in {
+                        "already_pending_rebuild",
+                    }
+                    if isinstance(switch_payload, dict) and needs_recovery_reload:
                         reload_payload = await reload_webspace_from_scenario(
                             dev_id,
                             scenario_id=runtime_scenario,
@@ -234,7 +236,10 @@ class BuilderWorkbenchService:
             "runtime_scenario_id": None,
             "purpose": "builder_prompt_ide",
             "active_draft_id": None,
-            "dialog": self.dialog_widget_config(source_id),
+            "dialog": self.dialog_widget_config(
+                source_id,
+                dev_webspace_id=dev_webspace_id_for_source(source_id),
+            ),
             "created_at": None,
             "updated_at": None,
         }
@@ -252,19 +257,28 @@ class BuilderWorkbenchService:
         source_id = safe_source_webspace_id(source_webspace_id)
         now = _now()
         existing = _read_json(self.binding_path(source_id))
+        dev_id = str(dev_webspace_id or existing.get("dev_webspace_id") or dev_webspace_id_for_source(source_id)).strip()
+        runtime_id = (
+            str(runtime_scenario_id or "").strip()
+            or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
+            or existing.get("runtime_scenario_id")
+            or None
+        )
+        scenario_token = str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip()
+        active_draft_token = str(active_draft_id or "").strip() or None
         binding = {
             "source_webspace_id": source_id,
-            "dev_webspace_id": str(dev_webspace_id or existing.get("dev_webspace_id") or dev_webspace_id_for_source(source_id)).strip(),
-            "scenario_id": str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip(),
-            "runtime_scenario_id": (
-                str(runtime_scenario_id or "").strip()
-                or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
-                or existing.get("runtime_scenario_id")
-                or None
-            ),
+            "dev_webspace_id": dev_id,
+            "scenario_id": scenario_token,
+            "runtime_scenario_id": runtime_id,
             "purpose": "builder_prompt_ide",
-            "active_draft_id": str(active_draft_id or "").strip() or None,
-            "dialog": self.dialog_widget_config(source_id),
+            "active_draft_id": active_draft_token,
+            "dialog": self.dialog_widget_config(
+                source_id,
+                active_draft_id=active_draft_token,
+                runtime_scenario_id=runtime_id,
+                dev_webspace_id=dev_id,
+            ),
             "created_at": existing.get("created_at") or now,
             "updated_at": now,
         }
@@ -299,16 +313,70 @@ class BuilderWorkbenchService:
             "binding": binding,
         }
 
-    def dialog_widget_config(self, source_webspace_id: str | None = None) -> dict[str, Any]:
+    def dialog_widget_config(
+        self,
+        source_webspace_id: str | None = None,
+        *,
+        active_draft_id: str | None = None,
+        runtime_scenario_id: str | None = None,
+        dev_webspace_id: str | None = None,
+    ) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
+        dev_id = str(dev_webspace_id or dev_webspace_id_for_source(source_id)).strip()
+        try:
+            from adaos.services.conversation_links import ensure_builder_topic
+
+            topic = ensure_builder_topic(
+                source_id,
+                active_draft_id=active_draft_id,
+                scenario_id=runtime_scenario_id,
+                dev_webspace_id=dev_id,
+            )
+        except Exception:
+            topic = {
+                "schema": "adaos.conversation.topic_ref.v1",
+                "topic_id": f"builder:{source_id}:default",
+                "thread_id": f"thread.builder.{source_id}.default",
+                "topic_kind": "builder_default",
+                "webspace_id": source_id,
+                "source_webspace_id": source_id,
+                "active_draft_id": str(active_draft_id or "").strip() or None,
+                "scenario_id": str(runtime_scenario_id or "").strip() or None,
+                "dev_webspace_id": dev_id,
+                "project_id": str(active_draft_id or runtime_scenario_id or dev_id or "default").strip() or "default",
+                "conversation_id": f"conv.skill.{BUILDER_SKILL_ID}.default.{source_id}",
+                "channel_id": BUILDER_DIALOG_CHANNEL_ID,
+                "owner": BUILDER_OWNER,
+                "stored": False,
+            }
+        conversation_id = str(topic.get("conversation_id") or f"conv.skill.{BUILDER_SKILL_ID}.default.{source_id}").strip()
+        thread_id = str(topic.get("thread_id") or "").strip()
+        topic_id = str(topic.get("topic_id") or "").strip()
+        send_meta = {
+            "source_webspace_id": source_id,
+            "builder_source_webspace_id": source_id,
+            "dev_webspace_id": dev_id,
+            "dialog_channel_id": BUILDER_DIALOG_CHANNEL_ID,
+            "conversation_id": conversation_id,
+            "conversation_owner": BUILDER_OWNER,
+            "thread_id": thread_id,
+            "topic_id": topic_id,
+            "builder_topic": {k: v for k, v in topic.items() if k != "stored"},
+            "route_id": "voice_chat",
+        }
         return {
             "widget": "voice_chat",
             "mode": "embedded",
             "source_webspace_id": source_id,
+            "dev_webspace_id": dev_id,
             "dialog_channel_id": BUILDER_DIALOG_CHANNEL_ID,
-            "conversation_id": f"conv.skill.{BUILDER_SKILL_ID}.default.{source_id}",
+            "conversation_id": conversation_id,
+            "thread_id": thread_id,
+            "topic_id": topic_id,
+            "topic": {k: v for k, v in topic.items() if k != "stored"},
             "owner": BUILDER_OWNER,
             "default_tool": f"{BUILDER_SKILL_ID}.chat",
+            "meta": send_meta,
             "allow_voice": True,
             "allow_text": True,
         }
@@ -375,7 +443,7 @@ class BuilderWorkbenchService:
             "schema": "adaos.builder.workbench.v1",
             "source_webspace_id": source_id,
             "binding": binding,
-            "dialog": self.dialog_widget_config(source_id),
+            "dialog": binding.get("dialog") if isinstance(binding.get("dialog"), dict) else self.dialog_widget_config(source_id),
             "development_skills": self.list_development_skills(source_id).get("items", []),
             "preview_state": dict(preview_state or {}),
             "updated_at": _now(),

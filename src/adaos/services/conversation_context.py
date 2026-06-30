@@ -50,6 +50,8 @@ def build_context_packet(
     conversation_id: str,
     requester_owner: str,
     channel_id: str | None = None,
+    thread_id: str | None = None,
+    topic_ref: Mapping[str, Any] | None = None,
     agent_id: str | None = None,
     memory_owner: str | None = None,
     include_global_user: bool = True,
@@ -71,6 +73,10 @@ def build_context_packet(
     if not owner:
         raise ValueError("requester_owner is required")
     limits = budgets if isinstance(budgets, ContextBudgets) else ContextBudgets.from_mapping(budgets)
+    clean_thread_id = str(thread_id or "").strip()
+    clean_topic_ref = dict(topic_ref or {}) if isinstance(topic_ref, Mapping) else {}
+    if not clean_thread_id:
+        clean_thread_id = str(clean_topic_ref.get("thread_id") or "").strip()
     diagnostics: dict[str, Any] = {
         "schema": "adaos.context.diagnostics.v1",
         "selected_sources": [],
@@ -89,6 +95,8 @@ def build_context_packet(
         "conversation_id": cid,
         "requester_owner": owner,
         "channel_id": str(channel_id or "").strip() or None,
+        "thread_id": clean_thread_id or None,
+        "topic": clean_topic_ref or None,
         "agent_id": str(agent_id or "").strip() or None,
         "budgets": limits.to_dict(),
         "messages": [],
@@ -98,9 +106,15 @@ def build_context_packet(
         "token_estimate": 0,
         "diagnostics": diagnostics,
     }
+    if clean_thread_id:
+        diagnostics["thread_filter"] = clean_thread_id
+    if clean_topic_ref:
+        topic_id = str(clean_topic_ref.get("topic_id") or clean_topic_ref.get("id") or "").strip()
+        if topic_id:
+            packet["topic_id"] = topic_id
     remaining_tokens = limits.max_tokens
 
-    messages = _select_recent_messages(cid, limits.max_messages)
+    messages = _select_recent_messages(cid, limits.max_messages, thread_id=clean_thread_id or None)
     selected_messages: list[dict[str, Any]] = []
     for message in reversed(messages):
         if _timed_out(started, limits.timeout_ms):
@@ -243,10 +257,15 @@ def _positive_int(value: Any, default: int, *, minimum: int, maximum: int) -> in
     return max(minimum, min(parsed, maximum))
 
 
-def _select_recent_messages(conversation_id: str, limit: int) -> list[dict[str, Any]]:
+def _select_recent_messages(conversation_id: str, limit: int, *, thread_id: str | None = None) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
-    projection = conversation_store.list_projection(conversation_id, limit=limit, max_items=max(limit, 1))
+    projection = conversation_store.list_projection(
+        conversation_id,
+        thread_id=str(thread_id or "").strip() or None,
+        limit=limit,
+        max_items=max(limit, 1),
+    )
     messages = projection.get("messages") if isinstance(projection, dict) else []
     return [dict(item) for item in messages if isinstance(item, Mapping)]
 

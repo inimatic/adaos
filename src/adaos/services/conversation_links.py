@@ -28,6 +28,82 @@ def builder_conversation_id(webspace_id: str | None = None) -> str:
     return f"conv.skill.{BUILDER_SKILL}.default.{ws}"
 
 
+def builder_topic_ref(
+    webspace_id: str | None = None,
+    *,
+    active_draft_id: str | None = None,
+    scenario_id: str | None = None,
+    dev_webspace_id: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    ws = _safe_id(webspace_id, "default")
+    draft = _clean(active_draft_id)
+    scenario = _clean(scenario_id)
+    dev_ws = _clean(dev_webspace_id)
+    project = _clean(project_id) or draft or scenario or dev_ws or "default"
+    token = _safe_id(project, "default")
+    if draft:
+        kind = "builder_draft"
+    elif scenario:
+        kind = "builder_scenario"
+    elif dev_ws:
+        kind = "builder_workspace"
+    else:
+        kind = "builder_default"
+    return {
+        "schema": "adaos.conversation.topic_ref.v1",
+        "topic_id": f"builder:{ws}:{token}",
+        "thread_id": f"thread.builder.{ws}.{token}",
+        "topic_kind": kind,
+        "webspace_id": ws,
+        "source_webspace_id": ws,
+        "active_draft_id": draft or None,
+        "scenario_id": scenario or None,
+        "dev_webspace_id": dev_ws or None,
+        "project_id": project,
+    }
+
+
+def ensure_builder_topic(
+    webspace_id: str | None = None,
+    *,
+    active_draft_id: str | None = None,
+    scenario_id: str | None = None,
+    dev_webspace_id: str | None = None,
+    project_id: str | None = None,
+    title: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    conversation_ref = ensure_builder_conversation(webspace_id)
+    topic = builder_topic_ref(
+        conversation_ref.get("webspace_id") or webspace_id,
+        active_draft_id=active_draft_id,
+        scenario_id=scenario_id,
+        dev_webspace_id=dev_webspace_id,
+        project_id=project_id,
+    )
+    stored = bool(conversation_ref.get("stored"))
+    try:
+        if conversation_store.ensure_schema():
+            conversation_store.start_thread(
+                conversation_id=conversation_ref["conversation_id"],
+                thread_id=topic["thread_id"],
+                title=_clean(title, f"Builder: {topic['project_id']}"),
+                created_by={"type": "skill", "id": BUILDER_SKILL},
+                meta={**topic, **dict(meta or {})},
+            )
+            stored = True
+    except Exception:
+        stored = False
+    return {
+        **topic,
+        "conversation_id": conversation_ref["conversation_id"],
+        "channel_id": BUILDER_CHANNEL_ID,
+        "owner": BUILDER_OWNER,
+        "stored": stored,
+    }
+
+
 def teacher_conversation_id(webspace_id: str | None = None) -> str:
     ws = _safe_id(webspace_id, "default")
     return f"conv.teacher.default.{ws}"
@@ -156,14 +232,38 @@ def ensure_teacher_conversation(
 def builder_context_packet(
     webspace_id: str | None = None,
     *,
+    thread_id: str | None = None,
+    topic_ref: Mapping[str, Any] | None = None,
+    active_draft_id: str | None = None,
+    scenario_id: str | None = None,
+    dev_webspace_id: str | None = None,
+    project_id: str | None = None,
     budgets: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ref = ensure_builder_conversation(webspace_id)
+    clean_topic_ref = dict(topic_ref or {}) if isinstance(topic_ref, Mapping) else {}
+    if any(
+        str(value or "").strip()
+        for value in (thread_id, active_draft_id, scenario_id, dev_webspace_id, project_id)
+    ) or clean_topic_ref:
+        ref = ensure_builder_topic(
+            webspace_id,
+            active_draft_id=active_draft_id or str(clean_topic_ref.get("active_draft_id") or "").strip() or None,
+            scenario_id=scenario_id or str(clean_topic_ref.get("scenario_id") or "").strip() or None,
+            dev_webspace_id=dev_webspace_id or str(clean_topic_ref.get("dev_webspace_id") or "").strip() or None,
+            project_id=project_id or str(clean_topic_ref.get("project_id") or "").strip() or None,
+        )
+        if thread_id:
+            ref["thread_id"] = str(thread_id).strip()
+        clean_topic_ref = {k: v for k, v in ref.items() if k not in {"stored"}}
+    else:
+        ref = ensure_builder_conversation(webspace_id)
     try:
         packet = conversation_context.build_context_packet(
             conversation_id=ref["conversation_id"],
             requester_owner=BUILDER_OWNER,
             channel_id=BUILDER_CHANNEL_ID,
+            thread_id=str(ref.get("thread_id") or thread_id or "").strip() or None,
+            topic_ref=clean_topic_ref or None,
             memory_owner=BUILDER_OWNER,
             include_global_user=True,
             allow_cross_owner_memory=False,
@@ -175,6 +275,8 @@ def builder_context_packet(
             "conversation_id": ref["conversation_id"],
             "requester_owner": BUILDER_OWNER,
             "channel_id": BUILDER_CHANNEL_ID,
+            "thread_id": str(ref.get("thread_id") or thread_id or "").strip() or None,
+            "topic": clean_topic_ref or None,
             "messages": [],
             "memory": [],
             "token_estimate": 0,
@@ -185,6 +287,9 @@ def builder_context_packet(
             },
         }
     packet.setdefault("conversation_ref", {k: v for k, v in ref.items() if k != "stored"})
+    if clean_topic_ref:
+        packet.setdefault("topic", clean_topic_ref)
+        packet.setdefault("topic_id", str(clean_topic_ref.get("topic_id") or "").strip() or None)
     return packet
 
 

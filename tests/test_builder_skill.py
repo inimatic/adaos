@@ -69,6 +69,8 @@ def test_create_shopping_list_scenario_draft_writes_declarative_webui(tmp_path, 
     assert result["ok"] is True
     assert result["dialog"]["dialog_channel_id"] == "builder"
     assert result["dialog"]["default_tool"] == "builder_skill.chat"
+    assert result["topic"]["thread_id"] == "thread.builder.builder-skill-test.draft.shopping"
+    assert result["dialog"]["thread_id"] == "thread.builder.builder-skill-test.draft.shopping"
     assert result["scenario_id"].startswith("shopping_list_")
     assert result["preview_state"]["current_ui"]["type"] == "page"
     assert result["preview_state"]["datasources"][0]["type"] == "internal_crud"
@@ -124,12 +126,15 @@ def test_create_draft_publishes_pending_action_with_conversation_refs(monkeypatc
     )
 
     assert result["pending_action"]["id"] == "pa.builder.draft"
+    assert result["topic"]["thread_id"] == "thread.builder.1"
+    assert result["dialog"]["thread_id"] == "thread.builder.1"
     assert published[0]["kind"] == "builder.scenario_draft.review"
     assert published[0]["response_topic"] == "builder.pending_action.response"
     assert published[0]["domain_ref"]["conversation_id"] == "conv.skill.builder_skill.default.builder-pa-ws"
     assert published[0]["domain_ref"]["thread_id"] == "thread.builder.1"
     refs = published[0]["metadata"]["source_refs"]
     assert refs["draft_id"] == "draft.shopping"
+    assert refs["thread_id"] == "thread.builder.1"
     assert refs["turn_trace_id"] == "trace.builder.1"
     assert refs["message_id"] == "msg.builder.1"
     risk = published[0]["metadata"]["approval_policy"]["action_risk"]

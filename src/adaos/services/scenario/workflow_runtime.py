@@ -45,6 +45,24 @@ def _resolve_webspace_id(payload: Dict[str, Any]) -> str:
     return default_webspace_id()
 
 
+def _safe_token(value: str, *, fallback: str = "default") -> str:
+    token = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
+    return token.strip("._") or fallback
+
+
+def _prompt_topic_id(object_type: Optional[str], object_id: Optional[str]) -> str:
+    kind = str(object_type or "").strip().lower()
+    item_id = str(object_id or "").strip()
+    if kind not in {"skill", "scenario"} or not item_id:
+        return ""
+    return f"prompt-project:{kind}:{item_id}"
+
+
+def _builder_conversation_id(webspace_id: str) -> str:
+    ws = str(webspace_id or "default").strip() or "default"
+    return f"conv.skill.builder_skill.default.{ws}"
+
+
 @dataclass(slots=True)
 class ScenarioWorkflowRuntime:
     """
@@ -61,6 +79,83 @@ class ScenarioWorkflowRuntime:
     """
 
     ctx: AgentContext
+
+    def _selection_path(self, webspace_id: str) -> Path:
+        raw_state_dir = self.ctx.paths.state_dir()
+        root = Path(raw_state_dir() if callable(raw_state_dir) else raw_state_dir)
+        path = root / "prompt_ide" / "selection"
+        path.mkdir(parents=True, exist_ok=True)
+        return path / f"{_safe_token(webspace_id)}.json"
+
+    def _load_prompt_selection(self, webspace_id: str) -> Dict[str, Any]:
+        path = self._selection_path(webspace_id)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except Exception:
+            _log.warning("prompt selection read failed webspace=%s path=%s", webspace_id, path, exc_info=True)
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        kind = str(raw.get("object_type") or "").strip().lower()
+        object_id = str(raw.get("object_id") or "").strip()
+        if kind not in {"skill", "scenario"} or not object_id:
+            return {}
+        return {
+            "object_type": kind,
+            "object_id": object_id,
+            "state": str(raw.get("state") or "").strip(),
+            "topic_id": str(raw.get("topic_id") or "").strip(),
+            "conversation_id": str(raw.get("conversation_id") or "").strip(),
+        }
+
+    def _save_prompt_selection(
+        self,
+        webspace_id: str,
+        *,
+        object_type: Optional[str],
+        object_id: Optional[str],
+        state_id: Optional[str],
+    ) -> None:
+        kind = str(object_type or "").strip().lower()
+        item_id = str(object_id or "").strip()
+        if kind not in {"skill", "scenario"} or not item_id:
+            return
+        payload = {
+            "object_type": kind,
+            "object_id": item_id,
+            "state": str(state_id or "").strip() or "tz",
+            "topic_id": _prompt_topic_id(kind, item_id),
+            "conversation_id": _builder_conversation_id(webspace_id),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path = self._selection_path(webspace_id)
+        try:
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            _log.warning("prompt selection write failed webspace=%s path=%s", webspace_id, path, exc_info=True)
+
+    def _apply_prompt_project_context(
+        self,
+        wf_obj: Dict[str, Any],
+        webspace_id: str,
+        *,
+        object_type: Optional[str] = None,
+        object_id: Optional[str] = None,
+        selection: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        selection = selection if isinstance(selection, dict) else {}
+        kind = str(object_type or wf_obj.get("object_type") or selection.get("object_type") or "").strip().lower()
+        item_id = str(object_id or wf_obj.get("object_id") or selection.get("object_id") or "").strip()
+        if kind not in {"skill", "scenario"} or not item_id:
+            wf_obj.setdefault("conversation_id", _builder_conversation_id(webspace_id))
+            return None, None
+        wf_obj["object_type"] = kind
+        wf_obj["object_id"] = item_id
+        wf_obj["topic_id"] = _prompt_topic_id(kind, item_id)
+        wf_obj["conversation_id"] = _builder_conversation_id(webspace_id)
+        return kind, item_id
 
     async def sync_workflow_for_webspace(self, scenario_id: str, webspace_id: str) -> None:
         """
@@ -80,9 +175,6 @@ class ScenarioWorkflowRuntime:
             # fallback: first key in states
             initial = next(iter(states.keys()))
 
-        # Compute next_actions for the current state.
-        next_actions = self._actions_for_state(states, initial)
-
         async with _workflow_write_meta():
             async with async_get_ydoc(webspace_id) as ydoc:
                 data_map = ydoc.get_map("data")
@@ -93,17 +185,39 @@ class ScenarioWorkflowRuntime:
                         prompt_section = data_map.get("prompt")
                         if not isinstance(prompt_section, dict):
                             prompt_section = {}
+                        selection = self._load_prompt_selection(webspace_id)
                         wf_obj = dict(prompt_section.get("workflow") or {})
-                        wf_obj["state"] = initial
+                        current_state = str(wf_obj.get("state") or selection.get("state") or initial).strip()
+                        if current_state not in states:
+                            current_state = initial
+                        object_type, object_id = self._apply_prompt_project_context(
+                            wf_obj,
+                            webspace_id,
+                            selection=selection,
+                        )
+                        wf_obj["state"] = current_state
+                        next_actions = self._actions_for_state(states, current_state)
                         wf_obj["next_actions"] = json.loads(json.dumps(next_actions))
                         prompt_section["workflow"] = wf_obj
 
                         # Initialise Prompt IDE-specific sections for the prompt_engineer_scenario.
                         status_section = dict(prompt_section.get("status") or {})
-                        status_section["buttons"] = self._build_status_buttons(webspace_id, states, initial)
+                        status_section["buttons"] = self._build_status_buttons(
+                            webspace_id,
+                            states,
+                            current_state,
+                            object_id,
+                        )
                         prompt_section["status"] = status_section
                         # Files and LLM status helpers.
-                        prompt_section.setdefault("files", {})
+                        if object_type and object_id:
+                            prompt_section["files"] = {
+                                "object_type": object_type,
+                                "object_id": object_id,
+                                "list": self._build_files_list(object_type, object_id),
+                            }
+                        else:
+                            prompt_section.setdefault("files", {})
                         prompt_section.setdefault("llm_status", {"status": "idle", "message": "LLM: idle"})
 
                         payload = json.loads(json.dumps(prompt_section))
@@ -115,6 +229,7 @@ class ScenarioWorkflowRuntime:
                         scenario_section = dict(scenarios_section.get(scenario_id) or {})
                         wf_obj = dict(scenario_section.get("workflow") or {})
                         wf_obj["state"] = initial
+                        next_actions = self._actions_for_state(states, initial)
                         wf_obj["next_actions"] = json.loads(json.dumps(next_actions))
                         scenario_section["workflow"] = wf_obj
                         scenarios_section[scenario_id] = scenario_section
@@ -236,12 +351,15 @@ class ScenarioWorkflowRuntime:
 
                     wf_obj["state"] = next_state
                     wf_obj["next_actions"] = json.loads(json.dumps(self._actions_for_state(states, next_state)))
-                    if resolved_object_type:
-                        wf_obj["object_type"] = resolved_object_type
-                    if resolved_object_id:
-                        wf_obj["object_id"] = resolved_object_id
 
                     if scenario_id == "prompt_engineer_scenario":
+                        resolved_object_type, resolved_object_id = self._apply_prompt_project_context(
+                            wf_obj,
+                            webspace_id,
+                            object_type=resolved_object_type,
+                            object_id=resolved_object_id,
+                            selection=self._load_prompt_selection(webspace_id),
+                        )
                         prompt_section["workflow"] = wf_obj
                         # Keep status bar buttons in sync for Prompt IDE scenario.
                         status_section = dict(prompt_section.get("status") or {})
@@ -259,6 +377,14 @@ class ScenarioWorkflowRuntime:
                         scenarios_section[scenario_id] = scenario_section
                         payload = json.loads(json.dumps(scenarios_section))
                         data_map.set(txn, "scenarios", payload)
+
+        if scenario_id == "prompt_engineer_scenario":
+            self._save_prompt_selection(
+                webspace_id,
+                object_type=resolved_object_type,
+                object_id=resolved_object_id,
+                state_id=str(next_state or "") if action_meta else None,
+            )
 
         # Execute associated tool (if any) outside of the YDoc transaction.
         if action_meta is not None:
@@ -321,23 +447,26 @@ class ScenarioWorkflowRuntime:
                         prompt_section = {}
                     wf_obj = dict(prompt_section.get("workflow") or {})
                     wf_obj["state"] = state_id
-                    if object_type:
-                        wf_obj["object_type"] = object_type
-                    if object_id:
-                        wf_obj["object_id"] = object_id
+                    resolved_object_type, resolved_object_id = self._apply_prompt_project_context(
+                        wf_obj,
+                        webspace_id,
+                        object_type=object_type,
+                        object_id=object_id,
+                        selection=self._load_prompt_selection(webspace_id),
+                    )
                     wf_obj["next_actions"] = json.loads(json.dumps(self._actions_for_state(states, state_id)))
                     prompt_section["workflow"] = wf_obj
 
                     if scenario_id == "prompt_engineer_scenario":
                         # Keep files list in Yjs for Prompt IDE so that file panel can be
                         # driven by YDoc and hub-side actions can update it.
-                        if object_type and object_id:
+                        if resolved_object_type and resolved_object_id:
                             files_obj = dict(prompt_section.get("files") or {})
                             files_obj.update(
                                 {
-                                    "object_type": object_type,
-                                    "object_id": object_id,
-                                    "list": self._build_files_list(object_type, object_id),
+                                    "object_type": resolved_object_type,
+                                    "object_id": resolved_object_id,
+                                    "list": self._build_files_list(resolved_object_type, resolved_object_id),
                                 }
                             )
                             prompt_section["files"] = json.loads(json.dumps(files_obj))
@@ -353,6 +482,13 @@ class ScenarioWorkflowRuntime:
                         prompt_section["status"] = status_section
                     payload = json.loads(json.dumps(prompt_section))
                     data_map.set(txn, "prompt", payload)
+        if scenario_id == "prompt_engineer_scenario":
+            self._save_prompt_selection(
+                webspace_id,
+                object_type=object_type,
+                object_id=object_id,
+                state_id=state_id,
+            )
 
     def _resolve_next_state(self, states: Dict[str, Any], current_state: str, action_id: str) -> Optional[str]:
         state = states.get(current_state) or {}

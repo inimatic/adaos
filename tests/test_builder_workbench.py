@@ -52,11 +52,16 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert binding["active_draft_id"] == "draft.shopping"
     assert binding["dialog"]["widget"] == "voice_chat"
     assert binding["dialog"]["dialog_channel_id"] == "builder"
+    assert binding["dialog"]["thread_id"] == "thread.builder.desktop.draft.shopping"
+    assert binding["dialog"]["topic_id"] == "builder:desktop:draft.shopping"
+    assert binding["dialog"]["meta"]["thread_id"] == "thread.builder.desktop.draft.shopping"
+    assert binding["dialog"]["meta"]["builder_topic"]["active_draft_id"] == "draft.shopping"
     assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
 
     reused = await service.ensure_dev_webspace("desktop", active_draft_id="draft.next")
     assert reused["created"] is False
     assert reused["active_draft_id"] == "draft.next"
+    assert reused["dialog"]["thread_id"] == "thread.builder.desktop.draft.next"
     assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
     assert service.webspace_service.items["desktop-dev"].home_scenario == "web_desktop"
 
@@ -247,6 +252,8 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["widget"]["widget"] == "voice_chat"
     assert response.json()["widget"]["dialog_channel_id"] == "builder"
+    assert response.json()["widget"]["thread_id"] == "thread.builder.desktop.draft.one"
+    assert response.json()["binding"]["active_draft_id"] == "draft.one"
 
     response = client.get("/api/builder/workbench/development-skills", params={"webspace_id": "desktop"})
     assert response.status_code == 200

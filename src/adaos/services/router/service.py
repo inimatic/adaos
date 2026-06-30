@@ -2578,13 +2578,41 @@ class RouterService:
                     str(target_node_id or "").strip() or None,
                 )
 
-        def _voice_chat_projection_identity(messages: list[dict[str, Any]]) -> tuple[str, str]:
+        def _voice_chat_topic_id_from_sources(*sources: Any) -> str:
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                for key in (
+                    "thread_id",
+                    "conversation_thread_id",
+                    "conversation_topic_id",
+                    "topic_id",
+                    "conversationTopicId",
+                    "topicId",
+                ):
+                    value = source.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+                meta = source.get("_meta") if isinstance(source.get("_meta"), dict) else {}
+                if meta:
+                    nested = _voice_chat_topic_id_from_sources(meta)
+                    if nested:
+                        return nested
+                params = source.get("params") if isinstance(source.get("params"), dict) else {}
+                if params:
+                    nested = _voice_chat_topic_id_from_sources(params)
+                    if nested:
+                        return nested
+            return ""
+
+        def _voice_chat_projection_identity(messages: list[dict[str, Any]]) -> tuple[str, str, str]:
             for item in reversed([dict(entry) for entry in messages if isinstance(entry, dict)]):
                 conversation_id = str(item.get("conversation_id") or "").strip()
                 channel_id = str(item.get("dialog_channel_id") or item.get("channel_id") or "").strip()
-                if conversation_id or channel_id:
-                    return conversation_id, channel_id
-            return "", ""
+                topic_id = _voice_chat_topic_id_from_sources(item)
+                if conversation_id or channel_id or topic_id:
+                    return conversation_id, channel_id, topic_id
+            return "", "", ""
 
         def _conversation_id_for_dialog_channel(webspace_id: str, channel_id: str) -> str:
             ws = str(webspace_id or "default").strip() or "default"
@@ -2653,7 +2681,7 @@ class RouterService:
                     if resolved:
                         return resolved
             if messages:
-                conversation_id, channel_id = _voice_chat_projection_identity(messages)
+                conversation_id, channel_id, _topic_id = _voice_chat_projection_identity(messages)
                 if conversation_id:
                     return conversation_id
                 if channel_id:
@@ -2676,12 +2704,14 @@ class RouterService:
             # on heavier YJS history writes before dispatching NLU.
             cached_messages = [dict(item) for item in messages if isinstance(item, dict)]
             total_count = int(total_message_count if total_message_count is not None else len(cached_messages))
-            conversation_id, dialog_channel_id = _voice_chat_projection_identity(cached_messages)
+            conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(cached_messages)
             stream_params = {
                 key: value
                 for key, value in {
                     "conversation_id": conversation_id,
                     "dialog_channel_id": dialog_channel_id,
+                    "conversation_topic_id": topic_id,
+                    "thread_id": topic_id,
                 }.items()
                 if str(value or "").strip()
             }
@@ -2695,6 +2725,8 @@ class RouterService:
                 "history_mode": "compact_tail",
                 "conversation_id": conversation_id,
                 "dialog_channel_id": dialog_channel_id,
+                "conversation_topic_id": topic_id,
+                "thread_id": topic_id,
             }
             payload: dict[str, Any] = {
                 "receiver": "voice_chat.messages",
@@ -2710,12 +2742,16 @@ class RouterService:
                     "history_mode": "compact_tail",
                     "conversation_id": conversation_id,
                     "dialog_channel_id": dialog_channel_id,
+                    "conversation_topic_id": topic_id,
+                    "thread_id": topic_id,
                 },
                 "_meta": {
                     "webspace_id": webspace_id,
                     "route_id": "voice_chat",
                     "conversation_id": conversation_id,
                     "dialog_channel_id": dialog_channel_id,
+                    "conversation_topic_id": topic_id,
+                    "thread_id": topic_id,
                 },
             }
             if stream_params:
@@ -2752,7 +2788,7 @@ class RouterService:
             snapshot = [dict(item) for item in messages[-VOICE_CHAT_VISIBLE_TAIL:] if isinstance(item, dict)]
             if not snapshot:
                 return
-            conversation_id, dialog_channel_id = _voice_chat_projection_identity(snapshot)
+            conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(snapshot)
 
             async def _persist() -> None:
                 def _mutator(data_map: Any, txn: Any) -> None:
@@ -2777,6 +2813,8 @@ class RouterService:
                             "history_mode": "compact_tail",
                             "conversation_id": conversation_id,
                             "dialog_channel_id": dialog_channel_id,
+                            "conversation_topic_id": topic_id,
+                            "thread_id": topic_id,
                         },
                     )
 
@@ -2833,6 +2871,7 @@ class RouterService:
             *,
             conversation_id: Any = None,
             dialog_channel_id: Any = None,
+            thread_id: Any = None,
         ) -> None:
             current = _voice_chat_stream_cache.get((str(webspace_id or "").strip(), str(target_node_id or "").strip())) or {}
             raw_messages = current.get("messages") if isinstance(current, dict) else None
@@ -2844,9 +2883,16 @@ class RouterService:
                 current=current if isinstance(current, dict) else {},
                 messages=messages,
             )
+            resolved_topic_id = _voice_chat_topic_id_from_sources(
+                {"thread_id": thread_id} if thread_id is not None else {},
+                {"conversation_topic_id": thread_id} if thread_id is not None else {},
+                current if isinstance(current, dict) else {},
+                *messages,
+            )
             try:
                 projection = conversation_store.list_projection(
                     resolved_conversation_id,
+                    thread_id=resolved_topic_id or None,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
                 )
@@ -2882,6 +2928,9 @@ class RouterService:
                 cached_conversation_id = str(messages[-1].get("conversation_id") or "").strip()
             if cached_conversation_id and cached_conversation_id != resolved_conversation_id:
                 return
+            cached_topic_id = _voice_chat_topic_id_from_sources(current if isinstance(current, dict) else {}, *messages)
+            if resolved_topic_id and cached_topic_id and cached_topic_id != resolved_topic_id:
+                return
             last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
             _publish_voice_chat_stream(
                 webspace_id,
@@ -2900,6 +2949,7 @@ class RouterService:
             *,
             conversation_id: Any = None,
             dialog_channel_id: Any = None,
+            thread_id: Any = None,
         ) -> None:
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
             cached = _voice_chat_stream_cache.get(cache_key) or {}
@@ -2912,9 +2962,15 @@ class RouterService:
                 current=cached if isinstance(cached, dict) else {},
                 messages=cached_messages,
             )
+            resolved_topic_id = _voice_chat_topic_id_from_sources(
+                {"thread_id": thread_id} if thread_id is not None else {},
+                cached if isinstance(cached, dict) else {},
+                *cached_messages,
+            )
             try:
                 projection = conversation_store.list_projection(
                     resolved_conversation_id,
+                    thread_id=resolved_topic_id or None,
                     before_cursor=before_cursor,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
@@ -2928,6 +2984,7 @@ class RouterService:
                     target_node_id,
                     conversation_id=resolved_conversation_id,
                     dialog_channel_id=dialog_channel_id,
+                    thread_id=resolved_topic_id,
                 )
                 return
             window = [dict(item) for item in store_messages if isinstance(item, dict)]
@@ -2961,6 +3018,7 @@ class RouterService:
             meta = clean_msg.get("_meta") if isinstance(clean_msg.get("_meta"), dict) else {}
             channel_id = str(context.get("channel_id") or GENERAL_DIALOG_CHANNEL_ID)
             conversation_id = str(context.get("conversation_id") or "")
+            topic_id = _voice_chat_topic_id_from_sources(clean_msg, meta)
             owner = str(context.get("owner") or GENERAL_DIALOG_AGENT_OWNER)
             route_id = str(context.get("route_id") or "voice_chat")
             agent = context.get("agent") if isinstance(context.get("agent"), dict) else {}
@@ -2980,6 +3038,10 @@ class RouterService:
                     clean_msg.setdefault("voice_profile", dict(agent.get("voice_profile") or {}))
             clean_msg["dialog_channel_id"] = channel_id
             clean_msg["conversation_id"] = conversation_id
+            if topic_id:
+                clean_msg["thread_id"] = topic_id
+                clean_msg["conversation_topic_id"] = topic_id
+                clean_msg["topic_id"] = topic_id
             turn_trace_id = str(meta.get("turn_trace_id") or clean_msg.get("turn_trace_id") or "").strip()
             existing_trace = None
             if turn_trace_id:
@@ -3027,7 +3089,7 @@ class RouterService:
                 _store_dialog_channel_projection(str(webspace_id or "default").strip() or "default", context.get("channel") or {})
                 stored = conversation_store.append_message(
                     conversation_id=conversation_id,
-                    thread_id=str(clean_msg.get("thread_id") or meta.get("thread_id") or "").strip() or None,
+                    thread_id=topic_id or None,
                     webspace_id=str(webspace_id or "default").strip() or "default",
                     channel_id=channel_id,
                     owner=owner,
@@ -3046,6 +3108,7 @@ class RouterService:
                 )
                 projection = conversation_store.list_projection(
                     conversation_id,
+                    thread_id=topic_id or None,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
                 )
@@ -3731,6 +3794,7 @@ class RouterService:
                     target_node_id,
                     conversation_id=payload.get("conversation_id") or meta.get("conversation_id"),
                     dialog_channel_id=payload.get("dialog_channel_id") or meta.get("dialog_channel_id"),
+                    thread_id=_voice_chat_topic_id_from_sources(payload, meta),
                 )
 
         async def _on_io_out_chat_append(ev: Event) -> None:
@@ -3817,9 +3881,11 @@ class RouterService:
                 raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():
                     msg[key] = raw_value.strip()
-            raw_thread_id = payload.get("thread_id") if payload.get("thread_id") is not None else meta.get("thread_id")
-            if isinstance(raw_thread_id, str) and raw_thread_id.strip():
-                msg["thread_id"] = raw_thread_id.strip()
+            topic_id = _voice_chat_topic_id_from_sources(payload, meta)
+            if topic_id:
+                msg["thread_id"] = topic_id
+                msg["conversation_topic_id"] = topic_id
+                msg["topic_id"] = topic_id
             for key in (
                 "voice",
                 "voice_gender",
@@ -4030,6 +4096,7 @@ class RouterService:
                 or stream_params.get("channel_id")
                 or stream_params.get("channelId")
             )
+            thread_id = _voice_chat_topic_id_from_sources(payload, meta, stream_params)
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
                 await _publish_voice_chat_snapshot(
@@ -4037,6 +4104,7 @@ class RouterService:
                     target_node_id,
                     conversation_id=conversation_id,
                     dialog_channel_id=dialog_channel_id,
+                    thread_id=thread_id,
                 )
 
         async def _on_conversation_history_more(ev: Event) -> None:
@@ -4071,6 +4139,7 @@ class RouterService:
                 or stream_params.get("channel_id")
                 or stream_params.get("channelId")
             )
+            thread_id = _voice_chat_topic_id_from_sources(payload, meta, stream_params)
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
                 await _publish_voice_chat_history_more(
@@ -4079,6 +4148,7 @@ class RouterService:
                     before_cursor,
                     conversation_id=conversation_id,
                     dialog_channel_id=dialog_channel_id,
+                    thread_id=thread_id,
                 )
 
         async def _on_browser_session_changed(ev: Event) -> None:
@@ -4234,6 +4304,12 @@ class RouterService:
                 "conversation_owner": owner,
                 "route_id": route_id,
             }
+            thread_id = _voice_chat_topic_id_from_sources(payload, meta)
+            if thread_id:
+                payload["_meta"].setdefault("thread_id", thread_id)
+                payload["_meta"].setdefault("conversation_topic_id", thread_id)
+                payload.setdefault("thread_id", thread_id)
+                payload.setdefault("conversation_topic_id", thread_id)
             if agent_id:
                 payload["_meta"].setdefault("active_agent_id", agent_id)
             payload.setdefault("conversation_id", conversation_id)
@@ -4244,6 +4320,7 @@ class RouterService:
                     conversation_id=conversation_id,
                     requester_owner=owner,
                     channel_id=channel_id,
+                    thread_id=thread_id or None,
                     agent_id=agent_id,
                     budgets={
                         "max_tokens": 4_000,
