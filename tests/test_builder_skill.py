@@ -1182,13 +1182,14 @@ def test_ensure_workbench_prefers_direct_dev_runtime_switch(monkeypatch) -> None
             calls.append({"method": "snapshot", "webspace_id": webspace_id, "preview_state": preview_state})
             return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
 
-        async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None):
+        async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None, wait_for_rebuild=None):
             calls.append({
                 "method": "ensure_dev_webspace",
                 "source_webspace_id": source_webspace_id,
                 "active_draft_id": active_draft_id,
                 "runtime_scenario_id": runtime_scenario_id,
                 "preview_state": preview_state,
+                "wait_for_rebuild": wait_for_rebuild,
             })
             return {
                 "source_webspace_id": source_webspace_id,
@@ -1218,6 +1219,7 @@ def test_ensure_workbench_prefers_direct_dev_runtime_switch(monkeypatch) -> None
     assert result["projection"]["direct"]["result"]["runtime"]["ok"] is True
     assert [item["method"] for item in calls] == ["set_active_draft", "snapshot", "ensure_dev_webspace"]
     assert calls[2]["runtime_scenario_id"] == "todo_scenario"
+    assert calls[2]["wait_for_rebuild"] is False
 
 
 def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkeypatch) -> None:
@@ -1238,7 +1240,7 @@ def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkey
             calls.append({"method": "snapshot", "webspace_id": webspace_id})
             return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
 
-        async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None):
+        async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None, wait_for_rebuild=None):
             calls.append({"method": "ensure_dev_webspace", "runtime_scenario_id": runtime_scenario_id})
             await asyncio.sleep(0.05)
             return {"source_webspace_id": source_webspace_id, "runtime_scenario_id": runtime_scenario_id}

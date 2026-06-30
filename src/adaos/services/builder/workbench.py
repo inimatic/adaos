@@ -113,6 +113,7 @@ class BuilderWorkbenchService:
         scenario_id: str | None = None,
         runtime_scenario_id: str | None = None,
         preview_state: Mapping[str, Any] | None = None,
+        wait_for_rebuild: bool = True,
     ) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
         dev_id = dev_webspace_id_for_source(source_id)
@@ -166,7 +167,7 @@ class BuilderWorkbenchService:
                         dev_id,
                         runtime_scenario,
                         set_home=True,
-                        wait_for_rebuild=True,
+                        wait_for_rebuild=wait_for_rebuild,
                     )
                     runtime_payload = {
                         "ok": bool(switch_payload.get("ok", True)) if isinstance(switch_payload, dict) else True,
@@ -176,6 +177,8 @@ class BuilderWorkbenchService:
                     }
                     skip_reason = str(switch_payload.get("skip_reason") or "").strip() if isinstance(switch_payload, dict) else ""
                     needs_recovery_reload = bool(skip_reason) and skip_reason not in {
+                        "already_current",
+                        "already_current_ready",
                         "already_pending_rebuild",
                     }
                     if isinstance(switch_payload, dict) and needs_recovery_reload:

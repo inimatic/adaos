@@ -2522,6 +2522,7 @@ def _ensure_workbench_runtime_direct(
             active_draft_id=active_draft_id,
             runtime_scenario_id=runtime_scenario_id,
             preview_state=preview_state,
+            wait_for_rebuild=False,
         )
     except TypeError:
         return {"ok": False, "skipped": "ensure_dev_webspace_signature_mismatch"}

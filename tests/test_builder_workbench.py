@@ -77,7 +77,7 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
 
 
 @pytest.mark.asyncio
-async def test_ensure_dev_webspace_switches_current_and_reloads_skipped_switch(monkeypatch, tmp_path: Path) -> None:
+async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip(monkeypatch, tmp_path: Path) -> None:
     class _Webspaces:
         def __init__(self) -> None:
             self.items: dict[str, SimpleNamespace] = {}
@@ -125,12 +125,43 @@ async def test_ensure_dev_webspace_switches_current_and_reloads_skipped_switch(m
 
     second = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
     assert second["runtime"]["switch"]["skip_reason"] == "already_current_ready"
-    assert second["runtime"]["reload"]["action"] == "reload"
+    assert "reload" not in second["runtime"]
     assert switch_calls == [
         ("desktop-dev", "demo_scenario", True, True),
         ("desktop-dev", "demo_scenario", True, True),
     ]
-    assert reload_calls == [("desktop-dev", "demo_scenario", "reload")]
+    assert reload_calls == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_dev_webspace_can_switch_without_waiting_for_rebuild(monkeypatch, tmp_path: Path) -> None:
+    class _Webspaces:
+        def list(self, mode: str = "mixed"):
+            return []
+
+        async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
+            return SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
+
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    switch_calls: list[tuple[str, str, bool | None, bool]] = []
+
+    async def _switch(webspace_id: str, scenario_id: str, *, set_home=None, wait_for_rebuild=True):
+        switch_calls.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
+        return {"ok": True, "scenario_id": scenario_id, "background_rebuild": not wait_for_rebuild}
+
+    monkeypatch.setattr(webspace_runtime, "WebspaceService", lambda: _Webspaces())
+    monkeypatch.setattr(webspace_runtime, "switch_webspace_scenario", _switch)
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    result = await service.ensure_dev_webspace(
+        "desktop",
+        runtime_scenario_id="demo_scenario",
+        wait_for_rebuild=False,
+    )
+
+    assert result["runtime"]["switch"]["background_rebuild"] is True
+    assert switch_calls == [("desktop-dev", "demo_scenario", True, False)]
 
 
 @pytest.mark.asyncio
