@@ -41,6 +41,27 @@ def _fake_ctx() -> SimpleNamespace:
     )
 
 
+def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, object]]:
+    published: list[dict[str, object]] = []
+
+    def _list_pending_actions(*, webspace_id: str | None = None, include_terminal: bool = True) -> dict[str, object]:
+        return {"by_id": {}, "active_items": [], "active": []}
+
+    def _publish_pending_action(**kwargs) -> dict[str, object]:
+        published.append(dict(kwargs))
+        return {
+            "id": kwargs.get("action_id") or "pa.runtime.test",
+            "kind": kwargs.get("kind"),
+            "status": "pending",
+            "webspace_id": kwargs.get("webspace_id"),
+            "domain_ref": kwargs.get("domain_ref"),
+        }
+
+    monkeypatch.setattr(tool_bridge_module, "list_pending_actions", _list_pending_actions)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", _publish_pending_action)
+    return published
+
+
 def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -78,6 +99,8 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
 
 
 def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch) -> None:
+    published = _patch_runtime_approval_pending_actions(monkeypatch)
+
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
             return None
@@ -106,6 +129,10 @@ def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch)
     assert excinfo.value.status_code == 403
     assert excinfo.value.detail["error"] == "action_approval_required"
     assert excinfo.value.detail["action_risk"]["risk_class"] == "filesystem"
+    assert excinfo.value.detail["pending_action_id"] == published[0]["action_id"]
+    assert published[0]["kind"] == "runtime.action_approval"
+    assert published[0]["allowed_actions"] == ["approve", "refuse", "postpone"]
+    assert published[0]["domain_ref"]["tool"] == "files_skill:delete_file"
 
 
 def test_call_tool_allows_high_risk_runtime_action_with_approval(monkeypatch) -> None:
@@ -156,7 +183,122 @@ def test_call_tool_allows_high_risk_runtime_action_with_approval(monkeypatch) ->
     assert calls == ["run_sync", "files_skill:write_file"]
 
 
+def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> None:
+    calls: list[str] = []
+    pending_by_id: dict[str, dict[str, object]] = {}
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    def _list_pending_actions(*, webspace_id: str | None = None, include_terminal: bool = True) -> dict[str, object]:
+        return {"by_id": pending_by_id, "active_items": [], "active": []}
+
+    def _publish_pending_action(**kwargs) -> dict[str, object]:
+        action = {
+            "id": kwargs.get("action_id") or "pa.runtime.test",
+            "kind": kwargs.get("kind"),
+            "status": "pending",
+            "webspace_id": kwargs.get("webspace_id"),
+            "domain_ref": kwargs.get("domain_ref"),
+        }
+        pending_by_id[str(action["id"])] = action
+        return action
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "list_pending_actions", _list_pending_actions)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", _publish_pending_action)
+
+    body = tool_bridge_module.ToolCall(
+        tool="files_skill:write_file",
+        arguments={"path": "C:/private/report.txt", "text": "approved", "side_effect_class": "filesystem"},
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
+
+    pending_id = excinfo.value.detail["pending_action_id"]
+    pending_by_id[pending_id]["status"] = "responded"
+    pending_by_id[pending_id]["response"] = {
+        "response_action_id": "approve",
+        "responder": {"type": "user", "user_id": "owner"},
+    }
+
+    result = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
+
+    assert result["ok"] is True
+    assert calls == ["run_sync", "files_skill:write_file"]
+
+
+def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=None,
+        caps=None,
+        settings=None,
+        bus=None,
+        config=SimpleNamespace(role="hub", node_id="hub-1", token="hub-token"),
+    )
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("selection must not require approval")))
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="prompt_engineer_skill:prompt_select_project",
+                arguments={
+                    "object_type": "scenario",
+                    "object_id": "shopping_list_222d3f0c",
+                    "node_id": "member-1",
+                    "target_node_id": "member-1",
+                },
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=ctx,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["run_sync", "prompt_engineer_skill:prompt_select_project"]
+
+
 def test_call_tool_blocks_cross_node_mutation_without_approval(monkeypatch) -> None:
+    published = _patch_runtime_approval_pending_actions(monkeypatch)
+
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
             return None
@@ -205,6 +347,8 @@ def test_call_tool_blocks_cross_node_mutation_without_approval(monkeypatch) -> N
 
     assert excinfo.value.status_code == 403
     assert excinfo.value.detail["action_risk"]["risk_class"] == "cross_node"
+    assert excinfo.value.detail["pending_action_id"] == published[0]["action_id"]
+    assert published[0]["domain_ref"]["tool"] == "member_control:restart_service"
 
 
 def test_call_tool_skips_workspace_autosync_for_readonly_snapshots(monkeypatch, tmp_path) -> None:
