@@ -1054,7 +1054,11 @@ def _requested_known_fields(text: str) -> list[dict[str, Any]]:
     lowered = str(text or "").lower()
     words = set(re.findall(r"[A-Za-z0-9.\u0410-\u042f\u0430-\u044f\u0401\u0451]+", lowered))
     specs: list[dict[str, Any]] = []
-    if words.intersection({"\u043c\u0435\u0440\u0430", "\u0435\u0434\u0438\u043d\u0438\u0446\u0430", "\u0435\u0434.", "unit", "measure"}) or "\u0435\u0434\u0438\u043d\u0438\u0446\u0430 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u044f" in lowered:
+    if (
+        any(word.startswith("\u043c\u0435\u0440") for word in words)
+        or words.intersection({"\u0435\u0434\u0438\u043d\u0438\u0446\u0430", "\u0435\u0434.", "unit", "measure"})
+        or "\u0435\u0434\u0438\u043d\u0438\u0446\u0430 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u044f" in lowered
+    ):
         specs.append({"label": "\u041c\u0435\u0440\u0430", "field_id": "unit", "field_type": "string"})
     if any(token in lowered for token in ("\u043d\u0430\u043b\u0438\u0447", "availability", "stock")):
         specs.append({"label": "\u041d\u0430\u043b\u0438\u0447\u0438\u0435", "field_id": "availability", "field_type": "string"})
