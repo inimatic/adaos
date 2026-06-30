@@ -1797,6 +1797,129 @@ def rebuild_conversation_segments(
     }
 
 
+def compact_conversation_history(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    keep_last_messages: int = 40,
+    segment_size: int = 40,
+) -> dict[str, Any]:
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.summary_compaction.v1", "ok": False, "status": "unavailable"}
+    clean_thread = str(thread_id or "").strip() or None
+    safe_keep = max(0, min(int(keep_last_messages or 0), 5000))
+    safe_size = max(2, min(int(segment_size or 40), 200))
+    where = ["conversation_id=?", "redaction_state!='redacted'"]
+    params: list[Any] = [cid]
+    if clean_thread is not None:
+        where.append("thread_id=?")
+        params.append(clean_thread)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        message_rows = con.execute(
+            f"""
+            SELECT message_id, seq
+            FROM conversation_messages
+            WHERE {' AND '.join(where)}
+            ORDER BY seq ASC
+            """,
+            params,
+        ).fetchall()
+    message_count = len(message_rows)
+    if message_count == 0:
+        return {
+            "schema": "adaos.conversation.summary_compaction.v1",
+            "ok": True,
+            "status": "empty",
+            "conversation_id": cid,
+            "thread_id": clean_thread,
+            "message_count": 0,
+            "segment_count": 0,
+            "compacted_message_count": 0,
+            "raw_tail_count": 0,
+            "summary_refs": [],
+            "raw_tail_refs": [],
+        }
+    if message_count <= safe_keep:
+        tail_refs = [_message_range_ref(cid, row) for row in message_rows]
+        return {
+            "schema": "adaos.conversation.summary_compaction.v1",
+            "ok": True,
+            "status": "up_to_date",
+            "conversation_id": cid,
+            "thread_id": clean_thread,
+            "message_count": message_count,
+            "segment_count": 0,
+            "compacted_message_count": 0,
+            "raw_tail_count": len(tail_refs),
+            "summary_refs": [],
+            "raw_tail_refs": tail_refs,
+        }
+
+    tail_rows = message_rows[-safe_keep:] if safe_keep else []
+    tail_start_seq = int(tail_rows[0]["seq"]) if tail_rows else int(message_rows[-1]["seq"]) + 1
+    rebuild = rebuild_conversation_segments(cid, thread_id=clean_thread, segment_size=safe_size)
+    if not rebuild.get("ok"):
+        return {
+            "schema": "adaos.conversation.summary_compaction.v1",
+            "ok": False,
+            "status": str(rebuild.get("status") or "segment_rebuild_failed"),
+            "conversation_id": cid,
+            "thread_id": clean_thread,
+            "rebuild": rebuild,
+        }
+    segments = sorted(
+        (
+            item
+            for item in list_conversation_segments(cid, thread_id=clean_thread, limit=5000)
+            if int(item.get("start_seq") or 0) < tail_start_seq
+        ),
+        key=lambda item: int(item.get("start_seq") or 0),
+    )
+    summary_refs = [
+        {
+            "type": "conversation_segment",
+            "segment_id": str(item.get("id") or item.get("segment_id") or ""),
+            "conversation_id": cid,
+            "thread_id": item.get("thread_id"),
+            "start_seq": int(item.get("start_seq") or 0),
+            "end_seq": int(item.get("end_seq") or 0),
+            "message_count": int(item.get("message_count") or 0),
+            "source_refs": list(item.get("source_refs") or []),
+        }
+        for item in segments
+    ]
+    tail_refs = [_message_range_ref(cid, row) for row in tail_rows]
+    compacted_message_count = len([row for row in message_rows if int(row["seq"]) < tail_start_seq])
+    return {
+        "schema": "adaos.conversation.summary_compaction.v1",
+        "ok": True,
+        "status": "compacted",
+        "conversation_id": cid,
+        "thread_id": clean_thread,
+        "message_count": message_count,
+        "segment_count": len(summary_refs),
+        "compacted_message_count": compacted_message_count,
+        "raw_tail_count": len(tail_refs),
+        "tail_start_seq": tail_start_seq,
+        "summary_refs": summary_refs,
+        "raw_tail_refs": tail_refs,
+        "rebuild": rebuild,
+    }
+
+
+def _message_range_ref(conversation_id: str, row: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "conversation_message",
+        "conversation_id": conversation_id,
+        "message_id": str(_row_value(row, "message_id") or _row_value(row, "id") or ""),
+        "seq": int(_row_value(row, "seq") or 0),
+    }
+
+
 def list_conversation_segments(
     conversation_id: str,
     *,

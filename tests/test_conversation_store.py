@@ -245,6 +245,54 @@ def test_conversation_store_reports_node_local_retrieval_health() -> None:
     assert "segment_summary_stale" in stale["degraded_reasons"]
 
 
+def test_conversation_store_compacts_long_history_with_range_refs() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.compaction.{suffix}"
+    thread_id = f"thread.compaction.{suffix}"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for index in range(1, 11):
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            webspace_id="desktop",
+            channel_id="conversational",
+            owner="skill:test",
+            role="user" if index % 2 else "hub",
+            text=f"compaction detail {index}",
+            payload={"id": f"compaction.{suffix}.msg.{index}", "from": "user", "text": f"compaction detail {index}"},
+        )
+
+    result = conversation_store.compact_conversation_history(
+        conversation_id,
+        thread_id=thread_id,
+        keep_last_messages=4,
+        segment_size=3,
+    )
+
+    assert result["schema"] == "adaos.conversation.summary_compaction.v1"
+    assert result["status"] == "compacted"
+    assert result["message_count"] == 10
+    assert result["compacted_message_count"] == 6
+    assert result["raw_tail_count"] == 4
+    assert result["tail_start_seq"] == 7
+    assert [item["seq"] for item in result["raw_tail_refs"]] == [7, 8, 9, 10]
+    assert [(item["start_seq"], item["end_seq"]) for item in result["summary_refs"]] == [(1, 3), (4, 6)]
+    covered = {
+        ref["seq"]
+        for segment in result["summary_refs"]
+        for ref in segment["source_refs"]
+    } | {ref["seq"] for ref in result["raw_tail_refs"]}
+    assert covered == set(range(1, 11))
+    segments = conversation_store.list_conversation_segments(conversation_id, thread_id=thread_id)
+    assert segments
+    assert conversation_store.search_conversation_segments("detail 6", conversation_id=conversation_id, thread_id=thread_id)
+
+
 def test_conversation_store_records_retention_and_redaction_metadata() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

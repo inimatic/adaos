@@ -1731,8 +1731,11 @@ depth across several phases.
 - [x] `[should]` Add retrieval diagnostics: selected sources, skipped sources,
   estimated tokens, latency, and policy denials. First pass diagnostics are
   embedded in every context packet; richer scoring waits for FTS/summary work.
-- [ ] `[should]` Add summary compaction for long conversations without losing
-  message range refs.
+- [x] `[should]` Add summary compaction for long conversations without losing
+  message range refs. `conversation_store.compact_conversation_history(...)`
+  now rebuilds durable segment summaries for the compacted range, returns
+  segment `source_refs`, keeps a raw tail window, and leaves the canonical
+  message ledger intact.
 - [x] `[should]` Add golden retrieval tests for long companion, Builder, and
   Teacher conversations. `tests/test_conversation_context.py` now includes
   regression coverage for long companion segment/search retrieval, Builder
