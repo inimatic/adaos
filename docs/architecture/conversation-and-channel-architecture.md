@@ -1698,10 +1698,15 @@ depth across several phases.
   flow.
 - [x] `[must]` Publish bounded Yjs/WebIO projections from the node store for
   active browser consumers.
-- [ ] `[should]` Add FTS5 indexes for messages, segment summaries, and memory
-  items.
-- [ ] `[should]` Add background segment summarization jobs with bounded queue
-  and failure diagnostics.
+- [x] `[should]` Add FTS5 indexes for messages, segment summaries, and memory
+  items. `conversation_store` now maintains FTS5 tables for messages, memory,
+  and segment summaries, exposes rebuild/health APIs, and falls back to LIKE
+  search when FTS is unavailable.
+- [x] `[should]` Add background segment summarization jobs with bounded queue
+  and failure diagnostics. `enqueue_segment_summary_job(...)`,
+  `process_segment_summary_jobs(...)`, and `segment_summary_job_health(...)`
+  provide durable queued/running/completed/failed state, bounded queue depth,
+  retry attempts, and retrieval-health degradation reasons.
 - [ ] `[should]` Add projection recovery from node store when WebIO/Yjs tail is
   empty or stale.
 - [ ] `[could]` Add optional embedding queue and vector-index adapter behind a

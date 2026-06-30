@@ -245,6 +245,87 @@ def test_conversation_store_reports_node_local_retrieval_health() -> None:
     assert "segment_summary_stale" in stale["degraded_reasons"]
 
 
+def test_conversation_store_processes_segment_summary_jobs() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.segment.jobs.{suffix}"
+    thread_id = f"thread.jobs.{suffix}"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for index in range(1, 6):
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            webspace_id="desktop",
+            channel_id="builder",
+            owner="skill:test",
+            role="user",
+            text=f"queued summary detail {index}",
+            payload={"id": f"segment.jobs.{suffix}.{index}", "from": "user", "text": f"queued summary detail {index}"},
+        )
+
+    queued = conversation_store.enqueue_segment_summary_job(
+        conversation_id,
+        thread_id=thread_id,
+        segment_size=2,
+    )
+    duplicate = conversation_store.enqueue_segment_summary_job(
+        conversation_id,
+        thread_id=thread_id,
+        segment_size=2,
+    )
+    processed = conversation_store.process_segment_summary_jobs(limit=2)
+
+    assert queued["status"] == "queued"
+    assert duplicate["status"] == "existing"
+    assert duplicate["job"]["job_id"] == queued["job"]["job_id"]
+    assert processed["status"] == "processed"
+    assert processed["completed"] == 1
+    assert processed["jobs"][0]["status"] == "completed"
+    assert processed["jobs"][0]["result"]["segment_count"] == 3
+    assert conversation_store.segment_summary_health(conversation_id, thread_id=thread_id)["status"] == "ok"
+    job_health = conversation_store.segment_summary_job_health(conversation_id=conversation_id, thread_id=thread_id)
+    assert job_health["status"] == "ok"
+    assert job_health["counts"]["completed"] == 1
+    retrieval_health = conversation_store.retrieval_health_report(conversation_id, thread_id=thread_id)
+    assert retrieval_health["segment_summary_jobs"]["status"] == "ok"
+
+
+def test_conversation_store_reports_failed_segment_summary_jobs() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.segment.jobs.fail.{suffix}"
+    thread_id = f"thread.jobs.fail.{suffix}"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    queued = conversation_store.enqueue_segment_summary_job(
+        conversation_id,
+        thread_id=thread_id,
+        max_attempts=1,
+    )
+
+    processed = conversation_store.process_segment_summary_jobs(
+        limit=1,
+        processor=lambda _job: {"ok": False, "status": "model_unavailable", "error": "summarizer offline"},
+    )
+
+    assert queued["status"] == "queued"
+    assert processed["failed"] == 1
+    assert processed["jobs"][0]["status"] == "failed"
+    assert processed["jobs"][0]["last_error"] == "summarizer offline"
+    job_health = conversation_store.segment_summary_job_health(conversation_id=conversation_id, thread_id=thread_id)
+    assert job_health["status"] == "failed"
+    assert job_health["latest_error"] == "summarizer offline"
+    retrieval_health = conversation_store.retrieval_health_report(conversation_id, thread_id=thread_id)
+    assert "segment_summary_job_failed" in retrieval_health["degraded_reasons"]
+
+
 def test_conversation_store_compacts_long_history_with_range_refs() -> None:
     suffix = uuid4().hex[:8]
     conversation_id = f"conv.compaction.{suffix}"

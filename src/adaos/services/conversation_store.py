@@ -223,6 +223,28 @@ _SCHEMA = (
     ON conversation_segments(conversation_id, thread_id, start_seq, end_seq);
     """,
     """
+    CREATE TABLE IF NOT EXISTS conversation_segment_summary_jobs (
+        job_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        thread_id TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        segment_size INTEGER NOT NULL DEFAULT 40,
+        priority INTEGER NOT NULL DEFAULT 100,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        available_at REAL NOT NULL,
+        last_error TEXT,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        completed_at REAL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_segment_jobs_status
+    ON conversation_segment_summary_jobs(status, available_at, priority, created_at);
+    """,
+    """
     CREATE TABLE IF NOT EXISTS conversation_audit_events (
         audit_event_id TEXT PRIMARY KEY,
         event_type TEXT NOT NULL,
@@ -363,7 +385,7 @@ def ensure_schema(sql: Any | None = None) -> bool:
         try:
             with sql.connect() as con:
                 exists = con.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_audit_events'"
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_segment_summary_jobs'"
                 ).fetchone()
             if exists:
                 return True
@@ -560,6 +582,7 @@ def retrieval_health_report(
     clean_thread = str(thread_id or "").strip() or None
     search_health = search_index_health()
     segment_health = segment_summary_health(cid, thread_id=clean_thread) if cid else None
+    job_health = segment_summary_job_health(conversation_id=cid, thread_id=clean_thread) if cid else None
     counts = _retrieval_health_counts(conversation_id=cid, thread_id=clean_thread)
     degraded_reasons: list[str] = []
     if not search_health.get("fts_available"):
@@ -568,6 +591,8 @@ def retrieval_health_report(
         degraded_reasons.append("search_index_stale")
     if isinstance(segment_health, Mapping) and segment_health.get("status") not in {None, "ok"}:
         degraded_reasons.append(f"segment_summary_{segment_health.get('status')}")
+    if isinstance(job_health, Mapping) and job_health.get("status") in {"failed", "blocked"}:
+        degraded_reasons.append(f"segment_summary_job_{job_health.get('status')}")
     return {
         "schema": "adaos.conversation.retrieval_health.v1",
         "status": "degraded" if degraded_reasons else "ok",
@@ -576,8 +601,300 @@ def retrieval_health_report(
         "counts": counts,
         "search_index": search_health,
         "segment_summary": segment_health,
+        "segment_summary_jobs": job_health,
         "degraded_reasons": degraded_reasons,
     }
+
+
+def enqueue_segment_summary_job(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    segment_size: int = 40,
+    priority: int = 100,
+    max_attempts: int = 3,
+    queue_limit: int = 1000,
+    delay_seconds: float = 0.0,
+) -> dict[str, Any]:
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.segment_summary_enqueue.v1", "ok": False, "status": "unavailable"}
+    clean_thread = str(thread_id or "").strip() or None
+    safe_size = max(2, min(int(segment_size or 40), 200))
+    safe_priority = max(0, min(int(priority or 100), 1000))
+    safe_attempts = max(1, min(int(max_attempts or 3), 20))
+    safe_limit = max(1, min(int(queue_limit or 1000), 10000))
+    now = time.time()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        active_count = int(
+            con.execute(
+                "SELECT COUNT(*) FROM conversation_segment_summary_jobs WHERE status IN ('queued','running')",
+            ).fetchone()[0]
+            or 0
+        )
+        existing = con.execute(
+            """
+            SELECT *
+            FROM conversation_segment_summary_jobs
+            WHERE conversation_id=?
+              AND ((thread_id IS NULL AND ? IS NULL) OR thread_id=?)
+              AND status IN ('queued','running')
+            ORDER BY priority ASC, created_at ASC
+            LIMIT 1
+            """,
+            (cid, clean_thread, clean_thread),
+        ).fetchone()
+        if existing:
+            return {
+                "schema": "adaos.conversation.segment_summary_enqueue.v1",
+                "ok": True,
+                "status": "existing",
+                "queue_depth": active_count,
+                "job": _row_to_segment_summary_job(existing),
+            }
+        if active_count >= safe_limit:
+            return {
+                "schema": "adaos.conversation.segment_summary_enqueue.v1",
+                "ok": False,
+                "status": "queue_full",
+                "queue_depth": active_count,
+                "queue_limit": safe_limit,
+            }
+        job_id = _normalize_id(None, "segment_summary.job")
+        con.execute(
+            """
+            INSERT INTO conversation_segment_summary_jobs(
+                job_id, conversation_id, thread_id, status, segment_size, priority,
+                attempts, max_attempts, available_at, result_json, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                job_id,
+                cid,
+                clean_thread,
+                "queued",
+                safe_size,
+                safe_priority,
+                0,
+                safe_attempts,
+                now + max(0.0, float(delay_seconds or 0.0)),
+                "{}",
+                now,
+                now,
+            ),
+        )
+        row = con.execute("SELECT * FROM conversation_segment_summary_jobs WHERE job_id=?", (job_id,)).fetchone()
+        con.commit()
+    return {
+        "schema": "adaos.conversation.segment_summary_enqueue.v1",
+        "ok": True,
+        "status": "queued",
+        "queue_depth": active_count + 1,
+        "job": _row_to_segment_summary_job(row),
+    }
+
+
+def process_segment_summary_jobs(
+    *,
+    limit: int = 1,
+    processor: Any | None = None,
+) -> dict[str, Any]:
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.segment_summary_jobs.process.v1", "ok": False, "status": "unavailable"}
+    safe_limit = max(1, min(int(limit or 1), 50))
+    now = time.time()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            SELECT *
+            FROM conversation_segment_summary_jobs
+            WHERE status='queued' AND available_at<=?
+            ORDER BY priority ASC, available_at ASC, created_at ASC
+            LIMIT ?
+            """,
+            (now, safe_limit),
+        ).fetchall()
+    jobs = [_row_to_segment_summary_job(row) for row in rows]
+    completed = 0
+    failed = 0
+    requeued = 0
+    processed: list[dict[str, Any]] = []
+    for job in jobs:
+        attempts = int(job.get("attempts") or 0) + 1
+        _mark_segment_summary_job_running(str(job["job_id"]), attempts=attempts)
+        try:
+            result = (
+                processor(job)
+                if callable(processor)
+                else rebuild_conversation_segments(
+                    str(job["conversation_id"]),
+                    thread_id=str(job.get("thread_id") or "").strip() or None,
+                    segment_size=int(job.get("segment_size") or 40),
+                )
+            )
+            if not isinstance(result, Mapping):
+                result = {"ok": False, "status": "invalid_processor_result", "value": repr(result)}
+        except Exception as exc:
+            result = {"ok": False, "status": "exception", "error": f"{type(exc).__name__}: {exc}"}
+        if bool(result.get("ok")):
+            updated = _finish_segment_summary_job(str(job["job_id"]), status="completed", result=dict(result))
+            completed += 1
+        else:
+            terminal = attempts >= int(job.get("max_attempts") or 1)
+            updated = _finish_segment_summary_job(
+                str(job["job_id"]),
+                status="failed" if terminal else "queued",
+                result=dict(result),
+                last_error=_segment_summary_job_error(result),
+                available_at=time.time() + _segment_summary_retry_delay(attempts) if not terminal else None,
+            )
+            if terminal:
+                failed += 1
+            else:
+                requeued += 1
+        if updated:
+            processed.append(updated)
+    return {
+        "schema": "adaos.conversation.segment_summary_jobs.process.v1",
+        "ok": True,
+        "status": "processed" if processed else "idle",
+        "processed_count": len(processed),
+        "completed": completed,
+        "failed": failed,
+        "requeued": requeued,
+        "jobs": processed,
+    }
+
+
+def list_segment_summary_jobs(
+    *,
+    conversation_id: str | None = None,
+    thread_id: str | None = None,
+    statuses: list[str] | tuple[str, ...] | set[str] | None = None,
+    limit: int = 100,
+    ascending: bool = False,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    where: list[str] = []
+    params: list[Any] = []
+    cid = str(conversation_id or "").strip()
+    if cid:
+        where.append("conversation_id=?")
+        params.append(cid)
+    clean_thread = str(thread_id or "").strip()
+    if clean_thread:
+        where.append("thread_id=?")
+        params.append(clean_thread)
+    elif thread_id is not None:
+        where.append("thread_id IS NULL")
+    clean_statuses = [str(item or "").strip() for item in (statuses or []) if str(item or "").strip()]
+    if clean_statuses:
+        where.append(f"status IN ({','.join('?' for _ in clean_statuses)})")
+        params.extend(clean_statuses)
+    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
+    order = "ASC" if ascending else "DESC"
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_segment_summary_jobs
+            {sql_where}
+            ORDER BY updated_at {order}
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        ).fetchall()
+    return [_row_to_segment_summary_job(row) for row in rows]
+
+
+def segment_summary_job_health(
+    *,
+    conversation_id: str | None = None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.segment_summary_jobs.health.v1", "status": "unavailable"}
+    jobs = list_segment_summary_jobs(conversation_id=conversation_id, thread_id=thread_id, limit=500)
+    counts: dict[str, int] = {}
+    for job in jobs:
+        status = str(job.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    latest_error = next((job.get("last_error") for job in jobs if job.get("last_error")), None)
+    pending = counts.get("queued", 0) + counts.get("running", 0)
+    if counts.get("failed", 0):
+        status = "failed"
+    elif pending:
+        status = "pending"
+    else:
+        status = "ok"
+    return {
+        "schema": "adaos.conversation.segment_summary_jobs.health.v1",
+        "status": status,
+        "conversation_id": str(conversation_id or "").strip() or None,
+        "thread_id": str(thread_id or "").strip() or None,
+        "counts": counts,
+        "pending_count": pending,
+        "latest_error": latest_error,
+        "latest_job_id": str(jobs[0].get("job_id") or "") if jobs else None,
+    }
+
+
+def _mark_segment_summary_job_running(job_id: str, *, attempts: int) -> None:
+    now = time.time()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.execute(
+            """
+            UPDATE conversation_segment_summary_jobs
+            SET status='running', attempts=?, updated_at=?, last_error=NULL
+            WHERE job_id=?
+            """,
+            (attempts, now, job_id),
+        )
+        con.commit()
+
+
+def _finish_segment_summary_job(
+    job_id: str,
+    *,
+    status: str,
+    result: Mapping[str, Any],
+    last_error: str | None = None,
+    available_at: float | None = None,
+) -> dict[str, Any] | None:
+    now = time.time()
+    fields = ["status=?", "result_json=?", "last_error=?", "updated_at=?"]
+    params: list[Any] = [status, _json_dump(dict(result)), last_error, now]
+    if available_at is not None:
+        fields.append("available_at=?")
+        params.append(float(available_at))
+    if status in {"completed", "failed"}:
+        fields.append("completed_at=?")
+        params.append(now)
+    params.append(job_id)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute(
+            f"UPDATE conversation_segment_summary_jobs SET {', '.join(fields)} WHERE job_id=?",
+            params,
+        )
+        row = con.execute("SELECT * FROM conversation_segment_summary_jobs WHERE job_id=?", (job_id,)).fetchone()
+        con.commit()
+    return _row_to_segment_summary_job(row) if row else None
+
+
+def _segment_summary_retry_delay(attempts: int) -> float:
+    return min(300.0, float(2 ** max(0, min(attempts, 8))))
+
+
+def _segment_summary_job_error(result: Mapping[str, Any]) -> str:
+    return str(result.get("error") or result.get("status") or "segment_summary_failed")[:500]
 
 
 def _retrieval_health_counts(
@@ -699,6 +1016,28 @@ def _row_to_segment(row: sqlite3.Row) -> dict[str, Any]:
         "redaction_state": str(row["redaction_state"] or "active"),
         "created_at": float(row["created_at"] or 0.0),
         "updated_at": float(row["updated_at"] or 0.0),
+    }
+
+
+def _row_to_segment_summary_job(row: sqlite3.Row) -> dict[str, Any]:
+    result = _json_load(row["result_json"], {})
+    return {
+        "schema": "adaos.conversation.segment_summary_job.v1",
+        "id": str(row["job_id"] or ""),
+        "job_id": str(row["job_id"] or ""),
+        "conversation_id": str(row["conversation_id"] or ""),
+        "thread_id": row["thread_id"],
+        "status": str(row["status"] or "queued"),
+        "segment_size": int(row["segment_size"] or 40),
+        "priority": int(row["priority"] or 100),
+        "attempts": int(row["attempts"] or 0),
+        "max_attempts": int(row["max_attempts"] or 3),
+        "available_at": float(row["available_at"] or 0.0),
+        "last_error": row["last_error"],
+        "result": result if isinstance(result, dict) else {},
+        "created_at": float(row["created_at"] or 0.0),
+        "updated_at": float(row["updated_at"] or 0.0),
+        "completed_at": row["completed_at"],
     }
 
 
