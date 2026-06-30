@@ -11,6 +11,7 @@ from adaos.services import conversation_store
 EVAL_SCHEMA = "adaos.conversation.eval.result.v1"
 GOLDEN_DATASET_SCHEMA = "adaos.conversation.golden_dataset.v1"
 MIGRATION_GATE_SCHEMA = "adaos.conversation.eval.migration_gate.v1"
+EVAL_REPAIR_SUMMARY_SCHEMA = "adaos.conversation.eval.repair_summary.v1"
 DEFAULT_REQUIRED_GOLDEN_DATASET_IDS = (
     "general_no_match_repair",
     "conversation_companions_agent_handoff",
@@ -324,6 +325,107 @@ def run_golden_migration_gate(
     }
 
 
+def eval_repair_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+    schema = str(result.get("schema") or "").strip()
+    if schema == MIGRATION_GATE_SCHEMA:
+        failures = _mapping_list(result.get("failures"))
+        dataset_refs = [_dataset_failure_ref(item) for item in failures]
+        failed_count = int(result.get("failed_count") or len(dataset_refs))
+        return {
+            "schema": EVAL_REPAIR_SUMMARY_SCHEMA,
+            "source_schema": MIGRATION_GATE_SCHEMA,
+            "status": str(result.get("status") or "unknown"),
+            "fixture_count": int(result.get("fixture_count") or 0),
+            "passed_count": int(result.get("passed_count") or 0),
+            "failed_count": failed_count,
+            "dataset_refs": dataset_refs,
+            "source_refs": _gate_source_refs(result),
+        }
+    if schema == EVAL_SCHEMA:
+        failures = _mapping_list(result.get("failures"))
+        return {
+            "schema": EVAL_REPAIR_SUMMARY_SCHEMA,
+            "source_schema": EVAL_SCHEMA,
+            "status": str(result.get("status") or "unknown"),
+            "conversation_id": str(result.get("conversation_id") or ""),
+            "thread_id": str(result.get("thread_id") or "") or None,
+            "failed_count": len(failures),
+            "dataset_refs": [
+                {
+                    "dataset_id": str(result.get("dataset_id") or ""),
+                    "conversation_id": str(result.get("conversation_id") or ""),
+                    "thread_id": str(result.get("thread_id") or "") or None,
+                    "failure_names": [str(item.get("name") or "") for item in failures if isinstance(item, Mapping)],
+                }
+            ],
+            "source_refs": _eval_source_refs(result),
+        }
+    raise ValueError(f"unsupported eval result schema: {schema!r}")
+
+
+def publish_eval_repair_pending_action(
+    result: Mapping[str, Any],
+    *,
+    webspace_id: str = "default",
+    action_id: str | None = None,
+) -> dict[str, Any]:
+    summary = eval_repair_summary(result)
+    if str(summary.get("status") or "").lower() == "passed" or int(summary.get("failed_count") or 0) <= 0:
+        return {
+            "ok": True,
+            "published": False,
+            "reason": "eval_passed",
+            "summary": summary,
+        }
+
+    from adaos.services import pending_actions
+
+    risk = _eval_repair_action_risk(summary)
+    failed_count = int(summary.get("failed_count") or 0)
+    title = "Review conversation eval failures"
+    text_summary = f"{failed_count} conversation evaluation failure(s) need Builder repair triage."
+    action = pending_actions.publish_pending_action(
+        webspace_id=webspace_id,
+        action_id=action_id,
+        kind="builder.eval_repair.review",
+        title=title,
+        summary=text_summary,
+        request_text=text_summary,
+        producer={"type": "system", "system_id": "conversation_eval"},
+        owner_scope={"webspace_id": webspace_id, "owner": "skill:builder_skill"},
+        domain_ref={
+            "schema": "adaos.builder.eval_repair_ref.v1",
+            "source_schema": summary.get("source_schema"),
+            "failed_count": failed_count,
+            "dataset_ids": [
+                str(item.get("dataset_id") or "")
+                for item in summary.get("dataset_refs", [])
+                if isinstance(item, Mapping) and str(item.get("dataset_id") or "")
+            ],
+        },
+        allowed_actions=[
+            {"id": "preview", "label": "Preview Evidence", "terminal": False},
+            {"id": "create_repair_tasks", "label": "Create Repair Tasks", "terminal": True},
+            {"id": "postpone", "label": "Later", "terminal": False},
+            {"id": "refuse", "label": "Dismiss", "terminal": True},
+        ],
+        default_text_binding=False,
+        response_topic="builder.eval_repair.response",
+        priority=80,
+        metadata={
+            "schema": "adaos.builder.eval_repair.pending_action_metadata.v1",
+            "eval_summary": summary,
+            "source_refs": summary.get("source_refs", []),
+            "approval_policy": {
+                "action_risk": risk,
+                "requires_human_review": True,
+                "reason": "repair tasks may generate or apply runtime changes",
+            },
+        },
+    )
+    return {"ok": True, "published": True, "pending_action": action, "summary": summary}
+
+
 def _is_fallback_trace(trace: Mapping[str, Any], policy: Mapping[str, Any]) -> bool:
     haystack = " ".join(
         str(value or "").lower()
@@ -402,6 +504,83 @@ def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [item for item in value if isinstance(item, Mapping)]
     return []
+
+
+def _dataset_failure_ref(value: Mapping[str, Any]) -> dict[str, Any]:
+    failures = _mapping_list(value.get("failures"))
+    return {
+        "dataset_id": str(value.get("dataset_id") or ""),
+        "source_path": str(value.get("source_path") or "") or None,
+        "failure_names": [str(item.get("name") or "") for item in failures if str(item.get("name") or "")],
+        "failures": [dict(item) for item in failures[:10]],
+    }
+
+
+def _gate_source_refs(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    datasets = _mapping_list(result.get("datasets"))
+    for dataset in datasets:
+        if str(dataset.get("status") or "") == "passed":
+            continue
+        refs.append(
+            {
+                "type": "conversation_eval_dataset",
+                "dataset_id": str(dataset.get("dataset_id") or ""),
+                "source_path": str(dataset.get("source_path") or "") or None,
+                "conversation_id": str(dataset.get("conversation_id") or "") or None,
+                "thread_id": str(dataset.get("thread_id") or "") or None,
+                "evidence_refs": _mapping_list(dataset.get("evidence_refs"))[:20],
+            }
+        )
+    seen = {str(item.get("dataset_id") or "") for item in refs}
+    for failure in _mapping_list(result.get("failures")):
+        dataset_id = str(failure.get("dataset_id") or "")
+        if dataset_id in seen:
+            continue
+        refs.append(
+            {
+                "type": "conversation_eval_dataset",
+                "dataset_id": dataset_id,
+                "source_path": str(failure.get("source_path") or "") or None,
+                "evidence_refs": [],
+            }
+        )
+    return refs
+
+
+def _eval_source_refs(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    refs = [
+        {
+            "type": "conversation_eval_result",
+            "dataset_id": str(result.get("dataset_id") or "") or None,
+            "conversation_id": str(result.get("conversation_id") or "") or None,
+            "thread_id": str(result.get("thread_id") or "") or None,
+        }
+    ]
+    refs.extend(_mapping_list(result.get("evidence_refs"))[:20])
+    return refs
+
+
+def _eval_repair_action_risk(summary: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        from adaos.services.conversation_safety import classify_action_risk
+
+        result = classify_action_risk(
+            {
+                "tool": "builder.eval_repair.create_tasks",
+                "side_effect_class": "local_write",
+                "target": "Builder repair tasks from conversation evaluation failures",
+                "source_refs": summary.get("source_refs", []),
+            }
+        )
+        return dict(result) if isinstance(result, Mapping) else {"risk_class": "local_write"}
+    except Exception:
+        return {
+            "schema": "adaos.conversation.action_risk.v1",
+            "risk_class": "local_write",
+            "requires_approval": True,
+            "reason": "fallback risk for eval repair task creation",
+        }
 
 
 def _golden_fixture_paths(

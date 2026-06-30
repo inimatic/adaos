@@ -186,3 +186,56 @@ def test_conversation_eval_golden_migration_gate_blocks_missing_required_dataset
             ],
         }
     ]
+
+
+def test_conversation_eval_publishes_failed_gate_repair_pending_action(monkeypatch) -> None:
+    gate = conversation_eval.run_golden_migration_gate(
+        fixture_paths=[FIXTURE_DIR / "general_no_match_repair.json"],
+        required_dataset_ids=["general_no_match_repair", "builder_review_handoff"],
+    )
+    published: list[dict] = []
+
+    import adaos.services.pending_actions as pending_actions
+
+    def _publish_pending_action(**kwargs):
+        published.append(dict(kwargs))
+        return {
+            "id": "pa.eval.repair",
+            "kind": kwargs["kind"],
+            "domain_ref": kwargs["domain_ref"],
+            "metadata": kwargs["metadata"],
+        }
+
+    monkeypatch.setattr(pending_actions, "publish_pending_action", _publish_pending_action)
+
+    result = conversation_eval.publish_eval_repair_pending_action(gate, webspace_id="builder-eval")
+
+    assert result["ok"] is True
+    assert result["published"] is True
+    assert result["pending_action"]["kind"] == "builder.eval_repair.review"
+    assert published[0]["response_topic"] == "builder.eval_repair.response"
+    assert published[0]["owner_scope"]["owner"] == "skill:builder_skill"
+    assert published[0]["domain_ref"]["dataset_ids"] == ["builder_review_handoff"]
+    metadata = published[0]["metadata"]
+    assert metadata["schema"] == "adaos.builder.eval_repair.pending_action_metadata.v1"
+    assert metadata["eval_summary"]["schema"] == "adaos.conversation.eval.repair_summary.v1"
+    assert metadata["eval_summary"]["failed_count"] == 1
+    assert metadata["eval_summary"]["dataset_refs"][0]["dataset_id"] == "builder_review_handoff"
+    assert metadata["approval_policy"]["requires_human_review"] is True
+    assert metadata["approval_policy"]["action_risk"]["schema"] == "adaos.conversation.action_risk.v1"
+
+
+def test_conversation_eval_skips_pending_action_for_passed_gate(monkeypatch) -> None:
+    gate = conversation_eval.run_golden_migration_gate(fixture_dir=FIXTURE_DIR)
+    published: list[dict] = []
+
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: published.append(dict(kwargs)))
+
+    result = conversation_eval.publish_eval_repair_pending_action(gate, webspace_id="builder-eval")
+
+    assert result["ok"] is True
+    assert result["published"] is False
+    assert result["reason"] == "eval_passed"
+    assert published == []

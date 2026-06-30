@@ -2003,8 +2003,12 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[should]` Add optional model-backed graders for answer quality,
   unsupported claims, memory-write quality, and persona consistency after the
   deterministic evaluator is stable.
-- [ ] `[should]` Publish evaluation summaries into diagnostics / Pending
+- [x] `[should]` Publish evaluation summaries into diagnostics / Pending
   Actions so Builder repair tasks can link failing traces and fixtures.
+  `conversation_eval.publish_eval_repair_pending_action(...)` now turns a
+  failed golden result or migration gate into a `builder.eval_repair.review`
+  Pending Action with `adaos.conversation.eval.repair_summary.v1`,
+  dataset/source refs, and action-risk metadata.
 
 ### Phase 10. Security, Privacy, and Governance
 
