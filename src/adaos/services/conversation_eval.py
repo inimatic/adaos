@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from statistics import median
 from typing import Any, Mapping, Sequence
 
@@ -7,6 +9,14 @@ from adaos.services import conversation_store
 
 
 EVAL_SCHEMA = "adaos.conversation.eval.result.v1"
+GOLDEN_DATASET_SCHEMA = "adaos.conversation.golden_dataset.v1"
+MIGRATION_GATE_SCHEMA = "adaos.conversation.eval.migration_gate.v1"
+DEFAULT_REQUIRED_GOLDEN_DATASET_IDS = (
+    "general_no_match_repair",
+    "conversation_companions_agent_handoff",
+    "builder_review_handoff",
+    "teacher_candidate_repair",
+)
 
 
 def collect_metrics(
@@ -202,6 +212,117 @@ def evaluate_golden_conversation(
     }
 
 
+def load_golden_dataset(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    dataset = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(dataset, Mapping):
+        raise ValueError(f"golden dataset must be an object: {source}")
+    if dataset.get("schema_version") != GOLDEN_DATASET_SCHEMA:
+        raise ValueError(
+            f"unsupported golden dataset schema for {source}: {dataset.get('schema_version')!r}"
+        )
+    missing = [
+        key
+        for key in ("id", "conversation_id", "messages", "turn_traces", "expectations")
+        if key not in dataset
+    ]
+    if missing:
+        raise ValueError(f"golden dataset {source} is missing required keys: {', '.join(missing)}")
+    return dict(dataset)
+
+
+def evaluate_golden_dataset(dataset: Mapping[str, Any]) -> dict[str, Any]:
+    dataset_id = str(dataset.get("id") or "").strip()
+    if not dataset_id:
+        raise ValueError("golden dataset id is required")
+    result = evaluate_golden_conversation(
+        conversation_id=str(dataset.get("conversation_id") or ""),
+        messages=_mapping_list(dataset.get("messages")),
+        traces=_mapping_list(dataset.get("turn_traces")),
+        expectations=dataset.get("expectations") if isinstance(dataset.get("expectations"), Mapping) else {},
+    )
+    result["dataset_id"] = dataset_id
+    description = str(dataset.get("description") or "").strip()
+    if description:
+        result["description"] = description
+    return result
+
+
+def run_golden_migration_gate(
+    *,
+    fixture_dir: str | Path | None = None,
+    fixture_paths: Sequence[str | Path] | None = None,
+    required_dataset_ids: Sequence[str] | None = DEFAULT_REQUIRED_GOLDEN_DATASET_IDS,
+) -> dict[str, Any]:
+    paths = _golden_fixture_paths(fixture_dir=fixture_dir, fixture_paths=fixture_paths)
+    results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for path in paths:
+        source = Path(path)
+        try:
+            dataset = load_golden_dataset(source)
+            dataset_id = str(dataset.get("id") or source.stem)
+            seen_ids.add(dataset_id)
+            result = evaluate_golden_dataset(dataset)
+            result["source_path"] = str(source)
+        except Exception as exc:
+            dataset_id = source.stem
+            seen_ids.add(dataset_id)
+            result = {
+                "schema": EVAL_SCHEMA,
+                "dataset_id": dataset_id,
+                "source_path": str(source),
+                "status": "failed",
+                "failures": [
+                    {
+                        "name": "fixture_load",
+                        "passed": False,
+                        "details": {"error": str(exc)},
+                    }
+                ],
+            }
+        results.append(result)
+        if result.get("status") != "passed":
+            failures.append(
+                {
+                    "dataset_id": str(result.get("dataset_id") or dataset_id),
+                    "source_path": str(result.get("source_path") or source),
+                    "failures": list(result.get("failures") or []),
+                }
+            )
+
+    required = {str(item).strip() for item in required_dataset_ids or [] if str(item or "").strip()}
+    for dataset_id in sorted(required - seen_ids):
+        failures.append(
+            {
+                "dataset_id": dataset_id,
+                "source_path": None,
+                "failures": [
+                    {
+                        "name": "required_dataset",
+                        "passed": False,
+                        "details": {"dataset_id": dataset_id, "reason": "missing"},
+                    }
+                ],
+            }
+        )
+
+    passed_count = sum(1 for item in results if item.get("status") == "passed")
+    status = "passed" if results and not failures else "failed"
+    return {
+        "schema": MIGRATION_GATE_SCHEMA,
+        "status": status,
+        "fixture_count": len(results),
+        "passed_count": passed_count,
+        "failed_count": len(results) - passed_count + len(required - seen_ids),
+        "required_dataset_ids": sorted(required),
+        "datasets": results,
+        "failures": failures,
+    }
+
+
 def _is_fallback_trace(trace: Mapping[str, Any], policy: Mapping[str, Any]) -> bool:
     haystack = " ".join(
         str(value or "").lower()
@@ -274,6 +395,29 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, Sequence):
         return [str(item) for item in value if str(item or "")]
     return []
+
+
+def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [item for item in value if isinstance(item, Mapping)]
+    return []
+
+
+def _golden_fixture_paths(
+    *,
+    fixture_dir: str | Path | None,
+    fixture_paths: Sequence[str | Path] | None,
+) -> list[Path]:
+    if fixture_paths is not None:
+        return [Path(item) for item in fixture_paths]
+    root = Path(fixture_dir) if fixture_dir is not None else _default_golden_fixture_dir()
+    if not root.exists():
+        raise FileNotFoundError(f"golden fixture directory does not exist: {root}")
+    return sorted(root.glob("*.json"))
+
+
+def _default_golden_fixture_dir() -> Path:
+    return Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "conversation"
 
 
 def _add_check(checks: list[dict[str, Any]], *, name: str, passed: bool, details: Mapping[str, Any]) -> None:

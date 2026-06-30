@@ -145,3 +145,42 @@ def test_conversation_eval_replays_initial_golden_datasets() -> None:
             "failures": result["failures"],
             "metrics": result["metrics"],
         }
+
+
+def test_conversation_eval_golden_migration_gate_passes_initial_suite() -> None:
+    result = conversation_eval.run_golden_migration_gate(fixture_dir=FIXTURE_DIR)
+
+    assert result["schema"] == "adaos.conversation.eval.migration_gate.v1"
+    assert result["status"] == "passed"
+    assert result["fixture_count"] >= 4
+    assert result["failed_count"] == 0
+    assert result["failures"] == []
+    assert {
+        "general_no_match_repair",
+        "conversation_companions_agent_handoff",
+        "builder_review_handoff",
+        "teacher_candidate_repair",
+    }.issubset({item["dataset_id"] for item in result["datasets"]})
+
+
+def test_conversation_eval_golden_migration_gate_blocks_missing_required_dataset() -> None:
+    result = conversation_eval.run_golden_migration_gate(
+        fixture_paths=[FIXTURE_DIR / "general_no_match_repair.json"],
+        required_dataset_ids=["general_no_match_repair", "builder_review_handoff"],
+    )
+
+    assert result["status"] == "failed"
+    assert result["failed_count"] == 1
+    assert result["failures"] == [
+        {
+            "dataset_id": "builder_review_handoff",
+            "source_path": None,
+            "failures": [
+                {
+                    "name": "required_dataset",
+                    "passed": False,
+                    "details": {"dataset_id": "builder_review_handoff", "reason": "missing"},
+                }
+            ],
+        }
+    ]

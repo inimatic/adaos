@@ -1992,8 +1992,11 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[must]` Broaden the golden datasets to include companion profile
   correction, no-input repair, Builder apply/reject handoff, memory-write
   consent, and long-context retrieval.
-- [ ] `[must]` Make golden evaluation a migration gate before broad removal of
+- [x] `[must]` Make golden evaluation a migration gate before broad removal of
   compatibility Voice projections or broad generated-skill rollout.
+  `conversation_eval.run_golden_migration_gate()` loads checked-in golden
+  datasets, verifies the required baseline suite, and returns
+  `adaos.conversation.eval.migration_gate.v1` with blocking fixture failures.
 - [ ] `[should]` Add optional model-backed graders for answer quality,
   unsupported claims, memory-write quality, and persona consistency after the
   deterministic evaluator is stable.
@@ -2035,9 +2038,12 @@ Important lacunae found during Phase 6 implementation:
   Pending Action approval gates. Preview policy includes
   `adaos.builder.action_risk_review.v1` evidence and blocks auto-apply for
   mandatory action-risk classes.
-- [ ] `[must]` Enforce action-risk approval gates in the runtime path before
+- [x] `[must]` Enforce action-risk approval gates in the runtime path before
   executing filesystem, network, device-control, credential, destructive, or
-  cross-node effects outside Builder preview.
+  cross-node effects outside Builder preview. `tool_bridge.call_tool()` now
+  classifies runtime tool requests with
+  `conversation_safety.classify_action_risk(...)` and rejects mandatory-review
+  effects unless an explicit Pending Action / approval identity is attached.
 - [ ] `[should]` Add a policy inspector UI that explains memory access,
   retrieved evidence, action approval class, redaction state, and denial
   reasons for the last turn.
