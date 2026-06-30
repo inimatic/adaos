@@ -26,6 +26,9 @@ The current implementation is centered around local and private deployments:
 
 - [Quickstart](quickstart.md): installation, bootstrap, and first commands
 - [Architecture](architecture/index.md): how the runtime is organized
+- [MVP Roadmap](mvp_roadmap.md): current milestone checklist for finishing the
+  MVP across runtime, skills, browser, conversations, endpoints, and release
+  evidence
 - [Roadmap Inventory](architecture/roadmap-inventory.md): current target-architecture coverage, implementation statuses, and documentation gaps
 - [CLI](cli/index.md): command groups and operational workflows
 - [SDK](sdk/index.md): public Python-facing building blocks

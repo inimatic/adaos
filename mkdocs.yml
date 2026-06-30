@@ -195,6 +195,7 @@ nav:
   - DevPortal: devportal.md
   - Roadmap:
       - Overview: roadmap.md
+      - MVP Roadmap: mvp_roadmap.md
       - LLM Skill Creation: llm-skill-creation-roadmap.md
   - Changelog: changelog.md
   - Concepts:
