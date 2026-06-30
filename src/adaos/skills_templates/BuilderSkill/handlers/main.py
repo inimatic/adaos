@@ -345,6 +345,7 @@ def _publish_review_pending_action(
                 "scenario_id": refs.get("scenario_id"),
                 "draft_id": refs.get("draft_id"),
                 "patch_id": refs.get("patch_id"),
+                "operation": refs.get("operation"),
                 "conversation_id": refs.get("conversation_id"),
                 "thread_id": refs.get("thread_id"),
             },
@@ -422,10 +423,25 @@ async def _on_builder_pending_action_response(evt: Any) -> None:
     session_id = str(domain_ref.get("session_id") or "").strip()
     patch_id = str(domain_ref.get("patch_id") or "").strip()
     pending_action_id = str(payload.get("pending_action_id") or action.get("id") or "").strip()
+    operation = str(domain_ref.get("operation") or "").strip()
     if not webspace_id or response_action_id not in {"approve", "refuse"}:
         return
     session = _load_session(webspace_id, session_id or None)
     if not session:
+        return
+    if operation == "delete_draft":
+        draft_id = str(domain_ref.get("draft_id") or session.get("draft_id") or "").strip()
+        binding = _workbench_binding(webspace_id)
+        topic = _builder_topic_ref(webspace_id, session=session, binding=binding)
+        if response_action_id == "approve" and draft_id:
+            result = delete_development_skill(draft_id=draft_id, webspace_id=webspace_id)
+            if result.get("ok"):
+                message = f"{AGENT_LABEL}: \u0443\u0434\u0430\u043b\u0438\u043b \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a {draft_id}."
+            else:
+                message = f"{AGENT_LABEL}: \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0434\u0430\u043b\u0438\u0442\u044c {draft_id}: {result.get('error') or 'unknown_error'}."
+        else:
+            message = f"{AGENT_LABEL}: \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 {draft_id or session.get('scenario_id')} \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e."
+        _safe_emit_chat(message, webspace_id=webspace_id, session=session, binding=binding, topic_ref=topic)
         return
     patches = [dict(item) for item in session.get("patches", []) if isinstance(item, Mapping)]
     matched = False
@@ -1405,6 +1421,472 @@ def _guided_clarification_message(payload: Mapping[str, Any]) -> str:
     )
 
 
+def _normalise_command_text(text: str) -> str:
+    lowered = str(text or "").strip().lower().replace("\u0451", "\u0435")
+    lowered = re.sub(r"^\s*(?:builder|\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c)\s*[:,;\-]?\s*", "", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def _strip_command_ref(value: str) -> str:
+    token = str(value or "").strip(" \t\r\n:;,.!?()[]{}\"'\u00ab\u00bb")
+    fillers = (
+        "\u043d\u0430 ",
+        "\u043a ",
+        "\u043f\u0440\u043e\u0435\u043a\u0442 ",
+        "\u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f ",
+        "\u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439 ",
+        "\u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044e ",
+        "\u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a ",
+        "\u043d\u0430\u0432\u044b\u043a ",
+        "project ",
+        "prototype ",
+        "scenario ",
+        "draft ",
+        "skill ",
+    )
+    changed = True
+    while changed:
+        changed = False
+        lowered = token.lower()
+        for filler in fillers:
+            if lowered.startswith(filler):
+                token = token[len(filler) :].strip(" \t\r\n:;,.!?()[]{}\"'\u00ab\u00bb")
+                changed = True
+                break
+    return token
+
+
+def _has_any(text: str, tokens: tuple[str, ...]) -> bool:
+    return any(token in text for token in tokens)
+
+
+def _project_words() -> tuple[str, ...]:
+    return (
+        "\u043f\u0440\u043e\u0435\u043a\u0442",
+        "\u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+        "\u0441\u0446\u0435\u043d\u0430\u0440",
+        "\u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a",
+        "\u043d\u0430\u0432\u044b\u043a",
+        "project",
+        "prototype",
+        "scenario",
+        "draft",
+        "skill",
+    )
+
+
+def _is_explicit_create_request(text: str) -> bool:
+    lowered = _normalise_command_text(text)
+    return _has_any(
+        lowered,
+        (
+            "create",
+            "build",
+            "make new",
+            "new app",
+            "new scenario",
+            "new prototype",
+            "new skill",
+            "lets build",
+            "let's build",
+            "build it",
+            "\u0441\u043e\u0437\u0434",
+            "\u0441\u0434\u0435\u043b\u0430\u0435\u043c",
+            "\u0434\u0430\u0432\u0430\u0439 \u0441\u0434\u0435\u043b",
+            "\u0441\u043e\u0431\u0435\u0440",
+            "\u043f\u043e\u0441\u0442\u0440\u043e\u0438",
+            "\u043d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
+            "\u043d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+            "\u043d\u043e\u0432\u043e\u0435 \u043f\u0440\u0438\u043b\u043e\u0436",
+            "\u043d\u043e\u0432\u044b\u0439 \u0441\u0446\u0435\u043d\u0430\u0440",
+            "\u043d\u043e\u0432\u044b\u0439 \u043d\u0430\u0432\u044b\u043a",
+        ),
+    )
+
+
+def _parse_builder_command(text: str, *, allow_create: bool = True, has_session: bool = False) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    lowered = _normalise_command_text(raw)
+    if not lowered:
+        return {"intent": "none"}
+
+    if _has_any(
+        lowered,
+        (
+            "\u0447\u0442\u043e \u0432 \u0440\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u043a\u0435",
+            "\u043f\u043e\u043a\u0430\u0436\u0438 \u043f\u0440\u043e\u0435\u043a\u0442",
+            "\u043f\u043e\u043a\u0430\u0436\u0438 \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+            "\u043f\u043e\u043a\u0430\u0436\u0438 \u0447\u0435\u0440\u043d\u043e\u0432",
+            "\u0441\u043f\u0438\u0441\u043e\u043a \u043f\u0440\u043e\u0435\u043a\u0442",
+            "\u0441\u043f\u0438\u0441\u043e\u043a \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+            "\u0441\u043f\u0438\u0441\u043e\u043a \u0447\u0435\u0440\u043d\u043e\u0432",
+            "list projects",
+            "list drafts",
+            "show projects",
+            "show drafts",
+            "show prototypes",
+        ),
+    ):
+        return {"intent": "project.list", "confidence": 1.0, "source": "deterministic"}
+
+    if _has_any(
+        lowered,
+        (
+            "\u0447\u0442\u043e \u0432\u044b\u0431\u0440\u0430\u043d",
+            "\u0447\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u0432\u044b\u0431\u0440\u0430\u043d",
+            "\u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
+            "\u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+            "\u043d\u0430\u0434 \u0447\u0435\u043c \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u043c",
+            "current project",
+            "current draft",
+            "what is selected",
+        ),
+    ):
+        return {"intent": "project.current", "confidence": 1.0, "source": "deterministic"}
+
+    delete_verb = _has_any(lowered, ("delete", "remove project", "\u0443\u0434\u0430\u043b", "\u0441\u043e\u0442\u0440"))
+    field_word = _has_any(lowered, ("field", "column", "\u043f\u043e\u043b\u0435", "\u043a\u043e\u043b\u043e\u043d"))
+    if delete_verb and not field_word:
+        current = _has_any(lowered, ("current", "\u0442\u0435\u043a\u0443\u0449", "\u0432\u044b\u0431\u0440\u0430\u043d"))
+        if current or _has_any(lowered, _project_words()):
+            ref = ""
+            match = re.search(r"(?:delete|remove project|\u0443\u0434\u0430\u043b(?:\u0438|\u0438\u0442\u044c)?|\u0441\u043e\u0442\u0440(?:\u0438|\u0435\u0442\u044c)?)\s+(.+)$", lowered)
+            if match:
+                ref = _strip_command_ref(match.group(1))
+            return {
+                "intent": "project.delete",
+                "project_ref": "" if current else ref,
+                "target": "current" if current else "ref",
+                "confidence": 1.0,
+                "source": "deterministic",
+            }
+
+    for pattern in (
+        r"^(?:switch to|select|open)\s+(.+)$",
+        r"^(?:\u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447(?:\u0438\u0441\u044c|\u0438|\u0438\u0442\u044c\u0441\u044f)?|\u0432\u044b\u0431\u0435\u0440(?:\u0438|\u0430\u0442\u044c)?|\u043e\u0442\u043a\u0440\u043e\u0439|\u0440\u0430\u0431\u043e\u0442\u0430\u0435\u043c \u0441|\u043f\u0435\u0440\u0435\u0439\u0434\u0438 \u043a)\s+(.+)$",
+    ):
+        match = re.search(pattern, lowered)
+        if match:
+            ref = _strip_command_ref(match.group(1))
+            if ref:
+                return {"intent": "project.switch", "project_ref": ref, "confidence": 1.0, "source": "deterministic"}
+
+    if allow_create and (_is_explicit_create_request(raw) or (not has_session and _is_create_request(raw))):
+        return {"intent": "project.create", "idea": raw, "confidence": 1.0, "source": "deterministic"}
+
+    return {"intent": "none"}
+
+
+def _command_hint_message() -> str:
+    return (
+        f"{AGENT_LABEL}: \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u043e\u0435\u043a\u0442 \u0438\u043b\u0438 \u0441\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u043d\u043e\u0432\u044b\u0439. "
+        "\u041f\u0440\u0438\u043c\u0435\u0440\u044b: \u00ab\u0441\u043e\u0437\u0434\u0430\u0439 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a\u00bb, "
+        "\u00ab\u043f\u043e\u043a\u0430\u0436\u0438 \u043f\u0440\u043e\u0435\u043a\u0442\u044b\u00bb, \u00ab\u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u0441\u044c \u043d\u0430 demo_scenario\u00bb."
+    )
+
+
+def _session_ref_values(session: Mapping[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("id", "draft_id", "scenario_id", "title", "source_idea"):
+        value = str(session.get(key) or "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _safe_ref_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", _normalise_command_text(value)).strip("_")
+
+
+def _session_summary(session: Mapping[str, Any]) -> dict[str, Any]:
+    scenario_id = str(session.get("scenario_id") or "").strip()
+    draft_id = str(session.get("draft_id") or session.get("id") or "").strip()
+    return {
+        "session_id": str(session.get("id") or "").strip(),
+        "draft_id": draft_id or None,
+        "scenario_id": scenario_id or None,
+        "title": str(session.get("title") or scenario_id or draft_id or "prototype").strip(),
+        "updated_at": session.get("updated_at"),
+    }
+
+
+def _development_sessions(webspace_id: str) -> list[dict[str, Any]]:
+    sessions = [dict(item) for item in _sessions(webspace_id).values() if isinstance(item, Mapping)]
+    return sorted(sessions, key=lambda item: float(item.get("updated_at") or 0), reverse=True)
+
+
+def _resolve_project_session(webspace_id: str, project_ref: str, *, current: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    ref = _strip_command_ref(project_ref)
+    if not ref and isinstance(current, Mapping):
+        return {"status": "found", "session": copy.deepcopy(dict(current)), "matches": [_session_summary(current)]}
+    if not ref:
+        return {"status": "not_found", "matches": []}
+    ref_norm = _normalise_command_text(ref)
+    ref_safe = _safe_ref_token(ref)
+    exact: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    for session in _development_sessions(webspace_id):
+        values = _session_ref_values(session)
+        value_norms = [_normalise_command_text(value) for value in values]
+        value_safe = [_safe_ref_token(value) for value in values]
+        if ref_norm in value_norms or ref_safe in value_safe:
+            exact.append(session)
+            continue
+        blob_norm = " ".join(value_norms)
+        blob_safe = " ".join(value_safe)
+        if (ref_norm and ref_norm in blob_norm) or (ref_safe and ref_safe in blob_safe):
+            partial.append(session)
+    matches = exact or partial
+    if len(matches) == 1:
+        return {"status": "found", "session": copy.deepcopy(matches[0]), "matches": [_session_summary(matches[0])]}
+    if len(matches) > 1:
+        return {"status": "ambiguous", "matches": [_session_summary(item) for item in matches[:5]]}
+    return {"status": "not_found", "matches": []}
+
+
+def _builder_command_response(
+    *,
+    webspace_id: str,
+    message: str,
+    status: str,
+    command: Mapping[str, Any],
+    session: Mapping[str, Any] | None = None,
+    binding: Mapping[str, Any] | None = None,
+    topic_ref: Mapping[str, Any] | None = None,
+    _meta: Mapping[str, Any] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    topic = dict(topic_ref or {}) if isinstance(topic_ref, Mapping) else _builder_topic_ref(webspace_id, session=session, binding=binding, _meta=_meta)
+    _safe_emit_chat(message, webspace_id=webspace_id, _meta=_meta, session=session, binding=binding, topic_ref=topic)
+    payload: dict[str, Any] = {
+        "ok": True,
+        "status": status,
+        "command": dict(command),
+        "message": message,
+        "topic": {k: v for k, v in topic.items() if k != "stored"},
+        "dialog": _dialog_state(webspace_id, topic_ref=topic),
+    }
+    if session is not None:
+        payload["session"] = dict(session)
+        payload["session_id"] = session.get("id")
+        payload["scenario_id"] = session.get("scenario_id")
+        payload["draft_id"] = session.get("draft_id")
+    if binding is not None:
+        payload["binding"] = dict(binding)
+    if extra:
+        payload.update(dict(extra))
+    return payload
+
+
+def _format_project_list(items: list[dict[str, Any]], active_session_id: str | None) -> str:
+    if not items:
+        return _command_hint_message()
+    lines = []
+    for item in items[:8]:
+        mark = "* " if active_session_id and item.get("session_id") == active_session_id else "- "
+        title = str(item.get("title") or item.get("scenario_id") or item.get("draft_id") or "prototype")
+        scenario_id = str(item.get("scenario_id") or "")
+        draft_id = str(item.get("draft_id") or "")
+        ref = scenario_id or draft_id
+        lines.append(f"{mark}{title} ({ref})")
+    return f"{AGENT_LABEL}: \u043f\u0440\u043e\u0435\u043a\u0442\u044b \u0432 \u0440\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u043a\u0435:\n" + "\n".join(lines)
+
+
+def _handle_project_list_command(
+    *,
+    webspace_id: str,
+    session: Mapping[str, Any] | None,
+    binding: Mapping[str, Any],
+    topic: Mapping[str, Any],
+    command: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    items = [_session_summary(item) for item in _development_sessions(webspace_id)]
+    message = _format_project_list(items, str((session or {}).get("id") or ""))
+    return _builder_command_response(
+        webspace_id=webspace_id,
+        message=message,
+        status="project_list",
+        command=command,
+        session=session,
+        binding=binding,
+        topic_ref=topic,
+        _meta=_meta,
+        extra={"items": items},
+    )
+
+
+def _handle_project_current_command(
+    *,
+    webspace_id: str,
+    session: Mapping[str, Any] | None,
+    binding: Mapping[str, Any],
+    topic: Mapping[str, Any],
+    command: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(session, Mapping):
+        return _builder_command_response(
+            webspace_id=webspace_id,
+            message=_command_hint_message(),
+            status="target_required",
+            command=command,
+            binding=binding,
+            topic_ref=topic,
+            _meta=_meta,
+            extra={"needs_selection": True},
+        )
+    summary = _session_summary(session)
+    message = (
+        f"{AGENT_LABEL}: \u0441\u0435\u0439\u0447\u0430\u0441 \u0432\u044b\u0431\u0440\u0430\u043d "
+        f"{summary.get('title')} ({summary.get('scenario_id') or summary.get('draft_id')})."
+    )
+    return _builder_command_response(
+        webspace_id=webspace_id,
+        message=message,
+        status="project_current",
+        command=command,
+        session=session,
+        binding=binding,
+        topic_ref=topic,
+        _meta=_meta,
+        extra={"project": summary},
+    )
+
+
+def _handle_project_switch_command(
+    *,
+    webspace_id: str,
+    command: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    current, binding = _target_session(webspace_id)
+    resolution = _resolve_project_session(webspace_id, str(command.get("project_ref") or ""), current=current)
+    if resolution.get("status") != "found":
+        topic = _builder_topic_ref(webspace_id, session=current, binding=binding, _meta=_meta)
+        if resolution.get("status") == "ambiguous":
+            message = f"{AGENT_LABEL}: \u043d\u0430\u0448\u0435\u043b \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u043f\u0440\u043e\u0435\u043a\u0442\u043e\u0432. \u0423\u0442\u043e\u0447\u043d\u0438\u0442\u0435 id."
+            status = "project_ambiguous"
+        else:
+            message = f"{AGENT_LABEL}: \u043d\u0435 \u043d\u0430\u0448\u0435\u043b \u043f\u0440\u043e\u0435\u043a\u0442 \u00ab{command.get('project_ref') or ''}\u00bb. \u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435: \u00ab\u043f\u043e\u043a\u0430\u0436\u0438 \u043f\u0440\u043e\u0435\u043a\u0442\u044b\u00bb."
+            status = "project_not_found"
+        return _builder_command_response(
+            webspace_id=webspace_id,
+            message=message,
+            status=status,
+            command=command,
+            session=current,
+            binding=binding,
+            topic_ref=topic,
+            _meta=_meta,
+            extra={"matches": resolution.get("matches") or []},
+        )
+
+    selected = dict(resolution["session"])
+    preview = selected.get("preview_state") if isinstance(selected.get("preview_state"), Mapping) else _preview_state(session=selected)
+    workbench = _ensure_workbench(webspace_id, session=selected, preview_state=preview)
+    binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else _workbench_binding(webspace_id)
+    topic = _builder_topic_ref(webspace_id, session=selected, binding=binding, _meta=_meta)
+    selected["preview_state"] = preview
+    selected["thread_id"] = str(topic.get("thread_id") or "").strip() or None
+    selected["topic_id"] = str(topic.get("topic_id") or "").strip() or None
+    selected["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
+    _save_session(webspace_id, selected)
+    summary = _session_summary(selected)
+    message = f"{AGENT_LABEL}: \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u043b\u0441\u044f \u043d\u0430 {summary.get('title')} ({summary.get('scenario_id') or summary.get('draft_id')})."
+    return _builder_command_response(
+        webspace_id=webspace_id,
+        message=message,
+        status="project_switched",
+        command=command,
+        session=selected,
+        binding=binding,
+        topic_ref=topic,
+        _meta=_meta,
+        extra={"project": summary, "workbench": workbench},
+    )
+
+
+def _handle_project_delete_command(
+    *,
+    webspace_id: str,
+    session: Mapping[str, Any] | None,
+    binding: Mapping[str, Any],
+    topic: Mapping[str, Any],
+    command: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    resolution = _resolve_project_session(
+        webspace_id,
+        "" if command.get("target") == "current" else str(command.get("project_ref") or ""),
+        current=session,
+    )
+    if resolution.get("status") != "found":
+        message = f"{AGENT_LABEL}: \u043d\u0435 \u043f\u043e\u043d\u044f\u043b, \u043a\u0430\u043a\u043e\u0439 \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a \u0443\u0434\u0430\u043b\u0438\u0442\u044c. \u041f\u0440\u0438\u043c\u0435\u0440: \u00ab\u0443\u0434\u0430\u043b\u0438 \u0442\u0435\u043a\u0443\u0449\u0438\u0439\u00bb."
+        return _builder_command_response(
+            webspace_id=webspace_id,
+            message=message,
+            status="target_required",
+            command=command,
+            session=session,
+            binding=binding,
+            topic_ref=topic,
+            _meta=_meta,
+            extra={"matches": resolution.get("matches") or [], "needs_selection": True},
+        )
+    selected = dict(resolution["session"])
+    draft_id = str(selected.get("draft_id") or "").strip()
+    if not draft_id:
+        message = f"{AGENT_LABEL}: \u0443 {selected.get('scenario_id') or selected.get('id')} \u043d\u0435\u0442 Builder draft id \u0434\u043b\u044f \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u044f."
+        return _builder_command_response(
+            webspace_id=webspace_id,
+            message=message,
+            status="delete_not_available",
+            command=command,
+            session=selected,
+            binding=binding,
+            topic_ref=topic,
+            _meta=_meta,
+        )
+    delete_patch = {
+        "id": f"patch_delete_{_hash_suffix(draft_id + str(_now()))}",
+        "target": "builder_draft",
+        "operation": "delete_draft",
+        "status": "proposed",
+        "summary": f"Delete Builder draft {draft_id}",
+        "side_effect_class": "local_delete",
+        "diff": {"draft_id": draft_id, "scenario_id": selected.get("scenario_id")},
+    }
+    pending_action = _publish_review_pending_action(
+        webspace_id=webspace_id,
+        session=selected,
+        request_text=str(command.get("raw") or command.get("project_ref") or "delete current draft"),
+        kind="builder.scenario_delete.review",
+        summary=f"Delete Builder draft {draft_id}",
+        _meta=_meta,
+        patch=delete_patch,
+    )
+    if pending_action and pending_action.get("id"):
+        selected["pending_action_id"] = pending_action.get("id")
+        _save_session(webspace_id, selected)
+        message = f"{AGENT_LABEL}: \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u043b \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 {draft_id}. \u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0435 Pending Action."
+        status = "delete_review_required"
+    else:
+        message = f"{AGENT_LABEL}: \u043d\u0435 \u0441\u043c\u043e\u0433 \u0441\u043e\u0437\u0434\u0430\u0442\u044c Pending Action \u0434\u043b\u044f \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u044f {draft_id}."
+        status = "delete_review_failed"
+    return _builder_command_response(
+        webspace_id=webspace_id,
+        message=message,
+        status=status,
+        command=command,
+        session=selected,
+        binding=binding,
+        topic_ref=topic,
+        _meta=_meta,
+        extra={"pending_action": pending_action, "patch": delete_patch},
+    )
+
+
 def _is_create_request(text: str) -> bool:
     lowered = str(text or "").lower()
     return any(
@@ -1525,13 +2007,24 @@ def chat(
             "topic": topic,
             "dialog": _dialog_state(ws, topic_ref=topic),
         }
-    if _is_create_request(utterance):
+    command = _parse_builder_command(utterance, has_session=bool(session))
+    command["raw"] = utterance
+    intent = str(command.get("intent") or "")
+    if intent == "project.list":
+        return _handle_project_list_command(webspace_id=ws, session=session, binding=binding, topic=topic, command=command, _meta=_meta)
+    if intent == "project.current":
+        return _handle_project_current_command(webspace_id=ws, session=session, binding=binding, topic=topic, command=command, _meta=_meta)
+    if intent == "project.switch":
+        return _handle_project_switch_command(webspace_id=ws, command=command, _meta=_meta)
+    if intent == "project.delete":
+        return _handle_project_delete_command(webspace_id=ws, session=session, binding=binding, topic=topic, command=command, _meta=_meta)
+    if intent == "project.create":
         result = create_scenario_draft(idea=utterance or "prototype app", webspace_id=ws, _meta=_meta)
         if result.get("ok"):
             message = str(result.get("message") or "")
             _safe_emit_chat(message, webspace_id=ws, _meta=_meta, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else None)
-            return {**result, "dialog": _dialog_state(ws, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic)}
-        return {**result, "dialog": _dialog_state(ws, topic_ref=topic)}
+            return {**result, "command": command, "dialog": _dialog_state(ws, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic)}
+        return {**result, "command": command, "dialog": _dialog_state(ws, topic_ref=topic)}
     if not session:
         message = _target_required_message(binding)
         _safe_emit_chat(message, webspace_id=ws, _meta=_meta, binding=binding, topic_ref=topic)

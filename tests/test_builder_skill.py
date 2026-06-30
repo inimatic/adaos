@@ -629,6 +629,190 @@ def test_chat_requires_selected_builder_target(monkeypatch) -> None:
     assert "demo_scenario" in result["message"]
 
 
+def test_builder_command_parser_prioritises_project_commands() -> None:
+    skill = _load_module()
+
+    switch = skill._parse_builder_command("\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c, \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u0441\u044c \u043d\u0430 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439 demo_scenario", has_session=True)
+    delete_field = skill._parse_builder_command("\u0443\u0434\u0430\u043b\u0438 \u043f\u043e\u043b\u0435 \u0446\u0435\u043d\u0430", has_session=True)
+    create = skill._parse_builder_command("\u0441\u043e\u0437\u0434\u0430\u0439 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a", has_session=True)
+
+    assert switch["intent"] == "project.switch"
+    assert switch["project_ref"] == "demo_scenario"
+    assert delete_field["intent"] == "none"
+    assert create["intent"] == "project.create"
+
+
+def test_chat_handles_builder_project_commands(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    emitted: list[dict] = []
+    published: list[dict] = []
+    calls: list[dict] = []
+    binding = {
+        "source_webspace_id": "desktop",
+        "dev_webspace_id": "desktop-dev",
+        "active_draft_id": "draft.beta",
+        "runtime_scenario_id": "beta_scenario",
+    }
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return dict(binding)
+
+        def set_active_draft(self, *, source_webspace_id=None, active_draft_id=None, runtime_scenario_id=None, persist_projection=True):
+            binding.update(
+                {
+                    "source_webspace_id": source_webspace_id,
+                    "dev_webspace_id": f"{source_webspace_id}-dev",
+                    "active_draft_id": active_draft_id,
+                    "runtime_scenario_id": runtime_scenario_id,
+                }
+            )
+            calls.append(
+                {
+                    "method": "set_active_draft",
+                    "active_draft_id": active_draft_id,
+                    "runtime_scenario_id": runtime_scenario_id,
+                    "persist_projection": persist_projection,
+                }
+            )
+            return dict(binding)
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            calls.append({"method": "snapshot", "webspace_id": webspace_id})
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda text, **kwargs: emitted.append({"text": text, "kwargs": kwargs}))
+    monkeypatch.setattr(
+        pending_actions,
+        "publish_pending_action",
+        lambda **kwargs: published.append(dict(kwargs)) or {"id": f"pa.builder.{len(published)}", "kind": kwargs["kind"]},
+    )
+
+    base_session = {
+        "webspace_id": "desktop",
+        "status": "drafting",
+        "datasource_id": "items",
+        "fields": [{"id": "title", "type": "string", "label": "Title", "required": True}],
+        "patches": [],
+        "version": "v1",
+        "artifact_root": str(tmp_path),
+        "created_at": 1.0,
+        "updated_at": 1.0,
+    }
+    skill._save_session(
+        "desktop",
+        {
+            **base_session,
+            "id": "session_alpha",
+            "title": "Alpha",
+            "scenario_id": "alpha_scenario",
+            "draft_id": "draft.alpha",
+        },
+    )
+    skill._save_session(
+        "desktop",
+        {
+            **base_session,
+            "id": "session_beta",
+            "title": "Beta",
+            "scenario_id": "beta_scenario",
+            "draft_id": "draft.beta",
+        },
+    )
+
+    listed = skill.chat("\u043f\u043e\u043a\u0430\u0436\u0438 \u043f\u0440\u043e\u0435\u043a\u0442\u044b", webspace_id="desktop")
+    current = skill.chat("\u0447\u0442\u043e \u0432\u044b\u0431\u0440\u0430\u043d\u043e", webspace_id="desktop")
+    switched = skill.chat("\u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u0441\u044c \u043d\u0430 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439 alpha_scenario", webspace_id="desktop")
+    delete = skill.chat("\u0443\u0434\u0430\u043b\u0438 \u0442\u0435\u043a\u0443\u0449\u0438\u0439", webspace_id="desktop")
+
+    assert listed["status"] == "project_list"
+    assert {item["scenario_id"] for item in listed["items"]} == {"alpha_scenario", "beta_scenario"}
+    assert current["status"] == "project_current"
+    assert current["scenario_id"] == "beta_scenario"
+    assert switched["status"] == "project_switched"
+    assert switched["scenario_id"] == "alpha_scenario"
+    assert binding["active_draft_id"] == "draft.alpha"
+    assert binding["runtime_scenario_id"] == "alpha_scenario"
+    assert delete["status"] == "delete_review_required"
+    assert delete["pending_action"]["id"] == "pa.builder.1"
+    assert published[0]["kind"] == "builder.scenario_delete.review"
+    assert published[0]["domain_ref"]["operation"] == "delete_draft"
+    assert published[0]["domain_ref"]["draft_id"] == "draft.alpha"
+    assert emitted[-1]["kwargs"]["topic_ref"]["thread_id"] == delete["topic"]["thread_id"]
+    assert any(item["method"] == "set_active_draft" and item["active_draft_id"] == "draft.alpha" for item in calls)
+
+
+def test_builder_delete_pending_action_approve_deletes_draft(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    calls: list[dict] = []
+    emitted: list[dict] = []
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {
+                "source_webspace_id": webspace_id,
+                "dev_webspace_id": f"{webspace_id}-dev",
+                "active_draft_id": "draft.to_delete",
+                "runtime_scenario_id": "delete_scenario",
+            }
+
+        def delete_development_skill(self, draft_id, webspace_id):
+            calls.append({"method": "delete", "draft_id": draft_id, "webspace_id": webspace_id})
+            return {"ok": True, "draft_id": draft_id}
+
+        def set_active_draft(self, *, source_webspace_id=None, active_draft_id=None, runtime_scenario_id=None, persist_projection=True):
+            calls.append({"method": "set_active_draft", "active_draft_id": active_draft_id})
+            return {
+                "source_webspace_id": source_webspace_id,
+                "dev_webspace_id": f"{source_webspace_id}-dev",
+                "active_draft_id": active_draft_id,
+                "runtime_scenario_id": runtime_scenario_id,
+            }
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda text, **kwargs: emitted.append({"text": text, "kwargs": kwargs}))
+    skill._save_session(
+        "desktop",
+        {
+            "id": "session_delete",
+            "webspace_id": "desktop",
+            "status": "drafting",
+            "title": "Delete me",
+            "scenario_id": "delete_scenario",
+            "draft_id": "draft.to_delete",
+            "artifact_root": str(tmp_path),
+            "datasource_id": "items",
+            "fields": [{"id": "title", "type": "string", "label": "Title"}],
+            "patches": [],
+            "version": "v1",
+        },
+    )
+
+    asyncio.run(
+        skill._on_builder_pending_action_response(
+            {
+                "webspace_id": "desktop",
+                "response_action_id": "approve",
+                "pending_action_id": "pa.delete",
+                "domain_ref": {
+                    "session_id": "session_delete",
+                    "scenario_id": "delete_scenario",
+                    "draft_id": "draft.to_delete",
+                    "operation": "delete_draft",
+                },
+            }
+        )
+    )
+
+    assert calls[0] == {"method": "delete", "draft_id": "draft.to_delete", "webspace_id": "desktop"}
+    assert skill._load_session("desktop", "session_delete") is None
+    assert "draft.to_delete" in emitted[0]["text"]
+
+
 def test_builder_skill_exposes_workbench_tools() -> None:
     manifest = yaml.safe_load((SKILL_ROOT / "skill.yaml").read_text(encoding="utf-8"))
 
