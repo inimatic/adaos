@@ -167,6 +167,73 @@ def test_conversation_eval_reports_context_budget_failures() -> None:
     ]
 
 
+def test_conversation_eval_runs_optional_model_grader_callback() -> None:
+    fixture = _load_fixture("conversation_companions_agent_handoff.json")
+    calls: list[dict] = []
+
+    def _grader(request):
+        calls.append(dict(request))
+        return {"score": 0.94, "label": "good_answer", "reason": "addresses the request"}
+
+    expectations = dict(fixture["expectations"])
+    expectations["model_grades"] = [
+        {
+            "id": "answer_quality",
+            "rubric": "Score whether the answer is useful and directly addresses the user.",
+            "min_score": 0.9,
+        }
+    ]
+
+    result = conversation_eval.evaluate_golden_conversation(
+        conversation_id=fixture["conversation_id"],
+        messages=fixture["messages"],
+        traces=fixture["turn_traces"],
+        expectations=expectations,
+        model_grader=_grader,
+    )
+
+    assert result["status"] == "passed"
+    assert result["model_grades"][0]["schema"] == "adaos.conversation.eval.model_grade.v1"
+    assert result["model_grades"][0]["id"] == "answer_quality"
+    assert result["model_grades"][0]["score"] == 0.94
+    assert any(item["name"] == "model_grader:answer_quality" for item in result["checks"])
+    assert calls and calls[0]["schema"] == "adaos.conversation.eval.model_grader_request.v1"
+    assert calls[0]["messages"][-1]["text"].startswith("Nika:")
+
+
+def test_conversation_eval_model_grader_failure_blocks_result() -> None:
+    fixture = _load_fixture("conversation_companions_agent_handoff.json")
+
+    def _grader(_request):
+        return {
+            "score": 0.8,
+            "label": "unresolved",
+            "reason": "the user's request remains unresolved",
+            "unresolved_user_request": True,
+        }
+
+    result = conversation_eval.evaluate_golden_conversation(
+        conversation_id=fixture["conversation_id"],
+        messages=fixture["messages"],
+        traces=fixture["turn_traces"],
+        expectations={
+            "model_grades": [
+                {
+                    "id": "unresolved_user_request",
+                    "rubric": "Fail if the last user request remains unresolved.",
+                    "min_score": 0.7,
+                }
+            ]
+        },
+        model_grader=_grader,
+    )
+
+    assert result["status"] == "failed"
+    assert result["model_grades"][0]["passed"] is False
+    assert result["model_grades"][0]["unresolved_user_request"] is True
+    assert [item["name"] for item in result["failures"]] == ["model_grader:unresolved_user_request"]
+
+
 def test_conversation_eval_replays_initial_golden_datasets() -> None:
     fixture_names = [
         "general_no_match_repair.json",

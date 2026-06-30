@@ -2053,9 +2053,13 @@ Important lacunae found during Phase 6 implementation:
   `conversation_eval.run_golden_migration_gate()` loads checked-in golden
   datasets, verifies the required baseline suite, and returns
   `adaos.conversation.eval.migration_gate.v1` with blocking fixture failures.
-- [ ] `[should]` Add optional model-backed graders for answer quality,
+- [x] `[should]` Add optional model-backed graders for answer quality,
   unsupported claims, memory-write quality, and persona consistency after the
-  deterministic evaluator is stable.
+  deterministic evaluator is stable. Golden expectations can now opt into
+  `model_grades`; the evaluator builds compact rubric requests, supports
+  injected graders for deterministic tests, falls back to the Root LLM proxy
+  when no grader is injected, and treats failed or unresolved-user-request
+  grades as gate failures.
 - [x] `[should]` Publish evaluation summaries into diagnostics / Pending
   Actions so Builder repair tasks can link failing traces and fixtures.
   `conversation_eval.publish_eval_repair_pending_action(...)` now turns a

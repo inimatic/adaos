@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from statistics import median
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from adaos.services import conversation_store
 
@@ -12,6 +12,9 @@ EVAL_SCHEMA = "adaos.conversation.eval.result.v1"
 GOLDEN_DATASET_SCHEMA = "adaos.conversation.golden_dataset.v1"
 MIGRATION_GATE_SCHEMA = "adaos.conversation.eval.migration_gate.v1"
 EVAL_REPAIR_SUMMARY_SCHEMA = "adaos.conversation.eval.repair_summary.v1"
+MODEL_GRADE_SCHEMA = "adaos.conversation.eval.model_grade.v1"
+MODEL_GRADER_REQUEST_SCHEMA = "adaos.conversation.eval.model_grader_request.v1"
+ModelGrader = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 DEFAULT_REQUIRED_GOLDEN_DATASET_IDS = (
     "general_no_match_repair",
     "conversation_companions_agent_handoff",
@@ -136,6 +139,7 @@ def evaluate_golden_conversation(
     thread_id: str | None = None,
     messages: Sequence[Mapping[str, Any]] | None = None,
     traces: Sequence[Mapping[str, Any]] | None = None,
+    model_grader: ModelGrader | None = None,
 ) -> dict[str, Any]:
     cid = str(conversation_id or "").strip()
     if not cid:
@@ -290,8 +294,33 @@ def evaluate_golden_conversation(
                 details={"actual": actual, "threshold": threshold},
             )
 
+    model_grades = _evaluate_model_grades(
+        conversation_id=cid,
+        thread_id=thread_id,
+        messages=stored_messages,
+        traces=stored_traces,
+        expectations=expectations,
+        metrics=metrics,
+        grader=model_grader,
+    )
+    for grade in model_grades:
+        grade_id = str(grade.get("id") or "model_grader")
+        _add_check(
+            checks,
+            name=f"model_grader:{grade_id}",
+            passed=bool(grade.get("passed")),
+            details={
+                "id": grade_id,
+                "score": grade.get("score"),
+                "threshold": grade.get("threshold"),
+                "status": grade.get("status"),
+                "label": grade.get("label"),
+                "reason": grade.get("reason"),
+            },
+        )
+
     failures = [check for check in checks if not check.get("passed")]
-    return {
+    result = {
         "schema": EVAL_SCHEMA,
         "conversation_id": cid,
         "thread_id": str(thread_id or "").strip() or None,
@@ -301,6 +330,9 @@ def evaluate_golden_conversation(
         "failures": failures,
         "evidence_refs": _evidence_refs(stored_messages, stored_traces),
     }
+    if model_grades:
+        result["model_grades"] = model_grades
+    return result
 
 
 def load_golden_dataset(path: str | Path) -> dict[str, Any]:
@@ -322,7 +354,11 @@ def load_golden_dataset(path: str | Path) -> dict[str, Any]:
     return dict(dataset)
 
 
-def evaluate_golden_dataset(dataset: Mapping[str, Any]) -> dict[str, Any]:
+def evaluate_golden_dataset(
+    dataset: Mapping[str, Any],
+    *,
+    model_grader: ModelGrader | None = None,
+) -> dict[str, Any]:
     dataset_id = str(dataset.get("id") or "").strip()
     if not dataset_id:
         raise ValueError("golden dataset id is required")
@@ -331,6 +367,7 @@ def evaluate_golden_dataset(dataset: Mapping[str, Any]) -> dict[str, Any]:
         messages=_mapping_list(dataset.get("messages")),
         traces=_mapping_list(dataset.get("turn_traces")),
         expectations=dataset.get("expectations") if isinstance(dataset.get("expectations"), Mapping) else {},
+        model_grader=model_grader,
     )
     result["dataset_id"] = dataset_id
     description = str(dataset.get("description") or "").strip()
@@ -344,6 +381,7 @@ def run_golden_migration_gate(
     fixture_dir: str | Path | None = None,
     fixture_paths: Sequence[str | Path] | None = None,
     required_dataset_ids: Sequence[str] | None = DEFAULT_REQUIRED_GOLDEN_DATASET_IDS,
+    model_grader: ModelGrader | None = None,
 ) -> dict[str, Any]:
     paths = _golden_fixture_paths(fixture_dir=fixture_dir, fixture_paths=fixture_paths)
     results: list[dict[str, Any]] = []
@@ -356,7 +394,7 @@ def run_golden_migration_gate(
             dataset = load_golden_dataset(source)
             dataset_id = str(dataset.get("id") or source.stem)
             seen_ids.add(dataset_id)
-            result = evaluate_golden_dataset(dataset)
+            result = evaluate_golden_dataset(dataset, model_grader=model_grader)
             result["source_path"] = str(source)
         except Exception as exc:
             dataset_id = source.stem
@@ -513,6 +551,184 @@ def publish_eval_repair_pending_action(
         },
     )
     return {"ok": True, "published": True, "pending_action": action, "summary": summary}
+
+
+def _evaluate_model_grades(
+    *,
+    conversation_id: str,
+    thread_id: str | None,
+    messages: Sequence[Mapping[str, Any]],
+    traces: Sequence[Mapping[str, Any]],
+    expectations: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    grader: ModelGrader | None,
+) -> list[dict[str, Any]]:
+    grades: list[dict[str, Any]] = []
+    for spec in _model_grade_specs(expectations.get("model_grades")):
+        grade_id = str(spec.get("id") or "model_grader").strip() or "model_grader"
+        threshold = _float_or_none(spec.get("min_score"))
+        request = {
+            "schema": MODEL_GRADER_REQUEST_SCHEMA,
+            "id": grade_id,
+            "conversation_id": conversation_id,
+            "thread_id": str(thread_id or "").strip() or None,
+            "rubric": spec,
+            "messages": _compact_eval_messages(messages),
+            "turn_traces": _compact_eval_traces(traces),
+            "metrics": dict(metrics),
+        }
+        try:
+            raw = grader(request) if grader is not None else model_grade_conversation(request)
+            grades.append(_normalize_model_grade(grade_id, raw, threshold=threshold))
+        except Exception as exc:
+            grades.append(
+                {
+                    "schema": MODEL_GRADE_SCHEMA,
+                    "id": grade_id,
+                    "status": "error",
+                    "passed": False,
+                    "score": None,
+                    "threshold": threshold,
+                    "label": "grader_error",
+                    "reason": str(exc),
+                }
+            )
+    return grades
+
+
+def _model_grade_specs(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [item for item in value if isinstance(item, Mapping)]
+    return []
+
+
+def _compact_eval_messages(messages: Sequence[Mapping[str, Any]], *, limit: int = 40) -> list[dict[str, Any]]:
+    selected = list(messages)[-max(1, min(int(limit or 40), 200)) :]
+    return [
+        {
+            "id": str(item.get("id") or item.get("message_id") or ""),
+            "seq": int(item.get("seq") or 0),
+            "role": str(item.get("from") or item.get("role") or ""),
+            "text": str(item.get("text") or ""),
+            "channel_id": str(item.get("dialog_channel_id") or item.get("channel_id") or "") or None,
+            "agent_id": str(item.get("active_agent_id") or item.get("actor_id") or "") or None,
+        }
+        for item in selected
+    ]
+
+
+def _compact_eval_traces(traces: Sequence[Mapping[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+    selected = list(traces)[-max(1, min(int(limit or 20), 100)) :]
+    return [
+        {
+            "turn_trace_id": str(item.get("turn_trace_id") or ""),
+            "status": str(item.get("status") or ""),
+            "channel_id": str(item.get("channel_id") or "") or None,
+            "agent_id": str(item.get("agent_id") or "") or None,
+            "selected_tool": str(item.get("selected_tool") or "") or None,
+            "policy_decision": dict(item.get("policy_decision") or {})
+            if isinstance(item.get("policy_decision"), Mapping)
+            else {},
+            "summary": str(item.get("summary") or "") or None,
+        }
+        for item in selected
+    ]
+
+
+def model_grade_conversation(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Run one optional LLM-backed evaluation rubric through the Root LLM proxy."""
+    spec = request.get("rubric") if isinstance(request.get("rubric"), Mapping) else {}
+    grade_id = str(spec.get("id") or "model_grader").strip() or "model_grader"
+    threshold = _float_or_none(spec.get("min_score"))
+    prompt_payload = {
+        "schema": MODEL_GRADER_REQUEST_SCHEMA,
+        "conversation_id": request.get("conversation_id"),
+        "thread_id": request.get("thread_id"),
+        "rubric": dict(spec),
+        "messages": list(request.get("messages") or []),
+        "metrics": dict(request.get("metrics") or {}),
+    }
+    instructions = (
+        "You are an AdaOS conversation evaluation grader. "
+        "Return only compact JSON with keys score, label, reason, and unresolved_user_request. "
+        "Score must be a number from 0 to 1."
+    )
+    from adaos.sdk.llm.llm_client import send_response
+
+    response = send_response(
+        [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True)},
+        ],
+        model=str(spec.get("model") or "") or None,
+        temperature=0.0,
+        max_tokens=500,
+        timeout=_float_or_none(spec.get("timeout_seconds")) or 30,
+    )
+    raw_text = str(response.get("output_text") or "").strip()
+    parsed = _parse_model_grade_json(raw_text)
+    return _normalize_model_grade(grade_id, parsed, threshold=threshold, raw={"output_text": raw_text})
+
+
+def _parse_model_grade_json(text: str) -> Mapping[str, Any]:
+    clean = str(text or "").strip()
+    if not clean:
+        return {"score": 0.0, "label": "empty_grader_output", "reason": "model returned no JSON"}
+    try:
+        parsed = json.loads(clean)
+        return parsed if isinstance(parsed, Mapping) else {"score": 0.0, "label": "non_object_json", "raw": parsed}
+    except Exception:
+        start = clean.find("{")
+        end = clean.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                parsed = json.loads(clean[start : end + 1])
+                if isinstance(parsed, Mapping):
+                    return parsed
+            except Exception:
+                pass
+    return {"score": 0.0, "label": "invalid_grader_json", "reason": clean[:500]}
+
+
+def _normalize_model_grade(
+    grade_id: str,
+    value: Mapping[str, Any],
+    *,
+    threshold: float | None,
+    raw: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    score = _float_or_none(value.get("score"))
+    if score is not None:
+        score = max(0.0, min(1.0, score))
+    unresolved = bool(value.get("unresolved_user_request"))
+    explicit_passed = value.get("passed")
+    if isinstance(explicit_passed, bool):
+        passed = explicit_passed
+    elif score is not None and threshold is not None:
+        passed = score >= threshold
+    elif score is not None:
+        passed = score >= 0.5
+    else:
+        passed = False
+    if unresolved:
+        passed = False
+    status = "passed" if passed else "failed"
+    result = {
+        "schema": MODEL_GRADE_SCHEMA,
+        "id": str(value.get("id") or grade_id or "model_grader").strip() or "model_grader",
+        "status": status,
+        "passed": passed,
+        "score": score,
+        "threshold": threshold,
+        "label": str(value.get("label") or value.get("verdict") or status),
+        "reason": str(value.get("reason") or value.get("rationale") or ""),
+        "unresolved_user_request": unresolved,
+    }
+    if raw:
+        result["raw"] = dict(raw)
+    return result
 
 
 def _is_fallback_trace(trace: Mapping[str, Any], policy: Mapping[str, Any]) -> bool:
