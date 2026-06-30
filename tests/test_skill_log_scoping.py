@@ -13,6 +13,7 @@ from adaos.services.agent_context import clear_ctx, set_ctx
 from adaos.services.logging import setup_logging
 from adaos.services.root_mcp.logs import list_local_logs
 from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
+import adaos.services.ui_runtime_diagnostics as ui_runtime_diagnostics
 
 
 @pytest.mark.asyncio
@@ -179,6 +180,51 @@ async def test_ui_runtime_diagnostics_drop_noisy_runtime_debug_events(tmp_path: 
         lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
         assert [line["code"] for line in lines] == ["runtime_debug.cursor"]
     finally:
+        clear_ctx()
+
+
+@pytest.mark.asyncio
+async def test_ui_runtime_diagnostics_deduplicates_stable_runtime_debug_cursors(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    set_ctx(SimpleNamespace(paths=paths, skill_ctx=InprocSkillContext()))
+    ui_runtime_diagnostics._CURSOR_DEDUP.clear()
+    try:
+        cursor_event = {
+            "level": "debug",
+            "source": "ui.runtime_debug",
+            "code": "runtime_debug.cursor",
+            "message": "runtime_debug.cursor",
+            "currentScenario": "prompt_engineer_scenario",
+            "details": {
+                "runtime_debug_cursor": {
+                    "session_id": "brs-1",
+                    "tab_id": "tab-1",
+                    "latest_seq": 42,
+                    "yjs_status": {"state": "green", "reason": "ready"},
+                    "yjs_channel_guarantee": {
+                        "state": "green",
+                        "reason": "channel_guarantee_ready",
+                        "runtime": {"connectionState": "connected", "currentPath": "webrtc_data:yjs"},
+                    },
+                }
+            },
+        }
+        result = await ingest_ui_runtime_diagnostics(
+            {"webspace_id": "desktop", "events": [cursor_event, cursor_event]}
+        )
+        assert result["accepted"] == 1
+
+        result = await ingest_ui_runtime_diagnostics(
+            {"webspace_id": "desktop", "events": [cursor_event]}
+        )
+        assert result["accepted"] == 0
+
+        log_path = paths.skill_ui_diagnostics_log_path("__ui_runtime__")
+        lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        assert [line["code"] for line in lines] == ["runtime_debug.cursor"]
+    finally:
+        ui_runtime_diagnostics._CURSOR_DEDUP.clear()
         clear_ctx()
 
 

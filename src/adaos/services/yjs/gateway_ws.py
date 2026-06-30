@@ -53,7 +53,12 @@ _YWS_ATTEMPT_LOCK = threading.RLock()
 _WEBIO_CONTROL_DEDUPE_LOCK = threading.RLock()
 _WEBIO_CONTROL_DEDUPE_TTL_S = max(0.0, float(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_TTL_S", "1.5") or "1.5"))
 _WEBIO_CONTROL_DEDUPE_MAX = max(32, int(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_MAX", "512") or "512"))
+_WEBIO_CONTROL_DEDUPE_LOG_INTERVAL_S = max(
+    0.0,
+    float(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_LOG_INTERVAL_S", "30") or "30"),
+)
 _WEBIO_CONTROL_DEDUPE_RECENT: dict[str, float] = {}
+_WEBIO_CONTROL_DEDUPE_LOG_RECENT: dict[str, tuple[float, int]] = {}
 _WEBIO_CONTROL_EVENT_TYPES = {
     "webio.stream.snapshot.requested",
     "webio.stream.subscription.changed",
@@ -2400,7 +2405,7 @@ def _should_drop_duplicate_webio_control_event(event_type: str, payload: Any) ->
     with _WEBIO_CONTROL_DEDUPE_LOCK:
         last_at = float(_WEBIO_CONTROL_DEDUPE_RECENT.get(key) or 0.0)
         if last_at > 0 and now - last_at < _WEBIO_CONTROL_DEDUPE_TTL_S:
-            _ylog.debug("deduped webio control event type=%s key=%s", event_type, key)
+            _log_deduped_webio_control_event(event_type, key, now)
             return True
         _WEBIO_CONTROL_DEDUPE_RECENT[key] = now
         if len(_WEBIO_CONTROL_DEDUPE_RECENT) > _WEBIO_CONTROL_DEDUPE_MAX:
@@ -2414,6 +2419,25 @@ def _should_drop_duplicate_webio_control_event(event_type: str, payload: Any) ->
                 except StopIteration:
                     break
     return False
+
+
+def _log_deduped_webio_control_event(event_type: str, key: str, now: float) -> None:
+    if _WEBIO_CONTROL_DEDUPE_LOG_INTERVAL_S <= 0:
+        return
+    last_log_at, suppressed = _WEBIO_CONTROL_DEDUPE_LOG_RECENT.get(key, (0.0, 0))
+    if last_log_at <= 0 or now - last_log_at >= _WEBIO_CONTROL_DEDUPE_LOG_INTERVAL_S:
+        if suppressed > 0:
+            _ylog.debug(
+                "deduped webio control event type=%s key=%s suppressed=%s",
+                event_type,
+                key,
+                suppressed,
+            )
+        else:
+            _ylog.debug("deduped webio control event type=%s key=%s", event_type, key)
+        _WEBIO_CONTROL_DEDUPE_LOG_RECENT[key] = (now, 0)
+        return
+    _WEBIO_CONTROL_DEDUPE_LOG_RECENT[key] = (last_log_at, suppressed + 1)
 
 
 def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None:

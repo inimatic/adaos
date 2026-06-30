@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,9 @@ _MAX_EVENTS_PER_BATCH = 50
 _MAX_DETAILS_BYTES = 16_000
 _MAX_MESSAGE_CHARS = 1_500
 _FALLBACK_SKILL = "__ui_runtime__"
+_CURSOR_MIN_INTERVAL_S = 300.0
+_CURSOR_DEDUP_LOCK = threading.RLock()
+_CURSOR_DEDUP: dict[str, tuple[float, str]] = {}
 
 
 async def ingest_ui_runtime_diagnostics(
@@ -38,13 +42,15 @@ async def ingest_ui_runtime_diagnostics(
     accepted: list[dict[str, Any]] = []
     records: list[tuple[str, dict[str, Any]]] = []
 
-    for raw in events[:_MAX_EVENTS_PER_BATCH]:
+    for raw in _collapse_batch_runtime_debug_cursors(events[:_MAX_EVENTS_PER_BATCH]):
         if not isinstance(raw, Mapping):
             continue
         normalized = await _normalize_event(raw, webspace_id=target_webspace_id)
         if not normalized:
             continue
         if not _should_persist_event(normalized):
+            continue
+        if _is_suppressed_runtime_debug_cursor(normalized):
             continue
         records.append((str(normalized["skill_id"]), normalized))
         accepted.append(
@@ -87,6 +93,83 @@ def _should_persist_event(event: Mapping[str, Any]) -> bool:
     if code == "http.response" and _runtime_debug_http_response_is_notable(event):
         return True
     return False
+
+
+def _collapse_batch_runtime_debug_cursors(events: list[Any]) -> list[Any]:
+    last_cursor_index: int | None = None
+    out: list[Any] = []
+    for raw in events:
+        if _raw_runtime_debug_code(raw) == "runtime_debug.cursor":
+            last_cursor_index = len(out)
+            out.append(raw)
+            continue
+        out.append(raw)
+    if last_cursor_index is None:
+        return out
+    collapsed: list[Any] = []
+    for index, raw in enumerate(out):
+        if _raw_runtime_debug_code(raw) == "runtime_debug.cursor" and index != last_cursor_index:
+            continue
+        collapsed.append(raw)
+    return collapsed
+
+
+def _raw_runtime_debug_code(raw: Any) -> str:
+    if not isinstance(raw, Mapping):
+        return ""
+    source = str(raw.get("source") or "").strip()
+    code = str(raw.get("code") or "").strip()
+    if source == "ui.runtime_debug":
+        return code
+    return ""
+
+
+def _is_suppressed_runtime_debug_cursor(event: Mapping[str, Any]) -> bool:
+    if str(event.get("source") or "").strip() != "ui.runtime_debug":
+        return False
+    if str(event.get("code") or "").strip() != "runtime_debug.cursor":
+        return False
+    details = _coerce_dict(event.get("details"))
+    cursor = _coerce_dict(details.get("runtime_debug_cursor"))
+    signature = _runtime_debug_cursor_signature(event, cursor)
+    key = "|".join(
+        [
+            str(event.get("webspace_id") or ""),
+            str(event.get("browser_session_id") or ""),
+            str(event.get("browser_tab_id") or ""),
+        ]
+    )
+    now = time.time()
+    with _CURSOR_DEDUP_LOCK:
+        previous = _CURSOR_DEDUP.get(key)
+        if previous and previous[1] == signature and now - previous[0] < _CURSOR_MIN_INTERVAL_S:
+            return True
+        _CURSOR_DEDUP[key] = (now, signature)
+        if len(_CURSOR_DEDUP) > 1024:
+            cutoff = now - max(_CURSOR_MIN_INTERVAL_S * 2.0, 600.0)
+            for item_key, (seen_at, _) in list(_CURSOR_DEDUP.items()):
+                if seen_at < cutoff:
+                    _CURSOR_DEDUP.pop(item_key, None)
+        return False
+
+
+def _runtime_debug_cursor_signature(event: Mapping[str, Any], cursor: Mapping[str, Any]) -> str:
+    guarantee = _coerce_dict(cursor.get("yjs_channel_guarantee"))
+    yjs_status = _coerce_dict(cursor.get("yjs_status")) or _coerce_dict(guarantee.get("yjs_status"))
+    runtime = _coerce_dict(guarantee.get("runtime")) or _coerce_dict(yjs_status.get("runtime"))
+    return "|".join(
+        str(value)
+        for value in (
+            event.get("current_scenario"),
+            yjs_status.get("state"),
+            yjs_status.get("reason"),
+            guarantee.get("state"),
+            guarantee.get("reason"),
+            runtime.get("connectionState"),
+            runtime.get("currentPath"),
+            runtime.get("providerSynced"),
+        )
+    )
 
 
 def _runtime_debug_http_response_is_notable(event: Mapping[str, Any]) -> bool:
