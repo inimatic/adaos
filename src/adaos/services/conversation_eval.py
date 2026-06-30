@@ -61,10 +61,25 @@ def collect_metrics(
     repair_count = 0
     no_match_count = 0
     latencies: list[float] = []
+    context_packets: list[Mapping[str, Any]] = []
+    seen_context_packets: set[str] = set()
+    for message in stored_messages:
+        for packet in _context_packets_from_container(message):
+            key = _stable_json_key(packet)
+            if key in seen_context_packets:
+                continue
+            seen_context_packets.add(key)
+            context_packets.append(packet)
     for trace in stored_traces:
         status = str(trace.get("status") or "unknown").strip() or "unknown"
         trace_status_counts[status] = trace_status_counts.get(status, 0) + 1
         policy = trace.get("policy_decision") if isinstance(trace.get("policy_decision"), Mapping) else {}
+        for packet in _context_packets_from_container(trace):
+            key = _stable_json_key(packet)
+            if key in seen_context_packets:
+                continue
+            seen_context_packets.add(key)
+            context_packets.append(packet)
         if _is_fallback_trace(trace, policy):
             fallback_count += 1
         if _is_repair_trace(policy):
@@ -108,6 +123,7 @@ def collect_metrics(
         "repair_rate": round(repair_rate, 6),
         "no_match_count": no_match_count,
         "latency_ms": _latency_summary(latencies),
+        "context_budget": _context_budget_summary(context_packets),
         "agent_ids": sorted(agent_ids),
         "channel_ids": sorted(channel_ids),
     }
@@ -190,6 +206,34 @@ def evaluate_golden_conversation(
                 passed=float(metrics["fallback_rate"]) <= threshold,
                 details={"actual": metrics["fallback_rate"], "threshold": threshold},
             )
+    if "min_repair_rate" in expectations:
+        threshold = _float_or_none(expectations.get("min_repair_rate"))
+        if threshold is not None:
+            _add_check(
+                checks,
+                name="min_repair_rate",
+                passed=float(metrics["repair_rate"]) >= threshold,
+                details={"actual": metrics["repair_rate"], "threshold": threshold},
+            )
+    if "max_repair_rate" in expectations:
+        threshold = _float_or_none(expectations.get("max_repair_rate"))
+        if threshold is not None:
+            _add_check(
+                checks,
+                name="max_repair_rate",
+                passed=float(metrics["repair_rate"]) <= threshold,
+                details={"actual": metrics["repair_rate"], "threshold": threshold},
+            )
+    if "max_no_match_rate" in expectations:
+        threshold = _float_or_none(expectations.get("max_no_match_rate"))
+        if threshold is not None:
+            no_match_rate = _rate(int(metrics.get("no_match_count") or 0), int(metrics.get("trace_count") or 0))
+            _add_check(
+                checks,
+                name="max_no_match_rate",
+                passed=no_match_rate <= threshold,
+                details={"actual": no_match_rate, "threshold": threshold},
+            )
     if "max_latency_ms_p95" in expectations:
         threshold = _float_or_none(expectations.get("max_latency_ms_p95"))
         actual = _float_or_none(metrics.get("latency_ms", {}).get("p95") if isinstance(metrics.get("latency_ms"), Mapping) else None)
@@ -197,6 +241,51 @@ def evaluate_golden_conversation(
             _add_check(
                 checks,
                 name="max_latency_ms_p95",
+                passed=actual <= threshold,
+                details={"actual": actual, "threshold": threshold},
+            )
+    context_budget = metrics.get("context_budget") if isinstance(metrics.get("context_budget"), Mapping) else {}
+    if "min_context_packet_count" in expectations:
+        threshold = _float_or_none(expectations.get("min_context_packet_count"))
+        if threshold is not None:
+            actual = int(context_budget.get("packet_count") or 0)
+            _add_check(
+                checks,
+                name="min_context_packet_count",
+                passed=float(actual) >= threshold,
+                details={"actual": actual, "threshold": threshold},
+            )
+    context_token_threshold = _float_or_none(
+        expectations.get("max_context_token_estimate_p95", expectations.get("max_context_tokens_p95"))
+    )
+    if context_token_threshold is not None:
+        token_summary = context_budget.get("token_estimate") if isinstance(context_budget.get("token_estimate"), Mapping) else {}
+        actual = _float_or_none(token_summary.get("p95") if isinstance(token_summary, Mapping) else None)
+        if actual is not None:
+            _add_check(
+                checks,
+                name="max_context_token_estimate_p95",
+                passed=actual <= context_token_threshold,
+                details={"actual": actual, "threshold": context_token_threshold},
+            )
+    if "max_context_utilization" in expectations:
+        threshold = _float_or_none(expectations.get("max_context_utilization"))
+        utilization = context_budget.get("utilization") if isinstance(context_budget.get("utilization"), Mapping) else {}
+        actual = _float_or_none(utilization.get("max") if isinstance(utilization, Mapping) else None)
+        if threshold is not None and actual is not None:
+            _add_check(
+                checks,
+                name="max_context_utilization",
+                passed=actual <= threshold,
+                details={"actual": actual, "threshold": threshold},
+            )
+    if "max_context_budget_exhausted_rate" in expectations:
+        threshold = _float_or_none(expectations.get("max_context_budget_exhausted_rate"))
+        if threshold is not None:
+            actual = _float_or_none(context_budget.get("exhausted_rate")) or 0.0
+            _add_check(
+                checks,
+                name="max_context_budget_exhausted_rate",
                 passed=actual <= threshold,
                 details={"actual": actual, "threshold": threshold},
             )
@@ -461,6 +550,10 @@ def _is_repair_trace(policy: Mapping[str, Any]) -> bool:
 
 
 def _latency_summary(values: Sequence[float]) -> dict[str, Any]:
+    return _numeric_summary(values)
+
+
+def _numeric_summary(values: Sequence[float]) -> dict[str, Any]:
     if not values:
         return {"count": 0, "min": None, "median": None, "p95": None, "max": None}
     ordered = sorted(float(item) for item in values)
@@ -490,6 +583,91 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except Exception:
         return None
+
+
+def _rate(count: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round(float(count) / float(total), 6)
+
+
+def _stable_json_key(value: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(dict(value), sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        return str(id(value))
+
+
+def _context_packets_from_container(container: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    packets: list[Mapping[str, Any]] = []
+    roots: list[Mapping[str, Any]] = [container]
+    for key in ("_meta", "meta", "payload", "policy_decision", "renderer", "diagnostics"):
+        value = container.get(key)
+        if isinstance(value, Mapping):
+            roots.append(value)
+    for root in roots:
+        for key in ("context_packet", "llm_context_packet", "retrieval_context"):
+            packet = root.get(key)
+            if _looks_like_context_packet(packet):
+                packets.append(packet)  # type: ignore[arg-type]
+    return packets
+
+
+def _looks_like_context_packet(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    schema = str(value.get("schema") or "").strip()
+    if schema in {"adaos.context.packet.v1", "adaos.context_packet.v1"}:
+        return True
+    return "token_estimate" in value or "budgets" in value or "budget" in value
+
+
+def _context_budget_summary(packets: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    token_estimates: list[float] = []
+    max_tokens: list[float] = []
+    utilization: list[float] = []
+    selected_source_counts: list[float] = []
+    skipped_source_counts: list[float] = []
+    exhausted_count = 0
+    for packet in packets:
+        token_estimate = _float_or_none(packet.get("token_estimate") or packet.get("estimated_tokens"))
+        budget = packet.get("budgets") if isinstance(packet.get("budgets"), Mapping) else packet.get("budget")
+        budget_max = None
+        if isinstance(budget, Mapping):
+            budget_max = _float_or_none(budget.get("max_tokens") or budget.get("token_limit"))
+        if budget_max is None:
+            budget_max = _float_or_none(packet.get("max_tokens") or packet.get("token_limit"))
+        if token_estimate is not None:
+            token_estimates.append(token_estimate)
+        if budget_max is not None:
+            max_tokens.append(budget_max)
+        if token_estimate is not None and budget_max is not None and budget_max > 0:
+            utilization.append(token_estimate / budget_max)
+        diagnostics = packet.get("diagnostics") if isinstance(packet.get("diagnostics"), Mapping) else {}
+        if bool(packet.get("budget_exhausted") or diagnostics.get("budget_exhausted")):
+            exhausted_count += 1
+        selected_sources = packet.get("selected_sources")
+        if selected_sources is None and isinstance(diagnostics, Mapping):
+            selected_sources = diagnostics.get("selected_sources")
+        skipped_sources = packet.get("skipped_sources")
+        if skipped_sources is None and isinstance(diagnostics, Mapping):
+            skipped_sources = diagnostics.get("skipped_sources")
+        if isinstance(selected_sources, Sequence) and not isinstance(selected_sources, (str, bytes, bytearray)):
+            selected_source_counts.append(float(len(selected_sources)))
+        if isinstance(skipped_sources, Sequence) and not isinstance(skipped_sources, (str, bytes, bytearray)):
+            skipped_source_counts.append(float(len(skipped_sources)))
+    packet_count = len(packets)
+    return {
+        "schema": "adaos.conversation.eval.context_budget.v1",
+        "packet_count": packet_count,
+        "token_estimate": _numeric_summary(token_estimates),
+        "max_tokens": _numeric_summary(max_tokens),
+        "utilization": _numeric_summary(utilization),
+        "exhausted_count": exhausted_count,
+        "exhausted_rate": _rate(exhausted_count, packet_count),
+        "selected_source_count": _numeric_summary(selected_source_counts),
+        "skipped_source_count": _numeric_summary(skipped_source_counts),
+    }
 
 
 def _string_list(value: Any) -> list[str]:

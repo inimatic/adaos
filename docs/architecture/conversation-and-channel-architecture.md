@@ -2009,8 +2009,12 @@ Important lacunae found during Phase 6 implementation:
   now covers retrieved-memory prompt-injection flags, untrusted history
   evidence marking, deny-by-default cross-owner memory retrieval, and
   redaction-aware memory search/list behavior.
-- [ ] `[should]` Add dialog-level golden conversations and metrics for repair
-  rate, fallback rate, success rate, latency, and context budget.
+- [x] `[should]` Add dialog-level golden conversations and metrics for repair
+  rate, fallback rate, success rate, latency, and context budget. The
+  evaluator now derives repair/no-match/fallback/success/latency metrics from
+  turn traces, extracts context-packet budget evidence from messages and
+  traces, and gates Builder golden fixtures on context packet count, token
+  estimate, utilization, and budget-exhaustion rate.
 - [ ] `[should]` Add performance soak tests for long conversations, FTS,
   summaries, and active WebIO/Yjs projections.
 - [ ] `[could]` Add model-backed memory extraction and summarization quality

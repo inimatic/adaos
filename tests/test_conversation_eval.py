@@ -50,7 +50,19 @@ def _seed_eval_conversation() -> str:
         agent_id="agent:conversation_companions:arseni",
         selected_tool="conversation_companions.talk",
         policy_decision={"reason": "dialog_followup", "repair_state": "none"},
-        renderer={"receiver": "dialog.visible_tail"},
+        renderer={
+            "receiver": "dialog.visible_tail",
+            "context_packet": {
+                "schema": "adaos.context.packet.v1",
+                "token_estimate": 96,
+                "budgets": {"max_tokens": 1200, "max_messages": 12, "max_segments": 2, "max_memory_items": 4},
+                "diagnostics": {
+                    "budget_exhausted": False,
+                    "selected_sources": [{"type": "message", "message_id": "eval.msg.1"}],
+                    "skipped_sources": [],
+                },
+            },
+        },
         message_id="eval.msg.2",
     )
     assert trace_id
@@ -70,7 +82,13 @@ def test_conversation_eval_scores_golden_conversation() -> None:
             "required_channels": ["conversational"],
             "min_success_rate": 1.0,
             "max_fallback_rate": 0.0,
+            "max_repair_rate": 0.0,
+            "max_no_match_rate": 0.0,
             "max_latency_ms_p95": 10_000,
+            "min_context_packet_count": 1,
+            "max_context_token_estimate_p95": 120,
+            "max_context_utilization": 0.1,
+            "max_context_budget_exhausted_rate": 0.0,
         },
     )
 
@@ -80,6 +98,8 @@ def test_conversation_eval_scores_golden_conversation() -> None:
     assert result["metrics"]["turn_count"] == 1
     assert result["metrics"]["success_rate"] == 1.0
     assert result["metrics"]["fallback_rate"] == 0.0
+    assert result["metrics"]["context_budget"]["packet_count"] == 1
+    assert result["metrics"]["context_budget"]["token_estimate"]["p95"] == 96.0
     assert result["failures"] == []
     assert any(item["type"] == "turn_trace" for item in result["evidence_refs"])
 
@@ -123,6 +143,28 @@ def test_conversation_eval_counts_fallback_repair_and_no_match_traces() -> None:
     assert metrics["no_match_count"] == 1
     assert metrics["repair_count"] == 1
     assert metrics["latency_ms"]["count"] == 2
+
+
+def test_conversation_eval_reports_context_budget_failures() -> None:
+    conversation_id = _seed_eval_conversation()
+
+    result = conversation_eval.evaluate_golden_conversation(
+        conversation_id=conversation_id,
+        expectations={
+            "min_context_packet_count": 2,
+            "max_context_token_estimate_p95": 10,
+            "max_context_utilization": 0.01,
+            "max_context_budget_exhausted_rate": 0.0,
+        },
+    )
+
+    assert result["status"] == "failed"
+    failed_names = [item["name"] for item in result["failures"]]
+    assert failed_names == [
+        "min_context_packet_count",
+        "max_context_token_estimate_p95",
+        "max_context_utilization",
+    ]
 
 
 def test_conversation_eval_replays_initial_golden_datasets() -> None:

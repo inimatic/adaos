@@ -58,7 +58,27 @@
       },
       "renderer": {
         "projection": "builder.workbench",
-        "preview": "webui.json"
+        "preview": "webui.json",
+        "context_packet": {
+          "schema": "adaos.context.packet.v1",
+          "token_estimate": 320,
+          "budgets": {
+            "max_tokens": 1200,
+            "max_messages": 12,
+            "max_segments": 2,
+            "max_memory_items": 4
+          },
+          "diagnostics": {
+            "budget_exhausted": false,
+            "selected_sources": [
+              {
+                "type": "message",
+                "message_id": "golden.builder.first_idea.msg.1"
+              }
+            ],
+            "skipped_sources": []
+          }
+        }
       },
       "status": "completed",
       "created_at": 1400.0,
@@ -79,7 +99,35 @@
       },
       "renderer": {
         "projection": "builder.workbench",
-        "preview": "webui.json"
+        "preview": "webui.json",
+        "context_packet": {
+          "schema": "adaos.context.packet.v1",
+          "token_estimate": 410,
+          "budgets": {
+            "max_tokens": 1200,
+            "max_messages": 12,
+            "max_segments": 2,
+            "max_memory_items": 4
+          },
+          "diagnostics": {
+            "budget_exhausted": false,
+            "selected_sources": [
+              {
+                "type": "message",
+                "message_id": "golden.builder.first_idea.msg.1"
+              },
+              {
+                "type": "message",
+                "message_id": "golden.builder.first_idea.msg.2"
+              },
+              {
+                "type": "message",
+                "message_id": "golden.builder.first_idea.msg.3"
+              }
+            ],
+            "skipped_sources": []
+          }
+        }
       },
       "status": "completed",
       "created_at": 1401.0,
@@ -106,6 +154,12 @@
     ],
     "min_success_rate": 1.0,
     "max_fallback_rate": 0.0,
-    "max_latency_ms_p95": 1000
+    "max_repair_rate": 0.0,
+    "max_no_match_rate": 0.0,
+    "max_latency_ms_p95": 1000,
+    "min_context_packet_count": 2,
+    "max_context_token_estimate_p95": 450,
+    "max_context_utilization": 0.35,
+    "max_context_budget_exhausted_rate": 0.0
   }
 }
