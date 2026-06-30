@@ -2015,8 +2015,11 @@ Important lacunae found during Phase 6 implementation:
   turn traces, extracts context-packet budget evidence from messages and
   traces, and gates Builder golden fixtures on context packet count, token
   estimate, utilization, and budget-exhaustion rate.
-- [ ] `[should]` Add performance soak tests for long conversations, FTS,
-  summaries, and active WebIO/Yjs projections.
+- [x] `[should]` Add performance soak tests for long conversations, FTS,
+  summaries, and active WebIO/Yjs projections. A bounded store-level soak now
+  seeds a 240-message Builder thread, rebuilds/searches FTS, processes segment
+  summaries, recovers a stale visible-tail projection from the node ledger, and
+  verifies context packet budgets stay bounded.
 - [ ] `[could]` Add model-backed memory extraction and summarization quality
   evaluation datasets.
 

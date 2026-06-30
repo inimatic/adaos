@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import time
 from uuid import uuid4
 
 from adaos.services.agent_context import get_ctx
-from adaos.services import conversation_store
+from adaos.services import conversation_context, conversation_store
 
 
 def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
@@ -379,6 +380,106 @@ def test_conversation_store_reports_failed_segment_summary_jobs() -> None:
     assert job_health["latest_error"] == "summarizer offline"
     retrieval_health = conversation_store.retrieval_health_report(conversation_id, thread_id=thread_id)
     assert "segment_summary_job_failed" in retrieval_health["degraded_reasons"]
+
+
+def test_conversation_store_long_conversation_soak_keeps_retrieval_and_projection_bounded() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.soak.{suffix}"
+    thread_id = f"thread.soak.{suffix}"
+    started = time.perf_counter()
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for index in range(1, 241):
+        marker = f"soakmarker{index}"
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            webspace_id="desktop",
+            channel_id="builder",
+            owner="skill:test",
+            role="user" if index % 2 else "hub",
+            text=(
+                f"{marker} long builder dialog turn {index}. "
+                "The user iterates on a draft, preview evidence, memory, and diagnostics."
+            ),
+            payload={
+                "id": f"soak.{suffix}.msg.{index}",
+                "from": "user" if index % 2 else "hub",
+                "text": f"{marker} long builder dialog turn {index}",
+            },
+        )
+
+    rebuilt = conversation_store.rebuild_search_indexes()
+    queued = conversation_store.enqueue_segment_summary_job(
+        conversation_id,
+        thread_id=thread_id,
+        segment_size=30,
+    )
+    processed = conversation_store.process_segment_summary_jobs(limit=4)
+    projection = conversation_store.list_projection(
+        conversation_id,
+        thread_id=thread_id,
+        limit=24,
+        max_items=48,
+    )
+    recovered = conversation_store.recover_projection_from_store(
+        {
+            "conversation_id": conversation_id,
+            "thread_id": thread_id,
+            "messages": [{"id": "stale", "text": "stale", "seq": 10}],
+            "total_message_count": 10,
+        },
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        limit=24,
+        max_items=48,
+    )
+    packet = conversation_context.build_context_packet(
+        conversation_id=conversation_id,
+        requester_owner="skill:test",
+        channel_id="builder",
+        thread_id=thread_id,
+        budgets={"max_messages": 24, "max_segments": 4, "max_memory_items": 0, "max_tokens": 4000},
+    )
+    found_messages = conversation_store.search_messages(
+        "soakmarker173",
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        limit=5,
+    )
+    found_segments = conversation_store.search_conversation_segments(
+        "soakmarker240",
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        limit=5,
+    )
+    health = conversation_store.retrieval_health_report(conversation_id, thread_id=thread_id)
+    elapsed = time.perf_counter() - started
+
+    assert rebuilt["status"] in {"rebuilt", "fts_unavailable"}
+    assert queued["status"] == "queued"
+    assert processed["status"] == "processed"
+    assert processed["completed"] == 1
+    assert processed["jobs"][0]["result"]["segment_count"] == 8
+    assert projection["total_message_count"] == 240
+    assert len(projection["messages"]) == 24
+    assert projection["has_more_before"] is True
+    assert recovered["recovery"]["recovered"] is True
+    assert recovered["recovery"]["reason"] == "stale_total"
+    assert recovered["total_message_count"] == 240
+    assert found_messages and found_messages[0]["id"] == f"soak.{suffix}.msg.173"
+    assert found_segments and found_segments[0]["search"]["backend"] in {"fts", "like"}
+    assert health["status"] == "ok"
+    assert health["counts"]["messages"] == 240
+    assert health["segment_summary"]["segment_count"] == 8
+    assert packet["token_estimate"] <= packet["budgets"]["max_tokens"]
+    assert packet["diagnostics"]["selected_message_count"] <= 24
+    assert packet["diagnostics"]["selected_segment_count"] <= 4
+    assert elapsed < 20.0
 
 
 def test_conversation_store_compacts_long_history_with_range_refs() -> None:
