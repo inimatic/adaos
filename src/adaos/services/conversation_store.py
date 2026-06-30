@@ -202,6 +202,27 @@ _SCHEMA = (
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS conversation_segments (
+        segment_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        thread_id TEXT,
+        start_seq INTEGER NOT NULL,
+        end_seq INTEGER NOT NULL,
+        message_count INTEGER NOT NULL,
+        summary TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL DEFAULT '[]',
+        retention_class TEXT NOT NULL DEFAULT 'normal',
+        redaction_state TEXT NOT NULL DEFAULT 'active',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE(conversation_id, thread_id, start_seq, end_seq)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_segments_conversation_range
+    ON conversation_segments(conversation_id, thread_id, start_seq, end_seq);
+    """,
+    """
     CREATE TABLE IF NOT EXISTS conversation_audit_events (
         audit_event_id TEXT PRIMARY KEY,
         event_type TEXT NOT NULL,
@@ -301,6 +322,17 @@ def _ensure_fts(con: sqlite3.Connection) -> bool:
                 subject_id UNINDEXED,
                 key UNINDEXED,
                 text
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS conversation_segments_fts
+            USING fts5(
+                segment_id UNINDEXED,
+                conversation_id UNINDEXED,
+                thread_id UNINDEXED,
+                summary
             )
             """
         )
@@ -422,6 +454,29 @@ def _memory_fts_upsert(
         return
 
 
+def _segment_fts_upsert(
+    con: sqlite3.Connection,
+    *,
+    segment_id: str,
+    conversation_id: str,
+    thread_id: str | None,
+    summary: str,
+) -> None:
+    try:
+        if not _ensure_fts(con):
+            return
+        con.execute("DELETE FROM conversation_segments_fts WHERE segment_id=?", (segment_id,))
+        con.execute(
+            """
+            INSERT INTO conversation_segments_fts(segment_id, conversation_id, thread_id, summary)
+            VALUES(?,?,?,?)
+            """,
+            (segment_id, conversation_id, thread_id, summary),
+        )
+    except sqlite3.Error:
+        return
+
+
 def rebuild_search_indexes() -> dict[str, Any]:
     if not ensure_schema():
         return {"schema": "adaos.conversation.search_index_rebuild.v1", "ok": False, "status": "unavailable"}
@@ -430,6 +485,7 @@ def rebuild_search_indexes() -> dict[str, Any]:
             return {"schema": "adaos.conversation.search_index_rebuild.v1", "ok": False, "status": "fts_unavailable"}
         con.execute("DELETE FROM conversation_messages_fts")
         con.execute("DELETE FROM conversation_memory_fts")
+        con.execute("DELETE FROM conversation_segments_fts")
         con.execute(
             """
             INSERT INTO conversation_messages_fts(
@@ -448,14 +504,23 @@ def rebuild_search_indexes() -> dict[str, Any]:
             WHERE redaction_state!='redacted'
             """
         )
+        con.execute(
+            """
+            INSERT INTO conversation_segments_fts(segment_id, conversation_id, thread_id, summary)
+            SELECT segment_id, conversation_id, thread_id, summary
+            FROM conversation_segments
+            WHERE redaction_state!='redacted'
+            """
+        )
         message_count = int(con.execute("SELECT COUNT(*) FROM conversation_messages_fts").fetchone()[0] or 0)
         memory_count = int(con.execute("SELECT COUNT(*) FROM conversation_memory_fts").fetchone()[0] or 0)
+        segment_count = int(con.execute("SELECT COUNT(*) FROM conversation_segments_fts").fetchone()[0] or 0)
         con.commit()
     return {
         "schema": "adaos.conversation.search_index_rebuild.v1",
         "ok": True,
         "status": "rebuilt",
-        "counts": {"messages": message_count, "memory": memory_count},
+        "counts": {"messages": message_count, "memory": memory_count, "segments": segment_count},
     }
 
 
@@ -467,9 +532,11 @@ def search_index_health() -> dict[str, Any]:
             return {"schema": "adaos.conversation.search_index_health.v1", "status": "fts_unavailable", "fts_available": False}
         base_messages = int(con.execute("SELECT COUNT(*) FROM conversation_messages WHERE redaction_state!='redacted'").fetchone()[0] or 0)
         base_memory = int(con.execute("SELECT COUNT(*) FROM conversation_memory_items WHERE redaction_state!='redacted'").fetchone()[0] or 0)
+        base_segments = int(con.execute("SELECT COUNT(*) FROM conversation_segments WHERE redaction_state!='redacted'").fetchone()[0] or 0)
         indexed_messages = int(con.execute("SELECT COUNT(*) FROM conversation_messages_fts").fetchone()[0] or 0)
         indexed_memory = int(con.execute("SELECT COUNT(*) FROM conversation_memory_fts").fetchone()[0] or 0)
-    stale = indexed_messages != base_messages or indexed_memory != base_memory
+        indexed_segments = int(con.execute("SELECT COUNT(*) FROM conversation_segments_fts").fetchone()[0] or 0)
+    stale = indexed_messages != base_messages or indexed_memory != base_memory or indexed_segments != base_segments
     return {
         "schema": "adaos.conversation.search_index_health.v1",
         "status": "stale" if stale else "ok",
@@ -477,6 +544,7 @@ def search_index_health() -> dict[str, Any]:
         "counts": {
             "messages": {"base": base_messages, "indexed": indexed_messages},
             "memory": {"base": base_memory, "indexed": indexed_memory},
+            "segments": {"base": base_segments, "indexed": indexed_segments},
         },
     }
 
@@ -541,6 +609,25 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
     if isinstance(meta, dict) and meta:
         msg["_meta"] = meta
     return msg
+
+
+def _row_to_segment(row: sqlite3.Row) -> dict[str, Any]:
+    refs = _json_load(row["source_refs_json"], [])
+    return {
+        "id": str(row["segment_id"] or ""),
+        "segment_id": str(row["segment_id"] or ""),
+        "conversation_id": str(row["conversation_id"] or ""),
+        "thread_id": row["thread_id"],
+        "start_seq": int(row["start_seq"] or 0),
+        "end_seq": int(row["end_seq"] or 0),
+        "message_count": int(row["message_count"] or 0),
+        "summary": str(row["summary"] or ""),
+        "source_refs": refs if isinstance(refs, list) else [],
+        "retention_class": str(row["retention_class"] or "normal"),
+        "redaction_state": str(row["redaction_state"] or "active"),
+        "created_at": float(row["created_at"] or 0.0),
+        "updated_at": float(row["updated_at"] or 0.0),
+    }
 
 
 def _row_to_conversation(row: sqlite3.Row) -> dict[str, Any]:
@@ -1534,6 +1621,267 @@ def search_messages(
     for item in results:
         item["search"] = {"backend": "like", "rank": None}
     return results
+
+
+def rebuild_conversation_segments(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    segment_size: int = 40,
+) -> dict[str, Any]:
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.segment_rebuild.v1", "ok": False, "status": "unavailable"}
+    clean_thread = str(thread_id or "").strip() or None
+    safe_size = max(2, min(int(segment_size or 40), 200))
+    where = "conversation_id=? AND redaction_state!='redacted'"
+    params: list[Any] = [cid]
+    if clean_thread is not None:
+        where += " AND thread_id=?"
+        params.append(clean_thread)
+    now = time.time()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_messages
+            WHERE {where}
+            ORDER BY seq ASC
+            """,
+            params,
+        ).fetchall()
+        if clean_thread is None:
+            con.execute("DELETE FROM conversation_segments WHERE conversation_id=? AND thread_id IS NULL", (cid,))
+            if _ensure_fts(con):
+                con.execute("DELETE FROM conversation_segments_fts WHERE conversation_id=? AND thread_id IS NULL", (cid,))
+        else:
+            con.execute("DELETE FROM conversation_segments WHERE conversation_id=? AND thread_id=?", (cid, clean_thread))
+            if _ensure_fts(con):
+                con.execute("DELETE FROM conversation_segments_fts WHERE conversation_id=? AND thread_id=?", (cid, clean_thread))
+        count = 0
+        for index in range(0, len(rows), safe_size):
+            chunk = rows[index : index + safe_size]
+            if not chunk:
+                continue
+            messages = [_row_to_message(row) for row in chunk]
+            start_seq = int(messages[0].get("seq") or 0)
+            end_seq = int(messages[-1].get("seq") or 0)
+            segment_id = f"seg.{cid}.{clean_thread or 'root'}.{start_seq}.{end_seq}"
+            summary = _segment_summary_text(messages)
+            refs = [
+                {
+                    "type": "conversation_message",
+                    "conversation_id": cid,
+                    "message_id": str(item.get("id") or ""),
+                    "seq": int(item.get("seq") or 0),
+                }
+                for item in messages
+            ]
+            retention_class = "ephemeral" if any(str(item.get("retention_class") or "") == "ephemeral" for item in messages) else "normal"
+            con.execute(
+                """
+                INSERT INTO conversation_segments(
+                    segment_id, conversation_id, thread_id, start_seq, end_seq,
+                    message_count, summary, source_refs_json, retention_class,
+                    redaction_state, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    segment_id,
+                    cid,
+                    clean_thread,
+                    start_seq,
+                    end_seq,
+                    len(messages),
+                    summary,
+                    _json_dump(refs),
+                    retention_class,
+                    "active",
+                    now,
+                    now,
+                ),
+            )
+            _segment_fts_upsert(
+                con,
+                segment_id=segment_id,
+                conversation_id=cid,
+                thread_id=clean_thread,
+                summary=summary,
+            )
+            count += 1
+        con.commit()
+    return {
+        "schema": "adaos.conversation.segment_rebuild.v1",
+        "ok": True,
+        "status": "rebuilt",
+        "conversation_id": cid,
+        "thread_id": clean_thread,
+        "segment_size": safe_size,
+        "message_count": len(rows),
+        "segment_count": count,
+    }
+
+
+def list_conversation_segments(
+    conversation_id: str,
+    *,
+    thread_id: str | None = None,
+    limit: int = 20,
+    include_redacted: bool = False,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    clean_thread = str(thread_id or "").strip()
+    where = ["conversation_id=?"]
+    params: list[Any] = [conversation_id]
+    if clean_thread:
+        where.append("thread_id=?")
+        params.append(clean_thread)
+    if not include_redacted:
+        where.append("redaction_state!='redacted'")
+    safe_limit = max(1, min(int(limit or 20), 200))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_segments
+            WHERE {' AND '.join(where)}
+            ORDER BY end_seq DESC
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        ).fetchall()
+    return [_row_to_segment(row) for row in rows]
+
+
+def search_conversation_segments(
+    query: str,
+    *,
+    conversation_id: str | None = None,
+    thread_id: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    token = str(query or "").strip()
+    if not token or not ensure_schema():
+        return []
+    safe_limit = max(1, min(int(limit or 20), 200))
+    filters: list[str] = ["s.redaction_state!='redacted'"]
+    params: list[Any] = []
+    if conversation_id:
+        filters.append("s.conversation_id=?")
+        params.append(conversation_id)
+    if thread_id:
+        filters.append("s.thread_id=?")
+        params.append(thread_id)
+    filter_sql = f"AND {' AND '.join(filters)}" if filters else ""
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        if _ensure_fts(con):
+            try:
+                rows = con.execute(
+                    f"""
+                    SELECT s.*, bm25(conversation_segments_fts) AS search_rank
+                    FROM conversation_segments_fts
+                    JOIN conversation_segments s ON s.segment_id=conversation_segments_fts.segment_id
+                    WHERE conversation_segments_fts MATCH ? {filter_sql}
+                    ORDER BY search_rank ASC, s.end_seq DESC
+                    LIMIT ?
+                    """,
+                    [_fts_query(token), *params, safe_limit],
+                ).fetchall()
+                results = [_row_to_segment(row) for row in rows]
+                for index, item in enumerate(results):
+                    item["search"] = {"backend": "fts", "rank": float(rows[index]["search_rank"] or 0.0)}
+                return results
+            except sqlite3.Error:
+                pass
+        like_filters = ["summary LIKE ?", "redaction_state!='redacted'"]
+        like_params: list[Any] = [f"%{token}%"]
+        if conversation_id:
+            like_filters.append("conversation_id=?")
+            like_params.append(conversation_id)
+        if thread_id:
+            like_filters.append("thread_id=?")
+            like_params.append(thread_id)
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_segments
+            WHERE {' AND '.join(like_filters)}
+            ORDER BY end_seq DESC
+            LIMIT ?
+            """,
+            [*like_params, safe_limit],
+        ).fetchall()
+    results = [_row_to_segment(row) for row in rows]
+    for item in results:
+        item["search"] = {"backend": "like", "rank": None}
+    return results
+
+
+def segment_summary_health(conversation_id: str, *, thread_id: str | None = None) -> dict[str, Any]:
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.segment_summary_health.v1", "status": "unavailable"}
+    clean_thread = str(thread_id or "").strip()
+    msg_where = ["conversation_id=?", "redaction_state!='redacted'"]
+    msg_params: list[Any] = [conversation_id]
+    seg_where = ["conversation_id=?", "redaction_state!='redacted'"]
+    seg_params: list[Any] = [conversation_id]
+    if clean_thread:
+        msg_where.append("thread_id=?")
+        msg_params.append(clean_thread)
+        seg_where.append("thread_id=?")
+        seg_params.append(clean_thread)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        message_row = con.execute(
+            f"SELECT COUNT(*), COALESCE(MAX(seq), 0) FROM conversation_messages WHERE {' AND '.join(msg_where)}",
+            msg_params,
+        ).fetchone()
+        segment_row = con.execute(
+            f"SELECT COUNT(*), COALESCE(MAX(end_seq), 0), COALESCE(SUM(message_count), 0) FROM conversation_segments WHERE {' AND '.join(seg_where)}",
+            seg_params,
+        ).fetchone()
+    message_count = int(message_row[0] or 0)
+    latest_seq = int(message_row[1] or 0)
+    segment_count = int(segment_row[0] or 0)
+    summarized_until_seq = int(segment_row[1] or 0)
+    summarized_message_count = int(segment_row[2] or 0)
+    if message_count == 0:
+        status = "ok"
+    elif segment_count == 0:
+        status = "missing"
+    elif summarized_until_seq < latest_seq or summarized_message_count < message_count:
+        status = "stale"
+    else:
+        status = "ok"
+    return {
+        "schema": "adaos.conversation.segment_summary_health.v1",
+        "status": status,
+        "conversation_id": conversation_id,
+        "thread_id": clean_thread or None,
+        "message_count": message_count,
+        "segment_count": segment_count,
+        "summarized_message_count": summarized_message_count,
+        "summarized_until_seq": summarized_until_seq,
+        "latest_seq": latest_seq,
+    }
+
+
+def _segment_summary_text(messages: list[Mapping[str, Any]]) -> str:
+    if not messages:
+        return ""
+    first = str(messages[0].get("text") or "").strip()
+    last = str(messages[-1].get("text") or "").strip()
+    roles = ", ".join(str(item.get("from") or item.get("role") or "unknown") for item in messages[:6])
+    first = first[:180]
+    last = last[:180]
+    if len(messages) == 1 or first == last:
+        return f"{len(messages)} message seq {messages[0].get('seq')}: {first}"
+    return f"{len(messages)} messages seq {messages[0].get('seq')}-{messages[-1].get('seq')} ({roles}). First: {first} Last: {last}"
 
 
 def remember(

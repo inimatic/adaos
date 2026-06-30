@@ -128,6 +128,58 @@ def test_conversation_store_search_indexes_messages_and_memory() -> None:
     assert rebuilt["status"] in {"rebuilt", "fts_unavailable"}
 
 
+def test_conversation_store_rebuilds_redaction_aware_segments() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.segments",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for index in range(1, 6):
+        conversation_store.append_message(
+            conversation_id="conv.segments",
+            thread_id="thread.alpha",
+            webspace_id="desktop",
+            channel_id="builder",
+            owner="skill:test",
+            role="user",
+            text=f"topic alpha detail {index}",
+            payload={"id": f"segments.msg.{index}", "from": "user", "text": f"topic alpha detail {index}"},
+            redaction_state="redacted" if index == 3 else "active",
+        )
+
+    result = conversation_store.rebuild_conversation_segments(
+        "conv.segments",
+        thread_id="thread.alpha",
+        segment_size=2,
+    )
+
+    assert result["ok"] is True
+    assert result["message_count"] == 4
+    assert result["segment_count"] == 2
+    health = conversation_store.segment_summary_health("conv.segments", thread_id="thread.alpha")
+    assert health["status"] == "ok"
+    assert health["summarized_message_count"] == 4
+    segments = conversation_store.list_conversation_segments("conv.segments", thread_id="thread.alpha")
+    assert [item["message_count"] for item in segments] == [2, 2]
+    assert all(ref["message_id"] != "segments.msg.3" for item in segments for ref in item["source_refs"])
+
+    found = conversation_store.search_conversation_segments("detail 5", conversation_id="conv.segments", thread_id="thread.alpha")
+    assert found and found[0]["search"]["backend"] in {"fts", "like"}
+
+    conversation_store.append_message(
+        conversation_id="conv.segments",
+        thread_id="thread.alpha",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        role="user",
+        text="new unsummarized topic",
+        payload={"id": "segments.msg.6", "from": "user", "text": "new unsummarized topic"},
+    )
+    assert conversation_store.segment_summary_health("conv.segments", thread_id="thread.alpha")["status"] == "stale"
+
+
 def test_conversation_store_records_retention_and_redaction_metadata() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

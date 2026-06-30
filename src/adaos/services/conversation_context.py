@@ -15,6 +15,7 @@ MemoryWriteKind = Literal["conversation_fact", "skill_preference", "agent_prefer
 class ContextBudgets:
     max_tokens: int = 4_000
     max_messages: int = 20
+    max_segments: int = 4
     max_memory_items: int = 12
     timeout_ms: int = 250
 
@@ -24,6 +25,7 @@ class ContextBudgets:
         return cls(
             max_tokens=_positive_int(data.get("max_tokens"), 4_000, minimum=128, maximum=64_000),
             max_messages=_positive_int(data.get("max_messages"), 20, minimum=0, maximum=200),
+            max_segments=_positive_int(data.get("max_segments"), 4, minimum=0, maximum=50),
             max_memory_items=_positive_int(data.get("max_memory_items"), 12, minimum=0, maximum=100),
             timeout_ms=_positive_int(data.get("timeout_ms"), 250, minimum=1, maximum=10_000),
         )
@@ -32,6 +34,7 @@ class ContextBudgets:
         return {
             "max_tokens": self.max_tokens,
             "max_messages": self.max_messages,
+            "max_segments": self.max_segments,
             "max_memory_items": self.max_memory_items,
             "timeout_ms": self.timeout_ms,
         }
@@ -79,12 +82,12 @@ def build_context_packet(
         clean_thread_id = str(clean_topic_ref.get("thread_id") or "").strip()
     search_index = conversation_store.search_index_health()
     fts_available = bool(search_index.get("fts_available"))
-    fallbacks = [
-        "summaries_unavailable",
-        "semantic_retrieval_unavailable",
-    ]
+    segment_health = conversation_store.segment_summary_health(cid, thread_id=clean_thread_id or None)
+    fallbacks = ["semantic_retrieval_unavailable"]
     if not fts_available:
         fallbacks.insert(0, "fts_unavailable")
+    if segment_health.get("status") != "ok":
+        fallbacks.insert(0, "summaries_unavailable")
     diagnostics: dict[str, Any] = {
         "schema": "adaos.context.diagnostics.v1",
         "selected_sources": [],
@@ -92,6 +95,7 @@ def build_context_packet(
         "policy_denials": [],
         "fallbacks": fallbacks,
         "search_index": search_index,
+        "segment_summary": segment_health,
         "safety_flags": [],
         "budget_exhausted": False,
     }
@@ -140,6 +144,32 @@ def build_context_packet(
         packet["evidence_refs"].append(item["source_ref"])
     selected_messages.reverse()
     packet["messages"] = selected_messages
+
+    selected_segments: list[dict[str, Any]] = []
+    if limits.max_segments > 0 and segment_health.get("status") == "ok":
+        for segment in conversation_store.list_conversation_segments(
+            cid,
+            thread_id=clean_thread_id or None,
+            limit=limits.max_segments,
+        ):
+            if _timed_out(started, limits.timeout_ms):
+                diagnostics["budget_exhausted"] = True
+                diagnostics["skipped_sources"].append({"type": "segment", "reason": "timeout_budget"})
+                break
+            text = str(segment.get("summary") or "")
+            cost = estimate_tokens(text)
+            if cost > remaining_tokens:
+                diagnostics["budget_exhausted"] = True
+                diagnostics["skipped_sources"].append(_segment_ref(segment, reason="token_budget"))
+                continue
+            remaining_tokens -= cost
+            item = _context_segment(segment, cost)
+            _attach_safety(item, diagnostics)
+            selected_segments.append(item)
+            diagnostics["selected_sources"].append(item["source_ref"])
+            packet["evidence_refs"].append(item["source_ref"])
+    selected_segments.reverse()
+    packet["segments"] = selected_segments
 
     memory_candidate_owner = str(memory_owner or owner).strip() or owner
     memory_sources = _memory_queries(
@@ -192,6 +222,7 @@ def build_context_packet(
     packet["token_estimate"] = limits.max_tokens - remaining_tokens
     diagnostics["latency_ms"] = int(round((time.monotonic() - started) * 1000))
     diagnostics["selected_message_count"] = len(selected_messages)
+    diagnostics["selected_segment_count"] = len(selected_segments)
     diagnostics["selected_memory_count"] = len(selected_memory)
     return packet
 
@@ -288,6 +319,37 @@ def _context_message(message: Mapping[str, Any], token_estimate: int) -> dict[st
         "trust_boundary": "retrieved_untrusted_evidence",
         "source_ref": _source_ref("message", message),
     }
+
+
+def _context_segment(segment: Mapping[str, Any], token_estimate: int) -> dict[str, Any]:
+    return {
+        "id": str(segment.get("id") or segment.get("segment_id") or ""),
+        "conversation_id": str(segment.get("conversation_id") or ""),
+        "thread_id": segment.get("thread_id"),
+        "start_seq": int(segment.get("start_seq") or 0),
+        "end_seq": int(segment.get("end_seq") or 0),
+        "message_count": int(segment.get("message_count") or 0),
+        "summary": str(segment.get("summary") or ""),
+        "text": str(segment.get("summary") or ""),
+        "source_refs": [dict(item) for item in segment.get("source_refs", []) if isinstance(item, Mapping)],
+        "token_estimate": token_estimate,
+        "trust_boundary": "retrieved_untrusted_evidence",
+        "source_ref": _segment_ref(segment),
+    }
+
+
+def _segment_ref(segment: Mapping[str, Any], *, reason: str | None = None) -> dict[str, Any]:
+    ref = {
+        "type": "conversation_segment",
+        "segment_id": str(segment.get("id") or segment.get("segment_id") or ""),
+        "conversation_id": str(segment.get("conversation_id") or ""),
+        "thread_id": segment.get("thread_id"),
+        "start_seq": int(segment.get("start_seq") or 0),
+        "end_seq": int(segment.get("end_seq") or 0),
+    }
+    if reason:
+        ref["reason"] = reason
+    return ref
 
 
 def _source_ref(kind: str, message: Mapping[str, Any], *, reason: str | None = None) -> dict[str, Any]:

@@ -2059,8 +2059,12 @@ Important lacunae found during Phase 6 implementation:
   `search_index_health()`, `rebuild_search_indexes()`, `search_messages()`,
   and FTS-first/fallback memory search, while context packets report search
   index readiness.
-- [ ] `[must]` Add segment summaries for long conversations with source refs,
-  retention/redaction awareness, and summary freshness diagnostics.
+- [x] `[must]` Add segment summaries for long conversations with source refs,
+  retention/redaction awareness, and summary freshness diagnostics. The first
+  deterministic layer stores `conversation_segments`, builds summaries from
+  non-redacted ledger ranges, preserves source refs, exposes rebuild/list/search
+  APIs, and reports freshness through `segment_summary_health()` and context
+  packet diagnostics.
 - [ ] `[must]` Add memory provenance, conflict handling, confidence decay,
   stale-memory filtering, and explicit memory review/edit flows.
 - [ ] `[must]` Add memory extraction proposals that default to Pending Action

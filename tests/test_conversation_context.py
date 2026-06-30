@@ -96,6 +96,24 @@ def test_context_packet_filters_messages_by_thread_id() -> None:
     assert packet["diagnostics"]["thread_filter"] == "thread.builder.desktop.beta"
 
 
+def test_context_packet_includes_fresh_segment_summaries() -> None:
+    _seed_conversation()
+    conversation_store.rebuild_conversation_segments("conv.ctx", segment_size=2)
+
+    packet = conversation_context.build_context_packet(
+        conversation_id="conv.ctx",
+        requester_owner="skill:test",
+        channel_id="conversational",
+        budgets={"max_messages": 1, "max_segments": 2, "max_memory_items": 0, "max_tokens": 512},
+    )
+
+    assert packet["segments"]
+    assert packet["segments"][0]["source_ref"]["type"] == "conversation_segment"
+    assert "summaries_unavailable" not in packet["diagnostics"]["fallbacks"]
+    assert packet["diagnostics"]["segment_summary"]["status"] == "ok"
+    assert packet["diagnostics"]["selected_segment_count"] == len(packet["segments"])
+
+
 def test_context_packet_denies_cross_owner_memory_by_default() -> None:
     _seed_conversation()
     memory_id = conversation_store.remember(
