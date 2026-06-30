@@ -252,6 +252,22 @@ def execute_local_request(payload: Mapping[str, Any] | None, *, node_id: str = "
     status = "partial" if partial else "ok"
     if not fragments and denials and all(item.get("reason") in {"cross_owner_denied", "invalid_request"} for item in denials):
         status = "denied"
+    audit = _record_retrieval_audit(
+        request=request,
+        node_id=node_id,
+        status=status,
+        fragments=fragments,
+        denials=denials,
+        elapsed_ms=elapsed_ms,
+    )
+    diagnostics = {
+        "elapsed_ms": elapsed_ms,
+        "timeout_ms": _mapping(request.get("limits")).get("per_node_timeout_ms"),
+        "fragment_count": len(fragments),
+        "remote_sql": False,
+    }
+    if audit:
+        diagnostics["audit_event_id"] = audit.get("audit_event_id")
     return {
         "schema": RESPONSE_SCHEMA,
         "request_id": request["request_id"],
@@ -260,10 +276,58 @@ def execute_local_request(payload: Mapping[str, Any] | None, *, node_id: str = "
         "partial": bool(partial),
         "fragments": fragments,
         "denials": denials,
-        "diagnostics": {
-            "elapsed_ms": elapsed_ms,
-            "timeout_ms": _mapping(request.get("limits")).get("per_node_timeout_ms"),
-            "fragment_count": len(fragments),
-            "remote_sql": False,
-        },
+        "diagnostics": diagnostics,
     }
+
+
+def _record_retrieval_audit(
+    *,
+    request: Mapping[str, Any],
+    node_id: str,
+    status: str,
+    fragments: Sequence[Mapping[str, Any]],
+    denials: Sequence[Mapping[str, Any]],
+    elapsed_ms: int,
+) -> dict[str, Any] | None:
+    requester = _mapping(request.get("requester"))
+    scopes = _mapping(request.get("scopes"))
+    conversation_ids = [_text(item) for item in _list(scopes.get("conversation_ids")) if _text(item)]
+    target_nodes = [_text(item) for item in _list(request.get("target_nodes")) if _text(item)]
+    source_ref_counts: dict[str, int] = {}
+    for fragment in fragments:
+        ref = _mapping(fragment.get("source_ref"))
+        kind = _text(ref.get("type") or fragment.get("kind"), "unknown")
+        source_ref_counts[kind] = source_ref_counts.get(kind, 0) + 1
+    try:
+        return conversation_store.append_audit_event(
+            event_type="conversation.federated_retrieval.audit.v1",
+            action="execute_local_retrieval",
+            conversation_id=conversation_ids[0] if len(conversation_ids) == 1 else None,
+            status=status,
+            actor_owner=_text(requester.get("owner")),
+            actor_id=_text(requester.get("actor_id")),
+            reason=status,
+            counts={
+                "returned": len(fragments),
+                "denied": len(denials),
+                "target_nodes": len(target_nodes) or 1,
+                "owners": len(_list(scopes.get("owners"))),
+                "conversation_ids": len(conversation_ids),
+            },
+            meta={
+                "schema": "adaos.conversation_federated_retrieval.audit_meta.v1",
+                "request_id": _text(request.get("request_id")),
+                "node_id": node_id,
+                "requester_node_id": _text(requester.get("node_id")),
+                "target_nodes": target_nodes or [node_id],
+                "owner_scope": [_text(item) for item in _list(scopes.get("owners")) if _text(item)],
+                "memory_scopes": [_text(item) for item in _list(scopes.get("memory_scopes")) if _text(item)],
+                "conversation_ids": conversation_ids,
+                "denial_reasons": sorted({_text(item.get("reason")) for item in denials if isinstance(item, Mapping) and _text(item.get("reason"))}),
+                "source_ref_counts": source_ref_counts,
+                "elapsed_ms": elapsed_ms,
+                "remote_sql": False,
+            },
+        )
+    except Exception:
+        return None

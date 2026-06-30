@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from adaos.services import conversation_federation, conversation_store
 
 
 def test_federated_retrieval_returns_fragments_refs_scores_without_remote_sql() -> None:
+    request_id = f"fed.audit.{uuid4().hex[:8]}"
     conversation_store.upsert_conversation(
         conversation_id="conv.skill.builder_skill.default.fed",
         webspace_id="fed",
@@ -30,8 +33,10 @@ def test_federated_retrieval_returns_fragments_refs_scores_without_remote_sql() 
 
     response = conversation_federation.execute_local_request(
         {
+            "request_id": request_id,
             "requester": {"owner": "skill:builder_skill", "actor_id": "agent:builder_skill:builder"},
             "query": "shopping list",
+            "target_nodes": ["node-a"],
             "scopes": {
                 "webspace_id": "fed",
                 "owners": ["skill:builder_skill"],
@@ -44,14 +49,34 @@ def test_federated_retrieval_returns_fragments_refs_scores_without_remote_sql() 
     )
 
     assert response["schema"] == conversation_federation.RESPONSE_SCHEMA
+    assert response["request_id"] == request_id
     assert response["status"] == "ok"
     assert response["diagnostics"]["remote_sql"] is False
+    assert response["diagnostics"]["audit_event_id"]
     assert response["fragments"]
     refs = [item["source_ref"] for item in response["fragments"]]
     assert {"type": "memory", "memory_id": memory_id, "scope": "skill_user", "owner": "skill:builder_skill", "subject_id": "agent:builder_skill:builder"} in refs
     assert any(ref.get("message_id") == msg["id"] and ref.get("conversation_id") == "conv.skill.builder_skill.default.fed" for ref in refs)
     assert all("score" in item and "source_ref" in item and "summary" in item for item in response["fragments"])
     assert all("payload_json" not in item and "meta_json" not in item for item in response["fragments"])
+    audit = [
+        item
+        for item in conversation_store.list_audit_events(
+            conversation_id="conv.skill.builder_skill.default.fed",
+            event_type="conversation.federated_retrieval.audit.v1",
+            action="execute_local_retrieval",
+            limit=20,
+        )
+        if item["audit_event_id"] == response["diagnostics"]["audit_event_id"]
+    ][0]
+    assert audit["actor_owner"] == "skill:builder_skill"
+    assert audit["actor_id"] == "agent:builder_skill:builder"
+    assert audit["counts"]["returned"] == len(response["fragments"])
+    assert audit["counts"]["denied"] == len(response["denials"])
+    assert audit["meta"]["request_id"] == request_id
+    assert audit["meta"]["target_nodes"] == ["node-a"]
+    assert audit["meta"]["owner_scope"] == ["skill:builder_skill"]
+    assert audit["meta"]["remote_sql"] is False
 
 
 def test_federated_retrieval_denies_cross_owner_by_default() -> None:

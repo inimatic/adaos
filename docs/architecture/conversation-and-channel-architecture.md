@@ -1942,8 +1942,12 @@ Important lacunae found during Phase 6 implementation:
   `conversation_store.retrieval_health_report(...)` now reports scoped message,
   segment, and memory counts, FTS index health, segment-summary status, and
   degraded reasons for diagnostics surfaces.
-- [ ] `[should]` Add cross-node query audit events with requesting actor,
+- [x] `[should]` Add cross-node query audit events with requesting actor,
   target node, owner scope, and denied/returned counts.
+  `conversation_federation.execute_local_request(...)` now records
+  `conversation.federated_retrieval.audit.v1` audit events with request id,
+  requester, node targets, owner/memory scopes, returned/denied counts, denial
+  reasons, and `remote_sql=false`.
 - [ ] `[should]` Add the actual node-to-node transport adapter for federated
   retrieval after the local executor contract is stable.
 - [ ] `[could]` Add subnet-level search UI after local-node retrieval and policy
