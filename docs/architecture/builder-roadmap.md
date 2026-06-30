@@ -465,9 +465,12 @@ Open work:
   clarification, validation failure, review approval, rejection, and repair.
 - [ ] `[must]` Link Builder eval failures to repair tasks with conversation,
   trace, draft, validation, and file refs.
-- [ ] `[must]` Validate generated skills against conversation-native rules:
+- [x] `[must]` Validate generated skills against conversation-native rules:
   no direct transcript files, no direct Yjs chat writes, bounded context
-  access, declared memory policy, and explicit action risk class.
+  access, declared memory policy, and explicit action risk class. The first
+  shared validation slice blocks direct Yjs symbols, raw transcript files,
+  transport-owned chat/memory references, and unbounded process-local
+  conversation state in `SkillValidationService`.
 - [ ] `[should]` Publish a public-quality Builder-generated skill example that
   demonstrates skill-owned conversation, memory proposal, Pending Action, and
   browser widget patterns.

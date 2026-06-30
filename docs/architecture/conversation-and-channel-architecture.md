@@ -2105,9 +2105,12 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[must]` Add generated-skill templates for skill-owned conversations,
   multi-agent skill conversations, bounded `chat.ask` flows, and memory
   extraction proposal flows.
-- [ ] `[must]` Add validation/lint warnings that block direct transcript files,
+- [x] `[must]` Add validation/lint warnings that block direct transcript files,
   direct Yjs chat writes, unbounded in-process histories, and transport-owned
-  memory in generated LLM skills.
+  memory in generated LLM skills. The shared `SkillValidationService` now
+  rejects direct Yjs symbols, raw transcript/chat-history files,
+  transport-owned chat references, and unbounded module-level conversation
+  state during install/strict validation.
 - [ ] `[must]` Add browser acceptance tests for Builder through Voice/global
   dialog, Prompt IDE, and Pending Actions.
 - [ ] `[should]` Add Builder repair conversations that connect validation

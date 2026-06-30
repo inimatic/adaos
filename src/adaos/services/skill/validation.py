@@ -1,7 +1,7 @@
 # src/adaos/sdk/skill_validator.py
 
 from __future__ import annotations
-import os, sys, json, subprocess, importlib.util
+import ast, os, re, sys, json, subprocess, importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +14,25 @@ from adaos.services.agent_context import AgentContext, get_ctx
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
 WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
+_SKIP_DIRS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", ".runtime"}
+_YJS_PATTERNS = (
+    "y_py",
+    "ypy_websocket",
+    "YDoc",
+    "apply_update",
+    "encode_state_as_update",
+    "encode_state_vector",
+    "get_ydoc",
+)
+_TRANSCRIPT_FILE_RE = re.compile(r"(transcript|chat_history|conversation_history|voice_chat|dialog_history)", re.I)
+_UNBOUNDED_NAME_RE = re.compile(r"(cache|history|histories|events|logs|frames|sessions|state|buffer|queue|transcript)", re.I)
+_TRANSPORT_MEMORY_PATTERNS = (
+    "voice_chat.messages",
+    "voice_chat_skill",
+    "telegram_chat_id",
+    "telegram_message_id",
+    "slack_channel",
+)
 
 
 @dataclass
@@ -130,7 +149,109 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
             issues.append(Issue("error", "webui.schema.invalid", f"webui.json schema violation: {e.message}", "webui.json"))
         except Exception as e:
             issues.append(Issue("error", "webui.read.failed", f"failed to read/parse webui.json: {e}", "webui.json"))
+    issues.extend(_conversation_native_static_checks(skill_dir, install_mode=install_mode))
     return issues
+
+
+def _conversation_native_static_checks(skill_dir: Path, *, install_mode: bool) -> List[Issue]:
+    issues: List[Issue] = []
+    for path in sorted(skill_dir.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        rel = _relative_to(path, skill_dir)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for pattern in _YJS_PATTERNS:
+            if pattern in text:
+                issues.append(
+                    Issue(
+                        "error",
+                        "conversation.unsafe_direct_yjs",
+                        f"direct Yjs symbol used: {pattern}; generated skills must use declared projections/routes",
+                        rel,
+                    )
+                )
+                break
+        for pattern in _TRANSPORT_MEMORY_PATTERNS:
+            if pattern in text:
+                issues.append(
+                    Issue(
+                        "error" if install_mode else "warning",
+                        "conversation.transport_owned_memory",
+                        f"transport-owned chat/memory reference used: {pattern}; use adaos.sdk.conversation/memory",
+                        rel,
+                    )
+                )
+        issues.extend(_conversation_memory_ast_issues(path, rel, text, install_mode=install_mode))
+    for path in sorted(skill_dir.rglob("*")):
+        if not path.is_file() or any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        rel = _relative_to(path, skill_dir)
+        if _TRANSCRIPT_FILE_RE.search(path.name):
+            issues.append(
+                Issue(
+                    "error" if install_mode else "warning",
+                    "conversation.raw_transcript_file",
+                    "raw transcript/chat history files are not allowed as the primary conversation store",
+                    rel,
+                )
+            )
+    return issues
+
+
+def _conversation_memory_ast_issues(path: Path, rel: str, text: str, *, install_mode: bool) -> List[Issue]:
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError:
+        return []
+    issues: List[Issue] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if not any(_UNBOUNDED_NAME_RE.search(name) for name in names):
+            continue
+        value = node.value
+        if isinstance(value, (ast.List, ast.Dict, ast.Set)):
+            issues.append(
+                Issue(
+                    "error" if install_mode else "warning",
+                    "conversation.unbounded_process_memory",
+                    f"module-level mutable state may become unbounded: {', '.join(names)}",
+                    rel,
+                )
+            )
+        elif isinstance(value, ast.Call):
+            func_name = getattr(value.func, "id", "") or getattr(value.func, "attr", "")
+            if func_name in {"list", "dict", "set"}:
+                issues.append(
+                    Issue(
+                        "error" if install_mode else "warning",
+                        "conversation.unbounded_process_memory",
+                        f"module-level mutable state may become unbounded: {', '.join(names)}",
+                        rel,
+                    )
+                )
+            if func_name == "deque" and not any(kw.arg == "maxlen" for kw in value.keywords):
+                issues.append(
+                    Issue(
+                        "error" if install_mode else "warning",
+                        "conversation.unbounded_process_memory",
+                        f"deque without maxlen may become unbounded: {', '.join(names)}",
+                        rel,
+                    )
+                )
+    return issues
+
+
+def _relative_to(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except Exception:
+        return str(path)
 
 
 def _dynamic_checks(skill_name: str, skill_dir: Path, install_mode: bool, probe_tools: bool) -> List[Issue]:
