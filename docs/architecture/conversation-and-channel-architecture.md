@@ -1771,8 +1771,12 @@ depth across several phases.
   APIs over `io.out.chat.append` and direct `skill_memory` transcript storage.
 - [ ] `[should]` Add generated-skill templates for skill-owned conversations,
   multi-agent skill conversations, and bounded `chat.ask` flows.
-- [ ] `[should]` Add lint/validation warnings for skills that store
-  user-visible transcript history in arbitrary files.
+- [x] `[should]` Add lint/validation warnings for skills that store
+  user-visible transcript history in arbitrary files or use conversation/memory
+  SDK APIs without declared manifest policy. `SkillValidationService` now warns
+  when a skill uses `adaos.sdk.conversation` without a `conversation`
+  declaration or uses `adaos.sdk.memory` without a skill-local memory route /
+  conversation memory policy.
 - [ ] `[could]` Add SDK helpers for memory extraction proposals that require
   user confirmation before long-term storage.
 

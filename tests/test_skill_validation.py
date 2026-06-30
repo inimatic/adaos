@@ -6,7 +6,13 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.skill.validation import SkillValidationService
 
 
-def _write_skill(root: Path, *, handler: str, extra_files: dict[str, str] | None = None) -> Path:
+def _write_skill(
+    root: Path,
+    *,
+    handler: str,
+    extra_files: dict[str, str] | None = None,
+    manifest_extra: list[str] | None = None,
+) -> Path:
     skill_dir = root / "demo_skill"
     (skill_dir / "handlers").mkdir(parents=True)
     (skill_dir / "skill.yaml").write_text(
@@ -20,6 +26,7 @@ def _write_skill(root: Path, *, handler: str, extra_files: dict[str, str] | None
                 "    entry: handlers.main:ping",
                 "    input_schema: {}",
                 "",
+                *(manifest_extra or []),
             ]
         ),
         encoding="utf-8",
@@ -79,6 +86,20 @@ def ping():
     event_buffer.append("ping")
     return {"ok": True, "context_schema": conversation.context.__name__, "memory": memory.write_policy.__name__}
 """,
+        manifest_extra=[
+            "conversation:",
+            "  dialog_channel:",
+            "    id: demo",
+            "    owner: skill:demo_skill",
+            "    default_tool: demo_skill.ping",
+            "  memory:",
+            "    scopes: [skill_user]",
+            "data_routes:",
+            "  - surface: demo memory",
+            "    route: skill-local",
+            "    owner: skill:demo_skill",
+            "    path: skill_memory:demo_skill.memory",
+        ],
     )
 
     report = SkillValidationService(get_ctx()).validate_path(skill_dir, install_mode=True)
@@ -86,3 +107,26 @@ def ping():
     conversation_codes = {issue.code for issue in report.issues if issue.code.startswith("conversation.")}
     assert report.ok is True
     assert conversation_codes == set()
+
+
+def test_skill_validation_warns_when_conversation_sdk_lacks_manifest_policy(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk import conversation, memory
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    packet = conversation.context("conv.demo", requester_owner="skill:demo_skill")
+    policy = memory.write_policy("skill_preference", owner="skill:demo_skill")
+    return {"ok": True, "packet": packet, "policy": policy}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, install_mode=True)
+
+    codes = {issue.code for issue in report.issues}
+    assert report.ok is True
+    assert {"conversation.manifest_missing", "conversation.memory_policy_missing"}.issubset(codes)
+    assert all(issue.level == "warning" for issue in report.issues if issue.code in codes)

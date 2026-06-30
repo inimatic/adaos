@@ -33,6 +33,21 @@ _TRANSPORT_MEMORY_PATTERNS = (
     "telegram_message_id",
     "slack_channel",
 )
+_CONVERSATION_SDK_PATTERNS = (
+    "adaos.sdk.conversation",
+    "from adaos.sdk import conversation",
+    "conversation.context(",
+    "conversation.open(",
+    "conversation.current(",
+)
+_MEMORY_SDK_PATTERNS = (
+    "adaos.sdk.memory",
+    "from adaos.sdk import memory",
+    "memory.remember(",
+    "memory.propose_write(",
+    "memory.write_policy(",
+    "memory.record_consent(",
+)
 
 
 @dataclass
@@ -149,12 +164,14 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
             issues.append(Issue("error", "webui.schema.invalid", f"webui.json schema violation: {e.message}", "webui.json"))
         except Exception as e:
             issues.append(Issue("error", "webui.read.failed", f"failed to read/parse webui.json: {e}", "webui.json"))
-    issues.extend(_conversation_native_static_checks(skill_dir, install_mode=install_mode))
+    issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
     return issues
 
 
-def _conversation_native_static_checks(skill_dir: Path, *, install_mode: bool) -> List[Issue]:
+def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, Any], install_mode: bool) -> List[Issue]:
     issues: List[Issue] = []
+    uses_conversation_sdk = False
+    uses_memory_sdk = False
     for path in sorted(skill_dir.rglob("*.py")):
         if any(part in _SKIP_DIRS for part in path.parts):
             continue
@@ -163,6 +180,8 @@ def _conversation_native_static_checks(skill_dir: Path, *, install_mode: bool) -
             text = path.read_text(encoding="utf-8")
         except Exception:
             continue
+        uses_conversation_sdk = uses_conversation_sdk or any(pattern in text for pattern in _CONVERSATION_SDK_PATTERNS)
+        uses_memory_sdk = uses_memory_sdk or any(pattern in text for pattern in _MEMORY_SDK_PATTERNS)
         for pattern in _YJS_PATTERNS:
             if pattern in text:
                 issues.append(
@@ -198,7 +217,50 @@ def _conversation_native_static_checks(skill_dir: Path, *, install_mode: bool) -
                     rel,
                 )
             )
+    issues.extend(_conversation_manifest_policy_issues(manifest, uses_conversation_sdk=uses_conversation_sdk, uses_memory_sdk=uses_memory_sdk))
     return issues
+
+
+def _conversation_manifest_policy_issues(
+    manifest: Dict[str, Any],
+    *,
+    uses_conversation_sdk: bool,
+    uses_memory_sdk: bool,
+) -> List[Issue]:
+    issues: List[Issue] = []
+    conversation = manifest.get("conversation") if isinstance(manifest.get("conversation"), dict) else {}
+    if uses_conversation_sdk and not conversation:
+        issues.append(
+            Issue(
+                "warning",
+                "conversation.manifest_missing",
+                "skill uses adaos.sdk.conversation but skill.yaml has no conversation declaration",
+                "skill.yaml:conversation",
+            )
+        )
+    if uses_memory_sdk and not _manifest_has_memory_route_or_policy(manifest, conversation):
+        issues.append(
+            Issue(
+                "warning",
+                "conversation.memory_policy_missing",
+                "skill uses adaos.sdk.memory but skill.yaml declares no skill-local memory route or conversation memory policy",
+                "skill.yaml:data_routes",
+            )
+        )
+    return issues
+
+
+def _manifest_has_memory_route_or_policy(manifest: Dict[str, Any], conversation: Dict[str, Any]) -> bool:
+    if isinstance(conversation.get("memory"), dict) or isinstance(conversation.get("memory_policy"), dict):
+        return True
+    for route in manifest.get("data_routes") or []:
+        if not isinstance(route, dict):
+            continue
+        route_kind = str(route.get("route") or "").strip()
+        path = str(route.get("path") or "").strip().lower()
+        if route_kind == "skill-local" and ("skill_memory" in path or "memory" in path):
+            return True
+    return False
 
 
 def _conversation_memory_ast_issues(path: Path, rel: str, text: str, *, install_mode: bool) -> List[Issue]:
