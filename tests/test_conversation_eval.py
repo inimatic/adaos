@@ -130,6 +130,7 @@ def test_conversation_eval_replays_initial_golden_datasets() -> None:
         "general_no_match_repair.json",
         "conversation_companions_agent_handoff.json",
         "builder_review_handoff.json",
+        "builder_first_idea_preview_correction.json",
         "teacher_candidate_repair.json",
     ]
     for name in fixture_names:
@@ -152,13 +153,14 @@ def test_conversation_eval_golden_migration_gate_passes_initial_suite() -> None:
 
     assert result["schema"] == "adaos.conversation.eval.migration_gate.v1"
     assert result["status"] == "passed"
-    assert result["fixture_count"] >= 4
+    assert result["fixture_count"] >= 5
     assert result["failed_count"] == 0
     assert result["failures"] == []
     assert {
         "general_no_match_repair",
         "conversation_companions_agent_handoff",
         "builder_review_handoff",
+        "builder_first_idea_preview_correction",
         "teacher_candidate_repair",
     }.issubset({item["dataset_id"] for item in result["datasets"]})
 

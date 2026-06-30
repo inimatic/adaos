@@ -1,0 +1,111 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "builder_first_idea_preview_correction",
+  "conversation_id": "conv.golden.builder.first_idea",
+  "description": "Builder accepts a phrase-level first idea, produces a preview, and applies a follow-up UI correction in the same topic.",
+  "messages": [
+    {
+      "id": "golden.builder.first_idea.msg.1",
+      "conversation_id": "conv.golden.builder.first_idea",
+      "seq": 1,
+      "from": "user",
+      "text": "I have an idea. Let's build it.",
+      "dialog_channel_id": "builder",
+      "thread_id": "thread.builder.desktop.draft.first_idea"
+    },
+    {
+      "id": "golden.builder.first_idea.msg.2",
+      "conversation_id": "conv.golden.builder.first_idea",
+      "seq": 2,
+      "from": "hub",
+      "text": "Builder created a draft preview. Assumptions: local dev prototype. Preview: form, table, mock data, and webui.json. Risks: validation and human review are required before activation.",
+      "dialog_channel_id": "builder",
+      "thread_id": "thread.builder.desktop.draft.first_idea",
+      "active_agent_id": "agent:builder_skill:builder"
+    },
+    {
+      "id": "golden.builder.first_idea.msg.3",
+      "conversation_id": "conv.golden.builder.first_idea",
+      "seq": 3,
+      "from": "user",
+      "text": "Show the result as cards.",
+      "dialog_channel_id": "builder",
+      "thread_id": "thread.builder.desktop.draft.first_idea"
+    },
+    {
+      "id": "golden.builder.first_idea.msg.4",
+      "conversation_id": "conv.golden.builder.first_idea",
+      "seq": 4,
+      "from": "hub",
+      "text": "Builder updated the prototype. Operation: change_view_representation. The current webui.json preview now includes a card_list.",
+      "dialog_channel_id": "builder",
+      "thread_id": "thread.builder.desktop.draft.first_idea",
+      "active_agent_id": "agent:builder_skill:builder"
+    }
+  ],
+  "turn_traces": [
+    {
+      "turn_trace_id": "trace.golden.builder.first_idea.1",
+      "conversation_id": "conv.golden.builder.first_idea",
+      "channel_id": "builder",
+      "agent_id": "agent:builder_skill:builder",
+      "selected_tool": "builder_skill.create_scenario_draft",
+      "policy_decision": {
+        "reason": "phrase_level_builder_entrypoint",
+        "repair_state": "none",
+        "pending_action_kind": "builder.scenario_draft.review",
+        "thread_id": "thread.builder.desktop.draft.first_idea"
+      },
+      "renderer": {
+        "projection": "builder.workbench",
+        "preview": "webui.json"
+      },
+      "status": "completed",
+      "created_at": 1400.0,
+      "completed_at": 1400.52
+    },
+    {
+      "turn_trace_id": "trace.golden.builder.first_idea.2",
+      "conversation_id": "conv.golden.builder.first_idea",
+      "channel_id": "builder",
+      "agent_id": "agent:builder_skill:builder",
+      "selected_tool": "builder_skill.update_current_scenario",
+      "policy_decision": {
+        "reason": "builder_topic_followup",
+        "repair_state": "none",
+        "patch_operation": "change_view_representation",
+        "pending_action_kind": "builder.scenario_patch.review",
+        "thread_id": "thread.builder.desktop.draft.first_idea"
+      },
+      "renderer": {
+        "projection": "builder.workbench",
+        "preview": "webui.json"
+      },
+      "status": "completed",
+      "created_at": 1401.0,
+      "completed_at": 1401.47
+    }
+  ],
+  "expectations": {
+    "required_text": [
+      "Assumptions",
+      "Preview",
+      "Risks",
+      "change_view_representation",
+      "card_list"
+    ],
+    "forbidden_text": [
+      "raw UI chat state",
+      "Unhandled exception"
+    ],
+    "required_agents": [
+      "agent:builder_skill:builder"
+    ],
+    "required_channels": [
+      "builder"
+    ],
+    "min_success_rate": 1.0,
+    "max_fallback_rate": 0.0,
+    "max_latency_ms_p95": 1000
+  }
+}

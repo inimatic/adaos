@@ -1989,9 +1989,12 @@ Important lacunae found during Phase 6 implementation:
   fixtures cover general no-match repair, companion agent handoff, Builder
   review handoff, and Teacher candidate repair through
   `tests/fixtures/conversation/*`.
+- [x] `[must]` Add the first Builder first-idea preview/correction fixture to
+  the migration-gated suite. It covers phrase-level entry, draft preview,
+  `webui.json` evidence, and follow-up patching in one Builder topic.
 - [ ] `[must]` Broaden the golden datasets to include companion profile
   correction, no-input repair, Builder apply/reject handoff, memory-write
-  consent, and long-context retrieval.
+  consent, long-context retrieval, and Builder validation-failure repair.
 - [x] `[must]` Make golden evaluation a migration gate before broad removal of
   compatibility Voice projections or broad generated-skill rollout.
   `conversation_eval.run_golden_migration_gate()` loads checked-in golden
@@ -2091,6 +2094,10 @@ Important lacunae found during Phase 6 implementation:
   it now returns and emits canonical Builder topic/thread refs, stores them in
   sessions, passes them to chat append metadata, and keeps Pending Action
   `domain_ref` / `source_refs` attached to the same thread.
+- [x] `[must]` Add the first practical `builder_skill.chat` acceptance flow:
+  phrase-level first idea creates a draft preview, writes `webui.json`, opens a
+  review Pending Action, and applies a follow-up UI patch in the same Builder
+  topic.
 - [ ] `[must]` Add generated-skill templates for skill-owned conversations,
   multi-agent skill conversations, bounded `chat.ask` flows, and memory
   extraction proposal flows.

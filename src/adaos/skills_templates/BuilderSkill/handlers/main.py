@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from adaos.sdk.core.decorators import tool
+from adaos.sdk.core.decorators import subscribe, tool
 
 
 SKILL_ID = "builder_skill"
@@ -402,6 +402,69 @@ def _safe_emit_chat(
         return
 
 
+def _event_payload(evt: Any) -> dict[str, Any]:
+    payload = getattr(evt, "payload", None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    if isinstance(evt, Mapping):
+        return dict(evt)
+    return {}
+
+
+@subscribe("builder.pending_action.response")
+async def _on_builder_pending_action_response(evt: Any) -> None:
+    payload = _event_payload(evt)
+    action = payload.get("pending_action") if isinstance(payload.get("pending_action"), Mapping) else {}
+    response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+    domain_ref = payload.get("domain_ref") if isinstance(payload.get("domain_ref"), Mapping) else action.get("domain_ref") if isinstance(action, Mapping) else {}
+    response_action_id = str(payload.get("response_action_id") or response.get("response_action_id") or "").strip()
+    webspace_id = _source_webspace_id(str(payload.get("webspace_id") or action.get("webspace_id") or ""), None)
+    session_id = str(domain_ref.get("session_id") or "").strip()
+    patch_id = str(domain_ref.get("patch_id") or "").strip()
+    pending_action_id = str(payload.get("pending_action_id") or action.get("id") or "").strip()
+    if not webspace_id or response_action_id not in {"approve", "refuse"}:
+        return
+    session = _load_session(webspace_id, session_id or None)
+    if not session:
+        return
+    patches = [dict(item) for item in session.get("patches", []) if isinstance(item, Mapping)]
+    matched = False
+    for patch in patches:
+        if patch_id and str(patch.get("id") or "") == patch_id:
+            matched = True
+        elif pending_action_id and str(patch.get("pending_action_id") or "") == pending_action_id:
+            matched = True
+        else:
+            continue
+        patch["review_status"] = "approved" if response_action_id == "approve" else "refused"
+        patch["reviewed_at"] = _now()
+        patch["review_response_id"] = pending_action_id or None
+        if response_action_id == "approve":
+            patch["status"] = "applied"
+        break
+    if not matched:
+        return
+    session["patches"] = patches
+    if pending_action_id and str(session.get("pending_action_id") or "") == pending_action_id:
+        session.pop("pending_action_id", None)
+    session["user_summary"] = _draft_user_summary(session)
+    preview = _preview_state(session=session)
+    _write_webui(str(session.get("artifact_root") or ""), preview)
+    session["preview_state"] = preview
+    _save_session(webspace_id, session)
+    workbench = _ensure_workbench(webspace_id, session=session, preview_state=preview)
+    binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
+    topic = _builder_topic_ref(webspace_id, session=session, binding=binding)
+    if response_action_id == "approve":
+        message = f"{AGENT_LABEL}: \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f {session.get('scenario_id')} \u0443\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u044b."
+    else:
+        message = (
+            f"{AGENT_LABEL}: \u043e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u0438\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439 {session.get('scenario_id')} "
+            "\u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u043e. Rollback \u0434\u043b\u044f \u044d\u0442\u043e\u0439 \u0432\u0435\u0442\u043a\u0438 \u0435\u0449\u0435 \u043d\u0435 \u0440\u0435\u0430\u043b\u0438\u0437\u043e\u0432\u0430\u043d."
+        )
+    _safe_emit_chat(message, webspace_id=webspace_id, session=session, binding=binding, topic_ref=topic)
+
+
 def _build_fields(idea: str) -> list[dict[str, Any]]:
     lowered = str(idea or "").lower()
     if "shopping" in lowered or "\u043f\u043e\u043a\u0443\u043f" in lowered:
@@ -440,6 +503,7 @@ def _component_for_field(field: Mapping[str, Any]) -> dict[str, Any]:
 
 def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
+    filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
     datasource_id = str(session.get("datasource_id") or "items")
     table_columns = [{"field": item["id"], "label": item.get("label") or item["id"]} for item in fields]
     stored_mock_rows = session.get("mock_rows")
@@ -495,8 +559,10 @@ def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
             }
         ],
         "mock_data": {datasource_id: mock_rows},
+        "filters": filters,
         "form_action_position": "top" if action_position == "top" else "bottom",
         "pending_patches": [item for item in session.get("patches", []) if item.get("status") == "proposed"],
+        "user_summary": session.get("user_summary") if isinstance(session.get("user_summary"), Mapping) else _draft_user_summary(session),
         "version": str(session.get("version") or "v1"),
     }
 
@@ -522,9 +588,9 @@ def _mock_rows(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _food_mock_rows(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     products = [
-        {"item": "\u041c\u043e\u043b\u043e\u043a\u043e", "quantity": 2, "category": "\u041c\u043e\u043b\u043e\u0447\u043d\u044b\u0435", "done": False, "price": 89.9},
-        {"item": "\u0425\u043b\u0435\u0431", "quantity": 1, "category": "\u0411\u0430\u043a\u0430\u043b\u0435\u044f", "done": True, "price": 54.0},
-        {"item": "\u042f\u0431\u043b\u043e\u043a\u0438", "quantity": 6, "category": "\u0424\u0440\u0443\u043a\u0442\u044b", "done": False, "price": 129.5},
+        {"item": "\u041c\u043e\u043b\u043e\u043a\u043e", "quantity": 2, "unit": "\u043b", "availability": "\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438", "category": "\u041c\u043e\u043b\u043e\u0447\u043d\u044b\u0435", "done": False, "price": 89.9},
+        {"item": "\u0425\u043b\u0435\u0431", "quantity": 1, "unit": "\u0448\u0442", "availability": "\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438", "category": "\u0411\u0430\u043a\u0430\u043b\u0435\u044f", "done": True, "price": 54.0},
+        {"item": "\u042f\u0431\u043b\u043e\u043a\u0438", "quantity": 6, "unit": "\u043a\u0433", "availability": "\u043d\u0435\u0442", "category": "\u0424\u0440\u0443\u043a\u0442\u044b", "done": False, "price": 129.5},
     ]
     dates = ["2026-07-01", "2026-07-02", "2026-07-03"]
     rows: list[dict[str, Any]] = []
@@ -624,6 +690,7 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
     datasource_id = str(datasource.get("id") or "items").strip() or "items"
     mock_data = preview_state.get("mock_data") if isinstance(preview_state.get("mock_data"), Mapping) else {}
     rows = mock_data.get(datasource_id) if isinstance(mock_data.get(datasource_id), list) else []
+    filters = [dict(item) for item in preview_state.get("filters", []) if isinstance(item, Mapping)]
     has_card_view = any(
         isinstance(child, Mapping) and str(child.get("type") or "") == "card_list"
         for child in (ui.get("children") if isinstance(ui.get("children"), list) else [])
@@ -659,6 +726,39 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
             "inputs": form_inputs,
             "actions": [{"on": "submit", "type": "updateState", "params": {"lastPrototypeSubmit": "$event.values"}}],
         },
+    ]
+    for filter_obj in filters:
+        field_id = str(filter_obj.get("field_id") or "").strip()
+        if not field_id:
+            continue
+        state_key = str(filter_obj.get("state_key") or f"builderFilter_{field_id}").strip()
+        raw_options = filter_obj.get("options") if isinstance(filter_obj.get("options"), list) else []
+        buttons = [{"id": "all", "label": "\u0412\u0441\u0435"}]
+        if field_id == "done":
+            buttons.extend(
+                [
+                    {"id": "true", "label": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e"},
+                    {"id": "false", "label": "\u041d\u0435 \u043a\u0443\u043f\u043b\u0435\u043d\u043e"},
+                ]
+            )
+        else:
+            buttons.extend({"id": str(value), "label": str(value)} for value in raw_options if str(value).strip())
+        widgets.append(
+            {
+                "id": f"prototype-filter-{field_id}",
+                "type": "input.commandBar",
+                "area": "main",
+                "title": filter_obj.get("label") or field_id,
+                "inputs": {
+                    "variant": "segmented",
+                    "size": "small",
+                    "selectedStateKey": state_key,
+                    "buttons": buttons,
+                },
+                "actions": [{"on": "click", "type": "updateState", "params": {state_key: "$event.id"}}],
+            }
+        )
+    widgets.append(
         {
             "id": "prototype-table",
             "type": "ui.table",
@@ -674,10 +774,19 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
                     }
                     for index, field in enumerate(fields)
                 ],
+                "filters": [
+                    {
+                        "key": str(filter_obj.get("field_id") or ""),
+                        "stateKey": str(filter_obj.get("state_key") or f"builderFilter_{filter_obj.get('field_id')}"),
+                        "any": "all",
+                    }
+                    for filter_obj in filters
+                    if str(filter_obj.get("field_id") or "").strip()
+                ],
                 "emptyText": "No items yet",
             },
         },
-    ]
+    )
     if has_card_view:
         first = str(fields[0].get("id") if fields else "title")
         second = str(fields[1].get("id") if len(fields) > 1 else "")
@@ -778,12 +887,42 @@ def _load_session(webspace_id: str, session_id: str | None = None) -> dict[str, 
 
 
 def _message_created(session: Mapping[str, Any]) -> str:
+    summary = session.get("user_summary") if isinstance(session.get("user_summary"), Mapping) else _draft_user_summary(session)
+    assumptions = "; ".join(str(item) for item in summary.get("assumptions", [])[:2]) if isinstance(summary, Mapping) else ""
+    preview = "; ".join(str(item) for item in summary.get("preview", [])[:2]) if isinstance(summary, Mapping) else ""
+    risks = "; ".join(str(item) for item in summary.get("risks", [])[:2]) if isinstance(summary, Mapping) else ""
     return (
         f"{AGENT_LABEL}: \u0441\u043e\u0437\u0434\u0430\u043b dev-\u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439 "
         f"{session.get('scenario_id')} \u0438 \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a webui. "
+        f"Assumptions: {assumptions}. Preview: {preview}. Risks: {risks}. "
         "\u041c\u043e\u0436\u043d\u043e \u0441\u0440\u0430\u0437\u0443 \u043f\u0440\u0430\u0432\u0438\u0442\u044c: "
         "\u0434\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435, \u0443\u0431\u0435\u0440\u0438 \u043f\u043e\u043b\u0435, \u043f\u043e\u043a\u0430\u0436\u0438 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438."
     )
+
+
+def _draft_user_summary(session: Mapping[str, Any]) -> dict[str, list[str]]:
+    fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
+    labels = ", ".join(str(item.get("label") or item.get("id") or "") for item in fields[:5] if str(item.get("label") or item.get("id") or "").strip())
+    scenario_id = str(session.get("scenario_id") or "prototype").strip() or "prototype"
+    datasource_id = str(session.get("datasource_id") or "items").strip() or "items"
+    return {
+        "assumptions": [
+            "This is a local dev prototype, not an activated runtime change",
+            f"The first data model uses fields: {labels or 'title, notes, status'}",
+        ],
+        "preview": [
+            f"Scenario {scenario_id} has a form, table, mock data, and declarative webui.json",
+            f"Data is stored in an internal CRUD datasource named {datasource_id}",
+        ],
+        "risks": [
+            "No external network, device-control, or credential access is requested",
+            "Validation and human review are still required before activation",
+        ],
+        "expected_behavior": [
+            "The user can add records through the form and inspect them in the list",
+            "Follow-up Builder turns patch the current draft and refresh the preview",
+        ],
+    }
 
 
 def _extract_field_label(instruction: str) -> str | None:
@@ -811,12 +950,19 @@ def _field_id(label: str) -> str:
         "\u0442\u043e\u0432\u0430\u0440": "item",
         "\u043a\u043e\u043b-\u0432\u043e": "quantity",
         "\u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e": "quantity",
+        "\u043c\u0435\u0440\u0430": "unit",
+        "\u0435\u0434\u0438\u043d\u0438\u0446\u0430": "unit",
+        "\u0435\u0434.": "unit",
+        "\u043d\u0430\u043b\u0438\u0447\u0438\u0435": "availability",
         "\u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f": "category",
         "\u0442\u0435\u043b\u0435\u0444\u043e\u043d": "phone",
         "\u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0446\u0438\u044f": "organization",
         "date": "date",
         "done": "done",
         "purchased": "done",
+        "unit": "unit",
+        "measure": "unit",
+        "availability": "availability",
     }
     if lowered in known:
         return known[lowered]
@@ -840,6 +986,8 @@ def _default_label_for_field(field_id: str, fallback: str | None = None) -> str:
         "date": "\u0414\u0430\u0442\u0430",
         "done": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e",
         "price": "\u0426\u0435\u043d\u0430",
+        "unit": "\u041c\u0435\u0440\u0430",
+        "availability": "\u041d\u0430\u043b\u0438\u0447\u0438\u0435",
     }
     return labels.get(field_id) or _clean_field_label(fallback or field_id).title()
 
@@ -858,6 +1006,9 @@ def _ensure_field(
                 item["type"] = field_type
             if not str(item.get("label") or "").strip():
                 item["label"] = _default_label_for_field(fid, label)
+            options = _field_options(fid)
+            if options and not isinstance(item.get("options"), list):
+                item["options"] = options
             return fields, item, False
     field = {
         "id": fid,
@@ -865,8 +1016,63 @@ def _ensure_field(
         "label": _default_label_for_field(fid, label),
         "required": False,
     }
+    options = _field_options(fid)
+    if options:
+        field["options"] = options
     fields.append(field)
     return fields, field, True
+
+
+def _field_options(field_id: str) -> list[Any]:
+    if field_id == "unit":
+        return ["\u0448\u0442", "\u043a\u0433", "\u0433", "\u043b"]
+    if field_id == "availability":
+        return ["\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438", "\u043d\u0435\u0442"]
+    if field_id == "done":
+        return [True, False]
+    return []
+
+
+def _ensure_filter(filters: list[dict[str, Any]], field: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], bool]:
+    field_id = str(field.get("id") or "").strip()
+    if not field_id:
+        return filters, {}, False
+    for item in filters:
+        if str(item.get("field_id") or "") == field_id:
+            return filters, item, False
+    filter_obj = {
+        "field_id": field_id,
+        "label": field.get("label") or _default_label_for_field(field_id),
+        "state_key": f"builderFilter_{field_id}",
+        "options": _field_options(field_id),
+    }
+    filters.append(filter_obj)
+    return filters, filter_obj, True
+
+
+def _requested_known_fields(text: str) -> list[dict[str, Any]]:
+    lowered = str(text or "").lower()
+    words = set(re.findall(r"[A-Za-z0-9.\u0410-\u042f\u0430-\u044f\u0401\u0451]+", lowered))
+    specs: list[dict[str, Any]] = []
+    if words.intersection({"\u043c\u0435\u0440\u0430", "\u0435\u0434\u0438\u043d\u0438\u0446\u0430", "\u0435\u0434.", "unit", "measure"}) or "\u0435\u0434\u0438\u043d\u0438\u0446\u0430 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u044f" in lowered:
+        specs.append({"label": "\u041c\u0435\u0440\u0430", "field_id": "unit", "field_type": "string"})
+    if any(token in lowered for token in ("\u043d\u0430\u043b\u0438\u0447", "availability", "stock")):
+        specs.append({"label": "\u041d\u0430\u043b\u0438\u0447\u0438\u0435", "field_id": "availability", "field_type": "string"})
+    return specs
+
+
+def _requested_filter_field_ids(text: str) -> list[str]:
+    lowered = str(text or "").lower()
+    if not any(token in lowered for token in ("\u0444\u0438\u043b\u044c\u0442\u0440", "filter")):
+        return []
+    ids: list[str] = []
+    if any(token in lowered for token in ("\u043a\u0443\u043f\u043b\u0435\u043d", "done", "purchased")):
+        ids.append("done")
+    if any(token in lowered for token in ("\u043d\u0430\u043b\u0438\u0447", "availability", "stock")):
+        ids.append("availability")
+    if any(token in lowered for token in ("\u043a\u0430\u0442\u0435\u0433\u043e\u0440", "category")):
+        ids.append("category")
+    return ids
 
 
 def _move_field_first(fields: list[dict[str, Any]], field_id: str) -> list[dict[str, Any]]:
@@ -1012,13 +1218,25 @@ def _is_create_request(text: str) -> bool:
     return any(
         token in lowered
         for token in (
+            "i have an idea",
+            "i've got an idea",
+            "lets build",
+            "let's build",
+            "build it",
             "create",
             "new app",
             "new scenario",
             "app",
             "scenario",
             "skill",
+            "prototype",
             "\u0441\u043e\u0437\u0434",
+            "\u0441\u0434\u0435\u043b\u0430\u0435\u043c",
+            "\u0434\u0430\u0432\u0430\u0439 \u0441\u0434\u0435\u043b",
+            "\u0435\u0441\u0442\u044c \u0438\u0434\u0435\u044f",
+            "\u0438\u0434\u0435\u044f",
+            "\u0441\u043e\u0431\u0435\u0440",
+            "\u043f\u043e\u0441\u0442\u0440\u043e\u0438",
             "\u043d\u043e\u0432\u044b\u0439",
             "\u043f\u0440\u0438\u043b\u043e\u0436",
             "\u0441\u0446\u0435\u043d\u0430\u0440",
@@ -1180,6 +1398,7 @@ def create_scenario_draft(
     except Exception as exc:
         session["status"] = "degraded"
         session["draft_error"] = f"{type(exc).__name__}: {exc}"
+    session["user_summary"] = _draft_user_summary(session)
     preview = _preview_state(session=session)
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
@@ -1253,6 +1472,7 @@ def update_current_scenario(
         "diff": {},
     }
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
+    filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
     if any(token in lowered for token in ("карточ", "card")):
         session["card_view"] = True
         patch["operation"] = "change_view_representation"
@@ -1279,6 +1499,56 @@ def update_current_scenario(
             "added": added,
             "field_order": [str(item.get("id") or "") for item in fields],
             "table_column": {"key": "done", "kind": "boolean", "position": 0},
+        }
+    elif _requested_known_fields(text) or _requested_filter_field_ids(text):
+        applied: list[str] = []
+        changed_fields: list[dict[str, Any]] = []
+        changed_filters: list[dict[str, Any]] = []
+        not_implemented: list[str] = []
+
+        for spec in _requested_known_fields(text):
+            fields, field, added = _ensure_field(
+                fields,
+                label=str(spec["label"]),
+                field_id=str(spec["field_id"]),
+                field_type=str(spec["field_type"]),
+            )
+            changed_fields.append(dict(field))
+            applied.append("add_field" if added else "ensure_field")
+
+        fields_by_id = {str(item.get("id") or ""): item for item in fields}
+        for field_id in _requested_filter_field_ids(text):
+            field = fields_by_id.get(field_id)
+            if field is None and field_id in {"done", "availability"}:
+                fields, field, _added = _ensure_field(
+                    fields,
+                    label=_default_label_for_field(field_id),
+                    field_id=field_id,
+                    field_type="boolean" if field_id == "done" else "string",
+                )
+                fields_by_id[field_id] = field
+                changed_fields.append(dict(field))
+            if field is None:
+                not_implemented.append(f"filter:{field_id}")
+                continue
+            filters, filter_obj, added = _ensure_filter(filters, field)
+            changed_filters.append(dict(filter_obj))
+            applied.append("add_filter" if added else "ensure_filter")
+
+        session["fields"] = fields
+        session["filters"] = filters
+        rows = _food_mock_rows(fields)
+        session["mock_rows"] = rows
+        unique_applied = list(dict.fromkeys(applied))
+        patch["operation"] = unique_applied[0] if len(unique_applied) == 1 else "multi_update"
+        patch["status"] = "partial" if not_implemented else patch["status"]
+        patch["diff"] = {
+            "fields": changed_fields,
+            "filters": changed_filters,
+            "datasource_id": session.get("datasource_id") or "items",
+            "rows": rows,
+            "applied_operations": unique_applied,
+            "not_implemented": not_implemented,
         }
     elif _mentions_date(text) and ("field" in lowered or "column" in lowered or "\u043f\u043e\u043b\u0435" in lowered or "\u043a\u043e\u043b\u043e\u043d" in lowered or _wants_date_values(text)):
         fields, field, added = _ensure_field(fields, label="\u0414\u0430\u0442\u0430", field_id="date", field_type="date")
@@ -1308,6 +1578,8 @@ def update_current_scenario(
                 patch["operation"] = "add_field"
                 patch["diff"] = {"field": field}
     if patch["operation"] == "noop":
+        if not isinstance(session.get("user_summary"), Mapping):
+            session["user_summary"] = _draft_user_summary(session)
         preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
         workbench = _ensure_workbench(ws, session=session, preview_state=preview)
         binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else binding
@@ -1334,6 +1606,7 @@ def update_current_scenario(
         }
     session.setdefault("patches", []).append(patch)
     session["version"] = f"v{len(session.get('patches') or []) + 1}"
+    session["user_summary"] = _draft_user_summary(session)
     preview = _preview_state(session=session)
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
@@ -1358,10 +1631,18 @@ def update_current_scenario(
         session["patches"][-1] = patch
         session["pending_action_id"] = pending_action.get("id")
         _save_session(ws, session)
-    message = (
-        f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f "
-        f"{session.get('scenario_id')}. \u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {patch['operation']}."
-    )
+    not_implemented = patch.get("diff", {}).get("not_implemented") if isinstance(patch.get("diff"), Mapping) else None
+    if patch.get("status") == "partial" and isinstance(not_implemented, list) and not_implemented:
+        message = (
+            f"{AGENT_LABEL}: \u0447\u0430\u0441\u0442\u0438\u0447\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f "
+            f"{session.get('scenario_id')}. \u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {patch['operation']}. "
+            f"\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0440\u0435\u0430\u043b\u0438\u0437\u043e\u0432\u0430\u0442\u044c: {', '.join(str(item) for item in not_implemented)}."
+        )
+    else:
+        message = (
+            f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f "
+            f"{session.get('scenario_id')}. \u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {patch['operation']}."
+        )
     return {
         "ok": True,
         "session_id": session.get("id"),

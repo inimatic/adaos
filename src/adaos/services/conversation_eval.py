@@ -15,6 +15,7 @@ DEFAULT_REQUIRED_GOLDEN_DATASET_IDS = (
     "general_no_match_repair",
     "conversation_companions_agent_handoff",
     "builder_review_handoff",
+    "builder_first_idea_preview_correction",
     "teacher_candidate_repair",
 )
 

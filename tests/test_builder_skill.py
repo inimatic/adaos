@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 
@@ -167,6 +168,78 @@ def test_update_current_scenario_adds_card_view(monkeypatch, tmp_path) -> None:
     assert any(item["type"] == "card_list" for item in result["preview_state"]["current_ui"]["children"])
 
 
+def test_chat_first_idea_creates_preview_and_accepts_correction(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "first_idea"
+    emitted: list[dict] = []
+    published: list[dict] = []
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"first_idea","version":"0.1.0","name":"first_idea","steps":[]}',
+                encoding="utf-8",
+            )
+            return {
+                "ok": True,
+                "draft": {"draft_id": "draft.first.idea"},
+                "artifact_root": str(artifact_root),
+                "kwargs": kwargs,
+            }
+
+    class _Workbench:
+        def set_active_draft(self, *, source_webspace_id=None, active_draft_id=None, runtime_scenario_id=None, persist_projection=True):
+            return {
+                "source_webspace_id": source_webspace_id,
+                "dev_webspace_id": f"{source_webspace_id}-dev",
+                "active_draft_id": active_draft_id,
+                "runtime_scenario_id": runtime_scenario_id,
+                "dialog": {"widget": "voice_chat", "dialog_channel_id": "builder"},
+            }
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    import adaos.services.builder.workspace as workspace
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda text, **kwargs: emitted.append({"text": text, "kwargs": kwargs}))
+    monkeypatch.setattr(
+        pending_actions,
+        "publish_pending_action",
+        lambda **kwargs: published.append(dict(kwargs)) or {"id": f"pa.builder.{len(published)}", "kind": kwargs["kind"]},
+    )
+
+    created = skill.chat("I have an idea. Let's build it.", webspace_id="builder-first-idea")
+
+    assert created["ok"] is True
+    assert created["scenario_id"].startswith("i_have_an_idea_let_s_build_it")
+    assert created["dialog"]["dialog_channel_id"] == "builder"
+    assert created["preview_state"]["current_ui"]["type"] == "page"
+    assert created["preview_state"]["user_summary"]["assumptions"]
+    assert "Assumptions:" in created["message"]
+    assert (artifact_root / "webui.json").exists()
+    assert published[0]["kind"] == "builder.scenario_draft.review"
+    assert emitted[0]["kwargs"]["topic_ref"]["thread_id"] == created["topic"]["thread_id"]
+
+    updated = skill.chat("show the result as cards", webspace_id="builder-first-idea")
+
+    assert updated["ok"] is True
+    assert updated["patch"]["operation"] == "change_view_representation"
+    assert updated["topic"]["thread_id"] == created["topic"]["thread_id"]
+    assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
+    assert "card_list" in (artifact_root / "webui.json").read_text(encoding="utf-8")
+    assert published[-1]["kind"] == "builder.scenario_patch.review"
+
+
 def test_update_current_scenario_handles_layout_column_and_date_requests(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "shopping_list"
@@ -296,6 +369,134 @@ def test_update_current_scenario_publishes_patch_pending_action(monkeypatch, tmp
     assert action["metadata"]["source_refs"]["turn_trace_id"] == "trace.patch.1"
     assert action["metadata"]["approval_policy"]["action_risk"]["risk_class"] == "local_write"
     assert result["patch"]["pending_action_id"] == "pa.builder.2"
+
+
+def test_update_current_scenario_adds_product_units_and_filters(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "shopping_list"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"shopping_list","version":"0.1.0","name":"shopping_list","steps":[]}',
+        encoding="utf-8",
+    )
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {}
+
+        def set_active_draft(self, **kwargs):
+            return dict(kwargs)
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.filters"})
+    skill._save_session(
+        "builder-filters",
+        {
+            "id": "builder_session_filters",
+            "webspace_id": "builder-filters",
+            "status": "drafting",
+            "title": "Shopping list",
+            "scenario_id": "shopping_list",
+            "draft_id": "draft.shopping",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "shopping_items",
+            "fields": [
+                {"id": "item", "type": "string", "label": "Товар", "required": True},
+                {"id": "quantity", "type": "number", "label": "Кол-во", "required": False},
+                {"id": "done", "type": "boolean", "label": "Куплено", "required": False},
+            ],
+            "patches": [],
+            "version": "v1",
+        },
+    )
+
+    unit_result = skill.update_current_scenario("Добавь меру по товарам. Типа. шт., кг, г., л.", webspace_id="builder-filters")
+    assert unit_result["patch"]["operation"] == "add_field"
+    assert any(item["id"] == "unit" and item["options"] == ["шт", "кг", "г", "л"] for item in unit_result["preview_state"]["datasources"][0]["fields"])
+
+    filter_result = skill.update_current_scenario("Добавь поле Наличие. Добавь фильтр по Куплено и Наличие.", webspace_id="builder-filters")
+    assert filter_result["patch"]["operation"] == "multi_update"
+    assert filter_result["patch"]["diff"]["not_implemented"] == []
+    filters = filter_result["preview_state"]["filters"]
+    assert {item["field_id"] for item in filters} == {"done", "availability"}
+
+    page_schema = yaml.safe_load((artifact_root / "scenario.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]
+    widget_ids = {widget["id"] for widget in page_schema["widgets"]}
+    assert {"prototype-filter-done", "prototype-filter-availability", "prototype-table"}.issubset(widget_ids)
+    table = next(widget for widget in page_schema["widgets"] if widget["id"] == "prototype-table")
+    assert {item["key"] for item in table["inputs"]["filters"]} == {"done", "availability"}
+
+
+def test_builder_pending_action_approve_marks_patch_and_emits_chat(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "shopping_list"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"shopping_list","version":"0.1.0","name":"shopping_list","steps":[]}',
+        encoding="utf-8",
+    )
+    emitted: list[str] = []
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {}
+
+        def set_active_draft(self, **kwargs):
+            return dict(kwargs)
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    import adaos.sdk.io.out as io_out
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(io_out, "chat_append", lambda text, **_kwargs: emitted.append(text))
+    skill._save_session(
+        "builder-approve",
+        {
+            "id": "builder_session_approve",
+            "webspace_id": "builder-approve",
+            "status": "drafting",
+            "title": "Shopping list",
+            "scenario_id": "shopping_list",
+            "draft_id": "draft.shopping",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "shopping_items",
+            "fields": [{"id": "item", "type": "string", "label": "Товар", "required": True}],
+            "patches": [{"id": "patch_1", "operation": "add_field", "status": "applied", "pending_action_id": "pa.builder.1"}],
+            "pending_action_id": "pa.builder.1",
+            "version": "v2",
+        },
+    )
+
+    asyncio.run(
+        skill._on_builder_pending_action_response(
+            {
+                "pending_action_id": "pa.builder.1",
+                "response_action_id": "approve",
+                "webspace_id": "builder-approve",
+                "domain_ref": {
+                    "session_id": "builder_session_approve",
+                    "scenario_id": "shopping_list",
+                    "patch_id": "patch_1",
+                },
+                "pending_action": {"id": "pa.builder.1", "webspace_id": "builder-approve"},
+                "response": {"response_action_id": "approve"},
+            }
+        )
+    )
+
+    session = skill._load_session("builder-approve", "builder_session_approve")
+    assert session["patches"][0]["review_status"] == "approved"
+    assert "pending_action_id" not in session
+    assert any("утверждены" in text for text in emitted)
 
 
 def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monkeypatch, tmp_path) -> None:
