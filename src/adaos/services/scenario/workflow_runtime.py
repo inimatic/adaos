@@ -209,15 +209,7 @@ class ScenarioWorkflowRuntime:
                             object_id,
                         )
                         prompt_section["status"] = status_section
-                        # Files and LLM status helpers.
-                        if object_type and object_id:
-                            prompt_section["files"] = {
-                                "object_type": object_type,
-                                "object_id": object_id,
-                                "list": self._build_files_list(object_type, object_id),
-                            }
-                        else:
-                            prompt_section.setdefault("files", {})
+                        self._sync_prompt_project_snapshots(prompt_section, object_type, object_id)
                         prompt_section.setdefault("llm_status", {"status": "idle", "message": "LLM: idle"})
 
                         payload = json.loads(json.dumps(prompt_section))
@@ -370,6 +362,11 @@ class ScenarioWorkflowRuntime:
                             wf_obj.get("object_id"),
                         )
                         prompt_section["status"] = status_section
+                        self._sync_prompt_project_snapshots(
+                            prompt_section,
+                            resolved_object_type,
+                            resolved_object_id,
+                        )
                         payload = json.loads(json.dumps(prompt_section))
                         data_map.set(txn, "prompt", payload)
                     else:
@@ -458,18 +455,13 @@ class ScenarioWorkflowRuntime:
                     prompt_section["workflow"] = wf_obj
 
                     if scenario_id == "prompt_engineer_scenario":
-                        # Keep files list in Yjs for Prompt IDE so that file panel can be
-                        # driven by YDoc and hub-side actions can update it.
-                        if resolved_object_type and resolved_object_id:
-                            files_obj = dict(prompt_section.get("files") or {})
-                            files_obj.update(
-                                {
-                                    "object_type": resolved_object_type,
-                                    "object_id": resolved_object_id,
-                                    "list": self._build_files_list(resolved_object_type, resolved_object_id),
-                                }
-                            )
-                            prompt_section["files"] = json.loads(json.dumps(files_obj))
+                        # Keep Prompt IDE project snapshots in Yjs so read-only widgets
+                        # can subscribe instead of polling /api/tools/call.
+                        self._sync_prompt_project_snapshots(
+                            prompt_section,
+                            resolved_object_type,
+                            resolved_object_id,
+                        )
 
                         # Also refresh status bar buttons when state is forced.
                         status_section = dict(prompt_section.get("status") or {})
@@ -489,6 +481,33 @@ class ScenarioWorkflowRuntime:
                 object_id=object_id,
                 state_id=state_id,
             )
+
+    async def refresh_prompt_project_snapshots(
+        self,
+        webspace_id: str,
+        *,
+        object_type: Optional[str],
+        object_id: Optional[str],
+    ) -> None:
+        kind = str(object_type or "").strip().lower()
+        item_id = str(object_id or "").strip()
+        if kind not in {"skill", "scenario"} or not item_id:
+            return
+        async with _workflow_write_meta():
+            async with async_get_ydoc(webspace_id) as ydoc:
+                data_map = ydoc.get_map("data")
+                with ydoc.begin_transaction() as txn:
+                    prompt_section = data_map.get("prompt")
+                    if not isinstance(prompt_section, dict):
+                        prompt_section = {}
+                    wf_obj = prompt_section.get("workflow")
+                    if isinstance(wf_obj, dict):
+                        current_kind = str(wf_obj.get("object_type") or "").strip().lower()
+                        current_id = str(wf_obj.get("object_id") or "").strip()
+                        if current_kind and current_id and (current_kind != kind or current_id != item_id):
+                            return
+                    self._sync_prompt_project_snapshots(prompt_section, kind, item_id)
+                    data_map.set(txn, "prompt", json.loads(json.dumps(prompt_section)))
 
     def _resolve_next_state(self, states: Dict[str, Any], current_state: str, action_id: str) -> Optional[str]:
         state = states.get(current_state) or {}
@@ -721,6 +740,8 @@ class ScenarioWorkflowRuntime:
                             files_obj["object_id"] = object_id
                             files_obj["list"] = self._build_files_list(object_type, object_id)
                     prompt_section["files"] = json.loads(json.dumps(files_obj))
+                    if object_type and object_id:
+                        prompt_section["tz_state"] = self._build_tz_state(object_type, object_id)
 
                     # Update LLM status snapshot with last request/response for debugging.
                     status_obj = dict(prompt_section.get("llm_status") or {})
@@ -815,6 +836,96 @@ class ScenarioWorkflowRuntime:
                 }
             )
         return items
+
+    def _sync_prompt_project_snapshots(
+        self,
+        prompt_section: Dict[str, Any],
+        object_type: Optional[str],
+        object_id: Optional[str],
+    ) -> None:
+        kind = str(object_type or "").strip().lower()
+        item_id = str(object_id or "").strip()
+        if kind not in {"skill", "scenario"} or not item_id:
+            prompt_section.setdefault("files", {})
+            prompt_section.setdefault("tz_state", self._empty_tz_state(kind, item_id))
+            return
+        prompt_section["files"] = {
+            "object_type": kind,
+            "object_id": item_id,
+            "list": self._build_files_list(kind, item_id),
+        }
+        prompt_section["tz_state"] = self._build_tz_state(kind, item_id)
+
+    def _empty_tz_state(self, object_type: Optional[str], object_id: Optional[str]) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "object_type": str(object_type or "").strip().lower(),
+            "object_id": str(object_id or "").strip(),
+            "base_tz": "",
+            "tz_addenda": [],
+        }
+
+    def _build_tz_state(self, object_type: str, object_id: str) -> Dict[str, Any]:
+        """
+        Build the Prompt IDE TZ snapshot from project files.
+
+        This mirrors the read-only shape returned by
+        prompt_engineer_skill.prompt_get_tz_state, but keeps it in Yjs so UI
+        widgets can subscribe to data/prompt/tz_state instead of polling tools.
+        """
+        root = self._project_root(object_type, object_id)
+        state = self._empty_tz_state(object_type, object_id)
+        if root is None or not root.exists():
+            return state
+
+        raw_state = root / "prompt_state.json"
+        if raw_state.exists():
+            try:
+                loaded = json.loads(raw_state.read_text(encoding="utf-8"))
+            except Exception:
+                loaded = {}
+            if isinstance(loaded, dict):
+                base_tz = loaded.get("base_tz")
+                if isinstance(base_tz, str):
+                    state["base_tz"] = base_tz
+                tz_addenda = loaded.get("tz_addenda")
+                if isinstance(tz_addenda, list):
+                    state["tz_addenda"] = [item for item in tz_addenda if isinstance(item, dict)]
+
+        if not state["base_tz"]:
+            base_file = root / "tz" / "base_tz.md"
+            if base_file.exists():
+                try:
+                    state["base_tz"] = base_file.read_text(encoding="utf-8")
+                except Exception:
+                    state["base_tz"] = ""
+
+        if not state["tz_addenda"]:
+            addenda_dir = root / "tz" / "addenda"
+            items: List[Dict[str, Any]] = []
+            if addenda_dir.exists():
+                for path in sorted(addenda_dir.glob("*.md")):
+                    if not path.is_file():
+                        continue
+                    try:
+                        text = path.read_text(encoding="utf-8")
+                    except Exception:
+                        continue
+                    try:
+                        mtime = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+                    except Exception:
+                        mtime = ""
+                    items.append(
+                        {
+                            "id": path.stem,
+                            "text": text,
+                            "created_at": mtime,
+                            "iteration_ref": None,
+                        }
+                    )
+            state["tz_addenda"] = items
+
+        return state
 
     def _build_status_buttons(
         self,
@@ -964,6 +1075,40 @@ async def _on_workflow_set_state(evt: Dict[str, Any]) -> None:
             scenario_id,
             webspace_id,
             state_id,
+            exc,
+            exc_info=True,
+        )
+
+
+@subscribe("prompt.project.changed")
+async def _on_prompt_project_changed_refresh_workflow(evt: Dict[str, Any]) -> None:
+    """
+    Refresh Prompt IDE read-only YDoc projections after project tools write files.
+
+    prompt_engineer_skill emits this event after saves/snapshots. Keeping this
+    projection current lets UI widgets subscribe to data/prompt/* instead of
+    repeatedly calling read-only skill tools.
+    """
+    payload = _payload(evt)
+    object_type = str(payload.get("object_type") or "").strip().lower()
+    object_id = str(payload.get("object_id") or "").strip()
+    if object_type not in {"skill", "scenario"} or not object_id:
+        return
+    webspace_id = _resolve_webspace_id(payload)
+    ctx = get_ctx()
+    runtime = ScenarioWorkflowRuntime(ctx)
+    try:
+        await runtime.refresh_prompt_project_snapshots(
+            webspace_id,
+            object_type=object_type,
+            object_id=object_id,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.warning(
+            "prompt.project.changed workflow refresh failed webspace=%s object_type=%s object_id=%s error=%s",
+            webspace_id,
+            object_type,
+            object_id,
             exc,
             exc_info=True,
         )
