@@ -22,6 +22,7 @@ CURRENT_KEY = "builder_skill.current_session"
 MAX_SESSIONS = 50
 WORKBENCH_REFRESH_TOPIC = "builder.workbench.ensure_requested"
 PROMPT_IDE_SCENARIO_ID = "prompt_engineer_scenario"
+WORKBENCH_DIRECT_ENSURE_TIMEOUT_S = 2.0
 
 _FALLBACK_MEMORY: dict[str, Any] = {}
 
@@ -2532,7 +2533,13 @@ def _ensure_workbench_runtime_direct(
             loop = asyncio.get_running_loop()
         except RuntimeError:
             try:
-                value = asyncio.run(value)
+                value = asyncio.run(asyncio.wait_for(value, timeout=WORKBENCH_DIRECT_ENSURE_TIMEOUT_S))
+            except TimeoutError:
+                return {
+                    "ok": False,
+                    "skipped": "ensure_dev_webspace_timeout",
+                    "timeout_s": WORKBENCH_DIRECT_ENSURE_TIMEOUT_S,
+                }
             except Exception as exc:
                 return {"ok": False, "error": "ensure_dev_webspace_failed", "detail": f"{type(exc).__name__}: {exc}"}
         else:

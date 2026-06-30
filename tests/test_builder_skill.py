@@ -1220,6 +1220,51 @@ def test_ensure_workbench_prefers_direct_dev_runtime_switch(monkeypatch) -> None
     assert calls[2]["runtime_scenario_id"] == "todo_scenario"
 
 
+def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkeypatch) -> None:
+    skill = _load_module()
+    calls: list[dict] = []
+
+    class _Workbench:
+        def set_active_draft(self, *, source_webspace_id=None, active_draft_id=None, runtime_scenario_id=None, persist_projection=True):
+            calls.append({"method": "set_active_draft", "runtime_scenario_id": runtime_scenario_id})
+            return {
+                "source_webspace_id": source_webspace_id,
+                "dev_webspace_id": f"{source_webspace_id}-dev",
+                "active_draft_id": active_draft_id,
+                "runtime_scenario_id": runtime_scenario_id,
+            }
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            calls.append({"method": "snapshot", "webspace_id": webspace_id})
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+        async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None):
+            calls.append({"method": "ensure_dev_webspace", "runtime_scenario_id": runtime_scenario_id})
+            await asyncio.sleep(0.05)
+            return {"source_webspace_id": source_webspace_id, "runtime_scenario_id": runtime_scenario_id}
+
+    monkeypatch.setattr(skill, "WORKBENCH_DIRECT_ENSURE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(
+        skill,
+        "_request_workbench_refresh",
+        lambda payload: calls.append({"method": "event", "payload": dict(payload)}) or {"ok": True, "payload": dict(payload)},
+    )
+
+    result = skill._ensure_workbench(
+        "desktop",
+        active_draft_id="draft.todo",
+        runtime_scenario_id="todo_scenario",
+        preview_state={"title": "Todo"},
+    )
+
+    assert result["ok"] is True
+    assert result["projection"]["direct"]["skipped"] == "ensure_dev_webspace_timeout"
+    assert result["projection"]["event"]["ok"] is True
+    assert [item["method"] for item in calls] == ["set_active_draft", "snapshot", "ensure_dev_webspace", "event"]
+    assert calls[-1]["payload"]["runtime_scenario_id"] == "todo_scenario"
+
+
 def test_workbench_tool_wrappers_use_voice_widget_and_active_draft(monkeypatch) -> None:
     skill = _load_module()
     calls: list[dict] = []
