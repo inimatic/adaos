@@ -390,14 +390,20 @@ def _invoke_skill_quarantine_hook(
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
         from contextvars import copy_context
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
             ctxvars = copy_context()
             future = pool.submit(lambda: ctxvars.run(_call_hook))
             try:
                 result = future.result(timeout=timeout_s)
             except FuturesTimeoutError as exc:
                 future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+                pool = None
                 raise TimeoutError(f"quarantine hook '{hook_name}' timed out after {timeout_s} seconds") from exc
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True)
         return {"called": True, "ok": True, "hook": hook_name, "result": result}
     except Exception as exc:
         _log.warning("skill quarantine hook failed skill=%s hook=%s: %s", name, hook_name, exc)
@@ -2805,14 +2811,20 @@ class SkillManager:
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
                 from contextvars import copy_context
 
-                with ThreadPoolExecutor(max_workers=1) as pool:
+                pool = ThreadPoolExecutor(max_workers=1)
+                try:
                     ctxvars = copy_context()
                     future = pool.submit(lambda: ctxvars.run(_call_tool))
                     try:
                         result = future.result(timeout=execution_timeout)
                     except FuturesTimeoutError as exc:
                         future.cancel()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        pool = None
                         raise TimeoutError(f"tool '{target_tool}' timed out after {execution_timeout} seconds") from exc
+                finally:
+                    if pool is not None:
+                        pool.shutdown(wait=True)
             else:
                 result = _call_tool()
         finally:
@@ -2981,14 +2993,20 @@ class SkillManager:
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
                 from contextvars import copy_context
 
-                with ThreadPoolExecutor(max_workers=1) as pool:
+                pool = ThreadPoolExecutor(max_workers=1)
+                try:
                     ctxvars = copy_context()
                     future = pool.submit(lambda: ctxvars.run(_call_tool))
                     try:
                         result = future.result(timeout=execution_timeout)
                     except FuturesTimeoutError as exc:
                         future.cancel()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        pool = None
                         raise TimeoutError(f"tool '{target_tool}' timed out after {execution_timeout} seconds") from exc
+                finally:
+                    if pool is not None:
+                        pool.shutdown(wait=True)
             else:
                 result = _call_tool()
         finally:
