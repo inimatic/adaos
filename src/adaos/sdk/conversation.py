@@ -110,6 +110,58 @@ def get(
     )
 
 
+def export(
+    conversation_id: str,
+    *,
+    include_redacted: bool = False,
+    include_memory: bool = True,
+    include_traces: bool = True,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    """Return a privacy/audit aware conversation export bundle."""
+    return conversation_store.export_conversation(
+        conversation_id,
+        include_redacted=include_redacted,
+        include_memory=include_memory,
+        include_traces=include_traces,
+        limit=limit,
+    )
+
+
+def redact(
+    conversation_id: str,
+    *,
+    reason: str = "user_request",
+    include_memory: bool = True,
+    include_traces: bool = True,
+) -> dict[str, Any]:
+    """Soft-redact a conversation bundle and record a durable audit event."""
+    return conversation_store.redact_conversation(
+        conversation_id,
+        reason=reason,
+        hard_delete=False,
+        include_memory=include_memory,
+        include_traces=include_traces,
+    )
+
+
+def delete(
+    conversation_id: str,
+    *,
+    reason: str = "user_request",
+    include_memory: bool = True,
+    include_traces: bool = True,
+) -> dict[str, Any]:
+    """Hard-delete a conversation bundle and record a durable audit event."""
+    return conversation_store.redact_conversation(
+        conversation_id,
+        reason=reason,
+        hard_delete=True,
+        include_memory=include_memory,
+        include_traces=include_traces,
+    )
+
+
 def start_thread(
     conversation_id: str,
     *,

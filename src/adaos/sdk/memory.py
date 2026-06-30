@@ -82,6 +82,27 @@ def search(
     )
 
 
+def export(
+    *,
+    memory_id: str | None = None,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    key: str | None = None,
+    include_redacted: bool = False,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    return conversation_store.export_memory(
+        memory_id=memory_id,
+        scope=scope,
+        owner=owner,
+        subject_id=subject_id,
+        key=key,
+        include_redacted=include_redacted,
+        limit=limit,
+    )
+
+
 def forget(
     *,
     memory_id: str | None = None,
@@ -100,6 +121,46 @@ def forget(
         key=key,
         reason=reason,
         hard_delete=hard_delete,
+    )
+
+
+def redact(
+    *,
+    memory_id: str | None = None,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    key: str | None = None,
+    reason: str = "user_request",
+) -> int:
+    return forget(
+        memory_id=memory_id,
+        scope=scope,
+        owner=owner,
+        subject_id=subject_id,
+        key=key,
+        reason=reason,
+        hard_delete=False,
+    )
+
+
+def delete(
+    *,
+    memory_id: str | None = None,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    key: str | None = None,
+    reason: str = "user_request",
+) -> int:
+    return forget(
+        memory_id=memory_id,
+        scope=scope,
+        owner=owner,
+        subject_id=subject_id,
+        key=key,
+        reason=reason,
+        hard_delete=True,
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 import json
 import re
 import sqlite3
@@ -2760,6 +2760,8 @@ def forget_memory(
         raise ValueError("memory_id or scoped selector is required")
     sql_where = " AND ".join(where)
     with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        audit_conversation_id = _memory_selector_conversation_id(con, sql_where, params)
         if hard_delete:
             cur = con.execute(f"DELETE FROM conversation_memory_items WHERE {sql_where}", params)
         else:
@@ -2774,8 +2776,145 @@ def forget_memory(
                 """,
                 [time.time(), str(reason or "user_request").strip() or "user_request", time.time(), *params],
         )
-        con.commit()
-        return int(cur.rowcount or 0)
+        rowcount = int(cur.rowcount or 0)
+        _append_audit_event_with_connection(
+            con,
+            event_type="conversation.privacy",
+            action="hard_delete_memory" if hard_delete else "redact_memory",
+            conversation_id=audit_conversation_id,
+            status="completed" if rowcount else "not_found",
+            reason=str(reason or "user_request").strip() or "user_request",
+            counts={"memory": rowcount},
+            meta={
+                "memory_id": str(memory_id or "").strip() or None,
+                "scope": str(scope or "").strip() or None,
+                "owner": str(owner or "").strip() or None,
+                "subject_id": str(subject_id or "").strip() or None,
+                "key": str(key or "").strip() or None,
+            },
+        )
+        return rowcount
+
+
+def export_memory(
+    *,
+    memory_id: str | None = None,
+    scope: str | None = None,
+    owner: str | None = None,
+    subject_id: str | None = None,
+    key: str | None = None,
+    include_redacted: bool = False,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    if not ensure_schema():
+        return {
+            "schema": "adaos.conversation.memory_export.v1",
+            "ok": False,
+            "memory": [],
+            "counts": {"memory": 0},
+            "error": "conversation_store_unavailable",
+        }
+    where: list[str] = []
+    params: list[Any] = []
+    if memory_id:
+        where.append("memory_id=?")
+        params.append(memory_id)
+    if scope:
+        where.append("scope=?")
+        params.append(scope)
+    if owner:
+        where.append("owner=?")
+        params.append(owner)
+    if subject_id:
+        where.append("subject_id=?")
+        params.append(subject_id)
+    if key:
+        where.append("key=?")
+        params.append(key)
+    if not where:
+        raise ValueError("memory_id or scoped selector is required")
+    if not include_redacted:
+        where.append("redaction_state!='redacted'")
+    sql_where = " AND ".join(where)
+    safe_limit = max(1, min(int(limit or 5000), 5000))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM conversation_memory_items
+            WHERE {sql_where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        ).fetchall()
+        items = [_row_to_memory(row) for row in rows]
+        audit_conversation_id = _memory_items_conversation_id(items)
+        audit = _append_audit_event_with_connection(
+            con,
+            event_type="conversation.privacy",
+            action="export_memory",
+            conversation_id=audit_conversation_id,
+            status="completed",
+            counts={"memory": len(items)},
+            meta={
+                "memory_id": str(memory_id or "").strip() or None,
+                "scope": str(scope or "").strip() or None,
+                "owner": str(owner or "").strip() or None,
+                "subject_id": str(subject_id or "").strip() or None,
+                "key": str(key or "").strip() or None,
+                "include_redacted": bool(include_redacted),
+                "limit": safe_limit,
+            },
+        )
+    result = {
+        "schema": "adaos.conversation.memory_export.v1",
+        "ok": True,
+        "memory": items,
+        "include_redacted": bool(include_redacted),
+        "counts": {"memory": len(items)},
+    }
+    if audit:
+        result["audit_event_id"] = audit["audit_event_id"]
+    return result
+
+
+def _memory_selector_conversation_id(
+    con: sqlite3.Connection,
+    sql_where: str,
+    params: Sequence[Any],
+) -> str | None:
+    rows = con.execute(
+        f"""
+        SELECT scope, subject_id
+        FROM conversation_memory_items
+        WHERE {sql_where}
+        LIMIT 20
+        """,
+        list(params),
+    ).fetchall()
+    return _memory_items_conversation_id(
+        [
+            {
+                "scope": str(row["scope"] or ""),
+                "subject_id": str(row["subject_id"] or ""),
+            }
+            for row in rows
+        ]
+    )
+
+
+def _memory_items_conversation_id(items: Sequence[Mapping[str, Any]]) -> str | None:
+    conversation_ids = {
+        str(item.get("subject_id") or "").strip()
+        for item in items
+        if str(item.get("scope") or "").strip() == "conversation"
+        and str(item.get("subject_id") or "").strip()
+    }
+    if len(conversation_ids) == 1:
+        return next(iter(conversation_ids))
+    return None
 
 
 def record_memory_consent(

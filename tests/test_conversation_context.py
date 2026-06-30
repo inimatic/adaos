@@ -226,6 +226,88 @@ def test_memory_search_and_forget_are_scoped_and_redaction_aware() -> None:
     assert redacted[0]["redaction_reason"] == "test_cleanup"
 
 
+def test_conversation_and_memory_privacy_flows_are_sdk_accessible() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.privacy.{suffix}"
+    sdk_conversation.open(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        title="Privacy Test",
+    )
+    sdk_conversation.append(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        role="user",
+        text="private sdk detail",
+        payload={"id": f"privacy.{suffix}.msg.1", "from": "user", "text": "private sdk detail"},
+    )
+    memory_id = sdk_memory.remember(
+        scope="conversation",
+        owner="skill:test",
+        subject_id=conversation_id,
+        key="private_fact",
+        text="private sdk memory",
+        consent_state="session",
+    )
+    trace_id = conversation_store.start_turn_trace(
+        webspace_id="desktop",
+        conversation_id=conversation_id,
+        channel_id="builder",
+        selected_tool="builder_skill.chat",
+        policy_decision={"reason": "privacy_test"},
+    )
+    assert memory_id and trace_id
+    assert conversation_store.finish_turn_trace(trace_id, status="completed")
+
+    exported = sdk_conversation.export(conversation_id)
+    memory_export = sdk_memory.export(memory_id=memory_id)
+
+    assert exported["schema"] == "adaos.conversation.export.v1"
+    assert exported["counts"] == {"messages": 1, "memory": 1, "turn_traces": 1}
+    assert exported["audit_event_id"]
+    assert memory_export["schema"] == "adaos.conversation.memory_export.v1"
+    assert memory_export["counts"] == {"memory": 1}
+    assert memory_export["memory"][0]["id"] == memory_id
+    assert memory_export["audit_event_id"]
+
+    assert sdk_memory.redact(memory_id=memory_id, reason="memory_privacy_test") == 1
+    assert sdk_memory.export(memory_id=memory_id)["memory"] == []
+    redacted_memory = sdk_memory.export(memory_id=memory_id, include_redacted=True)
+    assert redacted_memory["memory"][0]["redaction_state"] == "redacted"
+    assert redacted_memory["memory"][0]["redaction_reason"] == "memory_privacy_test"
+
+    redacted_conversation = sdk_conversation.redact(
+        conversation_id,
+        reason="conversation_privacy_test",
+        include_memory=False,
+    )
+    assert redacted_conversation["ok"] is True
+    assert redacted_conversation["counts"] == {"conversation": 1, "messages": 1, "memory": 0, "turn_traces": 1}
+    assert sdk_conversation.export(conversation_id)["conversation"] is None
+    redacted_export = sdk_conversation.export(conversation_id, include_redacted=True)
+    assert redacted_export["conversation"]["redaction_state"] == "redacted"
+    assert redacted_export["messages"][0]["redaction_reason"] == "conversation_privacy_test"
+
+    audit_actions = [
+        item["action"]
+        for item in conversation_store.list_audit_events(
+            conversation_id=conversation_id,
+            event_type="conversation.privacy",
+            ascending=True,
+        )
+    ]
+    assert {
+        "export_conversation",
+        "export_memory",
+        "redact_memory",
+        "redact_conversation",
+    }.issubset(set(audit_actions))
+
+
 def test_memory_consent_records_audit_and_updates_matching_items() -> None:
     memory_id = sdk_memory.remember(
         scope="skill_user",

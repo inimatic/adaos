@@ -2002,8 +2002,11 @@ Important lacunae found during Phase 6 implementation:
   the skill-owned channel and forwards the remaining text to NLU before
   waiting on compatibility Voice tail materialization.
 - [ ] `[should]` Retire direct writes to transport-specific chat projections.
-- [ ] `[should]` Add export/delete/redaction flows for conversation and memory
-  records.
+- [x] `[should]` Add export/delete/redaction flows for conversation and memory
+  records. Conversation bundles support export, soft redaction, hard delete,
+  include-redacted review, and durable privacy audit events; memory records now
+  have export/redact/delete SDK flows with durable audit events tied back to
+  the conversation when the memory scope is `conversation`.
 - [x] `[should]` Add safety tests for prompt injection through retrieved
   memory/history and for cross-owner memory denial. `tests/test_conversation_context.py`
   now covers retrieved-memory prompt-injection flags, untrusted history
