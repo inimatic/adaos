@@ -1,25 +1,177 @@
 name: "new_skill"
 version: "0.1.0"
+description: ""
 entry: "handlers/main.py"
+default_tool: "chat"
 
 runtime:
   python: "3.11"
 
-# Необязательные поля — можно оставить пустыми,
-# валидатор подставит значения по умолчанию.
-description: ""
 dependencies: []
-events: {}
-tools: []
-exports: {}
-data_routes: []
+events:
+  subscribe: []
+  publish:
+    - io.out.chat.append
+    - io.out.say
+exports:
+  tools:
+    - chat
+    - ask_for_details
+    - remember_preference
+tools:
+  - name: chat
+    description: "Handle a skill-owned dialog turn using the canonical conversation ledger."
+    entry: "handlers.main:chat"
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+        webspace_id:
+          type: string
+        conversation_context:
+          type: object
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, message, dialog]
+  - name: ask_for_details
+    description: "Ask a bounded follow-up question through adaos.sdk.chat.ask."
+    entry: "handlers.main:ask_for_details"
+    input_schema:
+      type: object
+      properties:
+        question:
+          type: string
+        required_slot:
+          type: string
+        max_turns:
+          type: integer
+          minimum: 1
+          maximum: 5
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, message, dialog]
+  - name: remember_preference
+    description: "Propose a consent-gated skill preference memory write."
+    entry: "handlers.main:remember_preference"
+    input_schema:
+      type: object
+      required: [key, text]
+      properties:
+        key:
+          type: string
+        text:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, message, dialog, pending_action]
+
+data_routes:
+  - surface: "skill conversation memory"
+    route: "skill-local"
+    path: "node_conversation_store:memory.skill_user.new_skill"
+    owner: "skill:new_skill"
+    first_paint: "empty skill memory projection"
+    recovery: "memory.search/list rebuilds from node-local conversation store"
+    guard_visibility: "memory writes are proposed through Pending Actions before long-term reuse"
+
+conversation:
+  dialog_channel:
+    id: new_skill
+    label: "New Skill"
+    owner: skill:new_skill
+    default_tool: new_skill.chat
+    route_id: voice_chat
+    history:
+      store: node
+      visible_tail_messages: 50
+    retrieval:
+      max_messages: 12
+      max_segments: 2
+      max_memory_items: 4
+      max_tokens: 1200
+    repair:
+      no_match: ask_for_details
+      correction: pass_to_tool
+      cancel: close_active_frame
+    response:
+      default_targets: [text_tail, speech_text]
+      renderer: dialog.visible_tail
+  history:
+    store: node
+    owner: skill:new_skill
+    retention_class: normal
+  retrieval:
+    strategy: recent_plus_segments_plus_memory
+    cross_owner_memory: deny_by_default
+  memory:
+    scopes: [conversation, skill_user, agent_user]
+    consent: required_for_reusable_memory
+    default_visibility: owner
+  response:
+    default_targets: [text_tail, speech_text]
+    structured_envelope: true
+  forms:
+    - id: details
+      kind: slot_collection
+      required_slots: [details]
+      repair:
+        max_turns: 3
+        on_exhausted: fallback_to_summary
+  agents:
+    - id: agent:new_skill:assistant
+      label: "Assistant"
+      owner: skill:new_skill
+      kind: skill_agent
+      channel_id: new_skill
+      skill: new_skill
+      talk_tool: chat
+      gender: neutral
+      voice: default
+      icon: sparkles-outline
+      aliases:
+        - "Assistant"
+        - "new skill"
+    - id: agent:new_skill:critic
+      label: "Reviewer"
+      owner: skill:new_skill
+      kind: skill_agent
+      channel_id: new_skill
+      skill: new_skill
+      talk_tool: chat
+      gender: neutral
+      voice: default
+      icon: search-outline
+      aliases:
+        - "Reviewer"
+        - "critic"
 
 llm_hints:
   description: ""
   aliases: []
-  primary_actions: []
+  primary_actions:
+    - id: new_skill.chat
+      intent: new_skill.chat
+      tool: chat
+      side_effect_class: local_write
+      examples:
+        - "Ask the skill for help"
+    - id: new_skill.ask_for_details
+      intent: new_skill.ask_for_details
+      tool: ask_for_details
+      side_effect_class: local_write
+      examples:
+        - "Ask a follow-up question"
   examples: []
-  owner_hints: []
+  owner_hints:
+    - skill:new_skill
 
 nlu_hints:
   aliases: []

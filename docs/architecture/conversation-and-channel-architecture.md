@@ -1599,9 +1599,11 @@ depth across several phases.
   `retention_policy`.
 - [x] `[must]` Define projection rules for `data.dialog` and WebIO stream
   receivers so Yjs carries only compact active tails.
-- [ ] `[should]` Add manifest schema support for `conversations`, `history`,
+- [x] `[should]` Add manifest schema support for `conversations`, `history`,
   `retrieval`, `dialog_channel`, `repair`, `response`, form/frame, and agent
-  declarations.
+  declarations. Runtime skill schema now accepts a `conversation` contract with
+  channel, history, retrieval, repair, response, memory, forms/frames, and
+  agent declarations.
 - [ ] `[should]` Add SDK design docs for `adaos.sdk.conversation` and
   `adaos.sdk.memory`.
 - [ ] `[could]` Define optional vector-index metadata while keeping vector
@@ -1781,8 +1783,12 @@ depth across several phases.
   available.
 - [x] `[must]` Teach LLM skill-development docs to prefer conversation/memory
   APIs over `io.out.chat.append` and direct `skill_memory` transcript storage.
-- [ ] `[should]` Add generated-skill templates for skill-owned conversations,
-  multi-agent skill conversations, and bounded `chat.ask` flows.
+- [x] `[should]` Add generated-skill templates for skill-owned conversations,
+  multi-agent skill conversations, and bounded `chat.ask` flows. The default
+  skill template now declares a skill-owned dialog channel, two starter agents,
+  node-local history/retrieval/memory policy, and SDK-based `chat`,
+  `ask_for_details`, and consent-gated `remember_preference` tools; Builder
+  rewrites template ids to the generated artifact id.
 - [x] `[should]` Add lint/validation warnings for skills that store
   user-visible transcript history in arbitrary files or use conversation/memory
   SDK APIs without declared manifest policy. `SkillValidationService` now warns

@@ -64,6 +64,28 @@ def _write_demo_skill(root: Path, name: str = "demo_skill") -> Path:
     return skill_dir
 
 
+def test_builder_skill_default_rewrites_conversation_manifest_refs(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    result = service.create_draft(
+        kind="skill",
+        artifact_id="demo_companion",
+        source_idea="A small companion skill.",
+        webspace_id="builder-template-ws",
+    )
+
+    manifest = yaml.safe_load((Path(result["artifact_root"]) / "skill.yaml").read_text(encoding="utf-8"))
+    conversation = manifest["conversation"]
+    assert manifest["name"] == "demo_companion"
+    assert conversation["dialog_channel"]["id"] == "demo_companion"
+    assert conversation["dialog_channel"]["owner"] == "skill:demo_companion"
+    assert conversation["dialog_channel"]["default_tool"] == "demo_companion.chat"
+    assert conversation["history"]["owner"] == "skill:demo_companion"
+    assert conversation["agents"][0]["id"] == "agent:demo_companion:assistant"
+    assert conversation["agents"][0]["owner"] == "skill:demo_companion"
+    assert manifest["data_routes"][0]["path"] == "node_conversation_store:memory.skill_user.demo_companion"
+
+
 def test_descriptor_fix_draft_materializes_manifest_webui_and_nlu_files(tmp_path: Path) -> None:
     _write_demo_skill(tmp_path)
     service = _service(tmp_path)

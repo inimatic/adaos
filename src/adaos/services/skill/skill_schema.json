@@ -108,6 +108,10 @@
 			"type": "array",
 			"items": { "$ref": "#/$defs/dataRoute" }
 		},
+		"conversation": {
+			"$ref": "#/$defs/conversationContract",
+			"description": "Node-local conversation, channel, history, retrieval, repair, response, memory, form/frame, and agent declarations used by Dialog Runtime."
+		},
 		"nlu": {
 			"type": "object",
 			"additionalProperties": true,
@@ -118,6 +122,99 @@
 		}
 	},
 	"$defs": {
+		"conversationContract": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"conversations": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/conversationDeclaration" }
+				},
+				"dialog_channel": { "$ref": "#/$defs/dialogChannelDeclaration" },
+				"history": { "type": "object", "additionalProperties": true },
+				"retrieval": { "type": "object", "additionalProperties": true },
+				"repair": { "type": "object", "additionalProperties": true },
+				"response": { "type": "object", "additionalProperties": true },
+				"memory": { "type": "object", "additionalProperties": true },
+				"forms": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/dialogFormDeclaration" }
+				},
+				"frames": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/dialogFormDeclaration" }
+				},
+				"agents": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/dialogAgentDeclaration" }
+				}
+			}
+		},
+		"conversationDeclaration": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"id": { "type": "string", "minLength": 1 },
+				"kind": { "type": "string", "minLength": 1 },
+				"owner": { "type": "string", "minLength": 1 },
+				"title": { "type": "string" },
+				"history": { "type": "object", "additionalProperties": true },
+				"retrieval": { "type": "object", "additionalProperties": true },
+				"retention": { "type": "object", "additionalProperties": true }
+			}
+		},
+		"dialogChannelDeclaration": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"id": { "type": "string", "minLength": 1 },
+				"label": { "type": "string" },
+				"owner": { "type": "string", "minLength": 1 },
+				"default_tool": { "type": "string", "minLength": 1 },
+				"route_id": { "type": "string" },
+				"history": { "type": "object", "additionalProperties": true },
+				"retrieval": { "type": "object", "additionalProperties": true },
+				"repair": { "type": "object", "additionalProperties": true },
+				"response": { "type": "object", "additionalProperties": true }
+			}
+		},
+		"dialogAgentDeclaration": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"id": { "type": "string", "minLength": 1 },
+				"label": { "type": "string", "minLength": 1 },
+				"owner": { "type": "string", "minLength": 1 },
+				"kind": { "type": "string" },
+				"channel_id": { "type": "string", "minLength": 1 },
+				"skill": { "type": "string", "minLength": 1 },
+				"talk_tool": { "type": "string", "minLength": 1 },
+				"aliases": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 }
+				},
+				"gender": { "type": "string" },
+				"voice": { "type": "string" },
+				"icon": { "type": "string" },
+				"voice_profile": { "type": "object", "additionalProperties": true },
+				"policy": { "type": "object", "additionalProperties": true }
+			}
+		},
+		"dialogFormDeclaration": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"id": { "type": "string", "minLength": 1 },
+				"kind": { "type": "string" },
+				"required_slots": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 }
+				},
+				"slot_schema": { "type": "object", "additionalProperties": true },
+				"repair": { "type": "object", "additionalProperties": true },
+				"response": { "type": "object", "additionalProperties": true }
+			}
+		},
 		"authoringHints": {
 			"type": "object",
 			"additionalProperties": true,

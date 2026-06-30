@@ -192,6 +192,40 @@ def test_runtime_skill_validator_schema_accepts_builder_authoring_hints() -> Non
     Draft202012Validator(schema).validate(payload)
 
 
+def test_runtime_skill_validator_schema_accepts_conversation_contract() -> None:
+    schema = _load_service_skill_schema()
+    payload = {
+        "name": "conversation_skill",
+        "version": "0.1.0",
+        "conversation": {
+            "dialog_channel": {
+                "id": "conversation_skill",
+                "owner": "skill:conversation_skill",
+                "default_tool": "conversation_skill.chat",
+                "history": {"store": "node"},
+                "retrieval": {"max_messages": 12},
+                "repair": {"no_match": "ask_for_details"},
+                "response": {"default_targets": ["text_tail", "speech_text"]},
+            },
+            "history": {"store": "node"},
+            "memory": {"scopes": ["skill_user", "agent_user"]},
+            "forms": [{"id": "details", "required_slots": ["details"]}],
+            "agents": [
+                {
+                    "id": "agent:conversation_skill:assistant",
+                    "label": "Assistant",
+                    "owner": "skill:conversation_skill",
+                    "channel_id": "conversation_skill",
+                    "skill": "conversation_skill",
+                    "talk_tool": "chat",
+                }
+            ],
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_runtime_skill_validator_schema_rejects_status_plane_data_route() -> None:
     schema = _load_service_skill_schema()
     payload = {

@@ -119,6 +119,20 @@ def _slug(value: str) -> str:
     return text or "builder"
 
 
+def _rewrite_skill_template_refs(value: Any, artifact_id: str) -> Any:
+    target = str(artifact_id or "").strip()
+    if not target:
+        return value
+    if isinstance(value, dict):
+        return {key: _rewrite_skill_template_refs(item, target) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_rewrite_skill_template_refs(item, target) for item in value]
+    if isinstance(value, str):
+        label = target.replace("_", " ").replace("-", " ").strip().title() or target
+        return value.replace("new_skill", target).replace("New Skill", label)
+    return value
+
+
 def _stable_suffix(*parts: object) -> str:
     h = hashlib.sha256()
     for part in parts:
@@ -546,6 +560,7 @@ class BuilderWorkspaceService:
         data["llm_hints"].setdefault("examples", [])
         data.setdefault("nlu_hints", {})
         data["nlu_hints"].setdefault("examples", [])
+        data = _rewrite_skill_template_refs(data, artifact_id)
         _write_yaml(manifest, data)
 
     def _patch_scenario_template(self, artifact_root: Path, artifact_id: str, source_idea: str) -> None:
