@@ -422,7 +422,10 @@ Open work:
 - [x] `[must]` Support the phrase-level flow: "I have an idea. Let's build it."
   `builder_skill.chat` treats first-idea/build phrases as draft-creation turns
   even when the user does not say "create app".
-- [ ] `[should]` Provide guided clarification when the idea is underspecified.
+- [x] `[should]` Provide guided clarification when the idea is underspecified.
+  `builder_skill.chat` now returns `clarification_required` with a structured
+  `adaos.builder.guided_clarification.v1` payload instead of creating a weak
+  draft from an empty "I have an idea" turn.
 - [x] `[must]` Show assumptions, preview, risks, and expected behavior in non-specialist
   language. Builder draft responses now return `user_summary` and include a
   compact plain-language summary in the dialog message.

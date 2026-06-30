@@ -240,6 +240,39 @@ def test_chat_first_idea_creates_preview_and_accepts_correction(monkeypatch, tmp
     assert published[-1]["kind"] == "builder.scenario_patch.review"
 
 
+def test_chat_guides_underspecified_first_idea(monkeypatch) -> None:
+    skill = _load_module()
+    emitted: list[dict] = []
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {
+                "source_webspace_id": webspace_id,
+                "dev_webspace_id": f"{webspace_id}-dev",
+                "dialog": {"dialog_channel_id": "builder"},
+            }
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda text, **kwargs: emitted.append({"text": text, "kwargs": kwargs}))
+
+    result = skill.chat("I have an idea", webspace_id="builder-clarify")
+
+    assert result["ok"] is True
+    assert result["status"] == "clarification_required"
+    assert result["needs_clarification"] is True
+    assert result["dialog"]["dialog_channel_id"] == "builder"
+    assert result["topic"]["thread_id"].startswith("thread.builder.builder-clarify")
+    assert result["clarification"]["schema"] == "adaos.builder.guided_clarification.v1"
+    assert [item["id"] for item in result["clarification"]["questions"]] == [
+        "user_goal",
+        "primary_objects",
+        "first_action",
+    ]
+    assert result["clarification"]["next_turn_policy"]["creates_draft_when_answered"] is True
+    assert "scenario_id" not in result
+    assert emitted[0]["kwargs"]["topic_ref"]["thread_id"] == result["topic"]["thread_id"]
+
+
 def test_update_current_scenario_handles_layout_column_and_date_requests(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "shopping_list"

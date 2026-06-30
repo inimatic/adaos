@@ -1217,6 +1217,103 @@ def _target_required_message(binding: Mapping[str, Any] | None = None) -> str:
     )
 
 
+def _normalized_builder_phrase(text: str) -> str:
+    phrase = re.sub(r"\s+", " ", str(text or "").strip().lower()).strip(" .!?;:")
+    for alias in ("builder", "\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c", "\u0431\u0438\u043b\u0434\u0435\u0440"):
+        if phrase == alias:
+            return ""
+        for separator in (", ", ": ", " - "):
+            prefix = f"{alias}{separator}"
+            if phrase.startswith(prefix):
+                return phrase[len(prefix) :].strip()
+    return phrase
+
+
+def _is_guided_clarification_request(text: str) -> bool:
+    phrase = _normalized_builder_phrase(text)
+    if not phrase:
+        return False
+    exact_vague_phrases = {
+        "i have an idea",
+        "i've got an idea",
+        "there is an idea",
+        "help me shape an idea",
+        "help me build something",
+        "\u0435\u0441\u0442\u044c \u0438\u0434\u0435\u044f",
+        "\u0443 \u043c\u0435\u043d\u044f \u0435\u0441\u0442\u044c \u0438\u0434\u0435\u044f",
+        "\u0434\u0430\u0432\u0430\u0439 \u0447\u0442\u043e-\u043d\u0438\u0431\u0443\u0434\u044c \u0441\u043e\u0431\u0435\u0440\u0435\u043c",
+        "\u0434\u0430\u0432\u0430\u0439 \u0447\u0442\u043e-\u043d\u0438\u0431\u0443\u0434\u044c \u0441\u0434\u0435\u043b\u0430\u0435\u043c",
+        "\u043f\u043e\u043c\u043e\u0433\u0438 \u0441\u0444\u043e\u0440\u043c\u0443\u043b\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0438\u0434\u0435\u044e",
+    }
+    if phrase in exact_vague_phrases:
+        return True
+    vague_starts = (
+        "i have an idea for",
+        "i want to build something",
+        "\u0445\u043e\u0447\u0443 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0447\u0442\u043e-\u0442\u043e",
+        "\u043d\u0443\u0436\u043d\u043e \u0441\u043e\u0431\u0440\u0430\u0442\u044c \u0447\u0442\u043e-\u0442\u043e",
+    )
+    return any(phrase.startswith(item) for item in vague_starts)
+
+
+def _builder_clarification_payload(
+    *,
+    text: str,
+    webspace_id: str,
+    topic: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema": "adaos.builder.guided_clarification.v1",
+        "status": "clarification_required",
+        "source_text": str(text or "").strip(),
+        "webspace_id": webspace_id,
+        "topic": dict(topic or {}),
+        "questions": [
+            {
+                "id": "user_goal",
+                "label": "\u0426\u0435\u043b\u044c",
+                "prompt": "\u041a\u0430\u043a\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443 \u0434\u043e\u043b\u0436\u0435\u043d \u0440\u0435\u0448\u0430\u0442\u044c \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f?",
+                "required": True,
+            },
+            {
+                "id": "primary_objects",
+                "label": "\u0414\u0430\u043d\u043d\u044b\u0435",
+                "prompt": "\u041a\u0430\u043a\u0438\u0435 \u043e\u0431\u044a\u0435\u043a\u0442\u044b, \u043f\u043e\u043b\u044f \u0438\u043b\u0438 \u0437\u0430\u043f\u0438\u0441\u0438 \u043d\u0443\u0436\u043d\u044b \u043d\u0430 \u043f\u0435\u0440\u0432\u043e\u043c \u044d\u043a\u0440\u0430\u043d\u0435?",
+                "required": True,
+            },
+            {
+                "id": "first_action",
+                "label": "\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0435",
+                "prompt": "\u041a\u0430\u043a\u043e\u0435 \u043e\u0434\u043d\u043e \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u0434\u043e\u043b\u0436\u0435\u043d \u0441\u0440\u0430\u0437\u0443 \u0441\u043c\u043e\u0447\u044c \u0441\u0434\u0435\u043b\u0430\u0442\u044c?",
+                "required": True,
+            },
+        ],
+        "suggested_replies": [
+            "\u0421\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f \u0441\u043f\u0438\u0441\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043e\u043a: \u0442\u043e\u0432\u0430\u0440, \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e, \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f; \u043d\u0443\u0436\u043d\u043e \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0442\u044c \u0438 \u043e\u0442\u043c\u0435\u0447\u0430\u0442\u044c \u043a\u0443\u043f\u043b\u0435\u043d\u043d\u043e\u0435.",
+            "Build a simple task tracker with title, owner, status, due date, and a quick add form.",
+        ],
+        "next_turn_policy": {
+            "creates_draft_when_answered": True,
+            "minimum_answer_fields": ["user_goal"],
+            "owner": f"skill:{SKILL_ID}",
+            "agent_id": AGENT_ID,
+        },
+    }
+
+
+def _guided_clarification_message(payload: Mapping[str, Any]) -> str:
+    questions = payload.get("questions") if isinstance(payload.get("questions"), list) else []
+    rendered = []
+    for index, item in enumerate(questions[:3], start=1):
+        if isinstance(item, Mapping):
+            rendered.append(f"{index}. {item.get('prompt')}")
+    return (
+        f"{AGENT_LABEL}: \u0438\u0434\u0435\u044e \u043b\u0443\u0447\u0448\u0435 \u0443\u0442\u043e\u0447\u043d\u0438\u0442\u044c \u0434\u043e \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a\u0430.\n\n"
+        + "\n".join(rendered)
+        + "\n\n\u041c\u043e\u0436\u043d\u043e \u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c \u043e\u0434\u043d\u043e\u0439 \u0444\u0440\u0430\u0437\u043e\u0439: \u0447\u0442\u043e \u0441\u0442\u0440\u043e\u0438\u043c, \u043a\u0430\u043a\u0438\u0435 \u043f\u043e\u043b\u044f \u043d\u0443\u0436\u043d\u044b, \u0438 \u043a\u0430\u043a\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0432\u0430\u0436\u043d\u043e \u043f\u0435\u0440\u0432\u044b\u043c."
+    )
+
+
 def _is_create_request(text: str) -> bool:
     lowered = str(text or "").lower()
     return any(
@@ -1323,6 +1420,20 @@ def chat(
     utterance = str(text or "").strip()
     session, binding = _target_session(ws)
     topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+    if _is_guided_clarification_request(utterance):
+        clarification = _builder_clarification_payload(text=utterance, webspace_id=ws, topic=topic)
+        message = _guided_clarification_message(clarification)
+        _safe_emit_chat(message, webspace_id=ws, _meta=_meta, binding=binding, topic_ref=topic)
+        return {
+            "ok": True,
+            "status": "clarification_required",
+            "needs_clarification": True,
+            "message": message,
+            "clarification": clarification,
+            "binding": binding,
+            "topic": topic,
+            "dialog": _dialog_state(ws, topic_ref=topic),
+        }
     if _is_create_request(utterance):
         result = create_scenario_draft(idea=utterance or "prototype app", webspace_id=ws, _meta=_meta)
         if result.get("ok"):
