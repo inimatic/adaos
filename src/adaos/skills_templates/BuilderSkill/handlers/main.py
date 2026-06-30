@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
+import inspect
 import json
 import re
 import time
@@ -731,6 +733,18 @@ def _write_webui_payload(artifact_root: str | None, payload: Mapping[str, Any]) 
 def _write_scenario_manifest(root: Path, scenario: Mapping[str, Any], preview_state: Mapping[str, Any]) -> None:
     scenario_id = str(scenario.get("id") or preview_state.get("scenario_id") or preview_state.get("id") or root.name).strip() or root.name
     title = str(preview_state.get("title") or scenario.get("title") or scenario.get("name") or scenario_id).strip() or scenario_id
+    depends = [
+        str(item).strip()
+        for item in (scenario.get("depends") if isinstance(scenario.get("depends"), list) else [])
+        if isinstance(item, str) and str(item).strip() and str(item).strip() != SKILL_ID
+    ]
+    runtime = scenario.get("runtime") if isinstance(scenario.get("runtime"), Mapping) else {}
+    skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+    required = [
+        str(item).strip()
+        for item in (skills.get("required") if isinstance(skills.get("required"), list) else [])
+        if isinstance(item, str) and str(item).strip() and str(item).strip() != SKILL_ID
+    ]
     lines = [
         f"id: {json.dumps(scenario_id, ensure_ascii=False)}",
         f"name: {json.dumps(str(scenario.get('name') or scenario_id), ensure_ascii=False)}",
@@ -738,14 +752,19 @@ def _write_scenario_manifest(root: Path, scenario: Mapping[str, Any], preview_st
         f"title: {json.dumps(title, ensure_ascii=False)}",
         f"description: {json.dumps(str(scenario.get('description') or 'Builder rapid prototype scenario.'), ensure_ascii=False)}",
         f"version: {json.dumps(str(scenario.get('version') or '0.1.0'), ensure_ascii=False)}",
-        "depends:",
-        "  - builder_skill",
-        "runtime:",
-        "  skills:",
-        "    required:",
-        "      - builder_skill",
-        "",
     ]
+    if depends:
+        lines.append("depends:")
+        lines.extend(f"  - {json.dumps(item, ensure_ascii=False)}" for item in depends)
+    else:
+        lines.append("depends: []")
+    lines.extend(["runtime:", "  skills:"])
+    if required:
+        lines.append("    required:")
+        lines.extend(f"      - {json.dumps(item, ensure_ascii=False)}" for item in required)
+    else:
+        lines.append("    required: []")
+    lines.append("")
     (root / "scenario.yaml").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -933,15 +952,13 @@ def _write_scenario_page_schema(root: Path, preview_state: Mapping[str, Any]) ->
     scenario.setdefault("title", preview_state.get("title") or scenario.get("name") or scenario.get("id") or "Prototype")
     depends = scenario.get("depends")
     depends_list = [str(item) for item in depends if isinstance(item, str)] if isinstance(depends, list) else []
-    if SKILL_ID not in depends_list:
-        depends_list.append(SKILL_ID)
+    depends_list = [item for item in depends_list if item != SKILL_ID]
     scenario["depends"] = depends_list
     runtime = scenario.get("runtime") if isinstance(scenario.get("runtime"), dict) else {}
     skills = runtime.get("skills") if isinstance(runtime.get("skills"), dict) else {}
     required = skills.get("required") if isinstance(skills.get("required"), list) else []
     required_list = [str(item) for item in required if isinstance(item, str)]
-    if SKILL_ID not in required_list:
-        required_list.append(SKILL_ID)
+    required_list = [item for item in required_list if item != SKILL_ID]
     skills["required"] = required_list
     runtime["skills"] = skills
     scenario["runtime"] = runtime
@@ -2455,7 +2472,16 @@ def _ensure_workbench(
             persist_projection=False,
         )
         snapshot = svc.snapshot(webspace_id, preview_state=preview_state)
-        event = _request_workbench_refresh(
+        direct = _ensure_workbench_runtime_direct(
+            svc,
+            webspace_id=webspace_id,
+            active_draft_id=draft_id,
+            runtime_scenario_id=scenario_id,
+            preview_state=preview_state,
+        )
+        if isinstance(direct.get("binding"), Mapping):
+            binding = dict(direct["binding"])
+        event = {"ok": True, "skipped": "direct_workbench_ensure"} if direct.get("ok") else _request_workbench_refresh(
             {
                 "source_webspace_id": webspace_id,
                 "active_draft_id": draft_id,
@@ -2465,7 +2491,60 @@ def _ensure_workbench(
         )
     except Exception as exc:
         return {"ok": False, "error": "workbench_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
-    return {"ok": True, "binding": binding, "projection": {"ok": True, "snapshot": snapshot, "deferred": True, "event": event}}
+    return {
+        "ok": True,
+        "binding": binding,
+        "projection": {
+            "ok": True,
+            "snapshot": snapshot,
+            "deferred": True,
+            "event": event,
+            "direct": direct,
+        },
+    }
+
+
+def _ensure_workbench_runtime_direct(
+    svc: Any,
+    *,
+    webspace_id: str,
+    active_draft_id: str | None,
+    runtime_scenario_id: str | None,
+    preview_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    ensure = getattr(svc, "ensure_dev_webspace", None)
+    if not callable(ensure):
+        return {"ok": False, "skipped": "ensure_dev_webspace_unavailable"}
+    try:
+        value = ensure(
+            webspace_id,
+            active_draft_id=active_draft_id,
+            runtime_scenario_id=runtime_scenario_id,
+            preview_state=preview_state,
+        )
+    except TypeError:
+        return {"ok": False, "skipped": "ensure_dev_webspace_signature_mismatch"}
+    except Exception as exc:
+        return {"ok": False, "error": "ensure_dev_webspace_failed", "detail": f"{type(exc).__name__}: {exc}"}
+
+    if inspect.isawaitable(value):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                value = asyncio.run(value)
+            except Exception as exc:
+                return {"ok": False, "error": "ensure_dev_webspace_failed", "detail": f"{type(exc).__name__}: {exc}"}
+        else:
+            try:
+                loop.create_task(value)
+            except Exception as exc:
+                return {"ok": False, "error": "ensure_dev_webspace_schedule_failed", "detail": f"{type(exc).__name__}: {exc}"}
+            return {"ok": True, "scheduled": True}
+
+    if isinstance(value, Mapping):
+        return {"ok": True, "binding": dict(value), "result": dict(value)}
+    return {"ok": True, "result": value}
 
 
 def _delete_sessions_for_draft(webspace_id: str, draft_id: str) -> None:
