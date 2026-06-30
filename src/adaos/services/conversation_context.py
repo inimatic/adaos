@@ -77,16 +77,21 @@ def build_context_packet(
     clean_topic_ref = dict(topic_ref or {}) if isinstance(topic_ref, Mapping) else {}
     if not clean_thread_id:
         clean_thread_id = str(clean_topic_ref.get("thread_id") or "").strip()
+    search_index = conversation_store.search_index_health()
+    fts_available = bool(search_index.get("fts_available"))
+    fallbacks = [
+        "summaries_unavailable",
+        "semantic_retrieval_unavailable",
+    ]
+    if not fts_available:
+        fallbacks.insert(0, "fts_unavailable")
     diagnostics: dict[str, Any] = {
         "schema": "adaos.context.diagnostics.v1",
         "selected_sources": [],
         "skipped_sources": [],
         "policy_denials": [],
-        "fallbacks": [
-            "fts_unavailable",
-            "summaries_unavailable",
-            "semantic_retrieval_unavailable",
-        ],
+        "fallbacks": fallbacks,
+        "search_index": search_index,
         "safety_flags": [],
         "budget_exhausted": False,
     }

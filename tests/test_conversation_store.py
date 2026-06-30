@@ -86,6 +86,48 @@ def test_conversation_store_keeps_agent_registry_and_memory() -> None:
     assert items[0]["redaction_state"] == "active"
 
 
+def test_conversation_store_search_indexes_messages_and_memory() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.search",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    conversation_store.append_message(
+        conversation_id="conv.search",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:test",
+        role="user",
+        text="alpha vector marker for Builder retrieval",
+        payload={"id": "search.msg.1", "from": "user", "text": "alpha vector marker for Builder retrieval"},
+    )
+    memory_id = conversation_store.remember(
+        scope="skill_user",
+        owner="skill:test",
+        subject_id="skill:test",
+        key="retrieval_style",
+        text="prefers compact retrieval evidence",
+        consent_state="skill_scoped",
+    )
+
+    health = conversation_store.search_index_health()
+    assert health["schema"] == "adaos.conversation.search_index_health.v1"
+    assert "fts_available" in health
+
+    messages = conversation_store.search_messages("vector marker", conversation_id="conv.search")
+    assert [item["id"] for item in messages] == ["search.msg.1"]
+    assert messages[0]["search"]["backend"] in {"fts", "like"}
+
+    memory = conversation_store.search_memory("compact retrieval", scope="skill_user", owner="skill:test")
+    assert memory_id in {item["id"] for item in memory}
+    assert {item["search"]["backend"] for item in memory}.issubset({"fts", "like"})
+
+    rebuilt = conversation_store.rebuild_search_indexes()
+    assert rebuilt["schema"] == "adaos.conversation.search_index_rebuild.v1"
+    assert rebuilt["status"] in {"rebuilt", "fts_unavailable"}
+
+
 def test_conversation_store_records_retention_and_redaction_metadata() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -237,6 +238,7 @@ _SCHEMA_COLUMN_MIGRATIONS = {
     "conversation_turn_traces": _RETENTION_REDACTION_COLUMNS,
 }
 _ENSURED_SQL_IDS: set[int] = set()
+_FTS_UNAVAILABLE_SQL_IDS: set[int] = set()
 
 
 def _json_dump(value: Any) -> str:
@@ -267,6 +269,45 @@ def _ensure_columns(con: sqlite3.Connection, table: str, columns: tuple[tuple[st
             con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
         except sqlite3.OperationalError:
             pass
+
+
+def _ensure_fts(con: sqlite3.Connection) -> bool:
+    token = id(con)
+    if token in _FTS_UNAVAILABLE_SQL_IDS:
+        return False
+    try:
+        con.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS conversation_messages_fts
+            USING fts5(
+                message_id UNINDEXED,
+                conversation_id UNINDEXED,
+                thread_id UNINDEXED,
+                webspace_id UNINDEXED,
+                channel_id UNINDEXED,
+                owner UNINDEXED,
+                role UNINDEXED,
+                text
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS conversation_memory_fts
+            USING fts5(
+                memory_id UNINDEXED,
+                scope UNINDEXED,
+                owner UNINDEXED,
+                subject_id UNINDEXED,
+                key UNINDEXED,
+                text
+            )
+            """
+        )
+        return True
+    except sqlite3.Error:
+        _FTS_UNAVAILABLE_SQL_IDS.add(token)
+        return False
 
 
 def _sql() -> Any | None:
@@ -307,6 +348,7 @@ def ensure_schema(sql: Any | None = None) -> bool:
             cur.execute(stmt)
         for table, columns in _SCHEMA_COLUMN_MIGRATIONS.items():
             _ensure_columns(con, table, columns)
+        _ensure_fts(con)
         con.commit()
     _ENSURED_SQL_IDS.add(token)
     return True
@@ -317,6 +359,126 @@ def _normalize_id(value: Any, fallback_prefix: str) -> str:
     if token:
         return token
     return f"{fallback_prefix}.{uuid.uuid4().hex}"
+
+
+def _fts_query(query: str) -> str:
+    tokens = re.findall(r"[A-Za-z0-9_\u0410-\u042f\u0430-\u044f\u0401\u0451]+", str(query or "").lower())
+    if not tokens:
+        token = str(query or "").replace('"', " ").strip()
+        return f'"{token}"' if token else '""'
+    return " OR ".join(f'"{token}"' for token in tokens[:12])
+
+
+def _message_fts_upsert(
+    con: sqlite3.Connection,
+    *,
+    message_id: str,
+    conversation_id: str,
+    thread_id: str | None,
+    webspace_id: str,
+    channel_id: str | None,
+    owner: str | None,
+    role: str,
+    text: str,
+) -> None:
+    try:
+        if not _ensure_fts(con):
+            return
+        con.execute("DELETE FROM conversation_messages_fts WHERE message_id=?", (message_id,))
+        con.execute(
+            """
+            INSERT INTO conversation_messages_fts(
+                message_id, conversation_id, thread_id, webspace_id, channel_id, owner, role, text
+            ) VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (message_id, conversation_id, thread_id, webspace_id, channel_id, owner, role, text),
+        )
+    except sqlite3.Error:
+        return
+
+
+def _memory_fts_upsert(
+    con: sqlite3.Connection,
+    *,
+    memory_id: str,
+    scope: str,
+    owner: str,
+    subject_id: str | None,
+    key: str | None,
+    text: str | None,
+) -> None:
+    try:
+        if not _ensure_fts(con):
+            return
+        con.execute("DELETE FROM conversation_memory_fts WHERE memory_id=?", (memory_id,))
+        con.execute(
+            """
+            INSERT INTO conversation_memory_fts(memory_id, scope, owner, subject_id, key, text)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (memory_id, scope, owner, subject_id, key, text),
+        )
+    except sqlite3.Error:
+        return
+
+
+def rebuild_search_indexes() -> dict[str, Any]:
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.search_index_rebuild.v1", "ok": False, "status": "unavailable"}
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        if not _ensure_fts(con):
+            return {"schema": "adaos.conversation.search_index_rebuild.v1", "ok": False, "status": "fts_unavailable"}
+        con.execute("DELETE FROM conversation_messages_fts")
+        con.execute("DELETE FROM conversation_memory_fts")
+        con.execute(
+            """
+            INSERT INTO conversation_messages_fts(
+                message_id, conversation_id, thread_id, webspace_id, channel_id, owner, role, text
+            )
+            SELECT message_id, conversation_id, thread_id, webspace_id, channel_id, owner, role, text
+            FROM conversation_messages
+            WHERE redaction_state!='redacted'
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO conversation_memory_fts(memory_id, scope, owner, subject_id, key, text)
+            SELECT memory_id, scope, owner, subject_id, key, text
+            FROM conversation_memory_items
+            WHERE redaction_state!='redacted'
+            """
+        )
+        message_count = int(con.execute("SELECT COUNT(*) FROM conversation_messages_fts").fetchone()[0] or 0)
+        memory_count = int(con.execute("SELECT COUNT(*) FROM conversation_memory_fts").fetchone()[0] or 0)
+        con.commit()
+    return {
+        "schema": "adaos.conversation.search_index_rebuild.v1",
+        "ok": True,
+        "status": "rebuilt",
+        "counts": {"messages": message_count, "memory": memory_count},
+    }
+
+
+def search_index_health() -> dict[str, Any]:
+    if not ensure_schema():
+        return {"schema": "adaos.conversation.search_index_health.v1", "status": "unavailable", "fts_available": False}
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        if not _ensure_fts(con):
+            return {"schema": "adaos.conversation.search_index_health.v1", "status": "fts_unavailable", "fts_available": False}
+        base_messages = int(con.execute("SELECT COUNT(*) FROM conversation_messages WHERE redaction_state!='redacted'").fetchone()[0] or 0)
+        base_memory = int(con.execute("SELECT COUNT(*) FROM conversation_memory_items WHERE redaction_state!='redacted'").fetchone()[0] or 0)
+        indexed_messages = int(con.execute("SELECT COUNT(*) FROM conversation_messages_fts").fetchone()[0] or 0)
+        indexed_memory = int(con.execute("SELECT COUNT(*) FROM conversation_memory_fts").fetchone()[0] or 0)
+    stale = indexed_messages != base_messages or indexed_memory != base_memory
+    return {
+        "schema": "adaos.conversation.search_index_health.v1",
+        "status": "stale" if stale else "ok",
+        "fts_available": True,
+        "counts": {
+            "messages": {"base": base_messages, "indexed": indexed_messages},
+            "memory": {"base": base_memory, "indexed": indexed_memory},
+        },
+    }
 
 
 def _row_value(row: sqlite3.Row | dict[str, Any], key: str, default: Any = None) -> Any:
@@ -1133,6 +1295,17 @@ def append_message(
                     now,
                 ),
             )
+            _message_fts_upsert(
+                con,
+                message_id=message_id,
+                conversation_id=conversation_id,
+                thread_id=str(thread_id or "").strip() or None,
+                webspace_id=webspace_id,
+                channel_id=channel_id,
+                owner=owner,
+                role=role,
+                text=text,
+            )
             con.commit()
         except Exception:
             con.rollback()
@@ -1279,6 +1452,90 @@ def list_messages(
     return [_row_to_message(row) for row in rows]
 
 
+def search_messages(
+    query: str,
+    *,
+    conversation_id: str | None = None,
+    thread_id: str | None = None,
+    owner: str | None = None,
+    channel_id: str | None = None,
+    limit: int = 50,
+    include_redacted: bool = False,
+) -> list[dict[str, Any]]:
+    token = str(query or "").strip()
+    if not token or not ensure_schema():
+        return []
+    safe_limit = max(1, min(int(limit or 50), 200))
+    filters: list[str] = []
+    params: list[Any] = []
+    if conversation_id:
+        filters.append("m.conversation_id=?")
+        params.append(conversation_id)
+    if thread_id:
+        filters.append("m.thread_id=?")
+        params.append(thread_id)
+    if owner:
+        filters.append("m.owner=?")
+        params.append(owner)
+    if channel_id:
+        filters.append("m.channel_id=?")
+        params.append(channel_id)
+    if not include_redacted:
+        filters.append("m.redaction_state!='redacted'")
+    filter_sql = f"AND {' AND '.join(filters)}" if filters else ""
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        if _ensure_fts(con):
+            try:
+                rows = con.execute(
+                    f"""
+                    SELECT m.*, bm25(conversation_messages_fts) AS search_rank
+                    FROM conversation_messages_fts
+                    JOIN conversation_messages m ON m.message_id=conversation_messages_fts.message_id
+                    WHERE conversation_messages_fts MATCH ? {filter_sql}
+                    ORDER BY search_rank ASC, m.ts DESC
+                    LIMIT ?
+                    """,
+                    [_fts_query(token), *params, safe_limit],
+                ).fetchall()
+                results = [_row_to_message(row) for row in rows]
+                for index, item in enumerate(results):
+                    item["search"] = {"backend": "fts", "rank": float(rows[index]["search_rank"] or 0.0)}
+                return results
+            except sqlite3.Error:
+                pass
+        like_filters = ["m.text LIKE ?"]
+        like_params: list[Any] = [f"%{token}%"]
+        if conversation_id:
+            like_filters.append("m.conversation_id=?")
+            like_params.append(conversation_id)
+        if thread_id:
+            like_filters.append("m.thread_id=?")
+            like_params.append(thread_id)
+        if owner:
+            like_filters.append("m.owner=?")
+            like_params.append(owner)
+        if channel_id:
+            like_filters.append("m.channel_id=?")
+            like_params.append(channel_id)
+        if not include_redacted:
+            like_filters.append("m.redaction_state!='redacted'")
+        rows = con.execute(
+            f"""
+            SELECT m.*
+            FROM conversation_messages m
+            WHERE {' AND '.join(like_filters)}
+            ORDER BY m.ts DESC
+            LIMIT ?
+            """,
+            [*like_params, safe_limit],
+        ).fetchall()
+    results = [_row_to_message(row) for row in rows]
+    for item in results:
+        item["search"] = {"backend": "like", "rank": None}
+    return results
+
+
 def remember(
     *,
     scope: str,
@@ -1355,6 +1612,15 @@ def remember(
                 now,
             ),
         )
+        _memory_fts_upsert(
+            con,
+            memory_id=mid,
+            scope=scope,
+            owner=owner,
+            subject_id=subject_id,
+            key=key,
+            text=text,
+        )
         con.commit()
     return mid
 
@@ -1418,34 +1684,70 @@ def search_memory(
         )
     if not ensure_schema():
         return []
-    where = ["(text LIKE ? OR key LIKE ?)"]
-    params: list[Any] = [f"%{token}%", f"%{token}%"]
+    safe_limit = max(1, min(int(limit or 50), 200))
+    filters: list[str] = []
+    params: list[Any] = []
     if scope:
-        where.append("scope=?")
+        filters.append("m.scope=?")
         params.append(scope)
     if owner:
-        where.append("owner=?")
+        filters.append("m.owner=?")
         params.append(owner)
     if subject_id:
-        where.append("subject_id=?")
+        filters.append("m.subject_id=?")
         params.append(subject_id)
     if not include_redacted:
-        where.append("redaction_state!='redacted'")
-    params.append(max(1, min(int(limit or 50), 200)))
+        filters.append("m.redaction_state!='redacted'")
+    filter_sql = f"AND {' AND '.join(filters)}" if filters else ""
     with _sql().connect() as con:  # type: ignore[union-attr]
         con.row_factory = sqlite3.Row
+        if _ensure_fts(con):
+            try:
+                rows = con.execute(
+                    f"""
+                    SELECT m.*, bm25(conversation_memory_fts) AS search_rank
+                    FROM conversation_memory_fts
+                    JOIN conversation_memory_items m ON m.memory_id=conversation_memory_fts.memory_id
+                    WHERE conversation_memory_fts MATCH ? {filter_sql}
+                    ORDER BY search_rank ASC, m.updated_at DESC
+                    LIMIT ?
+                    """,
+                    [_fts_query(token), *params, safe_limit],
+                ).fetchall()
+                items = [_row_to_memory(row) for row in rows]
+                for index, item in enumerate(items):
+                    item["search"] = {"backend": "fts", "rank": float(rows[index]["search_rank"] or 0.0)}
+                return items
+            except sqlite3.Error:
+                pass
+        where = ["(m.text LIKE ? OR m.key LIKE ?)"]
+        like_params: list[Any] = [f"%{token}%", f"%{token}%"]
+        if scope:
+            where.append("m.scope=?")
+            like_params.append(scope)
+        if owner:
+            where.append("m.owner=?")
+            like_params.append(owner)
+        if subject_id:
+            where.append("m.subject_id=?")
+            like_params.append(subject_id)
+        if not include_redacted:
+            where.append("m.redaction_state!='redacted'")
         rows = con.execute(
             f"""
-            SELECT * FROM conversation_memory_items
+            SELECT m.* FROM conversation_memory_items m
             WHERE {' AND '.join(where)}
             ORDER BY
-                CASE WHEN key=? THEN 0 ELSE 1 END,
-                updated_at DESC
+                CASE WHEN m.key=? THEN 0 ELSE 1 END,
+                m.updated_at DESC
             LIMIT ?
             """,
-            [*params[:-1], token, params[-1]],
+            [*like_params, token, safe_limit],
         ).fetchall()
-    return [_row_to_memory(row) for row in rows]
+    items = [_row_to_memory(row) for row in rows]
+    for item in items:
+        item["search"] = {"backend": "like", "rank": None}
+    return items
 
 
 def forget_memory(

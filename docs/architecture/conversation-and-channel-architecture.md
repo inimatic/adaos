@@ -2053,8 +2053,12 @@ Important lacunae found during Phase 6 implementation:
 
 ### Phase 11. Memory and Retrieval Maturity
 
-- [ ] `[must]` Add FTS indexes for conversation messages and memory items with
-  index health diagnostics and rebuild status.
+- [x] `[must]` Add FTS indexes for conversation messages and memory items with
+  index health diagnostics and rebuild status. `conversation_store` now
+  creates/syncs FTS5 indexes when available, exposes
+  `search_index_health()`, `rebuild_search_indexes()`, `search_messages()`,
+  and FTS-first/fallback memory search, while context packets report search
+  index readiness.
 - [ ] `[must]` Add segment summaries for long conversations with source refs,
   retention/redaction awareness, and summary freshness diagnostics.
 - [ ] `[must]` Add memory provenance, conflict handling, confidence decay,
