@@ -6,7 +6,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from adaos.sdk.core.decorators import subscribe, tool
 
@@ -19,6 +19,7 @@ SESSIONS_KEY = "builder_skill.sessions"
 CURRENT_KEY = "builder_skill.current_session"
 MAX_SESSIONS = 50
 WORKBENCH_REFRESH_TOPIC = "builder.workbench.ensure_requested"
+PROMPT_IDE_SCENARIO_ID = "prompt_engineer_scenario"
 
 _FALLBACK_MEMORY: dict[str, Any] = {}
 
@@ -122,6 +123,15 @@ def _scenario_id_from_idea(idea: str) -> str:
 
 def _conversation_id(webspace_id: str) -> str:
     return f"conv.skill.{SKILL_ID}.default.{webspace_id or 'default'}"
+
+
+def _prompt_project_topic_id(session: Mapping[str, Any] | None = None, binding: Mapping[str, Any] | None = None) -> str:
+    source = session if isinstance(session, Mapping) else {}
+    fallback = binding if isinstance(binding, Mapping) else {}
+    scenario_id = str(source.get("scenario_id") or fallback.get("runtime_scenario_id") or "").strip()
+    if not scenario_id:
+        return ""
+    return f"prompt-project:scenario:{scenario_id}"
 
 
 def _builder_topic_ref(
@@ -237,6 +247,9 @@ def _chat_meta(
     meta.setdefault("dialog_channel_id", DIALOG_CHANNEL_ID)
     meta["conversation_id"] = _conversation_id(webspace_id)
     meta["conversation_owner"] = f"skill:{SKILL_ID}"
+    prompt_topic_id = _prompt_project_topic_id(session=session, binding=binding)
+    if prompt_topic_id:
+        meta.setdefault("conversation_topic_id", prompt_topic_id)
     meta.setdefault("active_agent_id", AGENT_ID)
     meta.setdefault("active_agent_label", AGENT_LABEL)
     meta.setdefault("active_agent_gender", "male")
@@ -445,6 +458,7 @@ async def _on_builder_pending_action_response(evt: Any) -> None:
         return
     patches = [dict(item) for item in session.get("patches", []) if isinstance(item, Mapping)]
     matched = False
+    matched_patch: dict[str, Any] | None = None
     for patch in patches:
         if patch_id and str(patch.get("id") or "") == patch_id:
             matched = True
@@ -457,6 +471,7 @@ async def _on_builder_pending_action_response(evt: Any) -> None:
         patch["review_response_id"] = pending_action_id or None
         if response_action_id == "approve":
             patch["status"] = "applied"
+        matched_patch = patch
         break
     if not matched:
         return
@@ -464,8 +479,22 @@ async def _on_builder_pending_action_response(evt: Any) -> None:
     if pending_action_id and str(session.get("pending_action_id") or "") == pending_action_id:
         session.pop("pending_action_id", None)
     session["user_summary"] = _draft_user_summary(session)
-    preview = _preview_state(session=session)
-    _write_webui(str(session.get("artifact_root") or ""), preview)
+    if (
+        matched_patch
+        and matched_patch.get("operation") == "llm_webui_transform"
+        and isinstance(session.get("preview_state"), Mapping)
+    ):
+        preview = copy.deepcopy(dict(session["preview_state"]))
+    else:
+        preview = _preview_state(session=session)
+    if (
+        matched_patch
+        and matched_patch.get("operation") == "llm_webui_transform"
+        and isinstance(session.get("webui_payload"), Mapping)
+    ):
+        _write_webui_payload(str(session.get("artifact_root") or ""), session["webui_payload"])
+    else:
+        _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
     _save_session(webspace_id, session)
     workbench = _ensure_workbench(webspace_id, session=session, preview_state=preview)
@@ -517,6 +546,24 @@ def _component_for_field(field: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ui_texts(session: Mapping[str, Any]) -> dict[str, str]:
+    if str(session.get("ui_locale") or "").strip().lower().startswith("en"):
+        return {
+            "default_title": "Prototype",
+            "input": "Input",
+            "add": "Add",
+            "list": "List",
+            "cards": "Cards",
+        }
+    return {
+        "default_title": "\u041f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+        "input": "\u0412\u0432\u043e\u0434",
+        "add": "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c",
+        "list": "\u0421\u043f\u0438\u0441\u043e\u043a",
+        "cards": "\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0438",
+    }
+
+
 def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
     filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
@@ -525,27 +572,28 @@ def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
     stored_mock_rows = session.get("mock_rows")
     mock_rows = [dict(item) for item in stored_mock_rows if isinstance(item, Mapping)] if isinstance(stored_mock_rows, list) else _mock_rows(fields)
     action_position = str(session.get("form_action_position") or "").strip().lower()
+    text = _ui_texts(session)
     ui = {
         "schema": "adaos.declarative_ui.v1",
         "id": str(session.get("scenario_id") or "prototype"),
         "type": "page",
-        "title": session.get("title") or "\u041f\u0440\u043e\u0442\u043e\u0442\u0438\u043f",
+        "title": session.get("title") or text["default_title"],
         "children": [
             {
                 "id": "editor",
                 "type": "section",
-                "label": "\u0412\u0432\u043e\u0434",
+                "label": text["input"],
                 "children": [_component_for_field(item) for item in fields],
                 "action_position": "top" if action_position == "top" else "bottom",
-                "actions": [{"id": "add_item", "type": "button", "label": "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c"}],
+                "actions": [{"id": "add_item", "type": "button", "label": text["add"]}],
             },
             {
                 "id": "items_table",
                 "type": "table",
-                "label": "\u0421\u043f\u0438\u0441\u043e\u043a",
+                "label": text["list"],
                 "binding": datasource_id,
                 "columns": table_columns,
-                "visible": True,
+                "visible": not bool(session.get("hide_table")),
             },
         ],
     }
@@ -554,7 +602,7 @@ def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
             {
                 "id": "items_cards",
                 "type": "card_list",
-                "label": "\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0438",
+                "label": text["cards"],
                 "binding": datasource_id,
                 "title": f"{{{{{fields[0]['id']}}}}}" if fields else "{{title}}",
                 "subtitle": f"{{{{{fields[1]['id']}}}}}" if len(fields) > 1 else "",
@@ -665,6 +713,21 @@ def _write_webui(artifact_root: str | None, preview_state: Mapping[str, Any]) ->
     _write_scenario_page_schema(root, preview_state)
 
 
+def _write_webui_payload(artifact_root: str | None, payload: Mapping[str, Any]) -> None:
+    if not artifact_root:
+        return
+    root = Path(artifact_root)
+    if not root.exists():
+        return
+    data = dict(payload)
+    preview_state = data.get("preview_state") if isinstance(data.get("preview_state"), Mapping) else {}
+    data.setdefault("schema", "adaos.webui.prototype.v1")
+    data.setdefault("generated_by", SKILL_ID)
+    (root / "webui.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if isinstance(preview_state, Mapping):
+        _write_scenario_page_schema(root, preview_state)
+
+
 def _write_scenario_manifest(root: Path, scenario: Mapping[str, Any], preview_state: Mapping[str, Any]) -> None:
     scenario_id = str(scenario.get("id") or preview_state.get("scenario_id") or preview_state.get("id") or root.name).strip() or root.name
     title = str(preview_state.get("title") or scenario.get("title") or scenario.get("name") or scenario_id).strip() or scenario_id
@@ -711,6 +774,13 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
         isinstance(child, Mapping) and str(child.get("type") or "") == "card_list"
         for child in (ui.get("children") if isinstance(ui.get("children"), list) else [])
     )
+    table_visible = True
+    for child in (ui.get("children") if isinstance(ui.get("children"), list) else []):
+        if isinstance(child, Mapping) and (
+            str(child.get("id") or "") == "items_table" or str(child.get("type") or "") == "table"
+        ):
+            table_visible = child.get("visible") is not False
+            break
     editor = next(
         (
             dict(child)
@@ -774,35 +844,36 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
                 "actions": [{"on": "click", "type": "updateState", "params": {state_key: "$event.id"}}],
             }
         )
-    widgets.append(
-        {
-            "id": "prototype-table",
-            "type": "ui.table",
-            "area": "main",
-            "title": "List",
-            "dataSource": {"kind": "static", "value": rows},
-            "inputs": {
-                "columns": [
-                    {
-                        "key": str(field.get("id") or f"field_{index}"),
-                        "label": field.get("label") or field.get("id") or f"Field {index + 1}",
-                        **({"kind": "boolean", "width": "72px"} if str(field.get("type") or "") == "boolean" else {}),
-                    }
-                    for index, field in enumerate(fields)
-                ],
-                "filters": [
-                    {
-                        "key": str(filter_obj.get("field_id") or ""),
-                        "stateKey": str(filter_obj.get("state_key") or f"builderFilter_{filter_obj.get('field_id')}"),
-                        "any": "all",
-                    }
-                    for filter_obj in filters
-                    if str(filter_obj.get("field_id") or "").strip()
-                ],
-                "emptyText": "No items yet",
+    if table_visible:
+        widgets.append(
+            {
+                "id": "prototype-table",
+                "type": "ui.table",
+                "area": "main",
+                "title": "List",
+                "dataSource": {"kind": "static", "value": rows},
+                "inputs": {
+                    "columns": [
+                        {
+                            "key": str(field.get("id") or f"field_{index}"),
+                            "label": field.get("label") or field.get("id") or f"Field {index + 1}",
+                            **({"kind": "boolean", "width": "72px"} if str(field.get("type") or "") == "boolean" else {}),
+                        }
+                        for index, field in enumerate(fields)
+                    ],
+                    "filters": [
+                        {
+                            "key": str(filter_obj.get("field_id") or ""),
+                            "stateKey": str(filter_obj.get("state_key") or f"builderFilter_{filter_obj.get('field_id')}"),
+                            "any": "all",
+                        }
+                        for filter_obj in filters
+                        if str(filter_obj.get("field_id") or "").strip()
+                    ],
+                    "emptyText": "No items yet",
+                },
             },
-        },
-    )
+        )
     if has_card_view:
         first = str(fields[0].get("id") if fields else "title")
         second = str(fields[1].get("id") if len(fields) > 1 else "")
@@ -1089,9 +1160,13 @@ def _field_type_for_id(field_id: str, label: str | None = None) -> str:
 
 
 def _default_label_for_field(field_id: str, fallback: str | None = None) -> str:
+    fallback_text = str(fallback or "").strip().lower()
+    if field_id == "done":
+        if any(token in fallback_text for token in ("complete", "execution", "done", "\u0438\u0441\u043f\u043e\u043b\u043d", "\u0432\u044b\u043f\u043e\u043b\u043d")):
+            return "\u0418\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u043e"
+        return "\u041a\u0443\u043f\u043b\u0435\u043d\u043e"
     labels = {
         "date": "\u0414\u0430\u0442\u0430",
-        "done": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e",
         "price": "\u0426\u0435\u043d\u0430",
         "unit": "\u041c\u0435\u0440\u0430",
         "availability": "\u041d\u0430\u043b\u0438\u0447\u0438\u0435",
@@ -1208,35 +1283,425 @@ def _date_mock_rows(fields: list[dict[str, Any]], existing_rows: Any = None) -> 
 
 
 def _mentions_date(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return "date" in lowered or "\u0434\u0430\u0442" in lowered
+    return _text_contains_any(text, ("date", "\u0434\u0430\u0442"))
+
+
+def _text_variants(text: str) -> list[str]:
+    raw = str(text or "")
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        lowered = str(value or "").lower()
+        if lowered and lowered not in seen:
+            seen.add(lowered)
+            variants.append(lowered)
+
+    add(raw)
+    for encoding in ("latin1", "cp1251"):
+        try:
+            add(raw.encode(encoding).decode("utf-8"))
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+    return variants
+
+
+def _text_contains_any(text: str, tokens: Iterable[str]) -> bool:
+    token_list = [str(token or "").lower() for token in tokens if str(token or "")]
+    if not token_list:
+        return False
+    return any(token in variant for variant in _text_variants(text) for token in token_list)
+
+
+def _text_contains_all_groups(text: str, *groups: Iterable[str]) -> bool:
+    normalized_groups = [
+        [str(token or "").lower() for token in group if str(token or "")]
+        for group in groups
+    ]
+    normalized_groups = [group for group in normalized_groups if group]
+    if not normalized_groups:
+        return False
+    for variant in _text_variants(text):
+        if all(any(token in variant for token in group) for group in normalized_groups):
+            return True
+    return False
 
 
 def _wants_add_button_above_form(text: str) -> bool:
-    lowered = str(text or "").lower()
-    mentions_button = "button" in lowered or "\u043a\u043d\u043e\u043f" in lowered
-    mentions_add = "add" in lowered or "\u0434\u043e\u0431\u0430\u0432" in lowered
-    mentions_top = "above" in lowered or "top" in lowered or "\u043d\u0430\u0434" in lowered or "\u0432\u0435\u0440\u0445" in lowered
-    mentions_form = "form" in lowered or "\u0444\u043e\u0440\u043c" in lowered
-    return mentions_button and mentions_add and mentions_top and mentions_form
+    return _text_contains_all_groups(
+        text,
+        ("button", "\u043a\u043d\u043e\u043f"),
+        ("add", "\u0434\u043e\u0431\u0430\u0432"),
+        ("above", "top", "\u043d\u0430\u0434", "\u0432\u0435\u0440\u0445"),
+        ("form", "\u0444\u043e\u0440\u043c"),
+    )
 
 
 def _wants_done_checkbox_first(text: str) -> bool:
-    lowered = str(text or "").lower()
-    mentions_done = "done" in lowered or "purchased" in lowered or "\u043a\u0443\u043f\u043b\u0435\u043d" in lowered
-    mentions_checkbox = "checkbox" in lowered or "check box" in lowered or "\u0447\u0435\u043a\u0431\u043e\u043a\u0441" in lowered
-    mentions_first_column = (
-        ("first" in lowered or "\u043f\u0435\u0440\u0432" in lowered)
-        and ("column" in lowered or "\u043a\u043e\u043b\u043e\u043d" in lowered)
+    mentions_done = _text_contains_any(text, ("done", "purchased", "\u043a\u0443\u043f\u043b\u0435\u043d"))
+    mentions_checkbox = _text_contains_any(text, ("checkbox", "check box", "\u0447\u0435\u043a\u0431\u043e\u043a\u0441"))
+    mentions_first_column = _text_contains_all_groups(
+        text,
+        ("first", "\u043f\u0435\u0440\u0432"),
+        ("column", "\u043a\u043e\u043b\u043e\u043d"),
     )
     return mentions_done and (mentions_checkbox or mentions_first_column)
 
 
 def _wants_date_values(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return _mentions_date(lowered) and any(
-        token in lowered for token in ("data", "value", "values", "fill", "\u0434\u0430\u043d\u043d", "\u0437\u043d\u0430\u0447\u0435\u043d", "\u0437\u0430\u043f\u043e\u043b\u043d")
+    return _mentions_date(text) and _text_contains_any(
+        text,
+        ("data", "value", "values", "fill", "\u0434\u0430\u043d\u043d", "\u0437\u043d\u0430\u0447\u0435\u043d", "\u0437\u0430\u043f\u043e\u043b\u043d"),
     )
+
+
+def _wants_card_view(text: str) -> bool:
+    return _text_contains_any(text, ("card", "cards", "\u043a\u0430\u0440\u0442\u043e\u0447", "\u043f\u043b\u0438\u0442\u043a"))
+
+
+def _wants_hide_list_or_table(text: str) -> bool:
+    mentions_remove = _text_contains_any(
+        text,
+        ("remove", "hide", "without", "\u0443\u0431\u0435\u0440", "\u0443\u0434\u0430\u043b", "\u0441\u043a\u0440\u043e\u0439", "\u0431\u0435\u0437"),
+    )
+    mentions_list = _text_contains_any(text, ("list", "table", "\u0441\u043f\u0438\u0441\u043e\u043a", "\u0442\u0430\u0431\u043b\u0438\u0446"))
+    mentions_only_cards = _text_contains_any(text, ("only", "\u0442\u043e\u043b\u044c\u043a")) and _wants_card_view(text)
+    return (mentions_remove and mentions_list) or mentions_only_cards
+
+
+def _wants_execution_checkbox(text: str) -> bool:
+    mentions_checkbox = _text_contains_any(text, ("checkbox", "check box", "\u0447\u0435\u043a\u0431\u043e\u043a\u0441", "\u0444\u043b\u0430\u0436\u043e\u043a"))
+    mentions_done = _text_contains_any(
+        text,
+        (
+            "done",
+            "complete",
+            "completed",
+            "execution",
+            "\u0438\u0441\u043f\u043e\u043b\u043d",
+            "\u0432\u044b\u043f\u043e\u043b\u043d",
+            "\u0433\u043e\u0442\u043e\u0432",
+            "\u043a\u0443\u043f\u043b\u0435\u043d",
+        )
+    )
+    return mentions_checkbox and mentions_done
+
+
+def _wants_english_ui(text: str) -> bool:
+    return _text_contains_any(text, ("english", "in english", "\u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a", "\u043d\u0430 \u0430\u043d\u0433\u043b"))
+
+
+def _english_title(value: str) -> str:
+    lowered = str(value or "").strip().lower()
+    if "\u043f\u043e\u043a\u0443\u043f" in lowered or "shopping" in lowered:
+        return "Shopping List"
+    if "\u0437\u0430\u0434\u0430\u0447" in lowered or "todo" in lowered:
+        return "Todo List"
+    if lowered:
+        return str(value).replace("_", " ").title()
+    return "Prototype"
+
+
+def _english_label(field_id: str, label: str | None = None) -> str:
+    token = f"{field_id} {label or ''}".strip().lower()
+    mapping = {
+        "item": "Item",
+        "product": "Product",
+        "title": "Title",
+        "name": "Name",
+        "quantity": "Quantity",
+        "unit": "Unit",
+        "price": "Price",
+        "date": "Date",
+        "category": "Category",
+        "availability": "Availability",
+        "done": "Done",
+        "notes": "Notes",
+        "status": "Status",
+        "owner": "Owner",
+    }
+    for key, value in mapping.items():
+        if key in token:
+            return value
+    if any(item in token for item in ("\u0442\u043e\u0432\u0430\u0440", "\u043f\u0440\u043e\u0434\u0443\u043a\u0442")):
+        return "Item"
+    if "\u043a\u043e\u043b" in token:
+        return "Quantity"
+    if "\u0446\u0435\u043d" in token:
+        return "Price"
+    if "\u0434\u0430\u0442" in token:
+        return "Date"
+    if "\u043a\u0430\u0442\u0435\u0433" in token:
+        return "Category"
+    if "\u043d\u0430\u043b\u0438\u0447" in token:
+        return "Availability"
+    if any(item in token for item in ("\u043a\u0443\u043f\u043b", "\u0438\u0441\u043f\u043e\u043b\u043d", "\u0432\u044b\u043f\u043e\u043b\u043d")):
+        return "Done"
+    fallback = str(label or field_id or "Field").strip()
+    return fallback.replace("_", " ").title()
+
+
+def _translate_session_to_english(session: dict[str, Any], fields: list[dict[str, Any]]) -> None:
+    session["ui_locale"] = "en"
+    session["title"] = _english_title(str(session.get("title") or session.get("scenario_id") or "Prototype"))
+    for field in fields:
+        field["label"] = _english_label(str(field.get("id") or ""), str(field.get("label") or ""))
+    session["fields"] = fields
+
+
+def _repo_root() -> Path:
+    cwd = Path.cwd()
+    if (cwd / "src" / "adaos" / "abi" / "webui.v1.schema.json").exists():
+        return cwd
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "src" / "adaos" / "abi" / "webui.v1.schema.json").exists():
+            return parent
+    return cwd
+
+
+def _load_webui_schema() -> dict[str, Any]:
+    path = _repo_root() / "src" / "adaos" / "abi" / "webui.v1.schema.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _current_webui_payload(session: Mapping[str, Any], preview_state: Mapping[str, Any]) -> dict[str, Any]:
+    artifact_root = str(session.get("artifact_root") or "").strip()
+    payload: dict[str, Any] = {}
+    if artifact_root:
+        path = Path(artifact_root) / "webui.json"
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+                if isinstance(raw, dict):
+                    payload = raw
+            except Exception:
+                payload = {}
+    payload.setdefault("schema", "adaos.webui.prototype.v1")
+    payload.setdefault("generated_by", SKILL_ID)
+    payload["preview_state"] = copy.deepcopy(dict(preview_state))
+    return payload
+
+
+def _balanced_json_object(text: str) -> str | None:
+    source = str(text or "")
+    for start, char in enumerate(source):
+        if char != "{":
+            continue
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(source)):
+            current = source[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == '"':
+                    in_string = False
+                continue
+            if current == '"':
+                in_string = True
+            elif current == "{":
+                depth += 1
+            elif current == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[start : index + 1]
+    return None
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    candidates = [raw]
+    for match in re.finditer(r"```(?:json)?\s*(.*?)```", raw, re.IGNORECASE | re.DOTALL):
+        candidates.insert(0, match.group(1).strip())
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        fragment = _balanced_json_object(candidate)
+        if fragment:
+            try:
+                parsed = json.loads(fragment)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+    raise ValueError("LLM response does not contain a JSON object")
+
+
+def _validate_webui_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    schema = _load_webui_schema()
+    if not schema:
+        return {"ok": True, "schema": "missing"}
+    try:
+        from jsonschema import Draft202012Validator
+
+        Draft202012Validator(schema).validate(dict(payload))
+        return {"ok": True, "schema": schema.get("$id") or "adaos.webui.v1"}
+    except Exception as exc:
+        return {"ok": False, "error": "webui_schema_validation_failed", "detail": f"{type(exc).__name__}: {exc}"}
+
+
+def _normalise_llm_webui_payload(
+    payload: Mapping[str, Any],
+    *,
+    previous_preview: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    data = dict(payload)
+    preview = data.get("preview_state") if isinstance(data.get("preview_state"), Mapping) else None
+    if preview is None and isinstance(data.get("current_ui"), Mapping):
+        preview = data
+        data = {"schema": "adaos.webui.prototype.v1", "generated_by": SKILL_ID, "preview_state": preview}
+    if not isinstance(preview, Mapping):
+        raise ValueError("LLM payload must contain preview_state")
+    preview_data = copy.deepcopy(dict(preview))
+    if not isinstance(preview_data.get("current_ui"), Mapping):
+        raise ValueError("preview_state.current_ui is required")
+    if not isinstance(preview_data.get("datasources"), list):
+        preview_data["datasources"] = copy.deepcopy(previous_preview.get("datasources") or [])
+    if not isinstance(preview_data.get("mock_data"), Mapping):
+        preview_data["mock_data"] = copy.deepcopy(previous_preview.get("mock_data") or {})
+    for key in ("session_id", "title", "version"):
+        if not preview_data.get(key) and previous_preview.get(key):
+            preview_data[key] = copy.deepcopy(previous_preview.get(key))
+    data.setdefault("schema", "adaos.webui.prototype.v1")
+    data.setdefault("generated_by", SKILL_ID)
+    data["preview_state"] = preview_data
+    return data, preview_data
+
+
+def _merge_session_from_preview(session: dict[str, Any], preview_state: Mapping[str, Any]) -> None:
+    title = str(preview_state.get("title") or "").strip()
+    if title:
+        session["title"] = title
+    datasources = preview_state.get("datasources") if isinstance(preview_state.get("datasources"), list) else []
+    datasource = datasources[0] if datasources and isinstance(datasources[0], Mapping) else {}
+    if datasource:
+        datasource_id = str(datasource.get("id") or "").strip()
+        if datasource_id:
+            session["datasource_id"] = datasource_id
+        fields = [dict(item) for item in datasource.get("fields", []) if isinstance(item, Mapping)]
+        if fields:
+            session["fields"] = fields
+    mock_data = preview_state.get("mock_data") if isinstance(preview_state.get("mock_data"), Mapping) else {}
+    datasource_id = str(session.get("datasource_id") or "items")
+    rows = mock_data.get(datasource_id)
+    if isinstance(rows, list):
+        session["mock_rows"] = [dict(item) for item in rows if isinstance(item, Mapping)]
+    filters = preview_state.get("filters") if isinstance(preview_state.get("filters"), list) else None
+    if filters is not None:
+        session["filters"] = [dict(item) for item in filters if isinstance(item, Mapping)]
+    ui = preview_state.get("current_ui") if isinstance(preview_state.get("current_ui"), Mapping) else {}
+    children = ui.get("children") if isinstance(ui.get("children"), list) else []
+    session["card_view"] = any(
+        isinstance(child, Mapping) and str(child.get("type") or "") == "card_list" and child.get("visible") is not False
+        for child in children
+    )
+    table_children = [
+        child
+        for child in children
+        if isinstance(child, Mapping) and (str(child.get("type") or "") == "table" or str(child.get("id") or "") == "items_table")
+    ]
+    session["hide_table"] = bool(
+        (table_children and table_children[0].get("visible") is False)
+        or (not table_children and session.get("card_view"))
+    )
+    editor = next(
+        (
+            child
+            for child in children
+            if isinstance(child, Mapping) and str(child.get("id") or "") == "editor"
+        ),
+        {},
+    )
+    action_position = str(editor.get("action_position") or preview_state.get("form_action_position") or "").strip().lower() if isinstance(editor, Mapping) else ""
+    if action_position:
+        session["form_action_position"] = "top" if action_position == "top" else "bottom"
+
+
+def _apply_llm_webui_transform(
+    *,
+    session: Mapping[str, Any],
+    instruction: str,
+    preview_state: Mapping[str, Any],
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    current_payload = _current_webui_payload(session, preview_state)
+    schema = _load_webui_schema()
+    history = [
+        {
+            "operation": str(item.get("operation") or ""),
+            "summary": str(item.get("summary") or ""),
+            "status": str(item.get("status") or ""),
+        }
+        for item in (session.get("patches") if isinstance(session.get("patches"), list) else [])[-8:]
+        if isinstance(item, Mapping)
+    ]
+    system_prompt = (
+        "You are AdaOS Builder. Transform the current prototype UI according to the user's instruction. "
+        "Return only one JSON object. The JSON must keep schema='adaos.webui.prototype.v1' and must contain preview_state. "
+        "preview_state.current_ui is the immediate Builder preview contract; scenario.json will be regenerated from it. "
+        "Use the supplied adaos.webui.v1 schema as the outer webui.json compatibility contract. "
+        "Do not include markdown, explanations, code fences, or unsafe side effects."
+    )
+    user_prompt = json.dumps(
+        {
+            "instruction": instruction,
+            "scenario_id": session.get("scenario_id"),
+            "title": session.get("title"),
+            "current_webui_json": current_payload,
+            "recent_patch_history": history,
+            "webui_v1_schema": schema,
+            "required_output_shape": {
+                "schema": "adaos.webui.prototype.v1",
+                "generated_by": SKILL_ID,
+                "preview_state": {
+                    "title": "string",
+                    "current_ui": "object",
+                    "datasources": "array",
+                    "mock_data": "object",
+                    "filters": "array optional",
+                    "form_action_position": "top|bottom optional",
+                },
+                "comment": "short text optional",
+            },
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    try:
+        from adaos.sdk.llm.llm_client import send_response
+
+        response = send_response(
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0,
+            max_tokens=6000,
+            timeout=75,
+        )
+        output_text = str(response.get("output_text") or "")
+        parsed = _extract_json_object(output_text)
+        payload, preview = _normalise_llm_webui_payload(parsed, previous_preview=preview_state)
+        validation = _validate_webui_payload(payload)
+        if not validation.get("ok"):
+            return validation
+        return {
+            "ok": True,
+            "payload": payload,
+            "preview_state": preview,
+            "comment": str(parsed.get("comment") or parsed.get("summary") or "").strip(),
+            "validation": validation,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": "llm_webui_transform_failed", "detail": f"{type(exc).__name__}: {exc}"}
 
 
 def _workbench_service():
@@ -1253,6 +1718,48 @@ def _request_workbench_refresh(payload: Mapping[str, Any]) -> dict[str, Any]:
         return {"ok": True, "topic": WORKBENCH_REFRESH_TOPIC}
     except Exception as exc:
         return {"ok": False, "topic": WORKBENCH_REFRESH_TOPIC, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _publish_prompt_project_selection(
+    webspace_id: str,
+    *,
+    session: Mapping[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    scenario_id = str(session.get("scenario_id") or "").strip()
+    if not scenario_id:
+        return {"ok": False, "error": "scenario_id_missing"}
+    payload_base = {
+        "source_webspace_id": webspace_id,
+        "webspace_id": webspace_id,
+        "object_type": "scenario",
+        "object_id": scenario_id,
+        "scenario_id": scenario_id,
+        "draft_id": str(session.get("draft_id") or "").strip() or None,
+        "reason": reason,
+    }
+    try:
+        from adaos.sdk.data import events
+
+        events.publish(
+            "scenario.workflow.set_state",
+            {
+                "state": "tz",
+                **payload_base,
+                "scenario_id": PROMPT_IDE_SCENARIO_ID,
+                "selected_scenario_id": scenario_id,
+            },
+            source=SKILL_ID,
+        )
+        events.publish("prompt.project.changed", payload_base, source=SKILL_ID)
+        events.publish("builder.preview.selected", payload_base, source=SKILL_ID)
+        return {
+            "ok": True,
+            "published": ["scenario.workflow.set_state", "prompt.project.changed", "builder.preview.selected"],
+            "payload": payload_base,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": "prompt_project_selection_publish_failed", "detail": f"{type(exc).__name__}: {exc}"}
 
 
 def _active_draft_id(session: Mapping[str, Any] | None) -> str | None:
@@ -1792,6 +2299,11 @@ def _handle_project_switch_command(
     selected["topic_id"] = str(topic.get("topic_id") or "").strip() or None
     selected["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
     _save_session(webspace_id, selected)
+    prompt_selection = _publish_prompt_project_selection(
+        webspace_id,
+        session=selected,
+        reason="builder_project_switched",
+    )
     summary = _session_summary(selected)
     message = f"{AGENT_LABEL}: \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u043b\u0441\u044f \u043d\u0430 {summary.get('title')} ({summary.get('scenario_id') or summary.get('draft_id')})."
     return _builder_command_response(
@@ -1803,7 +2315,7 @@ def _handle_project_switch_command(
         binding=binding,
         topic_ref=topic,
         _meta=_meta,
-        extra={"project": summary, "workbench": workbench},
+        extra={"project": summary, "workbench": workbench, "prompt_selection": prompt_selection},
     )
 
 
@@ -2109,6 +2621,11 @@ def create_scenario_draft(
     session["topic_id"] = str(topic.get("topic_id") or "").strip() or None
     session["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
     _save_session(ws, session)
+    prompt_selection = _publish_prompt_project_selection(
+        ws,
+        session=session,
+        reason="builder_project_created",
+    )
     message = _message_created(session)
     if session.get("draft_error"):
         message += f" \u041f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u0435: dev draft \u043d\u0435 \u0441\u043e\u0437\u0434\u0430\u043d ({session['draft_error']})."
@@ -2131,6 +2648,7 @@ def create_scenario_draft(
         "artifact_root": session.get("artifact_root"),
         "preview_state": preview,
         "workbench": workbench,
+        "prompt_selection": prompt_selection,
         "topic": {k: v for k, v in topic.items() if k != "stored"},
         "pending_action": pending_action,
         "message": message,
@@ -2172,10 +2690,39 @@ def update_current_scenario(
     }
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
     filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
+    if _wants_card_view(text):
+        session["card_view"] = True
+        session["hide_table"] = True
+        patch["operation"] = "change_view_representation"
+        patch["diff"] = {"card_view": True, "hide_table": True}
+        lowered = ""
+    elif _wants_hide_list_or_table(text):
+        session["hide_table"] = True
+        if _wants_card_view(text) or session.get("card_view"):
+            session["card_view"] = True
+        patch["operation"] = "change_view_representation"
+        patch["diff"] = {"card_view": bool(session.get("card_view")), "hide_table": True}
+        lowered = ""
+    elif _wants_execution_checkbox(text):
+        label = "\u0418\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u043e" if _text_contains_any(
+            text,
+            ("\u0438\u0441\u043f\u043e\u043b\u043d", "\u0432\u044b\u043f\u043e\u043b\u043d", "complete", "execution"),
+        ) else "\u041a\u0443\u043f\u043b\u0435\u043d\u043e"
+        fields, field, added = _ensure_field(fields, label=label, field_id="done", field_type="boolean")
+        session["fields"] = fields
+        patch["operation"] = "add_field" if added else "ensure_field"
+        patch["diff"] = {"field": field, "added": added, "component": "checkbox"}
+        lowered = ""
+    elif _wants_english_ui(text):
+        _translate_session_to_english(session, fields)
+        patch["operation"] = "translate_ui"
+        patch["diff"] = {"locale": "en", "fields": [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]}
+        lowered = ""
     if any(token in lowered for token in ("карточ", "card")):
         session["card_view"] = True
         patch["operation"] = "change_view_representation"
-        patch["diff"] = {"card_view": True}
+        session["hide_table"] = True
+        patch["diff"] = {"card_view": True, "hide_table": True}
     elif any(token in lowered for token in ("убери", "удали", "remove")):
         label = _extract_field_label(text) or text.rsplit(" ", 1)[-1]
         fid = _field_id(label)
@@ -2267,7 +2814,7 @@ def update_current_scenario(
         patch["operation"] = "update_mock_data"
         patch["diff"] = {"datasource_id": session.get("datasource_id") or "items", "rows": rows}
     else:
-        label = _extract_field_label(text) or ("\u0426\u0435\u043d\u0430" if "\u0446\u0435\u043d" in lowered or "price" in lowered else None)
+        label = _extract_field_label(text) or ("\u0426\u0435\u043d\u0430" if _text_contains_any(text, ("\u0446\u0435\u043d", "price")) else None)
         if label:
             fid = _field_id(label)
             if not any(str(item.get("id")) == fid for item in fields):
@@ -2276,6 +2823,24 @@ def update_current_scenario(
                 session["fields"] = fields
                 patch["operation"] = "add_field"
                 patch["diff"] = {"field": field}
+    if patch["operation"] == "noop":
+        base_preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
+        llm_patch = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
+        if llm_patch.get("ok"):
+            preview_from_llm = llm_patch.get("preview_state") if isinstance(llm_patch.get("preview_state"), Mapping) else base_preview
+            payload_from_llm = llm_patch.get("payload") if isinstance(llm_patch.get("payload"), Mapping) else None
+            patch["operation"] = "llm_webui_transform"
+            patch["diff"] = {
+                "schema_valid": True,
+                "comment": str(llm_patch.get("comment") or ""),
+                "validation": dict(llm_patch.get("validation") or {}) if isinstance(llm_patch.get("validation"), Mapping) else {},
+            }
+            session["preview_state"] = copy.deepcopy(dict(preview_from_llm))
+            if payload_from_llm is not None:
+                session["webui_payload"] = copy.deepcopy(dict(payload_from_llm))
+            _merge_session_from_preview(session, preview_from_llm)
+        else:
+            patch["diff"] = {"llm_fallback": llm_patch}
     if patch["operation"] == "noop":
         if not isinstance(session.get("user_summary"), Mapping):
             session["user_summary"] = _draft_user_summary(session)
@@ -2306,8 +2871,14 @@ def update_current_scenario(
     session.setdefault("patches", []).append(patch)
     session["version"] = f"v{len(session.get('patches') or []) + 1}"
     session["user_summary"] = _draft_user_summary(session)
-    preview = _preview_state(session=session)
-    _write_webui(str(session.get("artifact_root") or ""), preview)
+    if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("preview_state"), Mapping):
+        preview = copy.deepcopy(dict(session["preview_state"]))
+    else:
+        preview = _preview_state(session=session)
+    if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("webui_payload"), Mapping):
+        _write_webui_payload(str(session.get("artifact_root") or ""), session["webui_payload"])
+    else:
+        _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
     workbench = _ensure_workbench(ws, session=session, preview_state=preview)
     binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else binding
@@ -2316,6 +2887,11 @@ def update_current_scenario(
     session["topic_id"] = str(topic.get("topic_id") or "").strip() or None
     session["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
     _save_session(ws, session)
+    prompt_selection = _publish_prompt_project_selection(
+        ws,
+        session=session,
+        reason="builder_project_updated",
+    )
     pending_action = _publish_review_pending_action(
         webspace_id=ws,
         session=session,
@@ -2349,6 +2925,7 @@ def update_current_scenario(
         "patch": patch,
         "preview_state": preview,
         "workbench": workbench,
+        "prompt_selection": prompt_selection,
         "topic": {k: v for k, v in topic.items() if k != "stored"},
         "pending_action": pending_action,
         "message": message,

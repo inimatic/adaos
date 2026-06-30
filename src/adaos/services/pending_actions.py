@@ -635,7 +635,27 @@ def _respond_in_doc(
     by_id: dict[str, dict[str, Any]] = projection["by_id"]
     action = _mapping(by_id.get(action_id))
     if not action:
-        raise KeyError(f"pending action not found: {action_id}")
+        now = _now_ts()
+        snapshot = _build_projection(projection, updated_at=now)
+        response = {
+            "response_action_id": response_action_id,
+            "responder": _normalize_actor(responder or {}, ctx=ctx, default_type="user"),
+            "payload": _mapping(response_payload),
+            "responded_at": now,
+            "stale": True,
+        }
+        if idempotency_key:
+            response["idempotency_key"] = idempotency_key
+        stale_action = {
+            "id": action_id,
+            "status": "responded",
+            "stale": True,
+            "webspace_id": "",
+            "updated_at": now,
+            "finished_at": now,
+            "response": response,
+        }
+        return stale_action, snapshot, response, True
     status = _text(action.get("status")) or "pending"
     if status == "responded" and _same_terminal_response(
         action,

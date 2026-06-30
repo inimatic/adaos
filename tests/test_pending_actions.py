@@ -179,6 +179,23 @@ def test_response_marks_action_terminal_and_routes_once(pending_action_docs) -> 
     assert topics.count("nlp.teacher.candidate.confirmation.response") == 1
 
 
+def test_response_to_stale_missing_action_is_idempotent(pending_action_docs) -> None:
+    ctx = _make_ctx()
+
+    result = pending_actions.respond_pending_action(
+        "pa.missing",
+        "approve",
+        ctx=ctx,
+        webspace_id="default",
+    )
+
+    assert result["duplicate"] is True
+    assert result["terminal"] is True
+    assert result["action"]["stale"] is True
+    assert result["response"]["stale"] is True
+    assert [event.type for event in ctx.bus.events] == []
+
+
 def test_non_terminal_test_action_keeps_pending_action_active(pending_action_docs) -> None:
     ctx = _make_ctx()
     action = _publish(ctx)

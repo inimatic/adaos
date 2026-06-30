@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 from pathlib import Path
 
 import yaml
@@ -166,6 +167,146 @@ def test_update_current_scenario_adds_card_view(monkeypatch, tmp_path) -> None:
     assert result["ok"] is True
     assert result["patch"]["operation"] == "change_view_representation"
     assert any(item["type"] == "card_list" for item in result["preview_state"]["current_ui"]["children"])
+
+
+def test_card_view_hides_table_in_generated_page_schema(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "todo_cards"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"todo_cards","version":"0.1.0","name":"todo_cards","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": "draft.todo.cards"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-cards-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-cards")
+    result = skill.update_current_scenario("Покажи список карточками", webspace_id="builder-cards")
+
+    assert result["patch"]["diff"]["hide_table"] is True
+    page = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    widgets = page["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    assert any(item["id"] == "prototype-cards" for item in widgets)
+    assert not any(item["id"] == "prototype-table" for item in widgets)
+
+
+def test_update_current_scenario_adds_execution_checkbox(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "todo_checkbox"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            return {"ok": True, "draft": {"draft_id": "draft.todo.checkbox"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-checkbox-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-checkbox")
+    result = skill.update_current_scenario("Добавь чекбокс исполнения", webspace_id="builder-checkbox")
+
+    assert result["patch"]["operation"] == "add_field"
+    field = next(item for item in result["preview_state"]["datasources"][0]["fields"] if item["id"] == "done")
+    assert field["type"] == "boolean"
+    assert field["label"] == "\u0418\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u043e"
+
+
+def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "llm_fallback"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"llm_fallback","version":"0.1.0","name":"llm_fallback","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": "draft.llm"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-llm-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+
+    created = skill.create_scenario_draft("create todo list", webspace_id="builder-llm")
+    preview = dict(created["preview_state"])
+    preview["title"] = "English Todo"
+    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    monkeypatch.setattr(
+        skill,
+        "_apply_llm_webui_transform",
+        lambda **_kwargs: {"ok": True, "payload": payload, "preview_state": preview, "validation": {"ok": True}},
+    )
+
+    result = skill.update_current_scenario("Напиши текст на английском языке", webspace_id="builder-llm")
+
+    assert result["patch"]["operation"] == "translate_ui"
+
+    result = skill.update_current_scenario("Сделай более компактный ввод", webspace_id="builder-llm")
+
+    assert result["patch"]["operation"] == "llm_webui_transform"
+    assert result["preview_state"]["title"] == "English Todo"
+    saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
+    assert saved["preview_state"]["title"] == "English Todo"
+
+
+def test_chat_meta_uses_prompt_project_topic_for_selected_scenario() -> None:
+    skill = _load_module()
+
+    meta = skill._chat_meta(
+        None,
+        webspace_id="desktop",
+        session={"scenario_id": "todo_list_5b9319fa"},
+        binding={"runtime_scenario_id": "todo_list_5b9319fa"},
+    )
+
+    assert meta["conversation_topic_id"] == "prompt-project:scenario:todo_list_5b9319fa"
 
 
 def test_chat_first_idea_creates_preview_and_accepts_correction(monkeypatch, tmp_path) -> None:
