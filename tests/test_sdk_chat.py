@@ -100,3 +100,48 @@ def test_response_envelope_materializes_chat_and_speech() -> None:
     assert say_events[0].payload["text"] == "Speak this"
     projection = conversation_store.list_projection("conv.envelope")
     assert projection["messages"][0]["text"] == "Envelope reply"
+
+
+def test_response_planner_infers_structured_targets() -> None:
+    envelope = conversation_response.normalize_response_envelope(
+        {
+            "content": [
+                {"type": "text", "text": "Review the draft"},
+                {"type": "card", "data": {"title": "Draft"}},
+                {"type": "pending_action", "data": {"id": "pa.1"}},
+            ],
+            "speech_text": "Review the draft",
+            "pending_action": {"id": "pa.1"},
+        },
+        conversation_id="conv.plan",
+        meta={"response_policy": "structure_inferred"},
+    )
+
+    assert envelope["render_targets"] == ("text_tail", "speech_text", "card", "pending_action")
+    assert envelope["response_plan"]["schema"] == "adaos.conversation.response_plan.v1"
+    assert "structured_card_content" in envelope["response_plan"]["reason"]
+    assert "pending_action_content" in envelope["response_plan"]["reason"]
+
+
+def test_response_planner_adds_speech_for_voice_policy() -> None:
+    bus = LocalEventBus()
+    chat_events: list[Event] = []
+    say_events: list[Event] = []
+    bus.subscribe("io.out.chat.append", lambda ev: chat_events.append(ev))
+    bus.subscribe("io.out.say", lambda ev: say_events.append(ev))
+
+    result = conversation_response.materialize_response(
+        {"content": [{"type": "text", "text": "Need one detail"}]},
+        webspace_id="desktop",
+        conversation_id="conv.voice.plan",
+        channel_id="conversational",
+        owner="skill:test",
+        bus=bus,
+        route_id="voice_chat",
+        meta={"response_policy": "ask"},
+    )
+
+    assert result["render_targets"] == ("text_tail", "speech_text")
+    assert result["envelope"]["response_plan"]["reason"] == "text_content+voice_policy:ask"
+    assert chat_events and chat_events[0].payload["text"] == "Need one detail"
+    assert say_events and say_events[0].payload["text"] == "Need one detail"

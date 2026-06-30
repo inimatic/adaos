@@ -1863,9 +1863,12 @@ depth across several phases.
   `voice_chat_skill.handle_text` into conversation owner/surface policies.
 - [ ] `[should]` Add explicit fallback when a surface or owning skill is
   unavailable.
-- [ ] `[should]` Add response-planning rules for text vs speech vs card vs
+- [x] `[should]` Add response-planning rules for text vs speech vs card vs
   Pending Action, so skills do not choose transport-specific rendering by
-  default.
+  default. `conversation_response.plan_response_targets(...)` now infers
+  `text_tail`, `speech_text`, `card`, and `pending_action` targets from the
+  response envelope, voice policy, and structured content, and stores the
+  resulting `response_plan` in the materialized envelope.
 - [ ] `[could]` Add operator-visible policy inspection for one conversation:
   owner, channel, retrieval policy, memory scopes, and last dispatch.
 

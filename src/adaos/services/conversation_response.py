@@ -10,6 +10,7 @@ from adaos.services import conversation_store
 
 
 DEFAULT_RENDER_TARGETS = ("text_tail",)
+CARD_CONTENT_TYPES = {"card", "card_list", "table", "form", "webui", "builder_evidence"}
 
 
 def materialize_response(
@@ -35,7 +36,7 @@ def materialize_response(
         response,
         conversation_id=conversation_id,
         request_id=request_id,
-        meta=meta,
+        meta={**dict(meta or {}), "route_id": route_id, "dialog_channel_id": channel_id},
     )
     text = _envelope_text(envelope)
     speech_text = str(envelope.get("speech_text") or text or "").strip()
@@ -217,9 +218,64 @@ def normalize_response_envelope(
     if request_id and not value.get("request_id"):
         value["request_id"] = request_id
     value["content"] = _content_parts(value.get("content"))
-    value["render_targets"] = _targets(value.get("render_targets"))
     value["meta"] = merged_meta
+    response_plan = plan_response_targets(value, route_id=str(merged_meta.get("route_id") or ""))
+    value["render_targets"] = tuple(response_plan["targets"])
+    value["response_plan"] = response_plan
     return value
+
+
+def plan_response_targets(
+    response: Mapping[str, Any],
+    *,
+    route_id: str = "",
+    channel_id: str = "",
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    envelope = dict(response or {})
+    merged_meta = {
+        **dict(meta or {}),
+        **dict(envelope.get("meta") if isinstance(envelope.get("meta"), Mapping) else {}),
+    }
+    explicit = _targets_or_none(envelope.get("render_targets"))
+    if explicit is not None:
+        return {
+            "schema": "adaos.conversation.response_plan.v1",
+            "targets": list(explicit),
+            "reason": "explicit_render_targets",
+            "policy": str(merged_meta.get("response_policy") or "explicit"),
+        }
+    content = envelope.get("content")
+    parts = _content_parts(content)
+    text = _envelope_text({"content": parts})
+    targets: list[str] = []
+    reasons: list[str] = []
+    if text:
+        targets.append("text_tail")
+        reasons.append("text_content")
+    if str(envelope.get("speech_text") or "").strip() or str(merged_meta.get("speech_text") or "").strip():
+        targets.append("speech_text")
+        reasons.append("speech_text_present")
+    elif str(route_id or channel_id or merged_meta.get("route_id") or "").strip() == "voice_chat" and text:
+        policy = str(merged_meta.get("response_policy") or "").strip()
+        if policy in {"speech_text_first", "voice_reply", "ask"}:
+            targets.append("speech_text")
+            reasons.append(f"voice_policy:{policy}")
+    if any(str(part.get("type") or "").strip() in CARD_CONTENT_TYPES for part in parts):
+        targets.append("card")
+        reasons.append("structured_card_content")
+    if isinstance(envelope.get("pending_action"), Mapping) or any(str(part.get("type") or "").strip() == "pending_action" for part in parts):
+        targets.append("pending_action")
+        reasons.append("pending_action_content")
+    if not targets:
+        targets.extend(DEFAULT_RENDER_TARGETS)
+        reasons.append("default_text_tail")
+    return {
+        "schema": "adaos.conversation.response_plan.v1",
+        "targets": list(dict.fromkeys(targets)),
+        "reason": "+".join(reasons),
+        "policy": str(merged_meta.get("response_policy") or "structure_inferred"),
+    }
 
 
 def _tool_result_response(result: Any) -> Any | None:
@@ -364,12 +420,18 @@ def _envelope_text(envelope: Mapping[str, Any]) -> str:
 
 
 def _targets(value: Any) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return (value,)
-    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
-        return DEFAULT_RENDER_TARGETS
-    targets = tuple(str(item or "").strip() for item in value if str(item or "").strip())
+    targets = _targets_or_none(value)
     return targets or DEFAULT_RENDER_TARGETS
+
+
+def _targets_or_none(value: Any) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        token = value.strip()
+        return (token,) if token else None
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return None
+    targets = tuple(str(item or "").strip() for item in value if str(item or "").strip())
+    return targets or None
 
 
 def _as_mapping(value: Any) -> dict[str, Any] | None:
