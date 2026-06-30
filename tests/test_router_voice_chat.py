@@ -2151,7 +2151,7 @@ async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(m
         )
     )
 
-    await bus.wait_for_idle(timeout=1.0)
+    await bus.wait_for_idle(timeout=2.0)
     await _drain_voice_chat_persist(router)
 
     state = dialog_runtime.get_active_channel(webspace_id)
@@ -2161,6 +2161,11 @@ async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(m
     data = doc.get_map("data")
     assert data["dialog"]["active_channel_id"] == "conversational"
     assert data["dialog"]["active_agent"]["label"] == "Арсений"
+    visible_tail = data["dialog"]["visible_tail"]
+    assert visible_tail["conversation_id"] == conversation_id
+    assert visible_tail["recovery"]["recovered"] is True
+    assert visible_tail["recovery"]["reason"] == "empty_projection"
+    assert visible_tail["messages"][0]["text"] == "turn 1"
     assert seen_stream
     stream = seen_stream[-1].payload["data"]
     assert stream["conversation_id"] == conversation_id

@@ -1707,8 +1707,11 @@ depth across several phases.
   `process_segment_summary_jobs(...)`, and `segment_summary_job_health(...)`
   provide durable queued/running/completed/failed state, bounded queue depth,
   retry attempts, and retrieval-health degradation reasons.
-- [ ] `[should]` Add projection recovery from node store when WebIO/Yjs tail is
-  empty or stale.
+- [x] `[should]` Add projection recovery from node store when WebIO/Yjs tail is
+  empty or stale. `conversation_store.recover_projection_from_store(...)`
+  detects empty, mismatched, and stale visible-tail projections, restores from
+  the canonical ledger, and annotates `data.dialog.visible_tail.recovery` with
+  the recovery reason/source for diagnostics.
 - [ ] `[could]` Add optional embedding queue and vector-index adapter behind a
   feature flag.
 

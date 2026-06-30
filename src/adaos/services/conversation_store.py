@@ -1918,6 +1918,101 @@ def list_projection(
     }
 
 
+def recover_projection_from_store(
+    current_projection: Mapping[str, Any] | None,
+    *,
+    conversation_id: str,
+    thread_id: str | None = None,
+    limit: int = 8,
+    max_items: int = 200,
+) -> dict[str, Any]:
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        raise ValueError("conversation_id is required")
+    current = dict(current_projection or {}) if isinstance(current_projection, Mapping) else {}
+    store_projection = list_projection(cid, thread_id=thread_id, limit=limit, max_items=max_items)
+    store_messages = [dict(item) for item in store_projection.get("messages") or [] if isinstance(item, Mapping)]
+    current_messages = [dict(item) for item in current.get("messages") or [] if isinstance(item, Mapping)]
+    reason = _projection_recovery_reason(
+        current=current,
+        current_messages=current_messages,
+        store=store_projection,
+        store_messages=store_messages,
+        conversation_id=cid,
+        thread_id=str(thread_id or "").strip() or None,
+    )
+    if reason and store_messages:
+        recovered = dict(store_projection)
+        recovered["conversation_id"] = cid
+        if thread_id:
+            recovered["thread_id"] = str(thread_id).strip()
+        recovered["recovery"] = {
+            "schema": "adaos.conversation.projection_recovery.v1",
+            "recovered": True,
+            "reason": reason,
+            "source": "node_store",
+            "previous_message_count": len(current_messages),
+            "previous_total_message_count": _projection_int(current.get("total_message_count"), len(current_messages)),
+            "store_total_message_count": _projection_int(store_projection.get("total_message_count"), len(store_messages)),
+        }
+        return recovered
+    selected = dict(current) if current_messages else dict(store_projection)
+    selected["conversation_id"] = cid
+    if thread_id:
+        selected["thread_id"] = str(thread_id).strip()
+    selected.setdefault("messages", current_messages if current_messages else store_messages)
+    selected.setdefault("has_more_before", bool(store_projection.get("has_more_before")))
+    selected.setdefault("before_cursor", str(store_projection.get("before_cursor") or ""))
+    selected.setdefault("total_message_count", _projection_int(store_projection.get("total_message_count"), len(selected["messages"])))
+    selected["recovery"] = {
+        "schema": "adaos.conversation.projection_recovery.v1",
+        "recovered": False,
+        "reason": "current_projection_usable" if current_messages else "store_projection_empty",
+        "source": "current_projection" if current_messages else "node_store",
+        "store_total_message_count": _projection_int(store_projection.get("total_message_count"), len(store_messages)),
+    }
+    return selected
+
+
+def _projection_recovery_reason(
+    *,
+    current: Mapping[str, Any],
+    current_messages: list[dict[str, Any]],
+    store: Mapping[str, Any],
+    store_messages: list[dict[str, Any]],
+    conversation_id: str,
+    thread_id: str | None,
+) -> str:
+    if not store_messages:
+        return ""
+    current_conversation_id = str(current.get("conversation_id") or "").strip()
+    if current_conversation_id and current_conversation_id != conversation_id:
+        return "conversation_mismatch"
+    current_thread_id = str(current.get("thread_id") or current.get("conversation_topic_id") or "").strip()
+    if thread_id and current_thread_id and current_thread_id != thread_id:
+        return "thread_mismatch"
+    if not current_messages:
+        return "empty_projection"
+    current_total = _projection_int(current.get("total_message_count"), len(current_messages))
+    store_total = _projection_int(store.get("total_message_count"), len(store_messages))
+    if store_total > current_total:
+        return "stale_total"
+    if _projection_tail_seq(store_messages) > _projection_tail_seq(current_messages):
+        return "stale_tail"
+    return ""
+
+
+def _projection_tail_seq(messages: list[dict[str, Any]]) -> int:
+    return max((_projection_int(item.get("seq"), 0) for item in messages), default=0)
+
+
+def _projection_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(fallback or 0)
+
+
 def list_messages(
     conversation_id: str,
     *,

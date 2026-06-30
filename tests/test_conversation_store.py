@@ -130,6 +130,61 @@ def test_conversation_store_search_indexes_messages_and_memory() -> None:
     assert rebuilt["status"] in {"rebuilt", "fts_unavailable"}
 
 
+def test_conversation_store_recovers_empty_or_stale_projection_from_ledger() -> None:
+    suffix = uuid4().hex[:8]
+    conversation_id = f"conv.projection.recovery.{suffix}"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for index in range(1, 4):
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            webspace_id="desktop",
+            channel_id="general",
+            owner="skill:test",
+            role="user",
+            text=f"recoverable turn {index}",
+            payload={"id": f"projection.recovery.{suffix}.{index}", "from": "user", "text": f"recoverable turn {index}"},
+        )
+
+    empty = conversation_store.recover_projection_from_store(
+        {"messages": []},
+        conversation_id=conversation_id,
+        limit=2,
+    )
+    stale = conversation_store.recover_projection_from_store(
+        {
+            "conversation_id": conversation_id,
+            "messages": [{"id": "old", "text": "old", "seq": 1}],
+            "total_message_count": 1,
+        },
+        conversation_id=conversation_id,
+        limit=2,
+    )
+    fresh = conversation_store.recover_projection_from_store(
+        {
+            "conversation_id": conversation_id,
+            "messages": [{"id": "fresh", "text": "fresh", "seq": 3}],
+            "total_message_count": 3,
+        },
+        conversation_id=conversation_id,
+        limit=2,
+    )
+
+    assert empty["recovery"]["recovered"] is True
+    assert empty["recovery"]["reason"] == "empty_projection"
+    assert [item["text"] for item in empty["messages"]] == ["recoverable turn 2", "recoverable turn 3"]
+    assert stale["recovery"]["recovered"] is True
+    assert stale["recovery"]["reason"] == "stale_total"
+    assert stale["total_message_count"] == 3
+    assert fresh["recovery"]["recovered"] is False
+    assert fresh["recovery"]["source"] == "current_projection"
+    assert fresh["messages"][0]["text"] == "fresh"
+
+
 def test_conversation_store_rebuilds_redaction_aware_segments() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

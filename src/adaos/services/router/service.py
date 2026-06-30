@@ -2340,8 +2340,9 @@ class RouterService:
             active_conversation_id = str(active_dict.get("conversation_id") or "").strip()
             try:
                 visible_tail_projection = (
-                    conversation_store.list_projection(
-                        active_conversation_id,
+                    conversation_store.recover_projection_from_store(
+                        {},
+                        conversation_id=active_conversation_id,
                         limit=VOICE_CHAT_VISIBLE_TAIL,
                         max_items=VOICE_CHAT_HISTORY_LIMIT,
                     )
@@ -2365,6 +2366,9 @@ class RouterService:
                 "total_message_count": int(visible_tail_projection.get("total_message_count") or 0)
                 if isinstance(visible_tail_projection, dict)
                 else 0,
+                "recovery": visible_tail_projection.get("recovery")
+                if isinstance(visible_tail_projection, dict)
+                else None,
             }
             try:
                 memory_preview = conversation_store.list_memory(
@@ -2890,8 +2894,9 @@ class RouterService:
                 *messages,
             )
             try:
-                projection = conversation_store.list_projection(
-                    resolved_conversation_id,
+                projection = conversation_store.recover_projection_from_store(
+                    current if isinstance(current, dict) else {},
+                    conversation_id=resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
