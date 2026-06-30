@@ -497,3 +497,26 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Scenarios](../scenarios.md): scenario lifecycle basics
 - [Web UI Architecture](web-ui-architecture.md): browser-facing generated UI
 - [Runtime Guarding](runtime-guarding.md): guard/quarantine feedback into repair
+
+## Should Readiness Decision
+
+Builder can now start selective `[should]` work without waiting for every
+production `[must]` track to finish, because the reference foundation has
+durable conversations, topic-aware Builder context, first practical draft and
+patch flow, Pending Action review handoff, golden migration gate, runtime
+action-risk gates, FTS/search/segment retrieval, governed memory proposal, and
+generated-skill conversation lint.
+
+The remaining `[must]` work stays active in parallel:
+
+- Production apply/release/rollback: release records, approval identity on
+  applied changes, post-activation checks, and rollback UX.
+- Repair loop: convert guard/quarantine/test/import/route/NLU evidence into
+  Builder repair tasks with acceptance evidence and eval failure backlinks.
+- Product Workbench: make `prompt_engineer_scenario` the full Builder
+  Workbench, not only the current widget/projection binding.
+- Reference runtime: move the remaining Builder call paths to context packets,
+  retrieved evidence refs, scoped memory, and Pending Actions across all
+  supported transports.
+- Evaluation/browser acceptance: broaden golden dialogs and add browser
+  acceptance for Voice/global dialog, Prompt IDE, and Pending Actions.

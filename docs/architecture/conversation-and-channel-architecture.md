@@ -2128,6 +2128,38 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[should]` Use the first reference Builder skill as a public-quality
   example for third-party skill authors.
 
+## Should Readiness Checkpoint
+
+The foundation is ready for selective `[should]` work, provided the remaining
+`[must]` items continue as explicit parallel tracks rather than being treated
+as optional polish.
+
+Foundation now in place:
+
+- Durable node-local conversation ledger, channels, agents, topics/threads,
+  history paging, turn traces, export/redaction audit, FTS search, segment
+  summaries, scoped memory, consent audit, and Pending Action memory proposals.
+- Runtime action-risk approval gates, Builder preview approval gates, retrieved
+  evidence safety, golden evaluation, and migration-gated baseline fixtures.
+- Builder first practical flow: addressed/phrase-level entry, isolated Builder
+  conversation, workbench binding, draft preview, `webui.json` patching,
+  Pending Action review handoff, and generated-skill conversation lint.
+
+Parallel `[must]` tracks that remain before production maturity:
+
+- Voice production: reusable non-blocking widget, no-input/barge-in/TTS states,
+  per-agent voice profiles, and semantic routing isolation from STT/TTS latency.
+- Builder production lifecycle: Prompt IDE as full Workbench, release records,
+  approval identity on applied changes, post-activation checks, and repair task
+  routing from runtime evidence.
+- Evaluation expansion: companion profile correction, no-input repair,
+  apply/reject handoff, memory-write consent, validation failure, and repair
+  golden dialogs plus browser acceptance.
+- Memory maturity beyond the service gate: conflict resolution, confidence
+  decay, stale-memory review/edit UX, and higher-quality extraction policies.
+- Generated-skill templates for skill-owned conversations, multi-agent skills,
+  bounded ask flows, and memory proposal patterns.
+
 ## Acceptance Criteria
 
 The architecture is implemented when:
