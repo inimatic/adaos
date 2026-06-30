@@ -320,3 +320,167 @@ def test_context_packet_marks_history_as_untrusted_evidence() -> None:
 
     assert packet["messages"][0]["trust_boundary"] == "retrieved_untrusted_evidence"
     assert packet["messages"][0]["safety"]["risk_level"] == "none"
+
+
+def test_retrieval_regression_long_companion_history_uses_segments_and_search() -> None:
+    conversation_id = "conv.retrieval.companion.long.v2"
+    owner = "skill:conversation_companions"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner=owner,
+        active_agent_id="agent:conversation_companions:arseni",
+    )
+    for index in range(1, 13):
+        marker = "ancient baobab lifespan marker" if index == 4 else f"companion turn {index:02d}"
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            webspace_id="desktop",
+            channel_id="conversational",
+            owner=owner,
+            actor_id="agent:conversation_companions:arseni" if index % 2 == 0 else "user:default",
+            role="hub" if index % 2 == 0 else "user",
+            text=f"{marker}; durable retrieval regression sample {index:02d}",
+            payload={
+                "id": f"retrieval.companion.v2.msg.{index}",
+                "from": "hub" if index % 2 == 0 else "user",
+                "text": f"{marker}; durable retrieval regression sample {index:02d}",
+            },
+        )
+
+    rebuilt = conversation_store.rebuild_conversation_segments(conversation_id, segment_size=4)
+    packet = conversation_context.build_context_packet(
+        conversation_id=conversation_id,
+        requester_owner=owner,
+        channel_id="conversational",
+        agent_id="agent:conversation_companions:arseni",
+        budgets={"max_messages": 2, "max_segments": 3, "max_memory_items": 0, "max_tokens": 1200},
+    )
+
+    assert rebuilt["segment_count"] >= 3
+    assert [item["seq"] for item in packet["messages"]] == [11, 12]
+    assert packet["segments"]
+    assert packet["diagnostics"]["segment_summary"]["status"] == "ok"
+    assert packet["diagnostics"]["selected_segment_count"] == len(packet["segments"])
+    assert any(ref["type"] == "conversation_segment" for ref in packet["evidence_refs"])
+    found_messages = conversation_store.search_messages("baobab lifespan", conversation_id=conversation_id)
+    assert found_messages and found_messages[0]["seq"] == 4
+    found_segments = conversation_store.search_conversation_segments("baobab lifespan", conversation_id=conversation_id)
+    assert found_segments and found_segments[0]["start_seq"] <= 4 <= found_segments[0]["end_seq"]
+
+
+def test_retrieval_regression_builder_topic_scope_excludes_other_project_threads() -> None:
+    conversation_id = "conv.retrieval.builder.topic"
+    owner = "skill:builder_skill"
+    alpha = "thread.builder.desktop.alpha_project"
+    beta = "thread.builder.desktop.beta_project"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner=owner,
+        active_agent_id="agent:builder_skill:builder",
+    )
+    for thread_id, label in ((alpha, "alpha checkout route plan"), (beta, "beta inventory schema plan")):
+        for index in range(1, 5):
+            role = "hub" if index % 2 == 0 else "user"
+            conversation_store.append_message(
+                conversation_id=conversation_id,
+                thread_id=thread_id,
+                webspace_id="desktop",
+                channel_id="builder",
+                owner=owner,
+                actor_id="agent:builder_skill:builder" if role == "hub" else "user:default",
+                role=role,
+                text=f"{label}; builder evidence turn {index}",
+                payload={
+                    "id": f"retrieval.builder.{thread_id.rsplit('.', 1)[-1]}.{index}",
+                    "from": role,
+                    "text": f"{label}; builder evidence turn {index}",
+                },
+            )
+        conversation_store.rebuild_conversation_segments(conversation_id, thread_id=thread_id, segment_size=2)
+
+    packet = conversation_context.build_context_packet(
+        conversation_id=conversation_id,
+        requester_owner=owner,
+        channel_id="builder",
+        thread_id=beta,
+        topic_ref={"topic_id": "builder:desktop:beta_project", "thread_id": beta},
+        agent_id="agent:builder_skill:builder",
+        budgets={"max_messages": 10, "max_segments": 4, "max_memory_items": 0, "max_tokens": 1600},
+    )
+
+    texts = "\n".join(item["text"] for item in packet["messages"] + packet["segments"])
+    assert packet["thread_id"] == beta
+    assert packet["topic_id"] == "builder:desktop:beta_project"
+    assert "beta inventory schema plan" in texts
+    assert "alpha checkout route plan" not in texts
+    assert packet["diagnostics"]["thread_filter"] == beta
+    assert conversation_store.search_messages("checkout", conversation_id=conversation_id, thread_id=beta) == []
+    assert conversation_store.search_messages("inventory schema", conversation_id=conversation_id, thread_id=beta)
+    segment_hits = conversation_store.search_conversation_segments("inventory schema", conversation_id=conversation_id, thread_id=beta)
+    assert segment_hits and all(item["thread_id"] == beta for item in segment_hits)
+
+
+def test_retrieval_regression_teacher_memory_and_history_stay_owner_scoped() -> None:
+    conversation_id = "conv.retrieval.teacher"
+    owner = "skill:nlu_teacher"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner=owner,
+    )
+    for index, text in enumerate(
+        (
+            "Teacher captured low confidence utterance for weather command.",
+            "Candidate regex needs confirmation before runtime activation.",
+            "User rejected the first candidate and redirected intent mapping.",
+            "Teacher created a safer candidate with explicit route evidence.",
+        ),
+        start=1,
+    ):
+        role = "hub" if index % 2 == 0 else "user"
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            webspace_id="desktop",
+            channel_id="general",
+            owner=owner,
+            actor_id="agent:nlu_teacher:teacher" if role == "hub" else "user:default",
+            role=role,
+            text=text,
+            payload={"id": f"retrieval.teacher.msg.{index}", "from": role, "text": text},
+        )
+    memory_id = conversation_store.remember(
+        scope="skill_user",
+        owner=owner,
+        subject_id=owner,
+        key="teacher_review_style",
+        text="prefer candidate diffs with route evidence",
+        consent_state="skill_scoped",
+        visibility="owner_only",
+    )
+    other_memory_id = conversation_store.remember(
+        scope="skill_user",
+        owner="skill:conversation_companions",
+        subject_id="skill:conversation_companions",
+        key="private_companion_note",
+        text="do not leak into teacher retrieval",
+        consent_state="skill_scoped",
+        visibility="owner_only",
+    )
+
+    packet = conversation_context.build_context_packet(
+        conversation_id=conversation_id,
+        requester_owner=owner,
+        memory_owner=owner,
+        budgets={"max_messages": 4, "max_segments": 0, "max_memory_items": 4, "max_tokens": 1200},
+    )
+
+    assert [item["id"] for item in packet["memory"]] == [memory_id]
+    assert other_memory_id not in {item["id"] for item in packet["memory"]}
+    assert any("route evidence" in item["text"] for item in packet["messages"])
+    memory_hits = conversation_store.search_memory("candidate diffs", scope="skill_user", owner=owner)
+    assert [item["id"] for item in memory_hits] == [memory_id]

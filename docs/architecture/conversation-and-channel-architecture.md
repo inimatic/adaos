@@ -1733,8 +1733,11 @@ depth across several phases.
   embedded in every context packet; richer scoring waits for FTS/summary work.
 - [ ] `[should]` Add summary compaction for long conversations without losing
   message range refs.
-- [ ] `[should]` Add golden retrieval tests for long companion, Builder, and
-  Teacher conversations.
+- [x] `[should]` Add golden retrieval tests for long companion, Builder, and
+  Teacher conversations. `tests/test_conversation_context.py` now includes
+  regression coverage for long companion segment/search retrieval, Builder
+  thread-scoped context isolation, and Teacher owner-scoped memory/history
+  retrieval.
 - [ ] `[could]` Add semantic search / vector retrieval once FTS and summaries
   are stable.
 
