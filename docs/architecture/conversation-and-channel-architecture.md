@@ -2004,8 +2004,11 @@ Important lacunae found during Phase 6 implementation:
 - [ ] `[should]` Retire direct writes to transport-specific chat projections.
 - [ ] `[should]` Add export/delete/redaction flows for conversation and memory
   records.
-- [ ] `[should]` Add safety tests for prompt injection through retrieved
-  memory/history and for cross-owner memory denial.
+- [x] `[should]` Add safety tests for prompt injection through retrieved
+  memory/history and for cross-owner memory denial. `tests/test_conversation_context.py`
+  now covers retrieved-memory prompt-injection flags, untrusted history
+  evidence marking, deny-by-default cross-owner memory retrieval, and
+  redaction-aware memory search/list behavior.
 - [ ] `[should]` Add dialog-level golden conversations and metrics for repair
   rate, fallback rate, success rate, latency, and context budget.
 - [ ] `[should]` Add performance soak tests for long conversations, FTS,
