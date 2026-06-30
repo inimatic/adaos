@@ -432,8 +432,11 @@ Open work:
 - [x] `[must]` Support the first non-trivial prototype correction controls:
   product units, availability fields, and simple segmented filters are written
   to the current preview and generated `webui.json`.
-- [ ] `[should]` Keep advanced diffs, schemas, route plans, and runtime evidence available
-  for developers.
+- [x] `[should]` Keep advanced diffs, schemas, route plans, and runtime evidence available
+  for developers. `builder_skill.get_session` and `get_preview_state` now
+  return `adaos.builder.developer_evidence.v1` with artifact file refs,
+  schema names, route/topic plan, patch diffs, preview refs, workbench binding,
+  and Pending Action ids.
 - [ ] `[could]` Make completed Builder work visible in catalog, scenario, and skill
   history.
 

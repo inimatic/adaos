@@ -925,6 +925,97 @@ def _draft_user_summary(session: Mapping[str, Any]) -> dict[str, list[str]]:
     }
 
 
+def _developer_evidence(
+    *,
+    webspace_id: str,
+    session: Mapping[str, Any] | None,
+    preview_state: Mapping[str, Any] | None = None,
+    workbench: Mapping[str, Any] | None = None,
+    topic_ref: Mapping[str, Any] | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(session, Mapping):
+        return None
+    topic = dict(topic_ref or {}) if isinstance(topic_ref, Mapping) else _builder_topic_ref(webspace_id, session=session, _meta=_meta)
+    artifact_root = str(session.get("artifact_root") or "").strip()
+    artifact_path = Path(artifact_root) if artifact_root else None
+    files: list[dict[str, Any]] = []
+    if artifact_path is not None:
+        for name, role in (
+            ("webui.json", "runtime_preview"),
+            ("scenario.json", "scenario_manifest_json"),
+            ("scenario.yaml", "scenario_manifest_yaml"),
+        ):
+            path = artifact_path / name
+            files.append({"role": role, "path": str(path), "exists": path.exists()})
+    patches: list[dict[str, Any]] = []
+    for patch in session.get("patches", []) if isinstance(session.get("patches"), list) else []:
+        if not isinstance(patch, Mapping):
+            continue
+        diff = patch.get("diff") if isinstance(patch.get("diff"), Mapping) else {}
+        patches.append(
+            {
+                "id": str(patch.get("id") or ""),
+                "operation": str(patch.get("operation") or ""),
+                "status": str(patch.get("status") or ""),
+                "review_status": str(patch.get("review_status") or "") or None,
+                "pending_action_id": str(patch.get("pending_action_id") or "") or None,
+                "diff_keys": sorted(str(key) for key in diff.keys()),
+                "not_implemented": list(diff.get("not_implemented") or []) if isinstance(diff.get("not_implemented"), list) else [],
+            }
+        )
+    pending_action_ids = [
+        str(value)
+        for value in [session.get("pending_action_id"), *(item.get("pending_action_id") for item in patches)]
+        if str(value or "").strip()
+    ]
+    preview = preview_state if isinstance(preview_state, Mapping) else session.get("preview_state")
+    preview_payload = preview if isinstance(preview, Mapping) else {}
+    workbench_payload = dict(workbench or {}) if isinstance(workbench, Mapping) else {}
+    projection = workbench_payload.get("projection") if isinstance(workbench_payload.get("projection"), Mapping) else {}
+    return {
+        "schema": "adaos.builder.developer_evidence.v1",
+        "session_id": str(session.get("id") or ""),
+        "scenario_id": str(session.get("scenario_id") or "") or None,
+        "draft_id": str(session.get("draft_id") or "") or None,
+        "artifact_root": artifact_root or None,
+        "files": files,
+        "schemas": {
+            "preview_state": "adaos.builder.preview_state.v1",
+            "webui": "adaos.webui.v1",
+            "topic_ref": "adaos.conversation.topic_ref.v1",
+            "pending_action": "adaos.pending_action.v1",
+        },
+        "route_plan": {
+            "webspace_id": webspace_id,
+            "dialog_channel_id": DIALOG_CHANNEL_ID,
+            "conversation_id": _conversation_id(webspace_id),
+            "owner": f"skill:{SKILL_ID}",
+            "default_tool": f"{SKILL_ID}.chat",
+            "agent_id": AGENT_ID,
+            "thread_id": str(topic.get("thread_id") or "") or None,
+            "topic_id": str(topic.get("topic_id") or "") or None,
+        },
+        "topic": {key: value for key, value in topic.items() if key != "stored"},
+        "preview_refs": {
+            "current_ui_type": str(preview_payload.get("current_ui", {}).get("type") or "") if isinstance(preview_payload.get("current_ui"), Mapping) else None,
+            "datasource_ids": [
+                str(item.get("id") or "")
+                for item in preview_payload.get("datasources", [])
+                if isinstance(item, Mapping) and str(item.get("id") or "")
+            ],
+            "pending_patch_count": len(preview_payload.get("pending_patches") or []) if isinstance(preview_payload.get("pending_patches"), list) else 0,
+        },
+        "patches": patches,
+        "pending_action_ids": pending_action_ids,
+        "workbench": {
+            "ok": bool(workbench_payload.get("ok")),
+            "binding": dict(workbench_payload.get("binding") or {}) if isinstance(workbench_payload.get("binding"), Mapping) else {},
+            "projection_deferred": bool(projection.get("deferred")),
+        },
+    }
+
+
 def _extract_field_label(instruction: str) -> str | None:
     quoted = re.search(r"[\"'«](.*?)[\"'»]", instruction)
     if quoted:
@@ -1780,8 +1871,24 @@ def get_session(
 ) -> dict[str, Any]:
     ws = _source_webspace_id(webspace_id, _meta)
     session = _load_session(ws, session_id)
-    workbench = _ensure_workbench(ws, session=session, preview_state=(session or {}).get("preview_state") if isinstance(session, dict) else None)
-    return {"ok": bool(session), "session": session, "workbench": workbench, "dialog": _dialog_state(ws)}
+    preview = (session or {}).get("preview_state") if isinstance(session, dict) else None
+    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
+    binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
+    topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+    return {
+        "ok": bool(session),
+        "session": session,
+        "developer_evidence": _developer_evidence(
+            webspace_id=ws,
+            session=session,
+            preview_state=preview if isinstance(preview, Mapping) else None,
+            workbench=workbench,
+            topic_ref=topic,
+            _meta=_meta,
+        ),
+        "workbench": workbench,
+        "dialog": _dialog_state(ws, topic_ref=topic),
+    }
 
 
 @tool(summary="Get Builder preview state.", side_effects="none")
@@ -1796,7 +1903,23 @@ def get_preview_state(
         return {"ok": False, "error": "session_not_found", "preview_state": None, "dialog": _dialog_state(ws)}
     preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
     workbench = _ensure_workbench(ws, session=session, preview_state=preview)
-    return {"ok": True, "session_id": session.get("id"), "preview_state": preview, "workbench": workbench, "dialog": _dialog_state(ws)}
+    binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
+    topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+    return {
+        "ok": True,
+        "session_id": session.get("id"),
+        "preview_state": preview,
+        "developer_evidence": _developer_evidence(
+            webspace_id=ws,
+            session=session,
+            preview_state=preview,
+            workbench=workbench,
+            topic_ref=topic,
+            _meta=_meta,
+        ),
+        "workbench": workbench,
+        "dialog": _dialog_state(ws, topic_ref=topic),
+    }
 
 
 @tool(summary="Ensure paired Builder Prompt IDE dev webspace.", side_effects="local_write")

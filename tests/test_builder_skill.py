@@ -646,6 +646,89 @@ def test_builder_skill_exposes_workbench_tools() -> None:
     assert "data.builder" in routes
 
 
+def test_get_session_exposes_developer_evidence(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "shopping_list"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "webui.json").write_text('{"preview_state":{}}', encoding="utf-8")
+    (artifact_root / "scenario.json").write_text('{"id":"shopping_list"}', encoding="utf-8")
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {
+                "source_webspace_id": kwargs.get("source_webspace_id"),
+                "dev_webspace_id": f"{kwargs.get('source_webspace_id')}-dev",
+                "active_draft_id": kwargs.get("active_draft_id"),
+                "runtime_scenario_id": kwargs.get("runtime_scenario_id"),
+            }
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(
+        skill,
+        "_builder_topic_ref",
+        lambda webspace_id, **_kwargs: {
+            "schema": "adaos.conversation.topic_ref.v1",
+            "topic_id": f"builder:{webspace_id}:shopping_list",
+            "thread_id": f"thread.builder.{webspace_id}.shopping_list",
+            "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+            "channel_id": "builder",
+            "owner": "skill:builder_skill",
+        },
+    )
+    skill._save_session(
+        "builder-evidence",
+        {
+            "id": "builder_session_evidence",
+            "webspace_id": "builder-evidence",
+            "status": "drafting",
+            "title": "Shopping list",
+            "scenario_id": "shopping_list",
+            "draft_id": "draft.shopping",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "shopping_items",
+            "fields": [{"id": "item", "type": "string", "label": "Item", "required": True}],
+            "preview_state": {
+                "current_ui": {"type": "page"},
+                "datasources": [{"id": "shopping_items", "type": "internal_crud"}],
+                "pending_patches": [{"id": "patch_1"}],
+            },
+            "patches": [
+                {
+                    "id": "patch_1",
+                    "operation": "add_field",
+                    "status": "applied",
+                    "pending_action_id": "pa.patch",
+                    "diff": {"fields": [{"id": "price"}], "not_implemented": []},
+                }
+            ],
+            "pending_action_id": "pa.draft",
+            "version": "v2",
+        },
+    )
+
+    session_result = skill.get_session(webspace_id="builder-evidence")
+    evidence = session_result["developer_evidence"]
+
+    assert session_result["ok"] is True
+    assert evidence["schema"] == "adaos.builder.developer_evidence.v1"
+    assert evidence["route_plan"]["thread_id"] == "thread.builder.builder-evidence.shopping_list"
+    assert evidence["route_plan"]["default_tool"] == "builder_skill.chat"
+    assert evidence["preview_refs"]["current_ui_type"] == "page"
+    assert evidence["preview_refs"]["datasource_ids"] == ["shopping_items"]
+    assert set(evidence["pending_action_ids"]) == {"pa.draft", "pa.patch"}
+    assert evidence["patches"][0]["diff_keys"] == ["fields", "not_implemented"]
+    files = {item["role"]: item for item in evidence["files"]}
+    assert files["runtime_preview"]["exists"] is True
+    assert files["scenario_manifest_json"]["exists"] is True
+
+    preview_result = skill.get_preview_state(webspace_id="builder-evidence")
+    assert preview_result["developer_evidence"]["preview_refs"]["pending_patch_count"] == 1
+
+
 def test_create_scenario_draft_updates_builder_workbench(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "shopping_list"
