@@ -1638,8 +1638,12 @@ depth across several phases.
 - [x] `[should]` Add a first policy-inspection projection for one turn:
   selected channel, conversation, owner, action target, routing reason, and
   response renderer are available in `data.dialog.last_turn_trace`.
-- [ ] `[should]` Promote the projection into a small policy-inspection API that
+- [x] `[should]` Promote the projection into a small policy-inspection API that
   also includes NLU evidence, frame state, repair state, and replay/debug links.
+  `conversation_policy.inspect_turn_policy(...)` and
+  `inspect_last_turn_policy(...)` now normalize selected channel, agent, tool,
+  renderer, routing reasons, fallback/materialization/repair state, and source
+  refs from canonical turn traces.
 - [ ] `[could]` Add a simulator API that replays golden conversations without a
   browser or real transport.
 
