@@ -4474,6 +4474,7 @@ class RouterService:
                     "request_id": str(request_id or "").strip(),
                 },
             )
+            target_node_id = str(action_meta.get("target_node_id") or meta.get("target_node_id") or "").strip() or None
             materialized_chat_appends, materialization_probe = _subscribe_dialog_materialization_probe()
             try:
                 if skill == BUILDER_SKILL_ID:
@@ -4509,7 +4510,18 @@ class RouterService:
                     summary=f"{skill}.{tool} raised during dialog turn",
                     extra_policy={"result_status": "exception"},
                 )
-                return False
+                try:
+                    await _append_dialog_tool_unavailable(webspace_id, channel_id, action_meta, target_node_id)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").debug(
+                        "dialog unavailable fallback failed webspace=%s channel=%s skill=%s tool=%s",
+                        webspace_id,
+                        channel_id,
+                        skill,
+                        tool,
+                        exc_info=True,
+                    )
+                return True
             finally:
                 _unsubscribe_dialog_materialization_probe(materialization_probe)
             if not isinstance(result, dict) or not bool(result.get("ok")):
@@ -4530,7 +4542,18 @@ class RouterService:
                     summary=f"{skill}.{tool} returned non-ok dialog result",
                     extra_policy={"result_ok": False, "result_status": "non_ok"},
                 )
-                return False
+                try:
+                    await _append_dialog_tool_unavailable(webspace_id, channel_id, action_meta, target_node_id)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").debug(
+                        "dialog non-ok fallback failed webspace=%s channel=%s skill=%s tool=%s",
+                        webspace_id,
+                        channel_id,
+                        skill,
+                        tool,
+                        exc_info=True,
+                    )
+                return True
             try:
                 dialog_runtime.apply_tool_result(
                     result,
@@ -4622,6 +4645,35 @@ class RouterService:
                     webspace_id,
                     str(action_meta.get("turn_trace_id") or "").strip(),
                 )
+                fallback_payload = {
+                    "id": _make_id("m"),
+                    "from": "hub",
+                    "text": result_message,
+                    "ts": time.time(),
+                    "active_agent_id": agent_id,
+                    "active_agent_label": str(action_meta.get("active_agent_label") or "").strip() or None,
+                    "active_agent_icon": str(action_meta.get("active_agent_icon") or action_meta.get("agent_icon") or "").strip() or None,
+                    "_meta": {**action_meta, "materialization_fallback": "surface_missing_visible_output"},
+                }
+                try:
+                    await _append_voice_chat_message(webspace_id, fallback_payload, target_node_id)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").debug(
+                        "dialog visible-output fallback failed skill=%s tool=%s webspace=%s",
+                        skill,
+                        tool,
+                        webspace_id,
+                        exc_info=True,
+                    )
+                else:
+                    trace_status = "materialized"
+                    trace_renderer = {
+                        "receiver": "voice_chat.messages",
+                        "projection": "surface_fallback",
+                        "message_id": fallback_payload.get("id"),
+                    }
+                    trace_summary = f"{skill}.{tool} returned ok and router materialized fallback output"
+                    trace_policy["materialization_status"] = "fallback_materialized"
             _record_voice_turn_trace(
                 webspace_id,
                 action_meta,

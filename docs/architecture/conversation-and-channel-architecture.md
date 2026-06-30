@@ -1861,8 +1861,11 @@ depth across several phases.
   cancellation, and parameter updates without re-parsing transport state.
 - [ ] `[should]` Move legacy semantic fallback out of
   `voice_chat_skill.handle_text` into conversation owner/surface policies.
-- [ ] `[should]` Add explicit fallback when a surface or owning skill is
-  unavailable.
+- [x] `[should]` Add explicit fallback when a surface or owning skill is
+  unavailable. Active dialog owner-tool failures and non-ok results now
+  materialize a visible unavailable message instead of falling through to NLU;
+  ok tool results with a message but no visible surface output are materialized
+  by the router as a surface fallback.
 - [x] `[should]` Add response-planning rules for text vs speech vs card vs
   Pending Action, so skills do not choose transport-specific rendering by
   default. `conversation_response.plan_response_targets(...)` now infers
