@@ -1859,8 +1859,12 @@ depth across several phases.
 - [x] `[should]` Attach repair-state and active-frame metadata to
   owner-scoped tool payloads, so the selected skill can handle correction,
   cancellation, and parameter updates without re-parsing transport state.
-- [ ] `[should]` Move legacy semantic fallback out of
-  `voice_chat_skill.handle_text` into conversation owner/surface policies.
+- [x] `[should]` Move legacy semantic fallback out of
+  `voice_chat_skill.handle_text` into conversation owner/surface policies. The
+  `nlp.intent.not_obtained` path now asks a router-level
+  `adaos.dialog.surface_fallback_policy.v1` decision for the fallback
+  skill/tool target; `voice_chat_skill.handle_text` remains only the
+  compatibility implementation for the general Voice surface.
 - [x] `[should]` Add explicit fallback when a surface or owning skill is
   unavailable. Active dialog owner-tool failures and non-ok results now
   materialize a visible unavailable message instead of falling through to NLU;

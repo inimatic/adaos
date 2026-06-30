@@ -285,6 +285,45 @@ def _is_dialog_surface_route(
     return token == "voice_chat"
 
 
+def _dialog_surface_fallback_policy(
+    meta: Mapping[str, Any] | None,
+    payload: Mapping[str, Any] | None = None,
+    *,
+    route_id: str | None = None,
+) -> dict[str, Any]:
+    if not _is_dialog_surface_route(meta, payload, route_id=route_id):
+        return {}
+    meta = meta if isinstance(meta, Mapping) else {}
+    payload = payload if isinstance(payload, Mapping) else {}
+    channel_id = str(
+        meta.get("dialog_channel_id")
+        or payload.get("dialog_channel_id")
+        or GENERAL_DIALOG_CHANNEL_ID
+    ).strip() or GENERAL_DIALOG_CHANNEL_ID
+    default_tool = str(
+        meta.get("default_tool")
+        or payload.get("default_tool")
+        or _dialog_channel_policy(channel_id).get("default_tool")
+        or "voice_chat_skill.handle_text"
+    ).strip()
+    skill, _, tool = default_tool.partition(".")
+    if not tool:
+        if channel_id == GENERAL_DIALOG_CHANNEL_ID:
+            skill, tool = "voice_chat_skill", "handle_text"
+        else:
+            owner = str(meta.get("conversation_owner") or payload.get("conversation_owner") or "").strip()
+            skill = owner.removeprefix("skill:") if owner.startswith("skill:") else owner
+            tool = default_tool or "chat"
+    return {
+        "schema": "adaos.dialog.surface_fallback_policy.v1",
+        "channel_id": channel_id,
+        "skill": str(skill or "voice_chat_skill").strip() or "voice_chat_skill",
+        "tool": str(tool or "handle_text").strip() or "handle_text",
+        "reason": "nlu_not_obtained_surface_fallback",
+        "route_id": str(route_id or meta.get("route_id") or meta.get("route") or "").strip() or None,
+    }
+
+
 def _fallback_agent_registry_records() -> list[dict[str, Any]]:
     return [dict(item) for item in _CONVERSATION_AGENT_REGISTRY]
 
@@ -4232,8 +4271,10 @@ class RouterService:
                     except Exception:
                         pass
 
-        def _call_voice_chat_tool(text: str, meta: dict) -> Any:
-            return _call_runtime_skill_tool("voice_chat_skill", "handle_text", {"text": text}, meta)
+        def _call_dialog_surface_fallback_tool(text: str, meta: dict, policy: Mapping[str, Any]) -> Any:
+            skill = str(policy.get("skill") or "voice_chat_skill").strip() or "voice_chat_skill"
+            tool = str(policy.get("tool") or "handle_text").strip() or "handle_text"
+            return _call_runtime_skill_tool(skill, tool, {"text": text}, meta)
 
         def _chat_append_matches_dialog_action(
             payload: Mapping[str, Any],
@@ -5484,7 +5525,8 @@ class RouterService:
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 text = ""
-            if _is_dialog_surface_route(meta, payload, route_id=route_id.strip()) and text:
+            fallback_policy = _dialog_surface_fallback_policy(meta, payload, route_id=route_id.strip())
+            if fallback_policy and text:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=webspace_id,
                     text=text,
@@ -5501,10 +5543,11 @@ class RouterService:
                 ):
                     return
                 try:
-                    result = await asyncio.to_thread(_call_voice_chat_tool, text, meta)
+                    result = await asyncio.to_thread(_call_dialog_surface_fallback_tool, text, meta, fallback_policy)
                 except Exception:
                     logging.getLogger("adaos.router.voice_chat").warning(
-                        "voice.chat fallback tool failed",
+                        "dialog surface fallback tool failed policy=%r",
+                        fallback_policy,
                         exc_info=True,
                     )
                 else:
