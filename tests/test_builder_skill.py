@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import time
 from pathlib import Path
 
 import yaml
@@ -1265,6 +1266,28 @@ def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkey
     assert result["projection"]["event"]["ok"] is True
     assert [item["method"] for item in calls] == ["set_active_draft", "snapshot", "ensure_dev_webspace", "event"]
     assert calls[-1]["payload"]["runtime_scenario_id"] == "todo_scenario"
+
+
+def test_safe_emit_chat_does_not_wait_for_stuck_append(monkeypatch) -> None:
+    skill = _load_module()
+
+    import adaos.sdk.io.out as io_out
+
+    calls: list[str] = []
+
+    def _slow_chat_append(text, **_kwargs):
+        calls.append(text)
+        time.sleep(1.0)
+
+    monkeypatch.setattr(skill, "CHAT_APPEND_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(io_out, "chat_append", _slow_chat_append)
+
+    started = time.perf_counter()
+    skill._safe_emit_chat("hello", webspace_id="desktop")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.2
+    assert calls
 
 
 def test_workbench_tool_wrappers_use_voice_widget_and_active_draft(monkeypatch) -> None:

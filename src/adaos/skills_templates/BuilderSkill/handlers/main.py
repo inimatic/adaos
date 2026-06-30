@@ -23,6 +23,7 @@ MAX_SESSIONS = 50
 WORKBENCH_REFRESH_TOPIC = "builder.workbench.ensure_requested"
 PROMPT_IDE_SCENARIO_ID = "prompt_engineer_scenario"
 WORKBENCH_DIRECT_ENSURE_TIMEOUT_S = 2.0
+CHAT_APPEND_TIMEOUT_S = 0.75
 
 _FALLBACK_MEMORY: dict[str, Any] = {}
 
@@ -403,6 +404,7 @@ def _safe_emit_chat(
 ) -> None:
     try:
         from adaos.sdk.io.out import chat_append
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
         source_ws = _source_webspace_id(webspace_id, _meta)
         targets = [source_ws]
@@ -410,11 +412,23 @@ def _safe_emit_chat(
         if dev_ws and dev_ws not in targets:
             targets.append(dev_ws)
         for target in targets:
-            chat_append(
-                text,
-                from_="hub",
-                _meta=_chat_meta(_meta, webspace_id=target, session=session, binding=binding, topic_ref=topic_ref),
-            )
+            pool = ThreadPoolExecutor(max_workers=1)
+            try:
+                future = pool.submit(
+                    chat_append,
+                    text,
+                    from_="hub",
+                    _meta=_chat_meta(_meta, webspace_id=target, session=session, binding=binding, topic_ref=topic_ref),
+                )
+                try:
+                    future.result(timeout=CHAT_APPEND_TIMEOUT_S)
+                except FuturesTimeoutError:
+                    future.cancel()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    pool = None
+            finally:
+                if pool is not None:
+                    pool.shutdown(wait=True)
     except Exception:
         return
 
