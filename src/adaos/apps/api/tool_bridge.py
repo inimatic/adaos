@@ -42,6 +42,202 @@ _WORKSPACE_RUNTIME_SYNC_MIN_INTERVAL_S = max(
 _WORKSPACE_RUNTIME_LOCKS_LOCK = threading.RLock()
 _WORKSPACE_RUNTIME_LOCKS: dict[str, threading.RLock] = {}
 _WORKSPACE_RUNTIME_LAST_SYNC_AT: dict[str, float] = {}
+_APPROVED_ACTION_STATES = {"approve", "approved", "allowed", "operator_apply_allowed", "responded"}
+
+
+def _runtime_action_gate_enabled() -> bool:
+    raw = str(os.getenv("ADAOS_RUNTIME_ACTION_RISK_GATE") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off", "disabled"}
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _without_empty(value: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in value.items() if v not in (None, "", {}, [])}
+
+
+def _risk_relevant_payload(payload: Dict[str, Any], *, include_node_targets: bool) -> Dict[str, Any]:
+    ignored = {"_meta", "action_approval", "approval", "approval_ref"}
+    if not include_node_targets:
+        ignored.update({"target_node_id", "node_id", "node_target_id", "source_node_id"})
+    return {key: value for key, value in payload.items() if key not in ignored}
+
+
+def _looks_readonly_tool(public_tool: str) -> bool:
+    token = str(public_tool or "").strip().lower().replace("-", "_")
+    if not token:
+        return False
+    readonly_prefixes = (
+        "get_",
+        "list_",
+        "read_",
+        "search_",
+        "query_",
+        "describe_",
+        "preview_",
+        "validate_",
+        "check_",
+        "inspect_",
+        "prompt_list_",
+    )
+    return token in {"get_snapshot", "snapshot"} or token.startswith(readonly_prefixes)
+
+
+def _explicit_risk_class(payload: Dict[str, Any], context: Dict[str, Any] | None = None) -> str:
+    meta = _mapping(payload.get("_meta"))
+    ctx = _mapping(context)
+    for source in (payload, meta, ctx):
+        for key in ("risk_class", "side_effect_class", "effect_class", "action_risk_class"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        action_risk = source.get("action_risk")
+        if isinstance(action_risk, dict):
+            value = action_risk.get("risk_class") or action_risk.get("side_effect_class")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _runtime_action_risk(
+    *,
+    body: "ToolCall",
+    skill_name: str,
+    public_tool: str,
+    payload: Dict[str, Any],
+    target_node_id: str = "",
+    local_node_id: str = "",
+    forced_side_effect_class: str = "",
+) -> Dict[str, Any]:
+    from adaos.services.conversation_safety import classify_action_risk
+
+    explicit = _explicit_risk_class(payload, body.context)
+    tool_name = str(body.tool or "").strip()
+    effective_target = str(target_node_id or _resolve_target_node_id(payload) or "").strip()
+    side_effect_class = forced_side_effect_class or explicit
+    include_node_targets = True
+    readonly_tool = _is_readonly_snapshot_tool(tool_name) or _looks_readonly_tool(public_tool)
+    if not side_effect_class:
+        if readonly_tool:
+            side_effect_class = "safe"
+            include_node_targets = False
+        elif effective_target and effective_target != str(local_node_id or "").strip():
+            if any(tool_name.startswith(prefix) for prefix in _HUB_LOCAL_TOOL_PREFIXES):
+                side_effect_class = "local_write"
+                include_node_targets = False
+            else:
+                side_effect_class = "cross_node"
+    elif side_effect_class in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}:
+        include_node_targets = False
+    if side_effect_class == "safe":
+        action = {"side_effect_class": "safe"}
+    else:
+        action = _without_empty(
+            {
+                "tool": tool_name,
+                "skill": skill_name,
+                "public_tool": public_tool,
+                "side_effect_class": side_effect_class,
+                "dev_runtime": bool(body.dev),
+                "target_node_id": effective_target if include_node_targets else "",
+                "arguments": _risk_relevant_payload(payload, include_node_targets=include_node_targets),
+            }
+        )
+    return classify_action_risk(action)
+
+
+def _approval_sources(payload: Dict[str, Any], context: Dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    meta = _mapping(payload.get("_meta"))
+    ctx = _mapping(context)
+    sources: list[dict[str, Any]] = []
+    for source in (payload, meta, ctx):
+        for key in ("action_approval", "approval", "approval_ref", "pending_action_approval"):
+            value = source.get(key)
+            if isinstance(value, dict):
+                sources.append(dict(value))
+        direct_pending_action_id = source.get("pending_action_id")
+        if isinstance(direct_pending_action_id, str) and direct_pending_action_id.strip():
+            sources.append(
+                {
+                    "pending_action_id": direct_pending_action_id.strip(),
+                    "status": source.get("pending_action_status") or source.get("response_action_id"),
+                    "approved_by": source.get("approved_by") or source.get("responder") or source.get("user_id"),
+                }
+            )
+    return sources
+
+
+def _approval_allows_runtime_action(approval: Dict[str, Any], action_risk: Dict[str, Any]) -> bool:
+    if approval.get("approved") is True or approval.get("allowed") is True:
+        return bool(_approval_identity(approval))
+    status = str(
+        approval.get("status")
+        or approval.get("decision")
+        or approval.get("response_action_id")
+        or approval.get("action")
+        or ""
+    ).strip().lower()
+    if status not in _APPROVED_ACTION_STATES:
+        return False
+    approval_risk_class = str(approval.get("risk_class") or approval.get("approved_risk_class") or "").strip()
+    requested_risk_class = str(action_risk.get("risk_class") or "").strip()
+    if approval_risk_class and requested_risk_class and approval_risk_class != requested_risk_class:
+        return False
+    return bool(_approval_identity(approval))
+
+
+def _approval_identity(approval: Dict[str, Any]) -> str:
+    for key in ("approval_id", "pending_action_id", "id", "approved_by", "responder_id", "user_id"):
+        value = approval.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    responder = approval.get("responder")
+    if isinstance(responder, dict):
+        for key in ("user_id", "actor_id", "id"):
+            value = responder.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _enforce_runtime_action_gate(
+    *,
+    body: "ToolCall",
+    skill_name: str,
+    public_tool: str,
+    payload: Dict[str, Any],
+    target_node_id: str = "",
+    local_node_id: str = "",
+    forced_side_effect_class: str = "",
+) -> Dict[str, Any]:
+    action_risk = _runtime_action_risk(
+        body=body,
+        skill_name=skill_name,
+        public_tool=public_tool,
+        payload=payload,
+        target_node_id=target_node_id,
+        local_node_id=local_node_id,
+        forced_side_effect_class=forced_side_effect_class,
+    )
+    if not _runtime_action_gate_enabled() or not bool(action_risk.get("approval_required")):
+        return action_risk
+    for approval in _approval_sources(payload, body.context):
+        if _approval_allows_runtime_action(approval, action_risk):
+            return {**action_risk, "approval": {k: v for k, v in approval.items() if k != "secret"}}
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "action_approval_required",
+            "tool": str(body.tool or ""),
+            "action_risk": action_risk,
+            "approval_contract": {
+                "accepted_fields": ["action_approval", "_meta.action_approval", "context.action_approval"],
+                "required": ["approved/status=approve", "approval_id|pending_action_id|approved_by"],
+            },
+        },
+    )
 
 
 def _readonly_snapshot_rpc_timeout_s(requested_timeout: float | None) -> float | None:
@@ -541,6 +737,14 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)
     local_node_id = str(getattr(conf, "node_id", "") or "").strip()
+    _enforce_runtime_action_gate(
+        body=body,
+        skill_name=skill_name,
+        public_tool=public_tool,
+        payload=payload,
+        target_node_id=target_node_id,
+        local_node_id=local_node_id,
+    )
     if conf and _should_proxy_tool_call_to_target(
         conf=conf,
         tool_name=body.tool,
@@ -605,6 +809,15 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
             )
         target = candidates[0]
         target_node_id = target.get("node_id", "")
+        _enforce_runtime_action_gate(
+            body=body,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            payload=payload,
+            target_node_id=target_node_id,
+            local_node_id=local_node_id,
+            forced_side_effect_class="" if _is_readonly_snapshot_tool(body.tool) else "cross_node",
+        )
 
         if target_node_id and mgr.is_connected(target_node_id):
             try:

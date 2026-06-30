@@ -77,6 +77,136 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert result["trace_id"] == "trace-123"
 
 
+def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch) -> None:
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs):
+            raise AssertionError("high-risk tool must be blocked before execution")
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(
+                    tool="files_skill:delete_file",
+                    arguments={"path": "C:/private/report.txt", "side_effect_class": "filesystem"},
+                ),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=_fake_ctx(),
+            )
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["error"] == "action_approval_required"
+    assert excinfo.value.detail["action_risk"]["risk_class"] == "filesystem"
+
+
+def test_call_tool_allows_high_risk_runtime_action_with_approval(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="files_skill:write_file",
+                arguments={
+                    "path": "C:/private/report.txt",
+                    "text": "approved",
+                    "_meta": {
+                        "action_approval": {
+                            "status": "approve",
+                            "pending_action_id": "pa.runtime.fs",
+                            "approved_by": "user:owner",
+                            "risk_class": "filesystem",
+                        }
+                    },
+                },
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["run_sync", "files_skill:write_file"]
+
+
+def test_call_tool_blocks_cross_node_mutation_without_approval(monkeypatch) -> None:
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs):
+            raise AssertionError("explicit target node mutation must not run locally")
+
+    class _FakeDirectory:
+        def get_node_base_url(self, _node_id: str) -> str | None:
+            raise AssertionError("cross-node mutation must be blocked before proxy lookup")
+
+    class _FakeLinkManager:
+        def is_connected(self, _node_id: str) -> bool:
+            raise AssertionError("cross-node mutation must be blocked before RPC")
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=None,
+        caps=None,
+        settings=None,
+        bus=None,
+        config=SimpleNamespace(role="hub", node_id="hub-1", token="hub-token"),
+    )
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
+    monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(
+                    tool="member_control:restart_service",
+                    arguments={"target_node_id": "member-1", "service": "camera"},
+                ),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=ctx,
+            )
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["action_risk"]["risk_class"] == "cross_node"
+
+
 def test_call_tool_skips_workspace_autosync_for_readonly_snapshots(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "infrastate_skill").mkdir(parents=True, exist_ok=True)
