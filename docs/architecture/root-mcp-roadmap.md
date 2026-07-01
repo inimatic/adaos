@@ -29,6 +29,9 @@ The roadmap has two explicit companion slices:
   - operational MCP surface for supervisor-owned profiling and profiling evidence
 - `NLUAuthoringPlane`
   - governed phrase-checking, descriptor lookup, and training-content authoring surface for NLU Teacher
+- `SkillFactoryTaskPlane`
+  - task-scoped MCP surface for isolated dev nodes working on one Builder
+    realization task
 
 ## Phase 0. Architectural Fixation
 
@@ -378,3 +381,48 @@ Phase is complete when:
 
 - profiling has one typed operational surface with multiple consumers
 - web and agent clients no longer need separate profiler integration logic
+
+## `SkillFactoryTaskPlane` Roadmap
+
+`SkillFactoryTaskPlane` should support the future
+[Skill Factory](skill-factory.md) without turning Root MCP into an unrestricted
+remote development shell.
+
+The plane is task-scoped. It serves one assigned `realize_request` to one
+isolated dev node through one lease and one allowed forge branch.
+
+### `SkillFactoryTask-0`. Architecture and contracts
+
+- [x] document the target architecture in
+  [Skill Factory and Isolated Dev Nodes](skill-factory.md)
+- [ ] define capability profiles: `SkillFactoryTaskRead`,
+  `SkillFactoryTaskValidate`, and `SkillFactoryTaskReport`
+- [ ] define redaction policy so task MCP tokens, forge credentials, and user
+  secrets never enter Codex prompts or generated artifacts
+- [ ] define task-scoped lease bindings: `task_id`, `dev_node_id`,
+  `subnet_id`, `forge_project`, `branch`, allowed paths, and deadline
+
+### `SkillFactoryTask-1`. Read and validation surface
+
+- [ ] expose requirement spec, UI draft, datasource schema, capability
+  snapshot, allowed files, denied files, and mock data for one task
+- [ ] expose bounded staging validation as a tool that returns evidence, not
+  direct runtime mutation
+- [ ] deny real user data, secrets, production actions, direct publish, and
+  broad repository access
+
+### `SkillFactoryTask-2`. Progress and result reporting
+
+- [ ] expose progress, heartbeat, failure, and completion reporting tools
+- [ ] link result reports to forge branch, commit hash, `result.json`, test
+  report, changed files, and sanitized logs
+- [ ] write Root MCP audit events for task read, validation, progress, failure,
+  and completion calls
+
+### `SkillFactoryTask-3`. Dev queue integration
+
+- [ ] bind task MCP lease issuance to Root dev queue assignment
+- [ ] revoke task MCP leases on completion, cancellation, expiry, node failure,
+  and cleanup
+- [ ] make User Hub validation consume the result evidence rather than trusting
+  dev-node test output alone

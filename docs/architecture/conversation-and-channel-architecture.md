@@ -17,6 +17,7 @@ Related documents:
 - [Endpoint Audio Service](endpoint-audio-service.md)
 - [AdaOS Builder](builder.md)
 - [Builder Roadmap](builder-roadmap.md)
+- [Skill Factory and Isolated Dev Nodes](skill-factory.md)
 - [Pending Actions](pending-actions.md)
 - [SDK IO](../sdk/io.md)
 

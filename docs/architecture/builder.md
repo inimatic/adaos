@@ -179,6 +179,32 @@ Root MCP should expose enough context for Builder to reason without scraping
 the repository blindly. Writes through Root MCP must remain governed,
 capability-scoped, audited, and previewable.
 
+## Relationship To Skill Factory
+
+The [Skill Factory](skill-factory.md) is the target remote realization layer
+for Builder work. It does not replace Builder, Prompt IDE, or the User Hub
+validation loop.
+
+Current Builder flows create local drafts, previews, patches, and review
+Pending Actions inside the user's AdaOS workspace. The target Skill Factory
+adds a Root-managed dev queue and isolated AdaOS dev nodes that can turn a
+normalized Builder `realize_request` into a forge task branch.
+
+The boundary is:
+
+- Builder owns idea capture, conversation context, draft metadata, acceptance
+  criteria, preview state, and human-facing review.
+- Root owns queue policy, dev-node identity, task assignment, task-scoped
+  credentials, MCP leases, timeouts, retries, and audit.
+- Isolated Dev Node owns workspace checkout, Codex execution packet
+  preparation, local tests, commit creation, result reporting, and cleanup.
+- User Hub owns final pull, validation, staging, Pending Actions, approval, and
+  normal skill/scenario lifecycle activation.
+
+This means remote realization must still produce ordinary AdaOS artifacts:
+skills, scenarios, manifests, `webui.json`, tests, reports, and release
+evidence. It must not directly mutate the user's live runtime.
+
 ## Builder Contracts
 
 Builder work should move through explicit contracts before runtime mutation:

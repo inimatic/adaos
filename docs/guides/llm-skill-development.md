@@ -11,6 +11,7 @@ runtime governance.
 Read this together with:
 
 - [AdaOS Builder](../architecture/builder.md)
+- [Skill Factory and Isolated Dev Nodes](../architecture/skill-factory.md)
 - the repository note `docs/interfaces/webio.md`
 - [UI Addressing](../architecture/ui-addressing.md)
 - [Named Entities and Canonical Naming](../architecture/named-entities.md)

@@ -5,6 +5,7 @@
 It is not a private shell bridge for Codex and not a one-off endpoint for a single test environment. It is the first vertical slice of a shared machine-readable and agent-operable foundation that should later support both:
 
 - [Builder](builder.md) workflows that create or repair skills and scenarios through SDK-oriented surfaces
+- [Skill Factory](skill-factory.md) workflows that dispatch bounded realization tasks to isolated AdaOS dev nodes
 - `LLM-assisted operations` through managed targets and governed operational capabilities
 
 This document defines the target-state architecture and key boundaries.
@@ -166,10 +167,17 @@ Candidate planes include:
 - `InfraOpsPlane`
 - `ProfileOpsPlane`
 - `NLUAuthoringPlane`
+- `SkillFactoryTaskPlane`
 
 For Builder, `AdaOSDevPlane` and `NLUAuthoringPlane` are context and preview
 surfaces. They are not the Builder itself; the canonical Builder workflow is
 defined in [AdaOS Builder](builder.md).
+
+For Skill Factory, `SkillFactoryTaskPlane` is a future task-scoped bridge. It
+should expose only the snapshots, requirements, mocks, validation tools, and
+progress reporting needed by one assigned realization task. It must not expose
+real user data, secrets, production actions, or broad repository access to an
+isolated dev node.
 
 The key rule is:
 
@@ -200,6 +208,37 @@ canonical refs.
 The web MCP Server modal should issue a target-scoped token/session lease for this profile. Root remains the policy and routing point:
 the browser receives a bearer token, root resolves it to subnet/zone/target/capabilities, and NLU authoring calls are routed only through
 published Root MCP contracts.
+
+### SkillFactoryTaskPlane
+
+`SkillFactoryTaskPlane` is the target MCP plane for isolated dev-node
+realization tasks.
+
+It is intentionally narrower than `AdaOSDevPlane`:
+
+- `AdaOSDevPlane` describes AdaOS development contracts, SDKs, manifests,
+  templates, and registries.
+- `SkillFactoryTaskPlane` binds a single assigned `realize_request` to
+  task-scoped snapshots, mocks, validation tools, progress reporting, and
+  result evidence.
+
+Initial capability profile:
+
+- `SkillFactoryTaskRead`: read requirement specs, UI drafts, datasource
+  schemas, capability snapshots, allowed files, and mock data for one task.
+- `SkillFactoryTaskValidate`: run bounded staging validation against task
+  artifacts and return validation evidence.
+- `SkillFactoryTaskReport`: report progress, failure, commit hash, result
+  manifest, and sanitized logs for one task.
+
+The plane must enforce that the MCP session lease is tied to one `task_id`,
+one dev-node identity, one user subnet, and one forge branch. Tokens for this
+plane should be exposed to the private developer skill as tool bindings or
+environment variables, not as prompt text for Codex.
+
+The target architecture for the surrounding queue, dev-node lifecycle, forge
+branch discipline, and User Hub validation loop is defined in
+[Skill Factory and Isolated Dev Nodes](skill-factory.md).
 
 ## Root MCP Foundation Model
 
@@ -728,6 +767,13 @@ Early `Root MCP Foundation` should not allow:
 - reading secrets as a generic capability
 - unrestricted `docker`, `systemctl`, `git`, or package-manager access
 - broad production-target operations
+
+For Skill Factory tasks, Root MCP should also not become:
+
+- a raw remote shell for isolated dev nodes
+- a substitute for forge commits and task branches
+- a channel for exposing user runtime secrets to Codex
+- a direct activation path into the user's hub
 
 ## Operation Routing Model
 

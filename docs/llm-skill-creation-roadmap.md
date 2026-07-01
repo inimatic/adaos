@@ -1,5 +1,17 @@
 # AdaOS Roadmap
 
+Status: historical / secondary planning note.
+
+For current architecture and sequencing, use:
+
+- [AdaOS Builder](architecture/builder.md)
+- [Builder Roadmap](architecture/builder-roadmap.md)
+- [Skill Factory and Isolated Dev Nodes](architecture/skill-factory.md)
+
+This page remains useful as older checklist context for LLM-assisted skill
+creation, but it is not the source of truth for Builder or remote realization
+architecture.
+
 ## LLM Skill Creation in AdaOS
 
 ### Scaffold

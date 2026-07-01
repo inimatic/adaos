@@ -398,6 +398,9 @@ MVP outcome:
   work.
 - Operational planes expose current status and bounded actions with audit.
 - Known observability gaps are explicit, especially historical reconstruction.
+- Remote Skill Factory / Isolated Dev Node realization is documented as a
+  target architecture, but MVP does not require the full Root dev queue or
+  external dev-node pool.
 
 Checklist:
 
@@ -412,11 +415,15 @@ Checklist:
 - [ ] Keep `adaosmcp` self-check explicit about degraded analysis channels.
 - [ ] Ensure Builder draft/preview/apply/repair flow uses Root MCP descriptors
   and Pending Actions, not unguided direct mutation.
+- [ ] Keep the future Skill Factory boundary explicit: local Builder flows must
+  remain compatible with `realize_request` task envelopes, task-scoped MCP, and
+  forge task-branch evidence without depending on external dev nodes for MVP.
 
 Related docs:
 
 - [Root MCP Foundation](architecture/root-mcp-foundation.md)
 - [Root MCP Roadmap](architecture/root-mcp-roadmap.md)
+- [Skill Factory and Isolated Dev Nodes](architecture/skill-factory.md)
 - [SDK Control Plane](sdk_control_plane.md)
 - [AdaOS Builder](architecture/builder.md)
 - [Builder Roadmap](architecture/builder-roadmap.md)
@@ -482,3 +489,5 @@ pulls in a smaller required slice.
 - Complete profile-aware personalization and overlay precedence.
 - iOS client and broad mobile-native feature parity.
 - Full generated-skill marketplace/public ecosystem.
+- Full remote Skill Factory with Root dev queue, isolated dev-node pool,
+  task-scoped forge credentials, and automatic remote realization.

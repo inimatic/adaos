@@ -56,6 +56,7 @@ gate easy to read by priority.
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: addressed Builder entrypoint, dedicated Builder conversation, paired Prompt IDE dev webspace, first phrase-level build flow, thread-aware embedded chat, and non-specialist draft summary exist; Prompt IDE as full Builder Workbench remains open. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, and Prompt IDE widget binding; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
+| 10. Skill Factory | Open: target architecture exists; RealizeRequest schema, Root dev queue, dev-node registry, task-scoped MCP, forge task branches, and User Hub validation loop are not implemented. | Open: dev-node simulator, queue diagnostics, and failure fixtures. | Open: multi-node pools and parallel dev tasks. | None. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -481,11 +482,54 @@ Open work:
   demonstrates skill-owned conversation, memory proposal, Pending Action, and
   browser widget patterns.
 
+## Phase 10. Skill Factory And Isolated Dev Nodes
+
+Goal: Builder can hand a normalized realization task to Root, Root can assign
+it to an isolated AdaOS dev node, and the User Hub can validate the resulting
+forge task branch before any runtime activation.
+
+Current implementation slices:
+
+- [x] `[must]` Local Builder draft/preview and Prompt IDE dev-webspace slices
+  exist.
+- [x] `[must]` Root MCP descriptors, session leases, and `AdaOSDevPlane`
+  provide the first governed context foundation.
+- [x] `[must]` Pending Actions and runtime action-risk gates exist for review
+  and approval mechanics.
+- [x] `[must]` The target architecture is now documented in
+  [Skill Factory and Isolated Dev Nodes](skill-factory.md).
+
+Open work:
+
+- [ ] `[must]` Define `adaos.builder.realize_request.v1` and link it to Builder
+  conversations, drafts, previews, acceptance criteria, and sparse repo paths.
+- [ ] `[must]` Add Root dev queue and dev-node registry contracts with
+  lifecycle states, heartbeat, assignment, cancellation, timeout, retry, and
+  result events.
+- [ ] `[must]` Define forge task branch discipline and result evidence:
+  `result.json`, test report, changed files, sanitized logs, and commit hash.
+- [ ] `[must]` Add task-scoped MCP and credential leases for isolated dev-node
+  work; do not reuse broad runtime or user-subnet credentials.
+- [ ] `[must]` Implement the private developer skill / Codex runner wrapper
+  that prepares instruction packets, enforces allowed paths, runs tests,
+  commits, reports, and cleans up.
+- [ ] `[must]` Add User Hub result fetch, validation, staging, and Pending
+  Action approval before normal skill/scenario activation.
+- [ ] `[should]` Add a local dev-node simulator for tests and operator trials.
+- [ ] `[should]` Add golden task fixtures for success, test failure, forbidden
+  file edit, MCP denial, cancellation, and User Hub validation failure.
+- [ ] `[could]` Add multi-node pools, task placement policy, and parallel tasks
+  after one-task-per-node isolation is proven.
+
 ## Cross-Document Anchors
 
 Builder is intentionally cross-cutting. Detailed work remains in:
 
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
+- [Skill Factory and Isolated Dev Nodes](skill-factory.md): target remote
+  realization layer for Root-managed dev queues, isolated dev nodes, forge
+  task branches, task-scoped MCP, Codex execution packets, and User Hub
+  validation
 - [Conversation and Channel Architecture](conversation-and-channel-architecture.md):
   dedicated Builder conversation, skill-owned chats, and transport-independent
   context
@@ -524,5 +568,8 @@ The remaining `[must]` work stays active in parallel:
 - Reference runtime: move the remaining Builder call paths to context packets,
   retrieved evidence refs, scoped memory, and Pending Actions across all
   supported transports.
+- Skill Factory foundation: keep current local Builder flows compatible with
+  future `realize_request` task envelopes, Root dev queue, isolated dev-node
+  execution, and User Hub validation.
 - Evaluation/browser acceptance: broaden golden dialogs and add browser
   acceptance for Voice/global dialog, Prompt IDE, and Pending Actions.

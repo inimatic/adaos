@@ -37,6 +37,7 @@ Current target-state control-plane extensions are documented in:
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization
 - [AdaOS Builder](builder.md): canonical role and end-to-end workflow for turning ideas into governed skills, scenarios, UI descriptors, NLU hints, tests, and runtime-ready changes
 - [Builder Roadmap](builder-roadmap.md): cross-cutting roadmap for the Builder vertical slice across Root MCP, NLU Teacher, skill/scenario runtime, validation, approval, activation, and repair
+- [Skill Factory and Isolated Dev Nodes](skill-factory.md): target architecture and roadmap for remote realization through Root-managed dev queues, isolated AdaOS dev nodes, task-scoped MCP, forge branches, Codex execution packets, and User Hub validation
 - [Pending Actions](pending-actions.md): target core plane for durable human-in-the-loop responses, node-aware response routing, localization, and separation from notifications
 - [Conversation and Channel Architecture](conversation-and-channel-architecture.md): target architecture for conversation identity, skill-owned chats, transport-independent context, Builder chat isolation, SDK APIs, and migration checklist
 - [Web UI Architecture](web-ui-architecture.md): target stable browser-client architecture over `webui.v1`, semantic views, typed actions, Taiga renderers, and Ionic shell concerns

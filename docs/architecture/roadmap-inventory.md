@@ -1,6 +1,6 @@
 # Roadmap Inventory and Documentation Audit
 
-Snapshot date: 2026-06-27.
+Snapshot date: 2026-06-30.
 
 This page is the current cross-document inventory for AdaOS target
 architecture, implementation roadmaps, and high-value documentation gaps. It is
@@ -294,6 +294,7 @@ Authoritative docs:
 
 - [AdaOS Builder](builder.md)
 - [Builder Roadmap](builder-roadmap.md)
+- [Skill Factory and Isolated Dev Nodes](skill-factory.md)
 - [Root MCP Foundation](root-mcp-foundation.md)
 - [Root MCP Roadmap](root-mcp-roadmap.md)
 - [SDK Control Plane](../sdk_control_plane.md)
@@ -319,11 +320,18 @@ Current status:
   and governed device alias add/remove/deprecate writes.
 - [x] NLU authoring handlers receive Root MCP bearer/session scope and return
   target/subnet evidence in results.
+- [x] Skill Factory target architecture is documented as the future remote
+  realization layer for Builder work through Root dev queue, isolated dev
+  nodes, task-scoped MCP, forge branches, Codex execution packets, and User
+  Hub validation.
 - [ ] `NLUTeacherRead`, `NLUTeacherDryRun`, and `NLUTeacherAuthor` capability
   profile names still need final freezing.
 - [ ] Redaction policy for NLU authoring prompts/traces is not fully frozen.
 - [x] `nlu_authoring.check_phrase` exists as the current read-only phrase check.
 - [ ] Template list/get and safe template patch tools remain open.
+- [ ] `SkillFactoryTaskPlane`, `realize_request`, Root dev queue, dev-node
+  registry, task assignment, task-scoped forge credentials, and User Hub
+  result validation are target-state only.
 - [ ] Subnet historical reconstruction is still weaker than current snapshot
   inspection.
 - [ ] End-to-end Builder draft/preview/apply/repair workflow is not yet a
@@ -336,6 +344,9 @@ Developer-doc gap:
 - Builder should be treated as the source of truth for capability creation
   terminology. Domain docs should link back to [AdaOS Builder](builder.md)
   instead of introducing separate names such as "LLM programmer".
+- Skill Factory should be described as a future remote realization layer, not
+  as current Codex-in-VS-Code bridge functionality or as a runtime action
+  gateway.
 
 ### Named Entities, Device Identity, and NLU Canonicalization
 
