@@ -46,7 +46,10 @@ _WEBIO_RECEIVER_METADATA_CACHE_TTL_S = 2.0
 _WEBIO_STREAM_GUARD_STATS_LOCK = threading.Lock()
 _WEBIO_STREAM_GUARD_STATS: dict[str, dict[str, Any]] = {}
 GENERAL_DIALOG_AGENT_ID = "agent:core:general"
-GENERAL_DIALOG_AGENT_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "Ада").strip() or "Ада"
+GENERAL_DIALOG_AGENT_CONFIGURED_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "").strip()
+GENERAL_DIALOG_AGENT_DEFAULT_LABEL = "Ассистент"
+GENERAL_DIALOG_AGENT_GENDER = os.getenv("ADAOS_GENERAL_ASSISTANT_GENDER", "male").strip().lower() or "male"
+GENERAL_DIALOG_AGENT_VOICE = os.getenv("ADAOS_GENERAL_ASSISTANT_VOICE", "ru-male").strip() or "ru-male"
 GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
 GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
@@ -60,14 +63,14 @@ VOICE_CHAT_HISTORY_LIMIT = 200
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
     {
         "id": GENERAL_DIALOG_AGENT_ID,
-        "label": GENERAL_DIALOG_AGENT_LABEL,
+        "label": GENERAL_DIALOG_AGENT_DEFAULT_LABEL,
         "owner": GENERAL_DIALOG_AGENT_OWNER,
         "kind": "core_agent",
         "channel_id": GENERAL_DIALOG_CHANNEL_ID,
-        "gender": "female",
-        "voice": "ru-female",
+        "gender": GENERAL_DIALOG_AGENT_GENDER,
+        "voice": GENERAL_DIALOG_AGENT_VOICE,
         "icon": "sparkles-outline",
-        "aliases": (GENERAL_DIALOG_AGENT_LABEL, "Ада", "Ada", "general", "общий ассистент"),
+        "aliases": (GENERAL_DIALOG_AGENT_DEFAULT_LABEL, "ассистент", "общий ассистент", "general"),
     },
     {
         "id": "agent:conversation_companions:arseni",
@@ -136,7 +139,7 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
     },
 )
 _GENERAL_AGENT_ADDRESS_RE = re.compile(
-    r"^\s*(?:ада|ada|general|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
+    r"^\s*(?:general|ассистент|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
     re.IGNORECASE | re.UNICODE,
 )
 
@@ -259,6 +262,87 @@ def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) 
     }
 
 
+def _dedupe_texts(values: list[Any] | tuple[Any, ...]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        token = str(value or "").strip()
+        if not token:
+            continue
+        key = token.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(token)
+    return result
+
+
+def _current_subnet_id() -> str:
+    for getter in (
+        lambda: getattr(get_ctx(), "config", None),
+        load_config,
+    ):
+        try:
+            config = getter()
+        except Exception:
+            continue
+        for attr in ("subnet_id_value", "subnet_id"):
+            try:
+                token = str(getattr(config, attr, "") or "").strip()
+            except Exception:
+                token = ""
+            if token:
+                return token
+    return ""
+
+
+def _is_technical_subnet_label(label: str) -> bool:
+    return bool(re.fullmatch(r"sn_[0-9a-f]{8,}", str(label or "").strip(), re.IGNORECASE))
+
+
+def _general_agent_label() -> str:
+    if GENERAL_DIALOG_AGENT_CONFIGURED_LABEL:
+        return GENERAL_DIALOG_AGENT_CONFIGURED_LABEL
+    subnet_id = _current_subnet_id()
+    try:
+        label = display_subnet_alias(load_subnet_alias(subnet_id=subnet_id), subnet_id)
+    except Exception:
+        label = subnet_id
+    token = str(label or "").strip()
+    if token and not _is_technical_subnet_label(token):
+        return token
+    return GENERAL_DIALOG_AGENT_DEFAULT_LABEL
+
+
+def _general_agent_aliases(label: str | None = None) -> list[str]:
+    resolved = str(label or _general_agent_label()).strip()
+    return _dedupe_texts(
+        [
+            resolved,
+            GENERAL_DIALOG_AGENT_DEFAULT_LABEL,
+            "ассистент",
+            "общий ассистент",
+            "general",
+        ]
+    )
+
+
+def _general_agent_record() -> dict[str, Any]:
+    label = _general_agent_label()
+    return {
+        **dict(_CONVERSATION_AGENT_REGISTRY[0]),
+        "id": GENERAL_DIALOG_AGENT_ID,
+        "label": label,
+        "owner": GENERAL_DIALOG_AGENT_OWNER,
+        "kind": "core_agent",
+        "channel_id": GENERAL_DIALOG_CHANNEL_ID,
+        "gender": GENERAL_DIALOG_AGENT_GENDER,
+        "voice": GENERAL_DIALOG_AGENT_VOICE,
+        "icon": "sparkles-outline",
+        "aliases": tuple(_general_agent_aliases(label)),
+    }
+
+
 def _is_dialog_surface_route(
     meta: Mapping[str, Any] | None,
     payload: Mapping[str, Any] | None = None,
@@ -325,7 +409,9 @@ def _dialog_surface_fallback_policy(
 
 
 def _fallback_agent_registry_records() -> list[dict[str, Any]]:
-    return [dict(item) for item in _CONVERSATION_AGENT_REGISTRY]
+    records = [_general_agent_record()]
+    records.extend(dict(item) for item in _CONVERSATION_AGENT_REGISTRY[1:])
+    return records
 
 
 def _skill_manifest_dirs() -> list[Path]:
@@ -578,9 +664,21 @@ def _agent_registry_records() -> list[dict[str, Any]]:
     except Exception:
         records = []
     if records:
-        if not any(str(item.get("id") or "").strip() == GENERAL_DIALOG_AGENT_ID for item in records):
-            return [_general_agent_projection(), *records]
-        return [dict(item) for item in records]
+        general = _general_agent_record()
+        merged: list[dict[str, Any]] = []
+        has_general = False
+        for item in records:
+            record = dict(item)
+            if str(record.get("id") or "").strip() == GENERAL_DIALOG_AGENT_ID:
+                record = {
+                    **record,
+                    **general,
+                }
+                has_general = True
+            merged.append(record)
+        if not has_general:
+            return [general, *merged]
+        return merged
     return _fallback_agent_registry_records()
 
 
@@ -653,7 +751,28 @@ def _agent_label_from_id(agent_id: Any) -> str:
 
 
 def _general_agent_projection() -> dict[str, Any]:
-    return _agent_projection_from_record(_CONVERSATION_AGENT_REGISTRY[0])
+    return _agent_projection_from_record(_general_agent_record())
+
+
+def _general_agent_metadata() -> dict[str, Any]:
+    agent = _general_agent_projection()
+    gender = str(agent.get("gender") or "").strip()
+    voice = str(agent.get("voice") or "").strip()
+    return {
+        "active_agent_id": GENERAL_DIALOG_AGENT_ID,
+        "active_agent_label": str(agent.get("label") or "").strip(),
+        "active_agent_gender": gender or None,
+        "active_agent_voice": voice or None,
+        "active_agent_icon": agent.get("icon"),
+        "voice_gender": gender or None,
+        "voice": voice or None,
+        "voice_profile": agent.get("voice_profile") or _agent_voice_profile({"gender": gender, "voice": voice}),
+    }
+
+
+def _apply_general_agent_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    meta.update(_general_agent_metadata())
+    return meta
 
 
 def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: str) -> dict[str, Any]:
@@ -690,15 +809,8 @@ def _extract_general_agent_addressed_text(text: str) -> str | None:
     value = str(text or "").strip()
     if not value:
         return None
-    aliases = {
-        GENERAL_DIALOG_AGENT_LABEL.strip().lower(),
-        "ада",
-        "ada",
-        "general",
-        "общий ассистент",
-    }
-    aliases = {item for item in aliases if item}
-    lowered = value.lower()
+    aliases = {item.casefold() for item in _general_agent_aliases() if item}
+    lowered = value.casefold()
     if lowered in aliases:
         return ""
     for alias in aliases:
@@ -738,10 +850,11 @@ def _extract_addressed_agent(text: str) -> tuple[dict[str, Any], str] | None:
 
 
 def _general_agent_transition_text(seed: str = "") -> str:
+    label = _general_agent_label()
     variants = [
-        f"{GENERAL_DIALOG_AGENT_LABEL} на связи. Продолжим в общем режиме.",
-        f"{GENERAL_DIALOG_AGENT_LABEL} к вашим услугам. Чем помочь дальше?",
-        f"{GENERAL_DIALOG_AGENT_LABEL} рада помочь. Я вернула диалог в общий режим.",
+        f"{label} на связи. Продолжим в общем режиме.",
+        f"{label} к вашим услугам. Чем помочь дальше?",
+        f"{label} готов помочь. Диалог вернулся в общий режим.",
     ]
     try:
         index = sum(ord(ch) for ch in str(seed or "")) % len(variants)
@@ -751,10 +864,11 @@ def _general_agent_transition_text(seed: str = "") -> str:
 
 
 def _general_agent_ready_text(seed: str = "") -> str:
+    label = _general_agent_label()
     variants = [
-        f"{GENERAL_DIALOG_AGENT_LABEL} на связи.",
-        f"{GENERAL_DIALOG_AGENT_LABEL} к вашим услугам.",
-        f"{GENERAL_DIALOG_AGENT_LABEL} рада помочь.",
+        f"{label} на связи.",
+        f"{label} к вашим услугам.",
+        f"{label} готов помочь.",
     ]
     try:
         index = sum(ord(ch) for ch in str(seed or "")) % len(variants)
@@ -782,13 +896,14 @@ def _is_agent_roster_question(text: str) -> bool:
 
 
 def _agent_roster_text() -> str:
+    general_label = _general_agent_label()
     companions = [
         agent
         for agent in _agent_registry_records()
         if str(agent.get("channel_id") or "").strip() == CONVERSATIONAL_DIALOG_CHANNEL_ID
     ]
     lines = [
-        f"{GENERAL_DIALOG_AGENT_LABEL}: в общем режиме я отвечаю как системный ассистент.",
+        f"{general_label}: в общем режиме я отвечаю как системный ассистент.",
         "Для разговорного режима доступны персонажи:",
     ]
     for agent in companions:
@@ -799,7 +914,7 @@ def _agent_roster_text() -> str:
             "agent:conversation_companions:mira": "теплый собеседник",
         }.get(str(agent.get("id") or "").strip(), "разговорный агент")
         lines.append(f"- {label}: {role}.")
-    lines.append("Можно обратиться по имени: «Арсений, ...», «Ника, ...» или «Мира, ...».")
+    lines.append(f"Можно обратиться по имени: «{general_label}, ...», «Арсений, ...», «Ника, ...» или «Мира, ...».")
     return "\n".join(lines)
 
 
@@ -4839,6 +4954,7 @@ class RouterService:
                 if channel_id == "general":
                     _persist_general_dialog_channel(ws, event="manual_select_general")
                     if current is not None:
+                        general_meta = _general_agent_metadata()
                         dialog_runtime.deactivate_channel(
                             webspace_id=ws,
                             channel_id=current.channel_id,
@@ -4853,11 +4969,7 @@ class RouterService:
                                 "from": "hub",
                                 "text": _general_agent_transition_text("manual_select_general"),
                                 "ts": time.time(),
-                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
-                                "active_agent_gender": "female",
-                                "active_agent_voice": "ru-female",
-                                "active_agent_icon": _general_agent_projection().get("icon"),
+                                **general_meta,
                             },
                             _resolve_voice_target_node_id(payload, route_meta, default_local=False),
                         )
@@ -5133,11 +5245,7 @@ class RouterService:
                         reason="general_channel_requested",
                     )
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
-                meta["active_agent_id"] = GENERAL_DIALOG_AGENT_ID
-                meta["active_agent_label"] = GENERAL_DIALOG_AGENT_LABEL
-                meta["active_agent_gender"] = "female"
-                meta["active_agent_voice"] = "ru-female"
-                meta["active_agent_icon"] = _general_agent_projection().get("icon")
+                _apply_general_agent_metadata(meta)
                 try:
                     await _write_dialog_state(ws, event="general_channel_requested")
                 except Exception:
@@ -5222,6 +5330,7 @@ class RouterService:
             addressed_agent = _extract_addressed_agent(text)
             if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
                 addressed_general_text = addressed_agent[1]
+                general_meta = _general_agent_metadata()
                 _persist_general_dialog_channel(ws, event="general_agent_addressed")
                 _record_voice_turn_trace(
                     ws,
@@ -5247,11 +5356,7 @@ class RouterService:
                             "from": "hub",
                             "text": _general_agent_transition_text(text),
                             "ts": time.time(),
-                            "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-                            "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
-                            "active_agent_gender": "female",
-                            "active_agent_voice": "ru-female",
-                            "active_agent_icon": _general_agent_projection().get("icon"),
+                            **general_meta,
                             "_meta": dict(meta),
                         }
                         self.bus.publish(
@@ -5268,11 +5373,7 @@ class RouterService:
                     except Exception:
                         pass
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
-                meta["active_agent_id"] = GENERAL_DIALOG_AGENT_ID
-                meta["active_agent_label"] = GENERAL_DIALOG_AGENT_LABEL
-                meta["active_agent_gender"] = "female"
-                meta["active_agent_voice"] = "ru-female"
-                meta["active_agent_icon"] = _general_agent_projection().get("icon")
+                _apply_general_agent_metadata(meta)
                 if not addressed_general_text:
                     try:
                         await _write_dialog_state(ws, event="general_agent_addressed")
@@ -5286,11 +5387,7 @@ class RouterService:
                                 "from": "hub",
                                 "text": _general_agent_ready_text(text),
                                 "ts": time.time(),
-                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
-                                "active_agent_gender": "female",
-                                "active_agent_voice": "ru-female",
-                                "active_agent_icon": _general_agent_projection().get("icon"),
+                                **general_meta,
                                 "_meta": dict(meta),
                             },
                             target_node_id,
@@ -5324,11 +5421,7 @@ class RouterService:
                                 "from": "hub",
                                 "text": _agent_roster_text(),
                                 "ts": time.time(),
-                                "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-                                "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
-                                "active_agent_gender": "female",
-                                "active_agent_voice": "ru-female",
-                                "active_agent_icon": _general_agent_projection().get("icon"),
+                                **general_meta,
                                 "_meta": dict(meta),
                             },
                             target_node_id,
@@ -5439,6 +5532,7 @@ class RouterService:
                 else GENERAL_DIALOG_CHANNEL_ID
             )
             if current_channel_id_for_roster == GENERAL_DIALOG_CHANNEL_ID and _is_agent_roster_question(text):
+                general_meta = _general_agent_metadata()
                 _record_voice_turn_trace(
                     ws,
                     meta,
@@ -5456,11 +5550,7 @@ class RouterService:
                             "from": "hub",
                             "text": _agent_roster_text(),
                             "ts": time.time(),
-                            "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-                            "active_agent_label": GENERAL_DIALOG_AGENT_LABEL,
-                            "active_agent_gender": "female",
-                            "active_agent_voice": "ru-female",
-                            "active_agent_icon": _general_agent_projection().get("icon"),
+                            **general_meta,
                             "_meta": dict(meta),
                         },
                         target_node_id,

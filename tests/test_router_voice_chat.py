@@ -100,6 +100,11 @@ class _SkillCtx:
         return None
 
 
+def _patch_general_agent_name(monkeypatch, label: str = "Домашний ассистент") -> None:
+    monkeypatch.setattr(router_service_module, "load_subnet_alias", lambda *, subnet_id=None: label)
+    monkeypatch.setattr(router_service_module, "display_subnet_alias", lambda alias, subnet_id: str(alias or "").strip() or label)
+
+
 async def test_io_out_say_preserves_agent_tts_profile(monkeypatch) -> None:
     bus = LocalEventBus()
     doc = _Doc()
@@ -586,10 +591,11 @@ def test_voice_chat_data_path_is_node_scoped() -> None:
 async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> None:
     bus = LocalEventBus()
     doc = _Doc()
+    _patch_general_agent_name(monkeypatch)
     monkeypatch.setattr(
         router_service_module,
         "get_ctx",
-        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn_home")),
     )
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
@@ -613,7 +619,28 @@ async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> Non
     await bus.wait_for_idle(timeout=1.0)
     dialog = doc.get_map("data")["dialog"]
     assert dialog["active_channel_id"] == "general"
+    assert dialog["active_agent"]["id"] == "agent:core:general"
+    assert dialog["active_agent"]["label"] == "Домашний ассистент"
+    assert dialog["active_agent"]["voice_profile"]["gender"] == "male"
     assert [item["id"] for item in dialog["channels"][:2]] == ["general", "conversational"]
+
+
+def test_general_agent_registry_uses_subnet_alias_without_ada_alias(monkeypatch) -> None:
+    _patch_general_agent_name(monkeypatch)
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn_home")),
+    )
+    projection = router_service_module._general_agent_projection()
+
+    assert projection["id"] == "agent:core:general"
+    assert projection["label"] == "Домашний ассистент"
+    assert projection["gender"] == "male"
+    assert projection["voice"] == "ru-male"
+    assert "Домашний ассистент" in projection["aliases"]
+    assert "Ада" not in projection["aliases"]
+    assert "Ada" not in projection["aliases"]
 
 
 async def test_dialog_channel_select_conversational_activates_companion(monkeypatch) -> None:
@@ -1115,10 +1142,11 @@ async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) 
     bus = LocalEventBus()
     doc = _Doc()
     webspace_id = "dialog-general-ws"
+    _patch_general_agent_name(monkeypatch)
     monkeypatch.setattr(
         router_service_module,
         "get_ctx",
-        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn_home")),
     )
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
@@ -1156,9 +1184,10 @@ async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) 
     data = doc.get_map("data")
     assert data["dialog"]["active_channel_id"] == "general"
     assert data["dialog"]["active_agent"]["id"] == "agent:core:general"
-    assert data["dialog"]["active_agent"]["label"] == "Ада"
+    assert data["dialog"]["active_agent"]["label"] == "Домашний ассистент"
+    assert data["dialog"]["active_agent"]["voice_profile"]["gender"] == "male"
     assert dialog_runtime.get_active_channel(webspace_id) is None
-    assert "Ада" in data["voice_chat"]["messages"][-1]["text"]
+    assert "Домашний ассистент" in data["voice_chat"]["messages"][-1]["text"]
     dialog_runtime.reset_all()
 
 
@@ -1749,12 +1778,14 @@ async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeyp
     seen_nlu: list[Event] = []
     webspace_id = "general-agent-address-ws"
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    _patch_general_agent_name(monkeypatch)
     monkeypatch.setattr(
         router_service_module,
         "get_ctx",
         lambda: SimpleNamespace(
             config=SimpleNamespace(
                 node_id="hub-node",
+                subnet_id="sn_home",
                 root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
             ),
             paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
@@ -1800,7 +1831,7 @@ async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeyp
             source="test",
             ts=1.0,
             payload={
-                "text": "Ada, weather in Paris",
+                "text": "Домашний ассистент, weather in Paris",
                 "webspace_id": webspace_id,
                 "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
             },
@@ -1818,8 +1849,9 @@ async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeyp
     assert seen_nlu[0].payload["_meta"]["active_agent_id"] == "agent:core:general"
     data = doc.get_map("data")
     assert data["dialog"]["active_channel_id"] == "general"
-    assert data["dialog"]["active_agent"]["label"] == "Ада"
-    assert "Ада" in data["voice_chat"]["messages"][-1]["text"]
+    assert data["dialog"]["active_agent"]["label"] == "Домашний ассистент"
+    assert data["dialog"]["active_agent"]["voice_profile"]["gender"] == "male"
+    assert "Домашний ассистент" in data["voice_chat"]["messages"][-1]["text"]
     dialog_runtime.reset_all()
 
 
@@ -1966,12 +1998,14 @@ async def test_voice_chat_golden_companion_dialog_flow(monkeypatch) -> None:
     conversation_id = f"conv.skill.conversation_companions.default.{webspace_id}"
 
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    _patch_general_agent_name(monkeypatch)
     monkeypatch.setattr(
         router_service_module,
         "get_ctx",
         lambda: SimpleNamespace(
             config=SimpleNamespace(
                 node_id="hub-node",
+                subnet_id="sn_home",
                 root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
             ),
             paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
@@ -2105,7 +2139,7 @@ async def test_voice_chat_golden_companion_dialog_flow(monkeypatch) -> None:
         "Помоги выбрать формат интервью",
         "Ника, проверь идею",
         "говори короче и теплее",
-        "Ада, погода в Париже",
+        "Домашний ассистент, погода в Париже",
     ):
         bus.publish(
             Event(
@@ -2439,12 +2473,14 @@ async def test_voice_chat_general_agent_describes_available_agents(monkeypatch) 
     seen_nlu: list[Event] = []
     webspace_id = "agent-roster-ws"
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    _patch_general_agent_name(monkeypatch)
     monkeypatch.setattr(
         router_service_module,
         "get_ctx",
         lambda: SimpleNamespace(
             config=SimpleNamespace(
                 node_id="hub-node",
+                subnet_id="sn_home",
                 root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
             )
         ),
@@ -2463,7 +2499,7 @@ async def test_voice_chat_general_agent_describes_available_agents(monkeypatch) 
             source="test",
             ts=1.0,
             payload={
-                "text": "Ада, расскажи о своих агентах",
+                "text": "Домашний ассистент, расскажи о своих агентах",
                 "webspace_id": webspace_id,
                 "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
             },
@@ -2476,7 +2512,10 @@ async def test_voice_chat_general_agent_describes_available_agents(monkeypatch) 
     assert seen_nlu == []
     response = doc.get_map("data")["voice_chat"]["messages"][-1]
     assert response["active_agent_id"] == "agent:core:general"
+    assert response["active_agent_label"] == "Домашний ассистент"
+    assert response["active_agent_gender"] == "male"
     assert response["active_agent_icon"] == "sparkles-outline"
+    assert "Домашний ассистент" in response["text"]
     assert "Арсений" in response["text"]
     assert "Ника" in response["text"]
     assert "Мира" in response["text"]

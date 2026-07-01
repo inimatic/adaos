@@ -63,8 +63,10 @@ Implemented today:
   on an upgraded node, Router can bootstrap the active projection from the
   latest ledger message.
 - The `general` channel has a core-owned default agent identity:
-  `agent:core:general`, displayed as `Ada`/`Ада` unless configured otherwise.
-  Addressing that agent by name while another channel is active deactivates the
+  `agent:core:general`, displayed as the configured subnet/assistant name
+  (fallback: `Ассистент`). `Ада`/`Ada` are not built-in aliases because they
+  are too easy to misrecognize in broad-audience speech input. Addressing the
+  current general agent name while another channel is active deactivates the
   active process-local channel and routes the remaining text through the
   general Voice/NLU path.
 - Router seeds a persisted pilot agent/channel registry from the core general
@@ -152,8 +154,9 @@ Implemented companion pilot scenarios:
   `conversation_companions.talk` delegating to `update_profile`.
 - Exit: explicit "general"/"back to general" style commands deactivate the
   pilot channel and return unmatched turns to the general Voice fallback.
-  Addressing the general agent by name, for example "Ада, ...", performs the
-  same channel exit and continues with the remaining text in the general path.
+  Addressing the current general agent by subnet/assistant name, for example
+  "Домашний ассистент, ...", performs the same channel exit and continues with
+  the remaining text in the general path.
 - Manual channel switch: the Voice selector can switch `general` ->
   `conversational` through the same skill-owned start contract and
   `conversational` -> `general` through core-owned deactivation.
