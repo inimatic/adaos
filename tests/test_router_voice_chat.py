@@ -34,6 +34,13 @@ async def _drain_voice_chat_persist(router: RouterService) -> None:
     pending = list(getattr(router, "_voice_chat_persist_tasks", set()))
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
+    dialog_pending = [
+        task
+        for task in getattr(router, "_dialog_state_tasks", {}).values()
+        if task is not None and not task.done()
+    ]
+    if dialog_pending:
+        await asyncio.gather(*dialog_pending, return_exceptions=True)
 
 
 class _Txn:
@@ -91,6 +98,51 @@ class _SkillCtx:
 
     def clear(self):
         return None
+
+
+async def test_io_out_say_preserves_agent_tts_profile(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "tts-agent-profile-ws"
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="io.out.say",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "Арсений отвечает.",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "active_agent_id": "agent:conversation_companions:arseni",
+                    "active_agent_label": "Арсений",
+                    "active_agent_gender": "male",
+                    "active_agent_voice": "ru-male",
+                    "active_agent_icon": "male-outline",
+                    "voice_profile": {"gender": "male", "voice": "ru-male", "lang": "ru-RU"},
+                },
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+
+    queue = doc.get_map("data")["tts"]["queue"]
+    assert queue
+    assert queue[-1]["voice"] == "ru-male"
+    assert queue[-1]["voice_gender"] == "male"
+    assert queue[-1]["active_agent_id"] == "agent:conversation_companions:arseni"
+    assert queue[-1]["active_agent_gender"] == "male"
+    assert queue[-1]["voice_profile"]["gender"] == "male"
 
 
 async def test_voice_chat_user_ignores_other_target_node(monkeypatch) -> None:

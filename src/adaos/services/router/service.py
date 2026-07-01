@@ -601,8 +601,22 @@ def _agent_voice_profile(agent: Mapping[str, Any]) -> dict[str, Any]:
         "gender": gender or None,
         "voice": voice or None,
         "lang": "ru-RU",
-        "browser_voice_hint": voice or gender or None,
+        "browser_voice_hint": _browser_voice_hint(voice=voice, gender=gender),
     }
+
+
+def _browser_voice_hint(*, voice: Any = None, gender: Any = None) -> str | None:
+    gender_token = str(gender or "").strip().lower()
+    if gender_token in {"female", "male"}:
+        return gender_token
+    voice_token = str(voice or "").strip().lower()
+    if not voice_token:
+        return gender_token or None
+    if voice_token in {"female", "ru-female"} or voice_token.endswith("-female") or voice_token.endswith("_female"):
+        return "female"
+    if voice_token in {"male", "ru-male"} or voice_token.endswith("-male") or voice_token.endswith("_male"):
+        return "male"
+    return voice_token or gender_token or None
 
 
 def _agent_projection_from_record(agent: Mapping[str, Any]) -> dict[str, Any]:
@@ -2514,15 +2528,6 @@ class RouterService:
                     _mutate_data_map(
                         webspace_id,
                         _mutator,
-                        channel="core.router.dialog.live_room",
-                        prefer_live_room=True,
-                    ),
-                    timeout=_voice_chat_yjs_timeout_s(),
-                )
-                await asyncio.wait_for(
-                    _mutate_data_map(
-                        webspace_id,
-                        _mutator,
                         channel="core.router.dialog.store",
                         prefer_live_room=False,
                     ),
@@ -3303,7 +3308,12 @@ class RouterService:
                     return
                 data_map.set(txn, "tts", {"queue": []})
 
-            await _mutate_data_map(webspace_id, _mutator, channel="core.router.tts.live_room")
+            await _mutate_data_map(
+                webspace_id,
+                _mutator,
+                channel="core.router.tts.store",
+                prefer_live_room=False,
+            )
 
         async def _append_tts_queue_item(webspace_id: str, item: dict) -> None:
             def _mutator(data_map: Any, txn: Any) -> None:
@@ -3316,7 +3326,12 @@ class RouterService:
                     queue = queue[-50:]
                 data_map.set(txn, "tts", {"queue": queue})
 
-            await _mutate_data_map(webspace_id, _mutator, channel="core.router.tts.live_room")
+            await _mutate_data_map(
+                webspace_id,
+                _mutator,
+                channel="core.router.tts.store",
+                prefer_live_room=False,
+            )
 
         def _local_stream_node_id() -> str:
             try:
@@ -3986,6 +4001,7 @@ class RouterService:
                 return
             if self._event_originates_from_remote_member(payload):
                 return
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 return
@@ -3994,10 +4010,60 @@ class RouterService:
                 "text": text.strip(),
                 "ts": float(payload.get("ts") or time.time()),
             }
-            if isinstance(payload.get("lang"), str) and payload.get("lang").strip():
-                item["lang"] = payload.get("lang").strip()
-            if isinstance(payload.get("voice"), str) and payload.get("voice").strip():
-                item["voice"] = payload.get("voice").strip()
+            voice_profile = payload.get("voice_profile") if isinstance(payload.get("voice_profile"), dict) else None
+            if voice_profile is None and isinstance(meta.get("voice_profile"), dict):
+                voice_profile = meta.get("voice_profile")
+            lang = str(
+                payload.get("lang")
+                or meta.get("lang")
+                or ((voice_profile or {}).get("lang") if isinstance(voice_profile, dict) else "")
+                or ""
+            ).strip()
+            if lang:
+                item["lang"] = lang
+            voice = str(
+                payload.get("voice")
+                or meta.get("voice")
+                or payload.get("active_agent_voice")
+                or meta.get("active_agent_voice")
+                or ((voice_profile or {}).get("voice") if isinstance(voice_profile, dict) else "")
+                or ""
+            ).strip()
+            voice_hint = _browser_voice_hint(voice=voice)
+            inferred_gender = voice_hint if voice_hint in {"female", "male"} else ""
+            gender = str(
+                payload.get("voice_gender")
+                or meta.get("voice_gender")
+                or payload.get("active_agent_gender")
+                or meta.get("active_agent_gender")
+                or ((voice_profile or {}).get("gender") if isinstance(voice_profile, dict) else "")
+                or inferred_gender
+                or ""
+            ).strip()
+            if voice:
+                item["voice"] = voice
+            if gender:
+                item["voice_gender"] = gender
+            for key in ("active_agent_id", "active_agent_label", "active_agent_gender", "active_agent_voice", "active_agent_icon"):
+                value = payload.get(key) if payload.get(key) is not None else meta.get(key)
+                if isinstance(value, str) and value.strip():
+                    item[key] = value.strip()
+            if isinstance(voice_profile, dict):
+                next_profile = dict(voice_profile)
+                if gender and not next_profile.get("gender"):
+                    next_profile["gender"] = gender
+                if voice and not next_profile.get("voice"):
+                    next_profile["voice"] = voice
+                if not next_profile.get("browser_voice_hint"):
+                    next_profile["browser_voice_hint"] = gender or voice_hint
+                item["voice_profile"] = next_profile
+            elif voice or gender:
+                item["voice_profile"] = {
+                    "gender": gender or None,
+                    "voice": voice or None,
+                    "lang": lang or "ru-RU",
+                    "browser_voice_hint": gender or voice_hint,
+                }
             if isinstance(payload.get("rate"), (int, float)):
                 item["rate"] = float(payload.get("rate"))
             for ws in await _resolve_webspace_ids(payload):

@@ -93,6 +93,7 @@ def materialize_response(
                 payload["active_agent_label"] = actor_label
             if actor_icon:
                 payload["active_agent_icon"] = actor_icon
+            _attach_voice_metadata(payload, clean_meta)
             stored = _append_ledger_message(
                 payload,
                 webspace_id=webspace_id,
@@ -120,9 +121,7 @@ def materialize_response(
             "lang": str(clean_meta.get("lang") or "ru-RU"),
             "_meta": clean_meta,
         }
-        voice = str(clean_meta.get("voice") or clean_meta.get("active_agent_voice") or "").strip()
-        if voice:
-            say_payload["voice"] = voice
+        _attach_voice_metadata(say_payload, clean_meta)
         _publish(bus, "io.out.say", say_payload, source=source)
 
     return {
@@ -432,6 +431,62 @@ def _targets_or_none(value: Any) -> tuple[str, ...] | None:
         return None
     targets = tuple(str(item or "").strip() for item in value if str(item or "").strip())
     return targets or None
+
+
+def _voice_profile(meta: Mapping[str, Any]) -> dict[str, Any]:
+    profile = meta.get("voice_profile")
+    if isinstance(profile, Mapping):
+        return dict(profile)
+    agent = meta.get("active_agent")
+    if isinstance(agent, Mapping) and isinstance(agent.get("voice_profile"), Mapping):
+        return dict(agent["voice_profile"])
+    return {}
+
+
+def _voice_gender_from_voice(voice: Any) -> str:
+    token = str(voice or "").strip().lower()
+    if not token:
+        return ""
+    if token in {"female", "ru-female"} or token.endswith("-female") or token.endswith("_female"):
+        return "female"
+    if token in {"male", "ru-male"} or token.endswith("-male") or token.endswith("_male"):
+        return "male"
+    return ""
+
+
+def _attach_voice_metadata(payload: dict[str, Any], meta: Mapping[str, Any]) -> None:
+    profile = _voice_profile(meta)
+    voice = str(meta.get("voice") or meta.get("active_agent_voice") or profile.get("voice") or "").strip()
+    gender = str(
+        meta.get("voice_gender")
+        or meta.get("active_agent_gender")
+        or profile.get("gender")
+        or _voice_gender_from_voice(voice)
+        or ""
+    ).strip()
+    if voice:
+        payload["voice"] = voice
+    if gender:
+        payload["voice_gender"] = gender
+    if profile:
+        if gender and not profile.get("gender"):
+            profile["gender"] = gender
+        if voice and not profile.get("voice"):
+            profile["voice"] = voice
+        if not profile.get("browser_voice_hint"):
+            profile["browser_voice_hint"] = gender or _voice_gender_from_voice(voice) or voice
+        payload["voice_profile"] = profile
+    for key in (
+        "active_agent_id",
+        "active_agent_label",
+        "active_agent_gender",
+        "active_agent_voice",
+        "active_agent_icon",
+        "agent_icon",
+    ):
+        value = meta.get(key)
+        if isinstance(value, str) and value.strip():
+            payload.setdefault(key, value.strip())
 
 
 def _as_mapping(value: Any) -> dict[str, Any] | None:

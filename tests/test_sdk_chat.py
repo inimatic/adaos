@@ -88,18 +88,33 @@ def test_response_envelope_materializes_chat_and_speech() -> None:
         owner="skill:test",
         bus=bus,
         route_id="voice_chat",
-        actor_id="agent:test:nika",
-        actor_label="Nika",
+        actor_id="agent:test:arseni",
+        actor_label="Арсений",
         raw_meta={"request_id": "req.1"},
-        payload_meta={"turn_trace_id": "trace.1"},
+        payload_meta={
+            "turn_trace_id": "trace.1",
+            "active_agent_gender": "male",
+            "active_agent_voice": "ru-male",
+            "active_agent_icon": "male-outline",
+            "voice_profile": {"gender": "male", "voice": "ru-male", "lang": "ru-RU"},
+        },
     )
 
     assert result["materialized"] is True
     assert chat_events[0].payload["text"] == "Envelope reply"
     assert chat_events[0].payload["_meta"]["turn_trace_id"] == "trace.1"
+    assert chat_events[0].payload["active_agent_id"] == "agent:test:arseni"
+    assert chat_events[0].payload["voice_gender"] == "male"
+    assert chat_events[0].payload["voice"] == "ru-male"
     assert say_events[0].payload["text"] == "Speak this"
+    assert say_events[0].payload["active_agent_id"] == "agent:test:arseni"
+    assert say_events[0].payload["active_agent_gender"] == "male"
+    assert say_events[0].payload["voice_gender"] == "male"
+    assert say_events[0].payload["voice"] == "ru-male"
+    assert say_events[0].payload["voice_profile"]["gender"] == "male"
     projection = conversation_store.list_projection("conv.envelope")
     assert projection["messages"][0]["text"] == "Envelope reply"
+    assert projection["messages"][0]["voice_gender"] == "male"
 
 
 def test_response_planner_infers_structured_targets() -> None:
