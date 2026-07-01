@@ -78,6 +78,68 @@ _EFFECTIVE_BRANCH_PATHS = (
     "registry.merged",
     "runtime.environment",
 )
+_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES = (
+    "ui.application",
+    "data.catalog",
+    "data.installed",
+    "data.desktop",
+    "data.webio",
+    "data.routing",
+    "registry.merged",
+)
+
+
+def _normalize_materialization_required_branches(value: Any) -> list[str]:
+    if isinstance(value, Mapping):
+        raw_items = value.get("required_branches")
+        if raw_items is None:
+            raw_items = value.get("requiredBranches")
+    else:
+        raw_items = value
+    if isinstance(raw_items, str):
+        raw_items = [item.strip() for item in raw_items.split(",")]
+    if not isinstance(raw_items, Iterable) or isinstance(raw_items, (bytes, bytearray, str)):
+        return []
+    allowed_roots = {"ui", "data", "registry", "runtime"}
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        token = str(raw or "").strip().replace("/", ".")
+        parts = [part.strip() for part in token.split(".") if part.strip()]
+        if len(parts) < 2 or parts[0] not in allowed_roots:
+            continue
+        path = ".".join(parts)
+        if path in seen:
+            continue
+        seen.add(path)
+        normalized.append(path)
+    return normalized
+
+
+def _scenario_materialization_contract(scenario_id: str | None, *, source_mode: str) -> dict[str, Any]:
+    token = str(scenario_id or "").strip()
+    loader_space = _scenario_loader_space(source_mode)
+    manifest: Mapping[str, Any] = {}
+    if token:
+        try:
+            manifest = scenarios_loader.read_manifest(token, space=loader_space)
+        except Exception:
+            manifest = {}
+    materialization = manifest.get("materialization") if isinstance(manifest, Mapping) else None
+    required = _normalize_materialization_required_branches(materialization)
+    source = "scenario_manifest"
+    if not required:
+        runtime = manifest.get("runtime") if isinstance(manifest, Mapping) else None
+        yjs_runtime = runtime.get("yjs") if isinstance(runtime, Mapping) else None
+        required = _normalize_materialization_required_branches(yjs_runtime)
+        source = "runtime.yjs" if required else "default"
+    if not required:
+        required = list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES)
+    return {
+        "required_branches": required,
+        "source": source,
+        "scenario_id": token or None,
+    }
 
 
 def _member_snapshot_rebuild_min_interval_s() -> float:
@@ -2724,6 +2786,9 @@ def _build_materialization_snapshot(
     has_scenario_ui_application: bool,
     has_scenario_registry_entry: bool,
     has_scenario_catalog: bool,
+    has_data_webio: bool | None = None,
+    has_data_routing: bool | None = None,
+    has_registry_merged: bool | None = None,
     catalog_apps_count: int,
     catalog_widgets_count: int,
     installed_apps_count: int,
@@ -2731,6 +2796,7 @@ def _build_materialization_snapshot(
     topbar_count: int,
     page_widget_count: int,
     rebuild_state: Mapping[str, Any] | None = None,
+    required_branches: list[str] | tuple[str, ...] | None = None,
     snapshot_source: str,
     stale: bool = False,
     error: str | None = None,
@@ -2747,7 +2813,28 @@ def _build_materialization_snapshot(
         has_installed_apps=has_installed_apps,
         has_installed_widgets=has_installed_widgets,
     )
-    ready = not missing_branches
+    declared_required_branches = list(required_branches or _DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES)
+    branch_presence = {
+        "ui.application": bool(has_ui_application),
+        "ui.application.desktop": bool(has_desktop_config),
+        "ui.application.desktop.pageSchema": bool(has_desktop_page_schema),
+        "ui.application.modals.apps_catalog": bool(has_apps_catalog_modal),
+        "ui.application.modals.widgets_catalog": bool(has_widgets_catalog_modal),
+        "data.catalog": bool(has_catalog_apps and has_catalog_widgets),
+        "data.catalog.apps": bool(has_catalog_apps),
+        "data.catalog.widgets": bool(has_catalog_widgets),
+        "data.desktop": bool(has_data_desktop),
+        "data.installed": bool(has_installed_apps and has_installed_widgets),
+        "data.installed.apps": bool(has_installed_apps),
+        "data.installed.widgets": bool(has_installed_widgets),
+        "data.webio": bool(has_data_webio) if has_data_webio is not None else bool(has_catalog_apps or has_catalog_widgets),
+        "data.routing": bool(has_data_routing) if has_data_routing is not None else bool(has_desktop_page_schema),
+        "registry.merged": bool(has_registry_merged) if has_registry_merged is not None else bool(has_ui_application),
+    }
+    missing_required_branches = [
+        branch for branch in declared_required_branches if branch_presence.get(str(branch), False) is False
+    ]
+    ready = not missing_required_branches
     readiness_state = _derive_materialization_readiness_state(
         ready=ready,
         current_scenario=current_scenario,
@@ -2774,6 +2861,8 @@ def _build_materialization_snapshot(
         "ready": ready,
         "readiness_state": readiness_state,
         "missing_branches": missing_branches,
+        "required_branches": declared_required_branches,
+        "missing_required_branches": missing_required_branches,
         "compatibility_caches": compatibility_caches,
         "webspace_id": str(webspace_id or "").strip() or "default",
         "current_scenario": str(current_scenario or "").strip() or None,
@@ -3727,6 +3816,10 @@ class WebspaceScenarioRuntime:
             metadata = dict(metadata)
         metadata["scenario_source"] = scenario_source
         metadata["legacy_scenario_fallback"] = legacy_fallback
+        metadata["materialization"] = _scenario_materialization_contract(
+            scenario_id,
+            source_mode=mode,
+        )
 
         preserve_live_state = _preserve_live_state_on_rebuild_enabled()
         if preserve_live_state:
@@ -4191,7 +4284,14 @@ class WebspaceScenarioRuntime:
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")
         runtime_map = ydoc.get_map("runtime")
-        runtime_environment = runtime_environment_payload()
+        materialization_contract = _coerce_dict(effective_inputs.metadata.get("materialization") or {})
+        if not materialization_contract:
+            materialization_contract = _scenario_materialization_contract(
+                resolved.scenario_id,
+                source_mode=resolved.source_mode,
+            )
+        runtime_environment = dict(runtime_environment_payload())
+        runtime_environment["materialization"] = materialization_contract
         target_paths = _EFFECTIVE_BRANCH_PATHS
         changed_paths: List[str] = []
         diff_applied_paths: List[str] = []
@@ -4204,6 +4304,7 @@ class WebspaceScenarioRuntime:
         phase_timings_ms: Dict[str, float] = {}
         compatibility_presence = dict(effective_inputs.compatibility_cache_presence or {})
         resolved_branch_fingerprints = _resolved_output_branch_fingerprints(resolved)
+        resolved_branch_fingerprints["runtime.environment"] = _fingerprint_json_like(runtime_environment)
         persisted_branch_fingerprints = _read_effective_branch_fingerprints(registry_map)
         effective_branch_fingerprints = dict(persisted_branch_fingerprints)
         pending_fingerprint_updates: Dict[str, str] = {}
@@ -4234,6 +4335,9 @@ class WebspaceScenarioRuntime:
                 has_scenario_ui_application=bool(compatibility_presence.get("scenario_ui_application")),
                 has_scenario_registry_entry=bool(compatibility_presence.get("scenario_registry_entry")),
                 has_scenario_catalog=bool(compatibility_presence.get("scenario_catalog")),
+                has_data_webio=include_catalog and isinstance(resolved.webio, Mapping),
+                has_data_routing=include_catalog and isinstance(resolved.routing, Mapping),
+                has_registry_merged=bool(resolved.registry),
                 catalog_apps_count=len(resolved.catalog.get("apps") or []) if include_catalog else 0,
                 catalog_widgets_count=len(resolved.catalog.get("widgets") or []) if include_catalog else 0,
                 installed_apps_count=len(installed.get("apps") or []) if include_catalog else 0,
@@ -4241,6 +4345,8 @@ class WebspaceScenarioRuntime:
                 topbar_count=len(topbar),
                 page_widget_count=len(page_widgets),
                 rebuild_state=describe_webspace_rebuild_state(webspace_id),
+                required_branches=_normalize_materialization_required_branches(materialization_contract)
+                or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
                 snapshot_source=f"semantic_rebuild:{phase_name}",
                 stale=False,
             )

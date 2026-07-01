@@ -385,17 +385,56 @@ _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_
 _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", True)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
-_YROOM_EFFECTIVE_REQUIRED_DATA_KEYS = tuple(
-    key.strip()
-    for key in str(
+_YROOM_EFFECTIVE_DEFAULT_REQUIRED_BRANCHES = (
+    "ui.application",
+    "data.catalog",
+    "data.installed",
+    "data.desktop",
+    "data.webio",
+    "data.routing",
+    "registry.merged",
+)
+
+
+def _yroom_effective_env_required_branches() -> tuple[str, ...]:
+    raw_branches = str(os.getenv("ADAOS_YJS_EFFECTIVE_REQUIRED_BRANCHES", "") or "").strip()
+    if raw_branches:
+        return _normalize_required_branch_list(raw_branches.split(","))
+    raw_data_keys = str(
         os.getenv(
             "ADAOS_YJS_EFFECTIVE_REQUIRED_DATA_KEYS",
-            "catalog,installed,desktop,webio,routing",
+            "",
         )
         or ""
-    ).split(",")
-    if key.strip()
-)
+    ).strip()
+    if raw_data_keys:
+        return _normalize_required_branch_list(f"data.{key.strip()}" for key in raw_data_keys.split(","))
+    return tuple(_YROOM_EFFECTIVE_DEFAULT_REQUIRED_BRANCHES)
+
+
+def _normalize_required_branch_list(raw_items: Any) -> tuple[str, ...]:
+    if isinstance(raw_items, str):
+        raw_items = raw_items.split(",")
+    if isinstance(raw_items, (bytes, bytearray)) or raw_items is None:
+        return ()
+    try:
+        items = list(raw_items)
+    except Exception:
+        return ()
+    allowed_roots = {"ui", "data", "registry", "runtime"}
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        token = str(raw or "").strip().replace("/", ".")
+        parts = [part.strip() for part in token.split(".") if part.strip()]
+        if len(parts) < 2 or parts[0] not in allowed_roots:
+            continue
+        path = ".".join(parts)
+        if path in seen:
+            continue
+        seen.add(path)
+        normalized.append(path)
+    return tuple(normalized)
 
 
 def _yws_single_client_reconnect_escalation_limit() -> int:
@@ -4774,22 +4813,7 @@ def _recreate_y_server_after_failure(reason: str) -> None:
 
 def _room_effective_branches_ready(ydoc: Any) -> bool:
     try:
-        ui_map = ydoc.get_map("ui")
-        data_map = ydoc.get_map("data")
-        application = ui_map.get("application")
-        if not _room_effective_application_ready(application):
-            return False
-        catalog = data_map.get("catalog")
-        if not _room_effective_catalog_ready(catalog):
-            return False
-        installed = data_map.get("installed")
-        if not _room_effective_installed_ready(installed):
-            return False
-        if not _room_effective_data_desktop_ready(data_map.get("desktop")):
-            return False
-        if _room_effective_missing_required_data_keys(data_map):
-            return False
-        return True
+        return not _room_effective_missing_required_branches(ydoc)
     except Exception:
         return False
 
@@ -4828,9 +4852,69 @@ def _room_effective_data_desktop_ready(desktop: Any) -> bool:
     return isinstance(desktop, dict)
 
 
+def _room_effective_required_branches(ydoc: Any) -> tuple[str, ...]:
+    try:
+        runtime_map = ydoc.get_map("runtime")
+        environment = runtime_map.get("environment")
+        if isinstance(environment, dict):
+            materialization = environment.get("materialization")
+            if isinstance(materialization, dict):
+                required = _normalize_required_branch_list(materialization.get("required_branches"))
+                if required:
+                    return required
+    except Exception:
+        pass
+    return _yroom_effective_env_required_branches()
+
+
+def _room_effective_branch_value(ydoc: Any, path: str) -> Any:
+    parts = [part for part in str(path or "").split(".") if part]
+    if len(parts) < 2:
+        return None
+    try:
+        current = ydoc.get_map(parts[0])
+    except Exception:
+        return None
+    for part in parts[1:]:
+        try:
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                current = current.get(part)
+        except Exception:
+            return None
+        if current is None:
+            return None
+    return current
+
+
+def _room_effective_required_branch_ready(path: str, value: Any) -> bool:
+    if path == "ui.application":
+        return _room_effective_application_ready(value)
+    if path == "data.catalog":
+        return _room_effective_catalog_ready(value)
+    if path == "data.installed":
+        return _room_effective_installed_ready(value)
+    if path == "data.desktop":
+        return _room_effective_data_desktop_ready(value)
+    return value is not None
+
+
+def _room_effective_missing_required_branches(ydoc: Any) -> list[str]:
+    missing: list[str] = []
+    for path in _room_effective_required_branches(ydoc):
+        value = _room_effective_branch_value(ydoc, path)
+        if not _room_effective_required_branch_ready(path, value):
+            missing.append(path)
+    return missing
+
+
 def _room_effective_missing_required_data_keys(data_map: Any) -> list[str]:
     missing: list[str] = []
-    for key in _YROOM_EFFECTIVE_REQUIRED_DATA_KEYS:
+    for path in _yroom_effective_env_required_branches():
+        if not path.startswith("data."):
+            continue
+        key = path.split(".", 1)[1]
         try:
             value = data_map.get(key)
         except Exception:
@@ -4852,20 +4936,7 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
     if not _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS:
         return True
     try:
-        ui_map = ydoc.get_map("ui")
-        data_map = ydoc.get_map("data")
-        ydoc.get_map("registry")
-        application = ui_map.get("application")
-        catalog = data_map.get("catalog")
-        installed = data_map.get("installed")
-        desktop = data_map.get("desktop")
-        return (
-            _room_effective_application_ready(application)
-            and _room_effective_catalog_ready(catalog)
-            and _room_effective_installed_ready(installed)
-            and _room_effective_data_desktop_ready(desktop)
-            and not _room_effective_missing_required_data_keys(data_map)
-        )
+        return not _room_effective_missing_required_branches(ydoc)
     except Exception:
         return False
 
@@ -4911,15 +4982,17 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         return {"ready": False, "error": "missing_ydoc"}
     if not _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS:
         try:
-            data_map = ydoc.get_map("data")
-            missing_required_data_keys = _room_effective_missing_required_data_keys(data_map)
+            required_branches = list(_room_effective_required_branches(ydoc))
+            missing_required_branches = _room_effective_missing_required_branches(ydoc)
         except Exception:
-            missing_required_data_keys = []
+            required_branches = []
+            missing_required_branches = []
         return {
             "ready": _room_effective_top_level_ready(ydoc),
             "mode": "top_level_snapshot",
             "details": "disabled",
-            "missing_required_data_keys": missing_required_data_keys,
+            "required_branches": required_branches,
+            "missing_required_branches": missing_required_branches,
         }
     try:
         ui_map = ydoc.get_map("ui")
@@ -4934,14 +5007,15 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         catalog = data_map.get("catalog")
         installed = data_map.get("installed")
         desktop = data_map.get("desktop")
-        missing_required_data_keys = _room_effective_missing_required_data_keys(data_map)
+        required_branches = list(_room_effective_required_branches(ydoc))
+        missing_required_branches = _room_effective_missing_required_branches(ydoc)
         snapshot = {
             "ready": _room_effective_branches_ready(ydoc),
             "ui_keys": ui_keys,
             "data_keys": data_keys,
             "registry_keys": registry_keys,
-            "required_data_keys": list(_YROOM_EFFECTIVE_REQUIRED_DATA_KEYS),
-            "missing_required_data_keys": missing_required_data_keys,
+            "required_branches": required_branches,
+            "missing_required_branches": missing_required_branches,
             "has_application": isinstance(application, dict) and bool(application),
             "has_application_desktop": isinstance(application_desktop, dict) and bool(application_desktop),
             "has_application_page_schema": isinstance(application_desktop, dict)

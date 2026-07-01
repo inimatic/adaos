@@ -199,16 +199,24 @@ def test_gateway_initial_effective_repair_is_opt_in_by_default() -> None:
     assert gateway_module._YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES == 0
 
 
-def test_gateway_default_required_data_keys_do_not_require_scenarios_branch() -> None:
-    assert "scenarios" not in gateway_module._YROOM_EFFECTIVE_REQUIRED_DATA_KEYS
+def test_gateway_default_required_branches_do_not_require_scenarios_branch() -> None:
+    assert "data.scenarios" not in gateway_module._YROOM_EFFECTIVE_DEFAULT_REQUIRED_BRANCHES
 
 
-def test_gateway_default_required_data_keys_match_effective_materialization_contract() -> None:
-    required = set(gateway_module._YROOM_EFFECTIVE_REQUIRED_DATA_KEYS)
-    assert {"catalog", "installed", "desktop", "webio", "routing"}.issubset(required)
-    assert "webspaces" not in required
-    assert "builder" not in required
-    assert "dialog" not in required
+def test_gateway_default_required_branches_match_effective_materialization_contract() -> None:
+    required = set(gateway_module._YROOM_EFFECTIVE_DEFAULT_REQUIRED_BRANCHES)
+    assert {
+        "ui.application",
+        "data.catalog",
+        "data.installed",
+        "data.desktop",
+        "data.webio",
+        "data.routing",
+        "registry.merged",
+    }.issubset(required)
+    assert "data.webspaces" not in required
+    assert "data.builder" not in required
+    assert "data.dialog" not in required
 
 
 def test_room_bootstrap_rebuild_status_finalizer_is_lightweight() -> None:
@@ -226,17 +234,17 @@ def test_room_bootstrap_rebuild_status_finalizer_is_lightweight() -> None:
                     "catalog": {"apps": [], "widgets": []},
                     "installed": {"apps": [], "widgets": []},
                     "desktop": {},
+                    "webio": {},
+                    "routing": {},
                     "webspaces": {},
                     "pending_actions": {},
-                    "webio": {},
                     "nodes": {},
-                    "routing": {},
                     "builder": {},
                     "dialog": {},
                     "scenarios": {},
                 }
             if name == "registry":
-                return {}
+                return {"merged": {}}
             return {}
 
     seed_result: dict[str, object] = {}
@@ -254,7 +262,6 @@ def test_room_bootstrap_rebuild_status_finalizer_is_lightweight() -> None:
 
 def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
-    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_REQUIRED_DATA_KEYS", ("catalog", "installed", "desktop"))
 
     class _Doc:
         def __init__(self, state: dict[str, dict[str, object]]) -> None:
@@ -275,8 +282,10 @@ def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
                 "catalog": {"apps": [], "widgets": []},
                 "installed": {"apps": [], "widgets": []},
                 "desktop": {},
+                "webio": {},
+                "routing": {},
             },
-            "registry": {},
+            "registry": {"merged": {}},
         }
     )
     partial_installed_doc = _Doc(
@@ -291,8 +300,10 @@ def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
                 "catalog": {"apps": [], "widgets": []},
                 "installed": {},
                 "desktop": {},
+                "webio": {},
+                "routing": {},
             },
-            "registry": {},
+            "registry": {"merged": {}},
         }
     )
 
@@ -306,13 +317,8 @@ def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
     assert snapshot["has_installed_widgets"] is False
 
 
-def test_gateway_effective_guard_requires_runtime_data_keys(monkeypatch) -> None:
+def test_gateway_effective_guard_uses_declarative_runtime_required_branches(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
-    monkeypatch.setattr(
-        gateway_module,
-        "_YROOM_EFFECTIVE_REQUIRED_DATA_KEYS",
-        ("catalog", "installed", "desktop", "pending_actions", "webio"),
-    )
 
     class _Doc:
         def __init__(self, state: dict[str, dict[str, object]]) -> None:
@@ -334,7 +340,21 @@ def test_gateway_effective_guard_requires_runtime_data_keys(monkeypatch) -> None
                 "installed": {"apps": [], "widgets": []},
                 "desktop": {},
             },
-            "registry": {},
+            "registry": {"merged": {}},
+            "runtime": {
+                "environment": {
+                    "materialization": {
+                        "required_branches": [
+                            "ui.application",
+                            "data.catalog",
+                            "data.installed",
+                            "data.desktop",
+                            "data.pending_actions",
+                            "data.webio",
+                        ]
+                    }
+                }
+            },
         }
     )
     ready_doc = _Doc(
@@ -352,14 +372,28 @@ def test_gateway_effective_guard_requires_runtime_data_keys(monkeypatch) -> None
                 "pending_actions": {},
                 "webio": {},
             },
-            "registry": {},
+            "registry": {"merged": {}},
+            "runtime": {
+                "environment": {
+                    "materialization": {
+                        "required_branches": [
+                            "ui.application",
+                            "data.catalog",
+                            "data.installed",
+                            "data.desktop",
+                            "data.pending_actions",
+                            "data.webio",
+                        ]
+                    }
+                }
+            },
         }
     )
 
     assert gateway_module._room_effective_top_level_ready(partial_doc) is False
     snapshot = gateway_module._room_effective_branch_snapshot(partial_doc)
     assert snapshot["ready"] is False
-    assert snapshot["missing_required_data_keys"] == ["pending_actions", "webio"]
+    assert snapshot["missing_required_branches"] == ["data.pending_actions", "data.webio"]
     assert gateway_module._room_effective_top_level_ready(ready_doc) is True
 
 
