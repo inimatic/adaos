@@ -203,6 +203,14 @@ def test_gateway_default_required_data_keys_do_not_require_scenarios_branch() ->
     assert "scenarios" not in gateway_module._YROOM_EFFECTIVE_REQUIRED_DATA_KEYS
 
 
+def test_gateway_default_required_data_keys_match_effective_materialization_contract() -> None:
+    required = set(gateway_module._YROOM_EFFECTIVE_REQUIRED_DATA_KEYS)
+    assert {"catalog", "installed", "desktop", "webio", "routing"}.issubset(required)
+    assert "webspaces" not in required
+    assert "builder" not in required
+    assert "dialog" not in required
+
+
 def test_room_bootstrap_rebuild_status_finalizer_is_lightweight() -> None:
     class _Doc:
         def get_map(self, name: str) -> dict[str, object]:

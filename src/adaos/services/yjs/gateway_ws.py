@@ -390,7 +390,7 @@ _YROOM_EFFECTIVE_REQUIRED_DATA_KEYS = tuple(
     for key in str(
         os.getenv(
             "ADAOS_YJS_EFFECTIVE_REQUIRED_DATA_KEYS",
-            "catalog,installed,desktop,webspaces,webio,nodes,routing,builder,dialog",
+            "catalog,installed,desktop,webio,routing",
         )
         or ""
     ).split(",")
