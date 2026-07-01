@@ -195,6 +195,8 @@ def _contract_plane_id(contract: RootMcpToolContract) -> str:
         return published_by.split(":", 1)[1].strip() or "foundation"
     if contract.id.startswith("adaos_dev."):
         return "adaos_dev"
+    if contract.id.startswith("skill_factory."):
+        return "skill_factory_task"
     if contract.id.startswith("hub.memory."):
         return "profile_ops"
     return "foundation"
@@ -471,6 +473,144 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "plane:adaos_dev", "handler": "builder_get_context"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.get_status",
+            title="Get Skill Factory status",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return Root Skill Factory queue, forge policy, dev-node registry, and ready-event diagnostics.",
+            input_schema=schema_object(properties={"include_tasks": {"type": "boolean"}}),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.read.status",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_get_status"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.submit_realize_request",
+            title="Submit realize request",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Submit a normalized Builder realize_request into the Root development queue.",
+            input_schema=schema_object(
+                properties={
+                    "realize_request": {"type": "object"},
+                    "priority": {"type": "integer"},
+                    "timeout_seconds": {"type": "integer", "minimum": 60},
+                    "max_attempts": {"type": "integer", "minimum": 1},
+                },
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.submit.realize_request",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_submit_realize_request"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.register_dev_node",
+            title="Register dev node",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Register or update an isolated Skill Factory development node.",
+            input_schema=schema_object(
+                properties={"registration": {"type": "object"}},
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_node.register",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_register_dev_node"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.heartbeat",
+            title="Heartbeat dev node",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Update liveness and current status for an isolated development node.",
+            input_schema=schema_object(
+                properties={
+                    "node_id": {"type": "string"},
+                    "status": {"type": "string"},
+                    "current_task_id": {"type": "string"},
+                    "load": {"type": "object"},
+                },
+                required=["node_id"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_node.heartbeat",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_heartbeat"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.poll_assignment",
+            title="Poll task assignment",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Poll Root for the next queued Skill Factory task assignment for a dev node.",
+            input_schema=schema_object(properties={"node_id": {"type": "string"}}, required=["node_id"]),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_task.poll",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_poll_assignment"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.report_progress",
+            title="Report task progress",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Report Skill Factory task progress from an assigned isolated dev node.",
+            input_schema=schema_object(
+                properties={
+                    "task_id": {"type": "string"},
+                    "node_id": {"type": "string"},
+                    "status": {"type": "string"},
+                    "stage": {"type": "string"},
+                    "message": {"type": "string"},
+                    "details": {"type": "object"},
+                },
+                required=["task_id"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_task.report",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_report_progress"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.complete_task",
+            title="Complete task",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Report a completed Skill Factory dev result and emit a ready event after branch/path validation.",
+            input_schema=schema_object(
+                properties={"dev_result": {"type": "object"}},
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_task.report",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_complete_task"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.fail_task",
+            title="Fail task",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Report a failed Skill Factory task and optionally requeue it according to retry policy.",
+            input_schema=schema_object(
+                properties={"failure": {"type": "object"}},
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_task.report",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_fail_task"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.cancel_task",
+            title="Cancel task",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Cancel a queued or active Skill Factory task.",
+            input_schema=schema_object(
+                properties={"task_id": {"type": "string"}, "reason": {"type": "string"}},
+                required=["task_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.dev_task.cancel",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_cancel_task"},
         ),
         RootMcpToolContract(
             id="nlu_authoring.get_context",
@@ -1571,6 +1711,10 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
         "scenario_manifest_schema",
         "builder_task_schema",
         "builder_draft_schema",
+        "builder_realize_request_schema",
+        "skill_factory_dev_task_assignment_schema",
+        "skill_factory_dev_result_schema",
+        "skill_factory_status",
         "nlu_teacher_schema",
         "descriptor_build_profile",
     ]
@@ -1585,17 +1729,24 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
         {"webspace_id": webspace_id},
         dry_run=True,
     ).get("descriptor")
-    nlu_context = _handle_nlu_authoring_context(
-        {
-            "webspace_id": webspace_id,
-            "request_locale": request_locale,
-            "preferred_locales": preferred_locales,
-            "include_live": include_live,
-            "include_hints": include_hints,
-            "_root_scope": root_scope,
-        },
-        dry_run=True,
-    ).get("context")
+    try:
+        nlu_context = _handle_nlu_authoring_context(
+            {
+                "webspace_id": webspace_id,
+                "request_locale": request_locale,
+                "preferred_locales": preferred_locales,
+                "include_live": include_live,
+                "include_hints": include_hints,
+                "_root_scope": root_scope,
+            },
+            dry_run=True,
+        ).get("context")
+    except Exception as exc:  # pragma: no cover - defensive best-effort context enrichment.
+        nlu_context = {
+            "available": False,
+            "status": "unavailable",
+            "error": type(exc).__name__,
+        }
     target_id = _text_or_none(root_scope.get("target_id"))
     runtime_status: dict[str, Any] = {
         "available": False,
@@ -1650,6 +1801,88 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
             ],
         }
     }
+
+
+def _skill_factory_service():
+    from adaos.services.skill_factory import SkillFactoryService
+
+    return SkillFactoryService()
+
+
+def _handle_skill_factory_get_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    include_tasks = bool(arguments.get("include_tasks", True))
+    return {"skill_factory": _skill_factory_service().snapshot(include_tasks=include_tasks)}
+
+
+def _handle_skill_factory_submit_realize_request(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    payload = dict(arguments.get("realize_request") if isinstance(arguments.get("realize_request"), Mapping) else arguments)
+    if dry_run:
+        return {
+            "would_enqueue": True,
+            "realize_request": _skill_factory_service().normalize_realize_request(payload),
+        }
+    return _skill_factory_service().submit_realize_request(payload)
+
+
+def _handle_skill_factory_register_dev_node(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    payload = dict(arguments.get("registration") if isinstance(arguments.get("registration"), Mapping) else arguments)
+    if dry_run:
+        return {"would_register": True, "registration": payload}
+    return _skill_factory_service().register_dev_node(payload)
+
+
+def _handle_skill_factory_heartbeat(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    node_id = _text_or_none(arguments.get("node_id"))
+    if not node_id:
+        raise ValueError("node_id is required")
+    if dry_run:
+        return {"would_update": True, "node_id": node_id}
+    return _skill_factory_service().heartbeat(node_id, arguments)
+
+
+def _handle_skill_factory_poll_assignment(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    node_id = _text_or_none(arguments.get("node_id"))
+    if not node_id:
+        raise ValueError("node_id is required")
+    if dry_run:
+        return {"would_poll": True, "node_id": node_id, "skill_factory": _skill_factory_service().snapshot(include_tasks=False)}
+    return _skill_factory_service().poll_assignment(node_id)
+
+
+def _handle_skill_factory_report_progress(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    task_id = _text_or_none(arguments.get("task_id"))
+    if not task_id:
+        raise ValueError("task_id is required")
+    if dry_run:
+        return {"would_report_progress": True, "task_id": task_id, "status": arguments.get("status")}
+    return _skill_factory_service().report_progress(task_id, arguments)
+
+
+def _handle_skill_factory_complete_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    payload = dict(arguments.get("dev_result") if isinstance(arguments.get("dev_result"), Mapping) else arguments)
+    if dry_run:
+        return {"would_complete": True, "dev_result": payload}
+    return _skill_factory_service().complete_task(payload)
+
+
+def _handle_skill_factory_fail_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    payload = dict(arguments.get("failure") if isinstance(arguments.get("failure"), Mapping) else arguments)
+    if dry_run:
+        return {"would_fail": True, "failure": payload}
+    return _skill_factory_service().fail_task(payload)
+
+
+def _handle_skill_factory_cancel_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    task_id = _text_or_none(arguments.get("task_id"))
+    if not task_id:
+        raise ValueError("task_id is required")
+    if dry_run:
+        return {"would_cancel": True, "task_id": task_id}
+    return _skill_factory_service().cancel_task(
+        task_id,
+        reason=_text_or_none(arguments.get("reason")),
+        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+    )
 
 
 def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -2800,6 +3033,15 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
+    "skill_factory.get_status": lambda arguments, dry_run=False: _handle_skill_factory_get_status(arguments, dry_run=dry_run),
+    "skill_factory.submit_realize_request": lambda arguments, dry_run=False: _handle_skill_factory_submit_realize_request(arguments, dry_run=dry_run),
+    "skill_factory.register_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_register_dev_node(arguments, dry_run=dry_run),
+    "skill_factory.heartbeat": lambda arguments, dry_run=False: _handle_skill_factory_heartbeat(arguments, dry_run=dry_run),
+    "skill_factory.poll_assignment": lambda arguments, dry_run=False: _handle_skill_factory_poll_assignment(arguments, dry_run=dry_run),
+    "skill_factory.report_progress": lambda arguments, dry_run=False: _handle_skill_factory_report_progress(arguments, dry_run=dry_run),
+    "skill_factory.complete_task": lambda arguments, dry_run=False: _handle_skill_factory_complete_task(arguments, dry_run=dry_run),
+    "skill_factory.fail_task": lambda arguments, dry_run=False: _handle_skill_factory_fail_task(arguments, dry_run=dry_run),
+    "skill_factory.cancel_task": lambda arguments, dry_run=False: _handle_skill_factory_cancel_task(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
     "nlu_authoring.check_phrase": lambda arguments, dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
     "nlu_authoring.get_trace": lambda arguments, dry_run=False: _handle_nlu_authoring_trace(arguments, dry_run=dry_run),
@@ -3022,6 +3264,8 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
         return "profile_ops.local_process.retry"
     if token == "hub.memory.publish_profile":
         return "profile_ops.local_process.publish"
+    if token.startswith("skill_factory."):
+        return "root.skill_factory_queue"
     if token.startswith("nlu_authoring."):
         return "nlu_authoring.context"
     if token.startswith("adaos_dev."):

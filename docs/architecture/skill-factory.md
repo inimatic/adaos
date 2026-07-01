@@ -53,12 +53,21 @@ Implemented today:
 
 - Builder can create local draft and preview artifacts through the existing dev
   workspace and lifecycle facades.
+- Builder can normalize a draft/prototype into
+  `adaos.builder.realize_request.v1`, persist it in Builder state, link it to
+  Builder conversation/Pending Action metadata, and optionally enqueue it for
+  remote realization.
 - Prompt IDE has a paired Builder dev webspace model for current source
   webspaces.
 - `builder_skill` owns the first conversation-native draft and patch flow, with
   Pending Action review handoff.
-- Root MCP has descriptor cache, `AdaOSDevPlane`, session leases, and
-  plane-scoped tool contracts.
+- Root MCP has descriptor cache, `AdaOSDevPlane`, `SkillFactoryTaskPlane`,
+  session leases, and plane-scoped tool contracts.
+- Root has a local Skill Factory queue/state service with dev-node
+  registration, heartbeat, assignment polling, task priority/timeout/retry,
+  cancellation, result validation, ready events, and diagnostics.
+- The MVP forge policy uses an AdaOS registry/local forge-compatible backend,
+  sparse checkout paths, and dev-node-created `realize/` task branches.
 - The skill runtime supports prepare, test, activate, rollback, A/B slots,
   lifecycle diagnostics, and quarantine markers.
 - `tool_bridge` can proxy tool calls across hub/member nodes and now enforces
@@ -66,16 +75,14 @@ Implemented today:
 
 Missing for this target architecture:
 
-- Root-owned development queue.
-- Isolated Dev Node registry, heartbeat, lifecycle, and task assignment.
 - Private developer skill installed inside isolated dev-node containers.
-- Task-scoped MCP bridge for realization tasks.
-- Forge task-branch discipline with sparse checkout and result manifests.
+- Task-scoped MCP bridge and credential issuance for realization tasks.
 - Codex runner wrapper that receives controlled instruction files instead of
   broad repo access.
+- Actual isolated dev-node container bootstrap and device auth.
 - User Hub result pull, validation, staging, and approval loop from a task
   branch.
-- Retry, cancellation, failure feedback, and cleanup contracts for dev tasks.
+- Branch cleanup execution, dev-node cleanup enforcement, and scale policy.
 
 ## Target Flow
 
@@ -614,51 +621,51 @@ inventing a separate development system:
 
 - [x] `[must]` Define the target architecture and responsibility boundaries in
   this document.
-- [ ] `[must]` Name canonical schemas:
+- [x] `[must]` Name canonical schemas:
   `adaos.builder.realize_request.v1`,
   `adaos.skill_factory.dev_node_registration.v1`,
   `adaos.skill_factory.dev_task_assignment.v1`,
   `adaos.skill_factory.dev_result.v1`,
   `adaos.skill_factory.dev_ready_event.v1`, and
   `adaos.skill_factory.dev_task_failure.v1`.
-- [ ] `[must]` Decide whether the first forge backend is private GitHub,
+- [x] `[must]` Decide whether the first forge backend is private GitHub,
   Gitea, GitLab, or existing AdaOS registry infrastructure.
-- [ ] `[should]` Decide whether task branches are created by Root or by the dev
+- [x] `[should]` Decide whether task branches are created by Root or by the dev
   node for the first implementation. Default MVP recommendation: dev node
   creates the branch from an assigned base branch.
 
 ### Phase 1. Realize Request Normalization
 
-- [ ] `[must]` Add a Builder `realize_request` schema that references
+- [x] `[must]` Add a Builder `realize_request` schema that references
   conversation, draft, preview, acceptance criteria, sparse paths, constraints,
   and requested MCP scope.
-- [ ] `[must]` Make Prompt IDE / Builder emit `realize_request` instead of raw
+- [x] `[must]` Make Prompt IDE / Builder emit `realize_request` instead of raw
   implementation text when the user asks to realize a prototype.
-- [ ] `[must]` Keep local Builder draft/preview flow working when remote
+- [x] `[must]` Keep local Builder draft/preview flow working when remote
   realization is unavailable.
-- [ ] `[should]` Link `realize_request` records to Pending Actions and Builder
+- [x] `[should]` Link `realize_request` records to Pending Actions and Builder
   conversation threads.
 
 ### Phase 2. Forge Workspace Discipline
 
-- [ ] `[must]` Define private forge project layout for skills, scenarios,
+- [x] `[must]` Define private forge project layout for skills, scenarios,
   requirements, and task evidence.
-- [ ] `[must]` Implement sparse checkout path calculation from target artifact
+- [x] `[must]` Implement sparse checkout path calculation from target artifact
   and Builder draft metadata.
-- [ ] `[must]` Require task branches for remote realization results.
-- [ ] `[must]` Validate that a dev result only changes allowed paths.
-- [ ] `[should]` Add branch retention and cleanup policy for abandoned or
+- [x] `[must]` Require task branches for remote realization results.
+- [x] `[must]` Validate that a dev result only changes allowed paths.
+- [x] `[should]` Add branch retention and cleanup policy for abandoned or
   superseded tasks.
 
 ### Phase 3. Root Dev Queue And Node Registry
 
-- [ ] `[must]` Add Root-side dev-node registration records with capabilities,
+- [x] `[must]` Add Root-side dev-node registration records with capabilities,
   trust level, status, heartbeat, and max parallel tasks.
-- [ ] `[must]` Add a Root dev queue with task states, priority, timeout,
+- [x] `[must]` Add a Root dev queue with task states, priority, timeout,
   cancellation, retry count, and source refs.
-- [ ] `[must]` Add polling endpoints or Root MCP tools for dev-node
+- [x] `[must]` Add polling endpoints or Root MCP tools for dev-node
   assignment, status events, completion, failure, and heartbeat.
-- [ ] `[should]` Publish queue and dev-node status to operator diagnostics.
+- [x] `[should]` Publish queue and dev-node status to operator diagnostics.
 
 ### Phase 4. Isolated Dev Node Bootstrap
 

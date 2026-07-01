@@ -56,7 +56,7 @@ gate easy to read by priority.
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: addressed Builder entrypoint, dedicated Builder conversation, paired Prompt IDE dev webspace, first phrase-level build flow, thread-aware embedded chat, and non-specialist draft summary exist; Prompt IDE as full Builder Workbench remains open. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, and Prompt IDE widget binding; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
-| 10. Skill Factory | Open: target architecture exists; RealizeRequest schema, Root dev queue, dev-node registry, task-scoped MCP, forge task branches, and User Hub validation loop are not implemented. | Open: dev-node simulator, queue diagnostics, and failure fixtures. | Open: multi-node pools and parallel dev tasks. | None. |
+| 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, and forge task-branch policy exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -498,15 +498,20 @@ Current implementation slices:
   and approval mechanics.
 - [x] `[must]` The target architecture is now documented in
   [Skill Factory and Isolated Dev Nodes](skill-factory.md).
+- [x] `[must]` `adaos.builder.realize_request.v1` and Skill Factory dev-node,
+  assignment, result, ready-event, and failure schemas are published through
+  Root descriptors.
+- [x] `[must]` Root has a local Skill Factory queue, dev-node registry, Root
+  MCP task tools, sparse checkout policy, branch validation, and diagnostics.
 
 Open work:
 
-- [ ] `[must]` Define `adaos.builder.realize_request.v1` and link it to Builder
+- [x] `[must]` Define `adaos.builder.realize_request.v1` and link it to Builder
   conversations, drafts, previews, acceptance criteria, and sparse repo paths.
-- [ ] `[must]` Add Root dev queue and dev-node registry contracts with
+- [x] `[must]` Add Root dev queue and dev-node registry contracts with
   lifecycle states, heartbeat, assignment, cancellation, timeout, retry, and
   result events.
-- [ ] `[must]` Define forge task branch discipline and result evidence:
+- [x] `[must]` Define forge task branch discipline and result evidence:
   `result.json`, test report, changed files, sanitized logs, and commit hash.
 - [ ] `[must]` Add task-scoped MCP and credential leases for isolated dev-node
   work; do not reuse broad runtime or user-subnet credentials.

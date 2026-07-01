@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.skill_factory.dev_task_failure.v1",
+  "title": "AdaOS Skill Factory Dev Task Failure",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "task_id", "status", "message"],
+  "properties": {
+    "schema": { "const": "adaos.skill_factory.dev_task_failure.v1" },
+    "task_id": { "type": "string", "minLength": 1 },
+    "node_id": { "type": ["string", "null"] },
+    "status": { "type": "string", "enum": ["failed"] },
+    "failure_class": { "type": "string" },
+    "message": { "type": "string", "minLength": 1 },
+    "stage": { "type": ["string", "null"] },
+    "retryable": { "type": "boolean" },
+    "retry_requested": { "type": "boolean" },
+    "logs_ref": { "type": ["string", "null"] },
+    "details": { "type": "object", "additionalProperties": true }
+  }
+}

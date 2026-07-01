@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.realize_request.v1",
+  "title": "AdaOS Builder Realize Request",
+  "description": "Normalized Builder request for turning a draft or prototype into an implementation task for the Skill Factory.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "request_id", "target", "repo", "constraints", "mcp"],
+  "properties": {
+    "schema": { "const": "adaos.builder.realize_request.v1" },
+    "request_id": { "type": "string", "minLength": 1 },
+    "status": { "type": "string" },
+    "user_subnet_id": { "type": ["string", "null"] },
+    "source_session_id": { "type": ["string", "null"] },
+    "source_conversation_id": { "type": ["string", "null"] },
+    "target": { "$ref": "#/$defs/targetRef" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "draft_id": { "type": "string" },
+        "preview_id": { "type": "string" },
+        "requirement_spec_id": { "type": "string" },
+        "ui_draft_id": { "type": "string" },
+        "datasource_schema_id": { "type": "string" },
+        "ui_mapping_id": { "type": "string" },
+        "acceptance_criteria_id": { "type": "string" }
+      }
+    },
+    "repo": { "$ref": "#/$defs/repoRef" },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "no_external_api": { "type": "boolean" },
+        "no_secrets": { "type": "boolean" },
+        "must_add_tests": { "type": "boolean" },
+        "must_update_manifest": { "type": "boolean" }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "requested_scope": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "criteria": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "test_commands": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "builder_task_id": { "type": "string" },
+        "draft_id": { "type": "string" },
+        "preview_id": { "type": "string" },
+        "pending_action_id": { "type": "string" },
+        "conversation": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "targetRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["skill", "scenario", "webui", "datasource", "connector", "descriptor_fix", "unknown"]
+        },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "repoRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["forge_project", "base_branch", "sparse_paths"],
+      "properties": {
+        "forge_backend": { "type": "string" },
+        "forge_project": { "type": "string", "minLength": 1 },
+        "repo_url": { "type": ["string", "null"] },
+        "base_branch": { "type": "string", "minLength": 1 },
+        "sparse_paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

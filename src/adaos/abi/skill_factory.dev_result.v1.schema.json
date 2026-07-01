@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.skill_factory.dev_result.v1",
+  "title": "AdaOS Skill Factory Dev Result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "task_id", "status", "commit_hash", "branch", "changed_paths"],
+  "properties": {
+    "schema": { "const": "adaos.skill_factory.dev_result.v1" },
+    "task_id": { "type": "string", "minLength": 1 },
+    "node_id": { "type": ["string", "null"] },
+    "status": { "type": "string", "enum": ["completed"] },
+    "commit_hash": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string", "minLength": 1 },
+    "changed_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "tests": { "type": "object", "additionalProperties": true },
+    "validation": { "type": "object", "additionalProperties": true },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -344,6 +344,11 @@ class BuilderWorkspaceService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def realize_requests_dir(self) -> Path:
+        path = self.root / "realize_requests"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def approval_profiles(self) -> list[dict[str, Any]]:
         return [dict(profile) for profile in _APPROVAL_PROFILES.values()]
 
@@ -538,6 +543,110 @@ class BuilderWorkspaceService:
         _write_json(self.previews_dir() / f"{preview_id}.json", preview)
         self._mark_draft_previewed(draft_dir, draft, preview_id)
         return {"ok": True, "preview": preview}
+
+    def create_realize_request(
+        self,
+        *,
+        draft_id: str | None = None,
+        target: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
+        repo: dict[str, Any] | None = None,
+        constraints: dict[str, Any] | None = None,
+        mcp: dict[str, Any] | None = None,
+        acceptance: dict[str, Any] | None = None,
+        links: dict[str, Any] | None = None,
+        source_session_id: str | None = None,
+        source_conversation_id: str | None = None,
+        user_subnet_id: str | None = None,
+        submit_remote: bool = False,
+        create_pending_action: bool = True,
+    ) -> dict[str, Any]:
+        from adaos.services.skill_factory import SkillFactoryService
+
+        draft: dict[str, Any] | None = None
+        if draft_id:
+            draft = self.load_draft(draft_id)
+
+        payload: dict[str, Any] = {
+            "draft": draft or {},
+            "target": target or {},
+            "artifacts": artifacts or {},
+            "repo": repo or {},
+            "constraints": constraints or {},
+            "mcp": mcp or {},
+            "acceptance": acceptance or {},
+            "links": links or {},
+            "source_session_id": source_session_id,
+            "source_conversation_id": source_conversation_id,
+            "user_subnet_id": user_subnet_id,
+        }
+        if draft_id:
+            payload["links"]["draft_id"] = draft_id
+            payload["artifacts"].setdefault("draft_id", draft_id)
+
+        factory = SkillFactoryService(state_dir=self.state_dir)
+        request = factory.normalize_realize_request(payload)
+        request_dir = self.realize_requests_dir() / request["request_id"]
+        pending_action: dict[str, Any] | None = None
+        pending_action_error: str | None = None
+        if create_pending_action:
+            try:
+                from adaos.services.pending_actions import publish_pending_action
+
+                webspace_id = str((request.get("links") or {}).get("conversation", {}).get("webspace_id") or "desktop")
+                pending_action = publish_pending_action(
+                    webspace_id=webspace_id,
+                    action_id=f"builder.realize.{request['request_id']}",
+                    kind="builder.realize_request",
+                    title="Realize Builder draft",
+                    summary=f"Remote realization request for {request['target']['type']}:{request['target']['id']}.",
+                    request_text=str((request.get("source") or {}).get("text") or ""),
+                    producer={"type": "system", "system_id": "builder"},
+                    owner_scope={"webspace_id": webspace_id},
+                    domain_ref={
+                        "kind": "builder.realize_request",
+                        "request_id": request["request_id"],
+                        "draft_id": (request.get("links") or {}).get("draft_id"),
+                        "target": request.get("target"),
+                    },
+                    allowed_actions=["approve", "refuse", "postpone"],
+                    response_route={"type": "event", "topic": "builder.realize_request.response"},
+                    payload_ref={
+                        "type": "builder.realize_request",
+                        "path": str(request_dir / "realize_request.json"),
+                    },
+                    metadata={"schema": request["schema"], "target": request.get("target")},
+                )
+                request.setdefault("links", {})["pending_action_id"] = pending_action.get("id")
+            except Exception as exc:
+                pending_action_error = f"{type(exc).__name__}: {exc}"
+
+        _write_json(request_dir / "realize_request.json", request)
+
+        remote: dict[str, Any] | None = None
+        mode = "local_fallback"
+        if submit_remote:
+            try:
+                remote = factory.submit_realize_request(request)
+                task = remote.get("task") if isinstance(remote, dict) else None
+                if isinstance(task, dict):
+                    request.setdefault("links", {})["skill_factory_task_id"] = task.get("task_id")
+                    _write_json(request_dir / "realize_request.json", request)
+                mode = "remote_queued"
+            except Exception as exc:
+                remote = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                mode = "local_fallback"
+
+        return {
+            "ok": True,
+            "mode": mode,
+            "remote_submitted": bool(remote and remote.get("ok") and mode == "remote_queued"),
+            "realize_request": request,
+            "request_dir": str(request_dir),
+            "remote": remote,
+            "pending_action": pending_action,
+            "pending_action_error": pending_action_error,
+        }
 
     def load_preview(self, preview_id: str) -> dict[str, Any]:
         path = self.previews_dir() / f"{str(preview_id).strip()}.json"

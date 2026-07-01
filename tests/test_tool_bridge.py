@@ -135,6 +135,30 @@ def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch)
     assert published[0]["domain_ref"]["tool"] == "files_skill:delete_file"
 
 
+def test_runtime_action_risk_ignores_local_write_freeform_content() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="notebook_skill:save_note",
+        arguments={
+            "note_id": "note-1",
+            "content": "Title\nBody mentioning subnet should stay user text.",
+            "source": "editor_change",
+            "side_effect_class": "local_write",
+            "webspace_id": "desktop-dev",
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="notebook_skill",
+        public_tool="save_note",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
 def test_runtime_action_risk_treats_prompt_read_tools_as_readonly() -> None:
     body = tool_bridge_module.ToolCall(
         tool="prompt_engineer_skill:prompt_read_project_file",

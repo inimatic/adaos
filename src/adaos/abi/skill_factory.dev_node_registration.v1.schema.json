@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.skill_factory.dev_node_registration.v1",
+  "title": "AdaOS Skill Factory Dev Node Registration",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "node_id", "node_type", "capabilities", "status", "trust_level", "max_parallel_tasks"],
+  "properties": {
+    "schema": { "const": "adaos.skill_factory.dev_node_registration.v1" },
+    "node_id": { "type": "string", "minLength": 1 },
+    "node_type": { "type": "string", "enum": ["isolated_dev_node"] },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "status": { "type": "string" },
+    "trust_level": { "type": "string", "enum": ["isolated", "trusted_test", "unknown"] },
+    "max_parallel_tasks": { "type": "integer", "minimum": 1 },
+    "zone": { "type": ["string", "null"] },
+    "subnet_id": { "type": ["string", "null"] },
+    "heartbeat_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  }
+}

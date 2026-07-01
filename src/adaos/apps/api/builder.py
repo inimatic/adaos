@@ -40,6 +40,22 @@ class BuilderPreviewRequest(BaseModel):
     webspace_id: str | None = None
 
 
+class BuilderRealizeRequest(BaseModel):
+    draft_id: str | None = Field(default=None, min_length=1)
+    target: dict[str, Any] | None = None
+    artifacts: dict[str, Any] | None = None
+    repo: dict[str, Any] | None = None
+    constraints: dict[str, Any] | None = None
+    mcp: dict[str, Any] | None = None
+    acceptance: dict[str, Any] | None = None
+    links: dict[str, Any] | None = None
+    source_session_id: str | None = None
+    source_conversation_id: str | None = None
+    user_subnet_id: str | None = None
+    submit_remote: bool = False
+    create_pending_action: bool = True
+
+
 class BuilderWorkbenchEnsureRequest(BaseModel):
     webspace_id: str | None = None
     active_draft_id: str | None = None
@@ -89,6 +105,30 @@ def get_draft(draft_id: str, service: BuilderWorkspaceService = Depends(_get_ser
 def preview(body: BuilderPreviewRequest, service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     try:
         return service.preview(draft_id=body.draft_id, approval_profile=body.approval_profile, webspace_id=body.webspace_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/realize")
+def create_realize_request(body: BuilderRealizeRequest, service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
+    try:
+        return service.create_realize_request(
+            draft_id=body.draft_id,
+            target=body.target,
+            artifacts=body.artifacts,
+            repo=body.repo,
+            constraints=body.constraints,
+            mcp=body.mcp,
+            acceptance=body.acceptance,
+            links=body.links,
+            source_session_id=body.source_session_id,
+            source_conversation_id=body.source_conversation_id,
+            user_subnet_id=body.user_subnet_id,
+            submit_remote=body.submit_remote,
+            create_pending_action=body.create_pending_action,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

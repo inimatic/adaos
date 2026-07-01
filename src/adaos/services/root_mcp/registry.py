@@ -81,6 +81,27 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "backing_store": "root_descriptor_cache + supervisor_authority",
             },
             {
+                "plane_id": "skill_factory_task",
+                "title": "SkillFactoryTaskPlane",
+                "enabled": True,
+                "surface": "development",
+                "mode": "typed_development_task_plane",
+                "published_by": "root",
+                "preferred_for": ["builder_realization", "isolated_dev_nodes", "task_queue_diagnostics"],
+                "descriptor_ids": [
+                    "builder_realize_request_schema",
+                    "skill_factory_dev_node_registration_schema",
+                    "skill_factory_dev_task_assignment_schema",
+                    "skill_factory_dev_result_schema",
+                    "skill_factory_dev_ready_event_schema",
+                    "skill_factory_dev_task_failure_schema",
+                    "skill_factory_status",
+                ],
+                "tool_prefixes": ["skill_factory."],
+                "capability_profiles": ["SkillFactoryTaskRead", "SkillFactoryTaskSubmit", "SkillFactoryDevNode"],
+                "backing_store": "root_descriptor_cache + skill_factory_state",
+            },
+            {
                 "plane_id": "nlu_authoring",
                 "title": "NLUAuthoringPlane",
                 "enabled": True,
@@ -194,6 +215,27 @@ def _builder_task_schema() -> dict[str, Any]:
 
 def _builder_draft_schema() -> dict[str, Any]:
     return _load_json(_package_root() / "abi" / "builder.draft.v1.schema.json")
+
+
+def _builder_realize_request_schema() -> dict[str, Any]:
+    return _load_json(_package_root() / "abi" / "builder.realize_request.v1.schema.json")
+
+
+def _skill_factory_schema(name: str) -> dict[str, Any]:
+    return _load_json(_package_root() / "abi" / name)
+
+
+def _skill_factory_status() -> dict[str, Any]:
+    try:
+        from adaos.services.skill_factory import SkillFactoryService
+
+        return SkillFactoryService().snapshot(include_tasks=False)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _nlu_teacher_schema() -> dict[str, Any]:
@@ -317,6 +359,13 @@ def _descriptor_build_profile() -> dict[str, Any]:
             "scenario_manifest_schema",
             "builder_task_schema",
             "builder_draft_schema",
+            "builder_realize_request_schema",
+            "skill_factory_dev_node_registration_schema",
+            "skill_factory_dev_task_assignment_schema",
+            "skill_factory_dev_result_schema",
+            "skill_factory_dev_ready_event_schema",
+            "skill_factory_dev_task_failure_schema",
+            "skill_factory_status",
             "nlu_teacher_schema",
             "template_catalog",
             "architecture_catalog",
@@ -448,6 +497,20 @@ def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
         return _builder_task_schema()
     if token == "builder_draft_schema":
         return _builder_draft_schema()
+    if token == "builder_realize_request_schema":
+        return _builder_realize_request_schema()
+    if token == "skill_factory_dev_node_registration_schema":
+        return _skill_factory_schema("skill_factory.dev_node_registration.v1.schema.json")
+    if token == "skill_factory_dev_task_assignment_schema":
+        return _skill_factory_schema("skill_factory.dev_task_assignment.v1.schema.json")
+    if token == "skill_factory_dev_result_schema":
+        return _skill_factory_schema("skill_factory.dev_result.v1.schema.json")
+    if token == "skill_factory_dev_ready_event_schema":
+        return _skill_factory_schema("skill_factory.dev_ready_event.v1.schema.json")
+    if token == "skill_factory_dev_task_failure_schema":
+        return _skill_factory_schema("skill_factory.dev_task_failure.v1.schema.json")
+    if token == "skill_factory_status":
+        return _skill_factory_status()
     if token == "nlu_teacher_schema":
         return _nlu_teacher_schema()
     if token == "template_catalog":
@@ -557,6 +620,62 @@ def list_descriptor_sets() -> list[dict[str, Any]]:
             source_kind="builder_draft_schema",
             descriptor_class="schema",
             tags=["development", "builder", "draft", "schema"],
+        ),
+        _descriptor_entry(
+            "builder_realize_request_schema",
+            title="Builder realize request schema",
+            summary="JSON schema for normalized Builder realization requests sent to the Skill Factory.",
+            source_kind="builder_realize_request_schema",
+            descriptor_class="schema",
+            tags=["development", "builder", "skill-factory", "schema"],
+        ),
+        _descriptor_entry(
+            "skill_factory_dev_node_registration_schema",
+            title="Skill Factory dev-node registration schema",
+            summary="JSON schema for isolated dev-node registration records.",
+            source_kind="skill_factory_dev_node_registration_schema",
+            descriptor_class="schema",
+            tags=["development", "skill-factory", "dev-node", "schema"],
+        ),
+        _descriptor_entry(
+            "skill_factory_dev_task_assignment_schema",
+            title="Skill Factory dev-task assignment schema",
+            summary="JSON schema for task assignments issued by Root to isolated dev nodes.",
+            source_kind="skill_factory_dev_task_assignment_schema",
+            descriptor_class="schema",
+            tags=["development", "skill-factory", "assignment", "schema"],
+        ),
+        _descriptor_entry(
+            "skill_factory_dev_result_schema",
+            title="Skill Factory dev result schema",
+            summary="JSON schema for completed development task result manifests.",
+            source_kind="skill_factory_dev_result_schema",
+            descriptor_class="schema",
+            tags=["development", "skill-factory", "result", "schema"],
+        ),
+        _descriptor_entry(
+            "skill_factory_dev_ready_event_schema",
+            title="Skill Factory ready event schema",
+            summary="JSON schema for Root ready events sent after a dev result is accepted.",
+            source_kind="skill_factory_dev_ready_event_schema",
+            descriptor_class="schema",
+            tags=["development", "skill-factory", "ready-event", "schema"],
+        ),
+        _descriptor_entry(
+            "skill_factory_dev_task_failure_schema",
+            title="Skill Factory task failure schema",
+            summary="JSON schema for failed development task reports.",
+            source_kind="skill_factory_dev_task_failure_schema",
+            descriptor_class="schema",
+            tags=["development", "skill-factory", "failure", "schema"],
+        ),
+        _descriptor_entry(
+            "skill_factory_status",
+            title="Skill Factory status",
+            summary="Root-published queue and dev-node status for diagnostics and operator UI.",
+            source_kind="skill_factory_state",
+            descriptor_class="registry",
+            tags=["development", "skill-factory", "queue", "diagnostics"],
         ),
         _descriptor_entry(
             "nlu_teacher_schema",

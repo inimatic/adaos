@@ -30,6 +30,23 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "development.read.descriptors",
         "development.write.named_entities",
     ],
+    "SkillFactoryTaskRead": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "skill_factory.read.status",
+    ],
+    "SkillFactoryTaskSubmit": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "skill_factory.read.status",
+        "skill_factory.submit.realize_request",
+    ],
+    "SkillFactoryDevNode": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "skill_factory.read.status",
+        "skill_factory.dev_node.register",
+        "skill_factory.dev_node.heartbeat",
+        "skill_factory.dev_task.poll",
+        "skill_factory.dev_task.report",
+    ],
     "ProfileOpsRead": [
         *DEFAULT_BEARER_CAPABILITIES,
         "operations.read.targets",

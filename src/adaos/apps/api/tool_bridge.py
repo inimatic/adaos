@@ -54,6 +54,7 @@ _WORKSPACE_RUNTIME_LOCKS_LOCK = threading.RLock()
 _WORKSPACE_RUNTIME_LOCKS: dict[str, threading.RLock] = {}
 _WORKSPACE_RUNTIME_LAST_SYNC_AT: dict[str, float] = {}
 _APPROVED_ACTION_STATES = {"approve", "approved", "allowed", "operator_apply_allowed", "responded"}
+_RISK_FREEFORM_ARGUMENT_KEYS = {"content"}
 
 
 def _runtime_action_gate_enabled() -> bool:
@@ -69,7 +70,12 @@ def _without_empty(value: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in value.items() if v not in (None, "", {}, [])}
 
 
-def _risk_relevant_payload(payload: Dict[str, Any], *, include_node_targets: bool) -> Dict[str, Any]:
+def _risk_relevant_payload(
+    payload: Dict[str, Any],
+    *,
+    include_node_targets: bool,
+    ignore_freeform: bool = False,
+) -> Dict[str, Any]:
     ignored = {
         "_meta",
         "action_approval",
@@ -82,6 +88,8 @@ def _risk_relevant_payload(payload: Dict[str, Any], *, include_node_targets: boo
     }
     if not include_node_targets:
         ignored.update({"target_node_id", "node_id", "node_target_id", "source_node_id"})
+    if ignore_freeform:
+        ignored.update(_RISK_FREEFORM_ARGUMENT_KEYS)
     return {key: value for key, value in payload.items() if key not in ignored}
 
 
@@ -162,6 +170,8 @@ def _runtime_action_risk(
             include_node_targets = False
     elif side_effect_class in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}:
         include_node_targets = False
+    normalized_side_effect = str(side_effect_class or "").strip().lower().replace("-", "_")
+    ignore_freeform = normalized_side_effect in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}
     if side_effect_class == "safe":
         action = {"side_effect_class": "safe"}
     else:
@@ -173,7 +183,11 @@ def _runtime_action_risk(
                 "side_effect_class": side_effect_class,
                 "dev_runtime": bool(body.dev),
                 "target_node_id": effective_target if include_node_targets else "",
-                "arguments": _risk_relevant_payload(payload, include_node_targets=include_node_targets),
+                "arguments": _risk_relevant_payload(
+                    payload,
+                    include_node_targets=include_node_targets,
+                    ignore_freeform=ignore_freeform,
+                ),
             }
         )
     return classify_action_risk(action)
