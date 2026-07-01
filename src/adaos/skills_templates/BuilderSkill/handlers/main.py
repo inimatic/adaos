@@ -117,7 +117,7 @@ def _hash_suffix(text: str) -> str:
 
 
 def _scenario_id_from_idea(idea: str) -> str:
-    lowered = str(idea or "").lower()
+    lowered = _repair_mojibake_text(idea).lower()
     if "shopping" in lowered or "shop" in lowered or "\u043f\u043e\u043a\u0443\u043f" in lowered:
         base = "shopping_list"
     elif "todo" in lowered or "\u0437\u0430\u0434\u0430\u0447" in lowered:
@@ -836,7 +836,7 @@ def _next_ui_revision_label(session: Mapping[str, Any]) -> str:
 def _sync_preview_revision_version(preview_state: Mapping[str, Any], revision: str) -> dict[str, Any]:
     preview = _repair_text_tree(copy.deepcopy(dict(preview_state)))
     if revision:
-        preview["version"] = f"v{revision}"
+        preview["version"] = revision
     return preview
 
 
@@ -878,9 +878,9 @@ def _write_ui_revision(
     before_for_revision = _repair_text_tree(copy.deepcopy(dict(before_webui or {})))
     after_for_revision = _repair_text_tree(copy.deepcopy(dict(after_webui or {})))
     if isinstance(before_for_revision.get("preview_state"), dict):
-        before_for_revision["preview_state"]["version"] = f"v{revision}"
+        before_for_revision["preview_state"]["version"] = revision
     if isinstance(after_for_revision.get("preview_state"), dict):
-        after_for_revision["preview_state"]["version"] = f"v{revision}"
+        after_for_revision["preview_state"]["version"] = revision
     payload = {
         "schema": "adaos.builder.ui_revision.v1",
         "revision": revision,
@@ -1649,7 +1649,12 @@ def _repair_mojibake_text(value: Any) -> str:
         cyrillic = sum(1 for ch in candidate if "\u0400" <= ch <= "\u04ff")
         return (bad_pairs + bad_question_runs * 4, -cyrillic, len(candidate))
 
-    return min(candidates, key=score)
+    repaired = min(candidates, key=score)
+    return "".join(
+        ch
+        for ch in repaired
+        if ch in "\t\n\r" or (ord(ch) >= 0x20 and not 0x7F <= ord(ch) <= 0x9F)
+    )
 
 
 def _repair_text_tree(value: Any) -> Any:
@@ -3438,7 +3443,7 @@ def create_scenario_draft(
         "datasource_id": "shopping_items" if "shopping" in sid else "prototype_items",
         "fields": fields,
         "patches": [],
-        "version": "v001",
+        "version": "001",
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -3465,7 +3470,7 @@ def create_scenario_draft(
         session["draft_error"] = f"{type(exc).__name__}: {exc}"
     session["user_summary"] = _draft_user_summary(session)
     initial_revision = _next_ui_revision_label(session)
-    session["version"] = f"v{initial_revision}"
+    session["version"] = initial_revision
     preview = _preview_state(session=session)
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
@@ -3545,6 +3550,61 @@ def _llm_failure_summary(llm_result: Mapping[str, Any] | None) -> str:
     return comment or detail
 
 
+def _builder_update_message_clean(
+    *,
+    session: Mapping[str, Any],
+    patch: Mapping[str, Any],
+    revision: str | None,
+    llm_comment: str = "",
+    unable_reason: str = "",
+    not_implemented: Sequence[Any] | None = None,
+) -> str:
+    revision_text = f" \u0420\u0435\u0432\u0438\u0437\u0438\u044f UI: {revision}." if revision else ""
+    scenario_id = session.get("scenario_id")
+    operation = patch.get("operation")
+    if unable_reason:
+        return (
+            f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f {scenario_id} "
+            f"\u0441 \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u0435\u043c. "
+            f"\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {operation}. {unable_reason}.{revision_text}"
+        )
+    if patch.get("status") == "partial" and isinstance(not_implemented, list) and not_implemented:
+        return (
+            f"{AGENT_LABEL}: \u0447\u0430\u0441\u0442\u0438\u0447\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043b "
+            f"\u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f {scenario_id}. "
+            f"\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {operation}. "
+            f"\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0440\u0435\u0430\u043b\u0438\u0437\u043e\u0432\u0430\u0442\u044c: "
+            f"{', '.join(str(item) for item in not_implemented)}.{revision_text}"
+        )
+    if llm_comment and operation == "llm_webui_transform":
+        return (
+            f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f {scenario_id}. "
+            f"\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {operation}. {llm_comment}{revision_text}"
+        )
+    return (
+        f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f {scenario_id}. "
+        f"\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {operation}.{revision_text}"
+    )
+
+
+def _builder_revision_message(
+    kind: str,
+    *,
+    revision: str | None = None,
+    scenario_id: Any = None,
+    detail: Any = None,
+) -> str:
+    if kind == "session_not_found":
+        return f"{AGENT_LABEL}: \u043d\u0435 \u043d\u0430\u0448\u0435\u043b Builder-\u0441\u0435\u0441\u0441\u0438\u044e \u0434\u043b\u044f \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u0440\u0435\u0432\u0438\u0437\u0438\u0438."
+    if kind == "revision_not_found":
+        return f"{AGENT_LABEL}: \u043d\u0435 \u043d\u0430\u0448\u0435\u043b UI-\u0440\u0435\u0432\u0438\u0437\u0438\u044e {revision} \u0434\u043b\u044f {scenario_id}."
+    if kind == "revision_invalid":
+        return f"{AGENT_LABEL}: \u0440\u0435\u0432\u0438\u0437\u0438\u044f {revision} \u043d\u0435 \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442 \u0432\u0430\u043b\u0438\u0434\u043d\u044b\u0439 after_webui/preview_state."
+    if kind == "revision_validation_failed":
+        return f"{AGENT_LABEL}: \u0440\u0435\u0432\u0438\u0437\u0438\u044f {revision} \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044e: {detail}."
+    return f"{AGENT_LABEL}: \u0441\u0434\u0435\u043b\u0430\u043b UI-\u0440\u0435\u0432\u0438\u0437\u0438\u044e {revision} \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0434\u043b\u044f {scenario_id}."
+
+
 def _finalize_scenario_update(
     *,
     ws: str,
@@ -3560,11 +3620,11 @@ def _finalize_scenario_update(
     _ensure_session_artifact_root(session, binding)
     session.setdefault("patches", []).append(patch)
     next_revision = _next_ui_revision_label(session)
-    session["version"] = f"v{next_revision}"
+    session["version"] = next_revision
     session["user_summary"] = _draft_user_summary(session)
     if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("preview_state"), Mapping):
         preview = copy.deepcopy(dict(session["preview_state"]))
-        preview["version"] = f"v{next_revision}"
+        preview["version"] = next_revision
     else:
         preview = _preview_state(session=session)
     preview = _repair_text_tree(dict(preview))
@@ -3620,28 +3680,14 @@ def _finalize_scenario_update(
     not_implemented = patch.get("diff", {}).get("not_implemented") if isinstance(patch.get("diff"), Mapping) else None
     llm_comment = str((llm_result or {}).get("comment") or "").strip() if isinstance(llm_result, Mapping) else ""
     unable_reason = str((llm_result or {}).get("unable_reason") or "").strip() if isinstance(llm_result, Mapping) else ""
-    revision_text = f" Ревизия UI: {revision_info.get('revision')}." if revision_info else ""
-    if unable_reason:
-        message = (
-            f"{AGENT_LABEL}: обновил прототип {session.get('scenario_id')} с ограничением. "
-            f"Операция: {patch['operation']}. {unable_reason}.{revision_text}"
-        )
-    elif patch.get("status") == "partial" and isinstance(not_implemented, list) and not_implemented:
-        message = (
-            f"{AGENT_LABEL}: частично обновил прототип {session.get('scenario_id')}. "
-            f"Операция: {patch['operation']}. "
-            f"Не удалось реализовать: {', '.join(str(item) for item in not_implemented)}.{revision_text}"
-        )
-    elif llm_comment and patch.get("operation") == "llm_webui_transform":
-        message = (
-            f"{AGENT_LABEL}: обновил прототип {session.get('scenario_id')}. "
-            f"Операция: {patch['operation']}. {llm_comment}{revision_text}"
-        )
-    else:
-        message = (
-            f"{AGENT_LABEL}: обновил прототип {session.get('scenario_id')}. "
-            f"Операция: {patch['operation']}.{revision_text}"
-        )
+    message = _builder_update_message_clean(
+        session=session,
+        patch=patch,
+        revision=str(revision_info.get("revision") if revision_info else ""),
+        llm_comment=llm_comment,
+        unable_reason=unable_reason,
+        not_implemented=not_implemented if isinstance(not_implemented, list) else None,
+    )
     actions = _revision_chat_actions(session, str(revision_info.get("revision") if revision_info else ""))
     return {
         "ok": True,
@@ -3698,8 +3744,7 @@ def update_current_scenario(
     base_preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
     before_webui = _current_webui_payload(session, base_preview)
     llm_result: dict[str, Any] | None = None
-    deterministic_update = _has_deterministic_builder_update(text)
-    if text and _builder_llm_primary_enabled(_meta) and not deterministic_update:
+    if text and _builder_llm_primary_enabled(_meta):
         llm_result = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
         if llm_result.get("ok"):
             preview_from_llm = llm_result.get("preview_state") if isinstance(llm_result.get("preview_state"), Mapping) else base_preview
@@ -3911,11 +3956,10 @@ def update_current_scenario(
         diagnostic = _llm_failure_summary(llm_result if isinstance(llm_result, Mapping) else patch.get("diff", {}).get("llm_fallback") if isinstance(patch.get("diff"), Mapping) else None)
         diagnostic_text = f" LLM: {diagnostic}" if diagnostic else ""
         message = (
-            f"{AGENT_LABEL}: \u044f \u043d\u0435 \u043d\u0430\u0448\u0435\u043b \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0430\u043d\u043d\u043e\u0433\u043e "
-            f"\u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f \u0434\u043b\u044f {session.get('scenario_id')}. "
-            "\u0423\u0442\u043e\u0447\u043d\u0438\u0442\u0435, \u043a\u0430\u043a \u0438\u0437\u043c\u0435\u043d\u0438\u0442\u044c UI: "
-            "\u0434\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435, \u0443\u0431\u0435\u0440\u0438 \u043f\u043e\u043b\u0435, "
-            f"\u043f\u043e\u043a\u0430\u0436\u0438 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438 \u0438\u043b\u0438 \u0441\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445.{diagnostic_text}"
+            f"{AGENT_LABEL}: \u043d\u0435 \u0441\u043c\u043e\u0433 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e "
+            f"\u043f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0435 \u0434\u043b\u044f {session.get('scenario_id')}. "
+            f"\u0421\u0432\u043e\u0431\u043e\u0434\u043d\u0430\u044f \u0442\u0440\u0430\u043d\u0441\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f UI "
+            f"\u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0443 \u0438\u043b\u0438 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.{diagnostic_text}"
         )
         return {
             "ok": True,
@@ -4012,23 +4056,32 @@ def set_ui_revision_current(
     ws = _source_webspace_id(webspace_id, _meta)
     session = _load_session(ws, session_id)
     if not session:
-        message = f"{AGENT_LABEL}: не нашел Builder-сессию для восстановления ревизии."
+        message = _builder_revision_message("session_not_found")
         _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
         return {"ok": False, "error": "session_not_found", "message": message, "dialog": _dialog_state(ws)}
     revision_payload = _read_ui_revision(session, revision)
     if not revision_payload:
-        message = f"{AGENT_LABEL}: не нашел UI-ревизию {revision} для {session.get('scenario_id')}."
+        message = _builder_revision_message("revision_not_found", revision=revision, scenario_id=session.get("scenario_id"))
         _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session)
         return {"ok": False, "error": "revision_not_found", "message": message, "dialog": _dialog_state(ws)}
     after_webui = revision_payload.get("after_webui") if isinstance(revision_payload.get("after_webui"), Mapping) else {}
     preview = after_webui.get("preview_state") if isinstance(after_webui.get("preview_state"), Mapping) else revision_payload.get("preview_state")
     if not isinstance(after_webui, Mapping) or not isinstance(preview, Mapping):
-        message = f"{AGENT_LABEL}: ревизия {revision_payload.get('revision')} не содержит валидный after_webui/preview_state."
+        message = _builder_revision_message(
+            "revision_invalid",
+            revision=str(revision_payload.get("revision") or revision),
+            scenario_id=session.get("scenario_id"),
+        )
         _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session)
         return {"ok": False, "error": "revision_invalid", "message": message, "dialog": _dialog_state(ws)}
     validation = _validate_builder_webui_payload(after_webui, preview)
     if not validation.get("ok"):
-        message = f"{AGENT_LABEL}: ревизия {revision_payload.get('revision')} не прошла валидацию: {validation.get('detail') or validation.get('error')}."
+        message = _builder_revision_message(
+            "revision_validation_failed",
+            revision=str(revision_payload.get("revision") or revision),
+            scenario_id=session.get("scenario_id"),
+            detail=validation.get("detail") or validation.get("error"),
+        )
         _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session)
         return {"ok": False, "error": "revision_validation_failed", "validation": validation, "message": message, "dialog": _dialog_state(ws)}
     session["preview_state"] = copy.deepcopy(dict(preview))
@@ -4043,7 +4096,11 @@ def set_ui_revision_current(
     session["topic_id"] = str(topic.get("topic_id") or "").strip() or None
     session["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
     _save_session(ws, session)
-    message = f"{AGENT_LABEL}: сделал UI-ревизию {session['ui_revision']} текущей для {session.get('scenario_id')}."
+    message = _builder_revision_message(
+        "revision_restored",
+        revision=str(session.get("ui_revision") or revision),
+        scenario_id=session.get("scenario_id"),
+    )
     actions = _revision_chat_actions(session, str(session.get("ui_revision") or ""))
     _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session, binding=binding, topic_ref=topic, actions=actions)
     return {

@@ -66,7 +66,7 @@ def test_create_shopping_list_scenario_draft_writes_declarative_webui(tmp_path, 
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
 
     result = skill.create_scenario_draft(
-        idea="Строитель, создадим приложение список покупок",
+        idea="\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c, \u0441\u043e\u0437\u0434\u0430\u0434\u0438\u043c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a",
         webspace_id="builder-skill-test",
     )
 
@@ -83,7 +83,7 @@ def test_create_shopping_list_scenario_draft_writes_declarative_webui(tmp_path, 
     assert "preview_state" in webui.read_text(encoding="utf-8")
     scenario = yaml.safe_load((artifact_root / "scenario.json").read_text(encoding="utf-8"))
     page_schema = scenario["ui"]["application"]["desktop"]["pageSchema"]
-    assert page_schema["title"] == "Список покупок"
+    assert page_schema["title"] == "\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a"
     assert {item["type"] for item in page_schema["widgets"]} >= {"ui.form", "ui.table"}
 
 
@@ -162,9 +162,9 @@ def test_update_current_scenario_adds_card_view(monkeypatch, tmp_path) -> None:
     import adaos.services.builder.workspace as workspace
 
     monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
-    skill.create_scenario_draft("создай список покупок", webspace_id="builder-skill-cards")
+    skill.create_scenario_draft("\u0441\u043e\u0437\u0434\u0430\u0439 \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a", webspace_id="builder-skill-cards")
 
-    result = skill.update_current_scenario("покажи ответы карточками", webspace_id="builder-skill-cards")
+    result = skill.update_current_scenario("\u043f\u043e\u043a\u0430\u0436\u0438 \u043e\u0442\u0432\u0435\u0442\u044b \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438", webspace_id="builder-skill-cards")
 
     assert result["ok"] is True
     assert result["patch"]["operation"] == "change_view_representation"
@@ -202,7 +202,7 @@ def test_card_view_hides_table_in_generated_page_schema(monkeypatch, tmp_path) -
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
 
     skill.create_scenario_draft("create todo list", webspace_id="builder-cards")
-    result = skill.update_current_scenario("Покажи список карточками", webspace_id="builder-cards")
+    result = skill.update_current_scenario("\u041f\u043e\u043a\u0430\u0436\u0438 \u0441\u043f\u0438\u0441\u043e\u043a \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438", webspace_id="builder-cards")
 
     assert result["patch"]["diff"]["hide_table"] is True
     page = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
@@ -244,7 +244,7 @@ def test_update_current_scenario_swaps_input_and_cards(monkeypatch, tmp_path) ->
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
 
     skill.create_scenario_draft("create todo list", webspace_id="builder-swap")
-    result = skill.update_current_scenario("Переставь местами область Input и Cards", webspace_id="builder-swap")
+    result = skill.update_current_scenario("\u041f\u0435\u0440\u0435\u0441\u0442\u0430\u0432\u044c \u043c\u0435\u0441\u0442\u0430\u043c\u0438 \u043e\u0431\u043b\u0430\u0441\u0442\u044c Input \u0438 Cards", webspace_id="builder-swap")
 
     assert result["patch"]["operation"] == "swap_layout_areas"
     assert result["preview_state"]["layout_order"] == "cards_first"
@@ -297,7 +297,7 @@ def test_update_current_scenario_swaps_input_and_cards_with_lost_cyrillic(monkey
     assert revision["request"]["text"] == "\u041f\u0435\u0440\u0435\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043e\u0431\u043b\u0430\u0441\u0442\u0438 Input \u0438 Cards"
 
 
-def test_update_current_scenario_skips_llm_for_deterministic_swap(monkeypatch, tmp_path) -> None:
+def test_update_current_scenario_prefers_llm_for_ui_changes_when_enabled(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "todo_swap_no_llm"
     monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
@@ -324,18 +324,28 @@ def test_update_current_scenario_skips_llm_for_deterministic_swap(monkeypatch, t
     monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    created = skill.create_scenario_draft("create todo list", webspace_id="builder-swap-no-llm")
+    preview = dict(created["preview_state"])
+    preview["layout_order"] = "cards_first"
+    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
     monkeypatch.setattr(
         skill,
         "_apply_llm_webui_transform",
-        lambda **kwargs: llm_calls.append(dict(kwargs)) or {"ok": True, "preview_state": {}, "payload": {}},
+        lambda **kwargs: llm_calls.append(dict(kwargs)) or {
+            "ok": True,
+            "preview_state": preview,
+            "payload": payload,
+            "comment": "layout updated",
+            "validation": {"ok": True},
+        },
     )
 
-    skill.create_scenario_draft("create todo list", webspace_id="builder-swap-no-llm")
     result = skill.update_current_scenario("swap input and cards", webspace_id="builder-swap-no-llm")
 
-    assert result["patch"]["operation"] == "swap_layout_areas"
+    assert result["patch"]["operation"] == "llm_webui_transform"
+    assert result["preview_state"]["layout_order"] == "cards_first"
     assert result["ui_revision"]["revision"] == "002"
-    assert llm_calls == []
+    assert len(llm_calls) == 1
 
 
 def test_update_current_scenario_recovers_artifact_root_for_ui_revisions(monkeypatch, tmp_path) -> None:
@@ -392,7 +402,7 @@ def test_update_current_scenario_recovers_artifact_root_for_ui_revisions(monkeyp
     result = skill.update_current_scenario("show cards", webspace_id="builder-recover")
 
     assert result["ui_revision"]["revision"] == "002"
-    assert "Ревизия UI: 002" in result["message"]
+    assert "\u0420\u0435\u0432\u0438\u0437\u0438\u044f UI: 002" in result["message"]
     assert result["message_actions"]
     assert (artifact_root / "ui_revisions" / "002.json").exists()
 
@@ -424,7 +434,7 @@ def test_update_current_scenario_adds_execution_checkbox(monkeypatch, tmp_path) 
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
 
     skill.create_scenario_draft("create todo list", webspace_id="builder-checkbox")
-    result = skill.update_current_scenario("Добавь чекбокс исполнения", webspace_id="builder-checkbox")
+    result = skill.update_current_scenario("\u0414\u043e\u0431\u0430\u0432\u044c \u0447\u0435\u043a\u0431\u043e\u043a\u0441 \u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f", webspace_id="builder-checkbox")
 
     assert result["patch"]["operation"] == "add_field"
     field = next(item for item in result["preview_state"]["datasources"][0]["fields"] if item["id"] == "done")
@@ -473,12 +483,12 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
         lambda **_kwargs: {"ok": True, "payload": payload, "preview_state": preview, "validation": {"ok": True}},
     )
 
-    result = skill.update_current_scenario("Напиши текст на английском языке", webspace_id="builder-llm")
+    result = skill.update_current_scenario("\u041d\u0430\u043f\u0438\u0448\u0438 \u0442\u0435\u043a\u0441\u0442 \u043d\u0430 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u043e\u043c \u044f\u0437\u044b\u043a\u0435", webspace_id="builder-llm")
 
     assert result["patch"]["operation"] == "llm_webui_transform"
     assert result["ui_revision"]["revision"] == "002"
 
-    result = skill.update_current_scenario("Сделай более компактный ввод", webspace_id="builder-llm")
+    result = skill.update_current_scenario("\u0421\u0434\u0435\u043b\u0430\u0439 \u0431\u043e\u043b\u0435\u0435 \u043a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u044b\u0439 \u0432\u0432\u043e\u0434", webspace_id="builder-llm")
 
     assert result["patch"]["operation"] == "llm_webui_transform"
     assert result["preview_state"]["title"] == "English Todo"
@@ -522,13 +532,13 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     created = skill.create_scenario_draft("create todo list", webspace_id="builder-revision")
     assert created["ui_revision"]["revision"] == "001"
     created_revision = json.loads((artifact_root / "ui_revisions" / "001.json").read_text(encoding="utf-8"))
-    assert created_revision["preview_state"]["version"] == "v001"
-    assert created_revision["after_webui"]["preview_state"]["version"] == "v001"
+    assert created_revision["preview_state"]["version"] == "001"
+    assert created_revision["after_webui"]["preview_state"]["version"] == "001"
     updated = skill.update_current_scenario("show cards", webspace_id="builder-revision")
     assert updated["ui_revision"]["revision"] == "002"
     updated_revision = json.loads((artifact_root / "ui_revisions" / "002.json").read_text(encoding="utf-8"))
-    assert updated_revision["preview_state"]["version"] == "v002"
-    assert updated_revision["after_webui"]["preview_state"]["version"] == "v002"
+    assert updated_revision["preview_state"]["version"] == "002"
+    assert updated_revision["after_webui"]["preview_state"]["version"] == "002"
     assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
 
     restored = skill.set_ui_revision_current("001", webspace_id="builder-revision")
@@ -744,17 +754,17 @@ def test_update_current_scenario_handles_layout_column_and_date_requests(monkeyp
             "artifact_root": str(artifact_root),
             "datasource_id": "shopping_items",
             "fields": [
-                {"id": "item", "type": "string", "label": "Товар", "required": True},
-                {"id": "quantity", "type": "number", "label": "Кол-во", "required": False},
-                {"id": "category", "type": "string", "label": "Категория", "required": False},
-                {"id": "done", "type": "boolean", "label": "Куплено", "required": False},
+                {"id": "item", "type": "string", "label": "\u0422\u043e\u0432\u0430\u0440", "required": True},
+                {"id": "quantity", "type": "number", "label": "\u041a\u043e\u043b-\u0432\u043e", "required": False},
+                {"id": "category", "type": "string", "label": "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f", "required": False},
+                {"id": "done", "type": "boolean", "label": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e", "required": False},
             ],
             "patches": [],
             "version": "v1",
         },
     )
 
-    moved = skill.update_current_scenario("Переместим кнопку Add над формой", webspace_id="builder-layout")
+    moved = skill.update_current_scenario("\u041f\u0435\u0440\u0435\u043c\u0435\u0441\u0442\u0438\u043c \u043a\u043d\u043e\u043f\u043a\u0443 Add \u043d\u0430\u0434 \u0444\u043e\u0440\u043c\u043e\u0439", webspace_id="builder-layout")
     assert moved["patch"]["operation"] == "move_form_action"
     form = next(item for item in moved["preview_state"]["current_ui"]["children"] if item["id"] == "editor")
     assert form["action_position"] == "top"
@@ -763,21 +773,21 @@ def test_update_current_scenario_handles_layout_column_and_date_requests(monkeyp
     page_form = next(item for item in page_schema["widgets"] if item["id"] == "prototype-form")
     assert page_form["inputs"]["submitPlacement"] == "top"
 
-    checkbox = skill.update_current_scenario("Сделаем первой колонкой таблицы чекбокс (куплено)", webspace_id="builder-layout")
+    checkbox = skill.update_current_scenario("\u0421\u0434\u0435\u043b\u0430\u0435\u043c \u043f\u0435\u0440\u0432\u043e\u0439 \u043a\u043e\u043b\u043e\u043d\u043a\u043e\u0439 \u0442\u0430\u0431\u043b\u0438\u0446\u044b \u0447\u0435\u043a\u0431\u043e\u043a\u0441 (\u043a\u0443\u043f\u043b\u0435\u043d\u043e)", webspace_id="builder-layout")
     assert checkbox["patch"]["operation"] == "set_checkbox_column"
     assert checkbox["preview_state"]["datasources"][0]["fields"][0]["id"] == "done"
     page_schema = yaml.safe_load((artifact_root / "scenario.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]
     page_table = next(item for item in page_schema["widgets"] if item["id"] == "prototype-table")
-    assert page_table["inputs"]["columns"][0] == {"key": "done", "label": "Куплено", "kind": "boolean", "width": "72px"}
+    assert page_table["inputs"]["columns"][0] == {"key": "done", "label": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e", "kind": "boolean", "width": "72px"}
 
-    date_result = skill.update_current_scenario("Добвь данные в поле дата в таблицу", webspace_id="builder-layout")
+    date_result = skill.update_current_scenario("\u0414\u043e\u0431\u0430\u0432\u044c \u0434\u0430\u043d\u043d\u044b\u0435 \u0432 \u043f\u043e\u043b\u0435 \u0434\u0430\u0442\u0430 \u0432 \u0442\u0430\u0431\u043b\u0438\u0446\u0443", webspace_id="builder-layout")
     assert date_result["patch"]["operation"] == "add_field"
     assert any(item["id"] == "date" and item["type"] == "date" for item in date_result["preview_state"]["datasources"][0]["fields"])
     rows = date_result["preview_state"]["mock_data"]["shopping_items"]
     assert [row["date"] for row in rows] == ["2026-07-01", "2026-07-02", "2026-07-03"]
 
     filled = skill.update_current_scenario(
-        'Заполни колонку дата не словом "дата", а произвольными значениями типа дата',
+        "\u0417\u0430\u043f\u043e\u043b\u043d\u0438 \u043a\u043e\u043b\u043e\u043d\u043a\u0443 \u0434\u0430\u0442\u0430 \u043d\u0435 \u0441\u043b\u043e\u0432\u043e\u043c \"\u0434\u0430\u0442\u0430\", \u0430 \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u043b\u044c\u043d\u044b\u043c\u0438 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f\u043c\u0438 \u0442\u0438\u043f\u0430 \u0434\u0430\u0442\u0430",
         webspace_id="builder-layout",
     )
     assert filled["patch"]["operation"] == "update_mock_data"
@@ -872,7 +882,7 @@ def test_update_current_scenario_does_not_wait_forever_for_pending_action(monkey
     assert result["ui_revision"]["revision"] == "002"
     assert result["pending_action"]["error"] == "pending_action_publish_timeout"
     assert result["message_actions"]
-    assert "Ревизия UI: 002" in result["message"]
+    assert "\u0420\u0435\u0432\u0438\u0437\u0438\u044f UI: 002" in result["message"]
 
 
 def test_update_current_scenario_adds_product_units_and_filters(monkeypatch, tmp_path) -> None:
@@ -911,20 +921,20 @@ def test_update_current_scenario_adds_product_units_and_filters(monkeypatch, tmp
             "artifact_root": str(artifact_root),
             "datasource_id": "shopping_items",
             "fields": [
-                {"id": "item", "type": "string", "label": "Товар", "required": True},
-                {"id": "quantity", "type": "number", "label": "Кол-во", "required": False},
-                {"id": "done", "type": "boolean", "label": "Куплено", "required": False},
+                {"id": "item", "type": "string", "label": "\u0422\u043e\u0432\u0430\u0440", "required": True},
+                {"id": "quantity", "type": "number", "label": "\u041a\u043e\u043b-\u0432\u043e", "required": False},
+                {"id": "done", "type": "boolean", "label": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e", "required": False},
             ],
             "patches": [],
             "version": "v1",
         },
     )
 
-    unit_result = skill.update_current_scenario("Добавь меру по товарам. Типа. шт., кг, г., л.", webspace_id="builder-filters")
+    unit_result = skill.update_current_scenario("\u0414\u043e\u0431\u0430\u0432\u044c \u043c\u0435\u0440\u0443 \u043f\u043e \u0442\u043e\u0432\u0430\u0440\u0430\u043c. \u0422\u0438\u043f\u0430. \u0448\u0442., \u043a\u0433, \u0433., \u043b.", webspace_id="builder-filters")
     assert unit_result["patch"]["operation"] == "add_field"
-    assert any(item["id"] == "unit" and item["options"] == ["шт", "кг", "г", "л"] for item in unit_result["preview_state"]["datasources"][0]["fields"])
+    assert any(item["id"] == "unit" and item["options"] == ["\u0448\u0442", "\u043a\u0433", "\u0433", "\u043b"] for item in unit_result["preview_state"]["datasources"][0]["fields"])
 
-    filter_result = skill.update_current_scenario("Добавь поле Наличие. Добавь фильтр по Куплено и Наличие.", webspace_id="builder-filters")
+    filter_result = skill.update_current_scenario("\u0414\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435 \u041d\u0430\u043b\u0438\u0447\u0438\u0435. \u0414\u043e\u0431\u0430\u0432\u044c \u0444\u0438\u043b\u044c\u0442\u0440 \u043f\u043e \u041a\u0443\u043f\u043b\u0435\u043d\u043e \u0438 \u041d\u0430\u043b\u0438\u0447\u0438\u0435.", webspace_id="builder-filters")
     assert filter_result["patch"]["operation"] == "multi_update"
     assert filter_result["patch"]["diff"]["not_implemented"] == []
     filters = filter_result["preview_state"]["filters"]
@@ -973,7 +983,7 @@ def test_builder_pending_action_approve_marks_patch_and_emits_chat(monkeypatch, 
             "draft_id": "draft.shopping",
             "artifact_root": str(artifact_root),
             "datasource_id": "shopping_items",
-            "fields": [{"id": "item", "type": "string", "label": "Товар", "required": True}],
+            "fields": [{"id": "item", "type": "string", "label": "\u0422\u043e\u0432\u0430\u0440", "required": True}],
             "patches": [{"id": "patch_1", "operation": "add_field", "status": "applied", "pending_action_id": "pa.builder.1"}],
             "pending_action_id": "pa.builder.1",
             "version": "v2",
@@ -1000,7 +1010,7 @@ def test_builder_pending_action_approve_marks_patch_and_emits_chat(monkeypatch, 
     session = skill._load_session("builder-approve", "builder_session_approve")
     assert session["patches"][0]["review_status"] == "approved"
     assert "pending_action_id" not in session
-    assert any("утверждены" in text for text in emitted)
+    assert any("\u0443\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u044b" in text for text in emitted)
 
 
 def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monkeypatch, tmp_path) -> None:
@@ -1057,23 +1067,23 @@ def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monk
             "artifact_root": str(artifact_root),
             "datasource_id": "shopping_items",
             "fields": [
-                {"id": "item", "type": "string", "label": "Товар", "required": True},
-                {"id": "quantity", "type": "number", "label": "Кол-во", "required": False},
-                {"id": "category", "type": "string", "label": "Категория", "required": False},
-                {"id": "done", "type": "boolean", "label": "Куплено", "required": False},
-                {"id": "price", "type": "number", "label": "Цена", "required": False},
+                {"id": "item", "type": "string", "label": "\u0422\u043e\u0432\u0430\u0440", "required": True},
+                {"id": "quantity", "type": "number", "label": "\u041a\u043e\u043b-\u0432\u043e", "required": False},
+                {"id": "category", "type": "string", "label": "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f", "required": False},
+                {"id": "done", "type": "boolean", "label": "\u041a\u0443\u043f\u043b\u0435\u043d\u043e", "required": False},
+                {"id": "price", "type": "number", "label": "\u0426\u0435\u043d\u0430", "required": False},
             ],
             "patches": [],
             "version": "v1",
         },
     )
 
-    result = skill.chat("Сделай пример данных на основе продуктов питания", webspace_id="desktop-dev")
+    result = skill.chat("\u0421\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445 \u043d\u0430 \u043e\u0441\u043d\u043e\u0432\u0435 \u043f\u0440\u043e\u0434\u0443\u043a\u0442\u043e\u0432 \u043f\u0438\u0442\u0430\u043d\u0438\u044f", webspace_id="desktop-dev")
 
     assert result["ok"] is True
     assert result["patch"]["operation"] == "update_mock_data"
     rows = result["preview_state"]["mock_data"]["shopping_items"]
-    assert rows[0]["item"] == "Молоко"
+    assert rows[0]["item"] == "\u041c\u043e\u043b\u043e\u043a\u043e"
     assert {item["meta"]["webspace_id"] for item in emitted} == {"desktop", "desktop-dev"}
 
 
@@ -1092,7 +1102,7 @@ def test_chat_requires_selected_builder_target(monkeypatch) -> None:
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
     monkeypatch.setattr(skill, "_safe_emit_chat", lambda *args, **kwargs: None)
 
-    result = skill.chat("добавь поле цена", webspace_id="desktop")
+    result = skill.chat("\u0434\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435 \u0446\u0435\u043d\u0430", webspace_id="desktop")
 
     assert result["ok"] is True
     assert result["status"] == "target_required"
