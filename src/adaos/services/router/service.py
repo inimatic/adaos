@@ -3975,6 +3975,9 @@ class RouterService:
                     icon = str(active_agent.get("icon") or active_agent.get("avatar") or "").strip()
                     if icon:
                         msg["active_agent_icon"] = icon
+            actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+            if actions:
+                msg["actions"] = [dict(item) for item in actions if isinstance(item, dict)]
             targets = await _resolve_webspace_ids(payload)
             route_id = str(meta.get("route_id") or meta.get("route") or "").strip()
             target_node_id = _resolve_voice_target_node_id(

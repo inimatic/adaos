@@ -15,7 +15,7 @@ import os
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from adaos.sdk.core.decorators import tool
 from adaos.sdk.data.context import get_current_skill
@@ -224,6 +224,7 @@ def chat_append(
     from_: str = "hub",
     msg_id: str | None = None,
     ts: float | None = None,
+    actions: Sequence[Mapping[str, Any]] | None = None,
     _meta: Mapping[str, Any] | None = None,
 ) -> Mapping[str, bool]:
     if not isinstance(text, str) or not text.strip():
@@ -238,6 +239,8 @@ def chat_append(
     meta = _merged_meta(_meta)
     if meta:
         payload["_meta"] = meta
+    if actions:
+        payload["actions"] = [dict(item) for item in actions if isinstance(item, Mapping)]
     _publish("io.out.chat.append", payload, source="sdk.io.out")
     return {"ok": True}
 

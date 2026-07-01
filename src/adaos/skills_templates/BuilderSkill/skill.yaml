@@ -19,6 +19,7 @@ exports:
     - update_current_scenario
     - get_session
     - get_preview_state
+    - set_ui_revision_current
     - ensure_dev_webspace
     - get_workspace_binding
     - open_dev_webspace
@@ -125,6 +126,23 @@ tools:
     output_schema:
       type: object
       required: [ok, preview_state]
+  - name: set_ui_revision_current
+    description: "Restore a stored Builder UI revision as the current scenario web UI."
+    entry: "handlers.main:set_ui_revision_current"
+    input_schema:
+      type: object
+      required: [revision]
+      properties:
+        revision:
+          type: string
+        session_id:
+          type: string
+        webspace_id:
+          type: string
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, message]
   - name: ensure_dev_webspace
     description: "Create or reuse the paired Prompt IDE dev webspace for the current source webspace."
     entry: "handlers.main:ensure_dev_webspace"

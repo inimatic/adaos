@@ -249,6 +249,7 @@ def test_update_current_scenario_adds_execution_checkbox(monkeypatch, tmp_path) 
 def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "llm_fallback"
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
 
     class _Service:
         @classmethod
@@ -288,14 +289,63 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
 
     result = skill.update_current_scenario("Напиши текст на английском языке", webspace_id="builder-llm")
 
-    assert result["patch"]["operation"] == "translate_ui"
+    assert result["patch"]["operation"] == "llm_webui_transform"
+    assert result["ui_revision"]["revision"] == "002"
 
     result = skill.update_current_scenario("Сделай более компактный ввод", webspace_id="builder-llm")
 
     assert result["patch"]["operation"] == "llm_webui_transform"
     assert result["preview_state"]["title"] == "English Todo"
+    assert result["ui_revision"]["revision"] == "003"
     saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
     assert saved["preview_state"]["title"] == "English Todo"
+
+
+def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "revision_restore"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"revision_restore","version":"0.1.0","name":"revision_restore","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": "draft.revision"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-revision-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.revision"})
+
+    created = skill.create_scenario_draft("create todo list", webspace_id="builder-revision")
+    assert created["ui_revision"]["revision"] == "001"
+    updated = skill.update_current_scenario("show cards", webspace_id="builder-revision")
+    assert updated["ui_revision"]["revision"] == "002"
+    assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
+
+    restored = skill.set_ui_revision_current("001", webspace_id="builder-revision")
+
+    assert restored["ok"] is True
+    assert restored["revision"] == "001"
+    assert not any(item["type"] == "card_list" for item in restored["preview_state"]["current_ui"]["children"])
+    saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
+    assert not any(item["type"] == "card_list" for item in saved["preview_state"]["current_ui"]["children"])
 
 
 def test_write_webui_keeps_builder_skill_out_of_runtime_dependencies(tmp_path) -> None:

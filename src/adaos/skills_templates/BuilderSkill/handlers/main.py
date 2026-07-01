@@ -5,11 +5,12 @@ import copy
 import hashlib
 import inspect
 import json
+import os
 import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from adaos.sdk.core.decorators import subscribe, tool
 
@@ -402,6 +403,7 @@ def _safe_emit_chat(
     session: Mapping[str, Any] | None = None,
     binding: Mapping[str, Any] | None = None,
     topic_ref: Mapping[str, Any] | None = None,
+    actions: Sequence[Mapping[str, Any]] | None = None,
 ) -> None:
     try:
         from adaos.sdk.io.out import chat_append
@@ -413,14 +415,17 @@ def _safe_emit_chat(
         if dev_ws and dev_ws not in targets:
             targets.append(dev_ws)
         for target in targets:
+            meta = _chat_meta(_meta, webspace_id=target, session=session, binding=binding, topic_ref=topic_ref)
+
+            def _append_chat() -> Mapping[str, bool]:
+                try:
+                    return chat_append(text, from_="hub", actions=actions, _meta=meta)
+                except TypeError:
+                    return chat_append(text, from_="hub", _meta=meta)
+
             pool = ThreadPoolExecutor(max_workers=1)
             try:
-                future = pool.submit(
-                    chat_append,
-                    text,
-                    from_="hub",
-                    _meta=_chat_meta(_meta, webspace_id=target, session=session, binding=binding, topic_ref=topic_ref),
-                )
+                future = pool.submit(_append_chat)
                 try:
                     future.result(timeout=CHAT_APPEND_TIMEOUT_S)
                 except FuturesTimeoutError:
@@ -709,7 +714,7 @@ def _write_webui(artifact_root: str | None, preview_state: Mapping[str, Any]) ->
         "preview_state": preview_state,
         "nlu": {
             "llm_hints": {
-                "aliases": {"app_id": {"prototype": [str(preview_state.get("title") or "prototype")]}},
+                "aliases": [str(preview_state.get("title") or "prototype")],
                 "primary_actions": [
                     {
                         "intent": "builder.chat",
@@ -744,6 +749,150 @@ def _write_webui_payload(artifact_root: str | None, payload: Mapping[str, Any]) 
     (root / "webui.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if isinstance(preview_state, Mapping):
         _write_scenario_page_schema(root, preview_state)
+
+
+def _ui_revision_dir(artifact_root: str | None) -> Path | None:
+    if not artifact_root:
+        return None
+    root = Path(str(artifact_root))
+    if not root.exists():
+        return None
+    return root / "ui_revisions"
+
+
+def _next_ui_revision_number(revision_dir: Path) -> int:
+    max_seen = 0
+    if revision_dir.exists():
+        for path in revision_dir.glob("*.json"):
+            match = re.match(r"^(\d{3,})$", path.stem)
+            if match:
+                max_seen = max(max_seen, int(match.group(1)))
+    return max_seen + 1
+
+
+def _compact_llm_result(result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(result, Mapping):
+        return None
+    compact: dict[str, Any] = {}
+    for key in ("ok", "error", "detail", "comment", "unable_reason", "attempts"):
+        if key in result:
+            compact[key] = copy.deepcopy(result.get(key))
+    if isinstance(result.get("validation"), Mapping):
+        compact["validation"] = copy.deepcopy(dict(result["validation"]))
+    raw = str(result.get("last_response") or result.get("raw_response") or "").strip()
+    if raw:
+        compact["raw_response"] = raw[:12000]
+    return compact
+
+
+def _write_ui_revision(
+    *,
+    session: dict[str, Any],
+    request_text: str,
+    patch: Mapping[str, Any],
+    before_webui: Mapping[str, Any] | None,
+    after_webui: Mapping[str, Any] | None,
+    preview_state: Mapping[str, Any],
+    llm_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    revision_dir = _ui_revision_dir(str(session.get("artifact_root") or ""))
+    if revision_dir is None:
+        return None
+    revision_dir.mkdir(parents=True, exist_ok=True)
+    revision = f"{_next_ui_revision_number(revision_dir):03d}"
+    path = revision_dir / f"{revision}.json"
+    payload = {
+        "schema": "adaos.builder.ui_revision.v1",
+        "revision": revision,
+        "created_at": _now(),
+        "session_id": session.get("id"),
+        "scenario_id": session.get("scenario_id"),
+        "draft_id": session.get("draft_id"),
+        "request": {"text": str(request_text or "")},
+        "patch": copy.deepcopy(dict(patch)),
+        "llm": _compact_llm_result(llm_result),
+        "before_webui": copy.deepcopy(dict(before_webui or {})),
+        "after_webui": copy.deepcopy(dict(after_webui or {})),
+        "preview_state": copy.deepcopy(dict(preview_state)),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (revision_dir / "current.txt").write_text(revision + "\n", encoding="utf-8")
+    session["ui_revision"] = revision
+    revisions = [dict(item) for item in session.get("ui_revisions", []) if isinstance(item, Mapping)]
+    revisions.append(
+        {
+            "revision": revision,
+            "path": str(path),
+            "request": str(request_text or ""),
+            "operation": str(patch.get("operation") or ""),
+            "created_at": payload["created_at"],
+        }
+    )
+    session["ui_revisions"] = revisions[-20:]
+    return {"revision": revision, "path": str(path)}
+
+
+def _read_ui_revision(session: Mapping[str, Any], revision: str) -> dict[str, Any] | None:
+    token = str(revision or "").strip()
+    if not token:
+        return None
+    if token.lower() == "current":
+        revision_dir = _ui_revision_dir(str(session.get("artifact_root") or ""))
+        if revision_dir is None:
+            return None
+        try:
+            token = (revision_dir / "current.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            token = str(session.get("ui_revision") or "").strip()
+    match = re.search(r"(\d+)", token)
+    if not match:
+        return None
+    normalized = f"{int(match.group(1)):03d}"
+    revision_dir = _ui_revision_dir(str(session.get("artifact_root") or ""))
+    if revision_dir is None:
+        return None
+    path = revision_dir / f"{normalized}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+        if isinstance(data, dict):
+            data.setdefault("revision", normalized)
+            data.setdefault("path", str(path))
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def _revision_chat_actions(session: Mapping[str, Any], revision: str | None) -> list[dict[str, Any]]:
+    rev = str(revision or session.get("ui_revision") or "").strip()
+    if not rev:
+        return []
+    return [
+        {
+            "id": f"builder.revision.{rev}.current",
+            "label": f"current {rev}",
+            "fill": "clear",
+            "disabled": True,
+            "title": "This message revision is the current UI state after this Builder turn.",
+        },
+        {
+            "id": f"builder.revision.{rev}.set_current",
+            "label": "set current",
+            "fill": "outline",
+            "title": f"Restore UI revision {rev} as current.",
+            "action": {
+                "on": "click",
+                "type": "callSkill",
+                "target": "builder_skill.set_ui_revision_current",
+                "params": {
+                    "session_id": str(session.get("id") or ""),
+                    "revision": rev,
+                },
+            },
+        },
+    ]
 
 
 def _write_scenario_manifest(root: Path, scenario: Mapping[str, Any], preview_state: Mapping[str, Any]) -> None:
@@ -795,9 +944,50 @@ def _form_field_type(field: Mapping[str, Any]) -> str:
     return "text"
 
 
+def _normalise_page_schema_candidate(value: Any, *, title: str, page_id: str) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    data = copy.deepcopy(dict(value))
+    widgets = data.get("widgets")
+    if not isinstance(widgets, list):
+        return None
+    clean_widgets: list[dict[str, Any]] = []
+    for index, widget in enumerate(widgets):
+        if not isinstance(widget, Mapping):
+            continue
+        item = copy.deepcopy(dict(widget))
+        item_id = str(item.get("id") or "").strip()
+        item_type = str(item.get("type") or "").strip()
+        if not item_id:
+            item["id"] = f"widget-{index + 1}"
+        if not item_type:
+            continue
+        item["type"] = item_type
+        clean_widgets.append(item)
+    if not clean_widgets:
+        return None
+    data["widgets"] = clean_widgets
+    data.setdefault("id", page_id or "builder_prototype")
+    data.setdefault("title", title or "Prototype")
+    if not isinstance(data.get("layout"), Mapping):
+        data["layout"] = {
+            "type": "split",
+            "pattern": "split",
+            "areas": [{"id": "main", "role": "main"}, {"id": "right", "role": "aux"}],
+        }
+    return data
+
+
 def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any]:
     ui = preview_state.get("current_ui") if isinstance(preview_state.get("current_ui"), Mapping) else {}
     title = str(preview_state.get("title") or ui.get("title") or "Prototype").strip() or "Prototype"
+    direct_page_schema = _normalise_page_schema_candidate(
+        preview_state.get("page_schema"),
+        title=title,
+        page_id=str(ui.get("id") or preview_state.get("session_id") or "builder_prototype"),
+    )
+    if direct_page_schema is not None:
+        return direct_page_schema
     datasources = preview_state.get("datasources") if isinstance(preview_state.get("datasources"), list) else []
     datasource = datasources[0] if datasources and isinstance(datasources[0], Mapping) else {}
     fields = [dict(item) for item in datasource.get("fields", []) if isinstance(item, Mapping)]
@@ -1501,6 +1691,46 @@ def _load_webui_schema() -> dict[str, Any]:
         return {}
 
 
+def _builder_llm_primary_enabled(_meta: Mapping[str, Any] | None = None) -> bool:
+    raw = str(os.getenv("ADAOS_BUILDER_LLM_PRIMARY") or "").strip().lower()
+    if raw in {"0", "false", "no", "off", "fallback"}:
+        return False
+    if raw in {"1", "true", "yes", "on", "primary"}:
+        return True
+    if os.getenv("PYTEST_CURRENT_TEST") and str(os.getenv("ADAOS_BUILDER_LLM_IN_TESTS") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    if isinstance(_meta, Mapping) and _meta.get("disable_builder_llm") is True:
+        return False
+    return True
+
+
+def _project_memory(session: Mapping[str, Any]) -> dict[str, Any]:
+    artifact_root = str(session.get("artifact_root") or "").strip()
+    memory_text = ""
+    if artifact_root:
+        path = Path(artifact_root) / "builder_memory.md"
+        if path.exists():
+            try:
+                memory_text = path.read_text(encoding="utf-8-sig")[:12000]
+            except Exception:
+                memory_text = ""
+    return {
+        "source_idea": str(session.get("source_idea") or ""),
+        "user_summary": copy.deepcopy(dict(session.get("user_summary") or {})) if isinstance(session.get("user_summary"), Mapping) else {},
+        "memory_text": memory_text,
+        "current_revision": str(session.get("ui_revision") or ""),
+        "recent_revisions": [
+            {
+                "revision": str(item.get("revision") or ""),
+                "operation": str(item.get("operation") or ""),
+                "request": str(item.get("request") or "")[:500],
+            }
+            for item in session.get("ui_revisions", [])[-8:]
+            if isinstance(item, Mapping)
+        ],
+    }
+
+
 def _current_webui_payload(session: Mapping[str, Any], preview_state: Mapping[str, Any]) -> dict[str, Any]:
     artifact_root = str(session.get("artifact_root") or "").strip()
     payload: dict[str, Any] = {}
@@ -1584,6 +1814,47 @@ def _validate_webui_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "webui_schema_validation_failed", "detail": f"{type(exc).__name__}: {exc}"}
 
 
+def _validate_preview_state_payload(preview_state: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(preview_state.get("current_ui"), Mapping):
+        return {"ok": False, "error": "preview_state_invalid", "detail": "preview_state.current_ui must be an object"}
+    datasources = preview_state.get("datasources")
+    if datasources is not None and not isinstance(datasources, list):
+        return {"ok": False, "error": "preview_state_invalid", "detail": "preview_state.datasources must be an array"}
+    mock_data = preview_state.get("mock_data")
+    if mock_data is not None and not isinstance(mock_data, Mapping):
+        return {"ok": False, "error": "preview_state_invalid", "detail": "preview_state.mock_data must be an object"}
+    page_schema = preview_state.get("page_schema")
+    if page_schema is None:
+        return {"ok": True}
+    if not isinstance(page_schema, Mapping):
+        return {"ok": False, "error": "page_schema_invalid", "detail": "preview_state.page_schema must be an object"}
+    widgets = page_schema.get("widgets")
+    if not isinstance(widgets, list) or not widgets:
+        return {"ok": False, "error": "page_schema_invalid", "detail": "preview_state.page_schema.widgets must be a non-empty array"}
+    for index, widget in enumerate(widgets):
+        if not isinstance(widget, Mapping):
+            return {"ok": False, "error": "page_schema_invalid", "detail": f"widgets[{index}] must be an object"}
+        if not str(widget.get("id") or "").strip():
+            return {"ok": False, "error": "page_schema_invalid", "detail": f"widgets[{index}].id is required"}
+        if not str(widget.get("type") or "").strip():
+            return {"ok": False, "error": "page_schema_invalid", "detail": f"widgets[{index}].type is required"}
+    return {"ok": True}
+
+
+def _validate_builder_webui_payload(payload: Mapping[str, Any], preview_state: Mapping[str, Any]) -> dict[str, Any]:
+    webui_validation = _validate_webui_payload(payload)
+    if not webui_validation.get("ok"):
+        return webui_validation
+    preview_validation = _validate_preview_state_payload(preview_state)
+    if not preview_validation.get("ok"):
+        return preview_validation
+    return {
+        "ok": True,
+        "schema": webui_validation.get("schema") or "adaos.webui.v1",
+        "preview_state": "ok",
+    }
+
+
 def _normalise_llm_webui_payload(
     payload: Mapping[str, Any],
     *,
@@ -1594,11 +1865,26 @@ def _normalise_llm_webui_payload(
     if preview is None and isinstance(data.get("current_ui"), Mapping):
         preview = data
         data = {"schema": "adaos.webui.prototype.v1", "generated_by": SKILL_ID, "preview_state": preview}
+    if preview is None and isinstance(data.get("page_schema"), Mapping):
+        preview = {"page_schema": data.get("page_schema")}
+        data = {"schema": "adaos.webui.prototype.v1", "generated_by": SKILL_ID, "preview_state": preview}
     if not isinstance(preview, Mapping):
         raise ValueError("LLM payload must contain preview_state")
     preview_data = copy.deepcopy(dict(preview))
+    if isinstance(data.get("page_schema"), Mapping) and not isinstance(preview_data.get("page_schema"), Mapping):
+        preview_data["page_schema"] = copy.deepcopy(data["page_schema"])
+    if not preview_data.get("title") and previous_preview.get("title"):
+        preview_data["title"] = copy.deepcopy(previous_preview.get("title"))
     if not isinstance(preview_data.get("current_ui"), Mapping):
-        raise ValueError("preview_state.current_ui is required")
+        title = str(preview_data.get("title") or previous_preview.get("title") or "Prototype")
+        previous_ui = previous_preview.get("current_ui") if isinstance(previous_preview.get("current_ui"), Mapping) else {}
+        preview_data["current_ui"] = {
+            "schema": "adaos.declarative_ui.v1",
+            "id": str(previous_ui.get("id") or previous_preview.get("session_id") or "builder_prototype"),
+            "type": "page",
+            "title": title,
+            "children": [],
+        }
     if not isinstance(preview_data.get("datasources"), list):
         preview_data["datasources"] = copy.deepcopy(previous_preview.get("datasources") or [])
     if not isinstance(preview_data.get("mock_data"), Mapping):
@@ -1675,66 +1961,122 @@ def _apply_llm_webui_transform(
             "operation": str(item.get("operation") or ""),
             "summary": str(item.get("summary") or ""),
             "status": str(item.get("status") or ""),
+            "revision": str(item.get("revision") or ""),
         }
         for item in (session.get("patches") if isinstance(session.get("patches"), list) else [])[-8:]
         if isinstance(item, Mapping)
     ]
     system_prompt = (
-        "You are AdaOS Builder. Transform the current prototype UI according to the user's instruction. "
-        "Return only one JSON object. The JSON must keep schema='adaos.webui.prototype.v1' and must contain preview_state. "
-        "preview_state.current_ui is the immediate Builder preview contract; scenario.json will be regenerated from it. "
-        "Use the supplied adaos.webui.v1 schema as the outer webui.json compatibility contract. "
-        "Do not include markdown, explanations, code fences, or unsafe side effects."
+        "You are AdaOS Builder, a deterministic UI prototyping programmer. "
+        "Transform the current prototype UI according to the user's instruction. "
+        "Return only one JSON object. Do not include markdown, code fences, or prose outside JSON. "
+        "The root object must keep schema='adaos.webui.prototype.v1', generated_by='builder_skill', and preview_state. "
+        "preview_state.current_ui is the compact Builder preview contract. "
+        "preview_state.page_schema is optional and may contain a full AdaOS pageSchema with layout/widgets; use it when the user asks to move, remove, or redesign widgets. "
+        "Use the supplied adaos.webui.v1 schema as the webui.json compatibility contract. "
+        "For checkbox/toggle semantics use boolean fields and boolean UI/table kinds; do not represent booleans as literal strings like 'true'/'false' unless the user asks for text. "
+        "If you cannot safely satisfy the request, keep the previous UI valid and set unable_reason plus a short comment."
     )
-    user_prompt = json.dumps(
-        {
-            "instruction": instruction,
-            "scenario_id": session.get("scenario_id"),
-            "title": session.get("title"),
-            "current_webui_json": current_payload,
-            "recent_patch_history": history,
-            "webui_v1_schema": schema,
-            "required_output_shape": {
-                "schema": "adaos.webui.prototype.v1",
-                "generated_by": SKILL_ID,
-                "preview_state": {
-                    "title": "string",
-                    "current_ui": "object",
-                    "datasources": "array",
-                    "mock_data": "object",
-                    "filters": "array optional",
-                    "form_action_position": "top|bottom optional",
-                },
-                "comment": "short text optional",
+    base_request = {
+        "instruction": instruction,
+        "scenario_id": session.get("scenario_id"),
+        "title": session.get("title"),
+        "current_webui_json": current_payload,
+        "project_memory": _project_memory(session),
+        "recent_patch_history": history,
+        "webui_v1_schema": schema,
+        "required_output_shape": {
+            "schema": "adaos.webui.prototype.v1",
+            "generated_by": SKILL_ID,
+            "preview_state": {
+                "title": "string",
+                "current_ui": "object",
+                "datasources": "array",
+                "mock_data": "object",
+                "filters": "array optional",
+                "form_action_position": "top|bottom optional",
+                "page_schema": "optional AdaOS pageSchema object with layout/widgets",
             },
+            "comment": "short user-facing text about what changed or why it could not be changed",
+            "unable_reason": "short optional diagnostic if request cannot be implemented",
         },
+    }
+    user_prompt = json.dumps(
+        base_request,
         ensure_ascii=False,
         indent=2,
     )
+    attempts: list[dict[str, Any]] = []
+    last_response = ""
+    last_error: dict[str, Any] | None = None
     try:
         from adaos.sdk.llm.llm_client import send_response
 
-        response = send_response(
-            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0,
-            max_tokens=6000,
-            timeout=75,
-        )
-        output_text = str(response.get("output_text") or "")
-        parsed = _extract_json_object(output_text)
-        payload, preview = _normalise_llm_webui_payload(parsed, previous_preview=preview_state)
-        validation = _validate_webui_payload(payload)
-        if not validation.get("ok"):
-            return validation
+        timeout_s = float(os.getenv("ADAOS_BUILDER_LLM_TIMEOUT_S") or 30)
+        for attempt in range(1, 3):
+            if attempt == 1:
+                messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+            else:
+                repair_prompt = json.dumps(
+                    {
+                        "task": "Repair the previous Builder JSON response. Return only corrected JSON.",
+                        "validation_error": last_error or {},
+                        "previous_response": last_response[:20000],
+                        "original_request": base_request,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": repair_prompt},
+                ]
+            response = send_response(
+                messages,
+                temperature=0,
+                max_tokens=7000,
+                timeout=timeout_s,
+            )
+            output_text = str(response.get("output_text") or "")
+            last_response = output_text
+            try:
+                parsed = _extract_json_object(output_text)
+                payload, preview = _normalise_llm_webui_payload(parsed, previous_preview=preview_state)
+                validation = _validate_builder_webui_payload(payload, preview)
+                attempts.append({"attempt": attempt, "ok": bool(validation.get("ok")), "validation": validation})
+                if not validation.get("ok"):
+                    last_error = dict(validation)
+                    continue
+                return {
+                    "ok": True,
+                    "payload": payload,
+                    "preview_state": preview,
+                    "comment": str(parsed.get("comment") or parsed.get("summary") or "").strip(),
+                    "unable_reason": str(parsed.get("unable_reason") or "").strip(),
+                    "validation": validation,
+                    "attempts": attempts,
+                    "raw_response": output_text,
+                }
+            except Exception as exc:
+                last_error = {"ok": False, "error": "llm_response_parse_failed", "detail": f"{type(exc).__name__}: {exc}"}
+                attempts.append({"attempt": attempt, **last_error})
         return {
-            "ok": True,
-            "payload": payload,
-            "preview_state": preview,
-            "comment": str(parsed.get("comment") or parsed.get("summary") or "").strip(),
-            "validation": validation,
+            "ok": False,
+            "error": str((last_error or {}).get("error") or "llm_webui_transform_invalid"),
+            "detail": str((last_error or {}).get("detail") or "LLM response did not pass Builder validation"),
+            "validation": last_error or {},
+            "attempts": attempts,
+            "last_response": last_response,
+            "comment": "\u041d\u0435 \u0441\u043c\u043e\u0433 \u0441\u043e\u0431\u0440\u0430\u0442\u044c \u0432\u0430\u043b\u0438\u0434\u043d\u044b\u0439 UI JSON.",
         }
     except Exception as exc:
-        return {"ok": False, "error": "llm_webui_transform_failed", "detail": f"{type(exc).__name__}: {exc}"}
+        return {
+            "ok": False,
+            "error": "llm_webui_transform_failed",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "attempts": attempts,
+            "last_response": last_response,
+        }
 
 
 def _workbench_service():
@@ -2549,6 +2891,12 @@ def _ensure_workbench_runtime_direct(
     runtime_scenario_id: str | None,
     preview_state: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    if (
+        os.getenv("PYTEST_CURRENT_TEST")
+        and type(svc).__module__ == "adaos.services.builder.workbench"
+        and str(os.getenv("ADAOS_BUILDER_WORKBENCH_IN_TESTS") or "").strip().lower() not in {"1", "true", "yes", "on"}
+    ):
+        return {"ok": False, "skipped": "actual_workbench_direct_disabled_in_tests"}
     ensure = getattr(svc, "ensure_dev_webspace", None)
     if not callable(ensure):
         return {"ok": False, "skipped": "ensure_dev_webspace_unavailable"}
@@ -2656,7 +3004,14 @@ def chat(
         result = create_scenario_draft(idea=utterance or "prototype app", webspace_id=ws, _meta=_meta)
         if result.get("ok"):
             message = str(result.get("message") or "")
-            _safe_emit_chat(message, webspace_id=ws, _meta=_meta, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else None)
+            actions = result.get("message_actions") if isinstance(result.get("message_actions"), list) else None
+            _safe_emit_chat(
+                message,
+                webspace_id=ws,
+                _meta=_meta,
+                topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else None,
+                actions=actions,
+            )
             return {**result, "command": command, "dialog": _dialog_state(ws, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic)}
         return {**result, "command": command, "dialog": _dialog_state(ws, topic_ref=topic)}
     if not session:
@@ -2673,6 +3028,7 @@ def chat(
         }
     result = update_current_scenario(instruction=utterance, webspace_id=ws, auto_apply=auto_apply, _meta=_meta)
     if result.get("ok"):
+        actions = result.get("message_actions") if isinstance(result.get("message_actions"), list) else None
         _safe_emit_chat(
             str(result.get("message") or ""),
             webspace_id=ws,
@@ -2680,6 +3036,7 @@ def chat(
             session=session,
             binding=binding,
             topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic,
+            actions=actions,
         )
     return {**result, "dialog": _dialog_state(ws, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic)}
 
@@ -2735,6 +3092,25 @@ def create_scenario_draft(
     preview = _preview_state(session=session)
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
+    initial_patch = {
+        "id": f"patch_initial_{_hash_suffix(session_id + source_idea)}",
+        "target": "ui",
+        "operation": "create_scenario_draft",
+        "status": "applied",
+        "created_by": "builder_skill",
+        "created_at": _now(),
+        "summary": source_idea,
+        "diff": {"scenario_id": sid, "fields": fields},
+    }
+    _write_ui_revision(
+        session=session,
+        request_text=source_idea,
+        patch=initial_patch,
+        before_webui=None,
+        after_webui=_current_webui_payload(session, preview),
+        preview_state=preview,
+        llm_result=None,
+    )
     _save_session(ws, session)
     workbench = _ensure_workbench(ws, session=session, preview_state=preview)
     binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
@@ -2762,6 +3138,7 @@ def create_scenario_draft(
     if pending_action and pending_action.get("id"):
         session["pending_action_id"] = pending_action.get("id")
         _save_session(ws, session)
+    actions = _revision_chat_actions(session, str(session.get("ui_revision") or ""))
     return {
         "ok": True,
         "session_id": session_id,
@@ -2774,6 +3151,126 @@ def create_scenario_draft(
         "topic": {k: v for k, v in topic.items() if k != "stored"},
         "pending_action": pending_action,
         "message": message,
+        "message_actions": actions,
+        "ui_revision": {"revision": session.get("ui_revision")} if session.get("ui_revision") else None,
+        "dialog": _dialog_state(ws, topic_ref=topic),
+    }
+
+
+def _llm_failure_summary(llm_result: Mapping[str, Any] | None) -> str:
+    if not isinstance(llm_result, Mapping):
+        return ""
+    detail = str(llm_result.get("detail") or llm_result.get("error") or "").strip()
+    comment = str(llm_result.get("comment") or "").strip()
+    if comment and detail:
+        return f"{comment} ({detail})"
+    return comment or detail
+
+
+def _finalize_scenario_update(
+    *,
+    ws: str,
+    session: dict[str, Any],
+    binding: Mapping[str, Any],
+    patch: dict[str, Any],
+    request_text: str,
+    before_webui: Mapping[str, Any] | None,
+    llm_result: Mapping[str, Any] | None,
+    auto_apply: bool,
+    _meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    session.setdefault("patches", []).append(patch)
+    session["version"] = f"v{len(session.get('patches') or []) + 1}"
+    session["user_summary"] = _draft_user_summary(session)
+    if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("preview_state"), Mapping):
+        preview = copy.deepcopy(dict(session["preview_state"]))
+    else:
+        preview = _preview_state(session=session)
+    if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("webui_payload"), Mapping):
+        _write_webui_payload(str(session.get("artifact_root") or ""), session["webui_payload"])
+    else:
+        _write_webui(str(session.get("artifact_root") or ""), preview)
+    session["preview_state"] = preview
+    after_webui = _current_webui_payload(session, preview)
+    revision_info = _write_ui_revision(
+        session=session,
+        request_text=request_text,
+        patch=patch,
+        before_webui=before_webui,
+        after_webui=after_webui,
+        preview_state=preview,
+        llm_result=llm_result,
+    )
+    if revision_info:
+        patch["revision"] = revision_info.get("revision")
+        patch["revision_path"] = revision_info.get("path")
+        session["patches"][-1] = patch
+    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
+    resolved_binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else binding
+    topic = _builder_topic_ref(ws, session=session, binding=resolved_binding, _meta=_meta)
+    session["thread_id"] = str(topic.get("thread_id") or "").strip() or None
+    session["topic_id"] = str(topic.get("topic_id") or "").strip() or None
+    session["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
+    _save_session(ws, session)
+    prompt_selection = _publish_prompt_project_selection(
+        ws,
+        session=session,
+        reason="builder_project_updated",
+    )
+    pending_action = _publish_review_pending_action(
+        webspace_id=ws,
+        session=session,
+        request_text=request_text,
+        kind="builder.scenario_patch.review",
+        summary=f"Review Builder patch {patch['operation']} for {session.get('scenario_id')}",
+        _meta=_meta,
+        patch=patch,
+    )
+    if pending_action and pending_action.get("id"):
+        patch["pending_action_id"] = pending_action.get("id")
+        session["patches"][-1] = patch
+        session["pending_action_id"] = pending_action.get("id")
+        _save_session(ws, session)
+    not_implemented = patch.get("diff", {}).get("not_implemented") if isinstance(patch.get("diff"), Mapping) else None
+    llm_comment = str((llm_result or {}).get("comment") or "").strip() if isinstance(llm_result, Mapping) else ""
+    unable_reason = str((llm_result or {}).get("unable_reason") or "").strip() if isinstance(llm_result, Mapping) else ""
+    revision_text = f" Ревизия UI: {revision_info.get('revision')}." if revision_info else ""
+    if unable_reason:
+        message = (
+            f"{AGENT_LABEL}: обновил прототип {session.get('scenario_id')} с ограничением. "
+            f"Операция: {patch['operation']}. {unable_reason}.{revision_text}"
+        )
+    elif patch.get("status") == "partial" and isinstance(not_implemented, list) and not_implemented:
+        message = (
+            f"{AGENT_LABEL}: частично обновил прототип {session.get('scenario_id')}. "
+            f"Операция: {patch['operation']}. "
+            f"Не удалось реализовать: {', '.join(str(item) for item in not_implemented)}.{revision_text}"
+        )
+    elif llm_comment and patch.get("operation") == "llm_webui_transform":
+        message = (
+            f"{AGENT_LABEL}: обновил прототип {session.get('scenario_id')}. "
+            f"Операция: {patch['operation']}. {llm_comment}{revision_text}"
+        )
+    else:
+        message = (
+            f"{AGENT_LABEL}: обновил прототип {session.get('scenario_id')}. "
+            f"Операция: {patch['operation']}.{revision_text}"
+        )
+    actions = _revision_chat_actions(session, str(revision_info.get("revision") if revision_info else ""))
+    return {
+        "ok": True,
+        "session_id": session.get("id"),
+        "scenario_id": session.get("scenario_id"),
+        "patch": patch,
+        "preview_state": preview,
+        "workbench": workbench,
+        "prompt_selection": prompt_selection,
+        "topic": {k: v for k, v in topic.items() if k != "stored"},
+        "pending_action": pending_action,
+        "message": message,
+        "message_actions": actions,
+        "ui_revision": revision_info,
+        "llm": _compact_llm_result(llm_result),
         "dialog": _dialog_state(ws, topic_ref=topic),
     }
 
@@ -2812,6 +3309,37 @@ def update_current_scenario(
     }
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
     filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
+    base_preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
+    before_webui = _current_webui_payload(session, base_preview)
+    llm_result: dict[str, Any] | None = None
+    if text and _builder_llm_primary_enabled(_meta):
+        llm_result = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
+        if llm_result.get("ok"):
+            preview_from_llm = llm_result.get("preview_state") if isinstance(llm_result.get("preview_state"), Mapping) else base_preview
+            payload_from_llm = llm_result.get("payload") if isinstance(llm_result.get("payload"), Mapping) else None
+            patch["operation"] = "llm_webui_transform"
+            patch["diff"] = {
+                "schema_valid": True,
+                "comment": str(llm_result.get("comment") or ""),
+                "unable_reason": str(llm_result.get("unable_reason") or ""),
+                "validation": dict(llm_result.get("validation") or {}) if isinstance(llm_result.get("validation"), Mapping) else {},
+                "attempts": list(llm_result.get("attempts") or []) if isinstance(llm_result.get("attempts"), list) else [],
+            }
+            session["preview_state"] = copy.deepcopy(dict(preview_from_llm))
+            if payload_from_llm is not None:
+                session["webui_payload"] = copy.deepcopy(dict(payload_from_llm))
+            _merge_session_from_preview(session, preview_from_llm)
+            return _finalize_scenario_update(
+                ws=ws,
+                session=session,
+                binding=binding,
+                patch=patch,
+                request_text=text,
+                before_webui=before_webui,
+                llm_result=llm_result,
+                auto_apply=auto_apply,
+                _meta=_meta,
+            )
     if _wants_card_view(text):
         session["card_view"] = True
         session["hide_table"] = True
@@ -2946,23 +3474,26 @@ def update_current_scenario(
                 patch["operation"] = "add_field"
                 patch["diff"] = {"field": field}
     if patch["operation"] == "noop":
-        base_preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
-        llm_patch = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
-        if llm_patch.get("ok"):
+        llm_patch = llm_result
+        if llm_patch is None and text and _builder_llm_primary_enabled(_meta):
+            llm_patch = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
+        if isinstance(llm_patch, Mapping) and llm_patch.get("ok"):
             preview_from_llm = llm_patch.get("preview_state") if isinstance(llm_patch.get("preview_state"), Mapping) else base_preview
             payload_from_llm = llm_patch.get("payload") if isinstance(llm_patch.get("payload"), Mapping) else None
             patch["operation"] = "llm_webui_transform"
             patch["diff"] = {
                 "schema_valid": True,
                 "comment": str(llm_patch.get("comment") or ""),
+                "unable_reason": str(llm_patch.get("unable_reason") or ""),
                 "validation": dict(llm_patch.get("validation") or {}) if isinstance(llm_patch.get("validation"), Mapping) else {},
+                "attempts": list(llm_patch.get("attempts") or []) if isinstance(llm_patch.get("attempts"), list) else [],
             }
             session["preview_state"] = copy.deepcopy(dict(preview_from_llm))
             if payload_from_llm is not None:
                 session["webui_payload"] = copy.deepcopy(dict(payload_from_llm))
             _merge_session_from_preview(session, preview_from_llm)
         else:
-            patch["diff"] = {"llm_fallback": llm_patch}
+            patch["diff"] = {"llm_fallback": llm_patch or {"ok": False, "error": "llm_disabled"}}
     if patch["operation"] == "noop":
         if not isinstance(session.get("user_summary"), Mapping):
             session["user_summary"] = _draft_user_summary(session)
@@ -2970,12 +3501,14 @@ def update_current_scenario(
         workbench = _ensure_workbench(ws, session=session, preview_state=preview)
         binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else binding
         topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+        diagnostic = _llm_failure_summary(llm_result if isinstance(llm_result, Mapping) else patch.get("diff", {}).get("llm_fallback") if isinstance(patch.get("diff"), Mapping) else None)
+        diagnostic_text = f" LLM: {diagnostic}" if diagnostic else ""
         message = (
             f"{AGENT_LABEL}: \u044f \u043d\u0435 \u043d\u0430\u0448\u0435\u043b \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0430\u043d\u043d\u043e\u0433\u043e "
             f"\u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f \u0434\u043b\u044f {session.get('scenario_id')}. "
             "\u0423\u0442\u043e\u0447\u043d\u0438\u0442\u0435, \u043a\u0430\u043a \u0438\u0437\u043c\u0435\u043d\u0438\u0442\u044c UI: "
             "\u0434\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435, \u0443\u0431\u0435\u0440\u0438 \u043f\u043e\u043b\u0435, "
-            "\u043f\u043e\u043a\u0430\u0436\u0438 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438 \u0438\u043b\u0438 \u0441\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445."
+            f"\u043f\u043e\u043a\u0430\u0436\u0438 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438 \u0438\u043b\u0438 \u0441\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445.{diagnostic_text}"
         )
         return {
             "ok": True,
@@ -2990,69 +3523,17 @@ def update_current_scenario(
             "message": message,
             "dialog": _dialog_state(ws, topic_ref=topic),
         }
-    session.setdefault("patches", []).append(patch)
-    session["version"] = f"v{len(session.get('patches') or []) + 1}"
-    session["user_summary"] = _draft_user_summary(session)
-    if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("preview_state"), Mapping):
-        preview = copy.deepcopy(dict(session["preview_state"]))
-    else:
-        preview = _preview_state(session=session)
-    if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("webui_payload"), Mapping):
-        _write_webui_payload(str(session.get("artifact_root") or ""), session["webui_payload"])
-    else:
-        _write_webui(str(session.get("artifact_root") or ""), preview)
-    session["preview_state"] = preview
-    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
-    binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else binding
-    topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
-    session["thread_id"] = str(topic.get("thread_id") or "").strip() or None
-    session["topic_id"] = str(topic.get("topic_id") or "").strip() or None
-    session["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
-    _save_session(ws, session)
-    prompt_selection = _publish_prompt_project_selection(
-        ws,
+    return _finalize_scenario_update(
+        ws=ws,
         session=session,
-        reason="builder_project_updated",
-    )
-    pending_action = _publish_review_pending_action(
-        webspace_id=ws,
-        session=session,
-        request_text=text,
-        kind="builder.scenario_patch.review",
-        summary=f"Review Builder patch {patch['operation']} for {session.get('scenario_id')}",
-        _meta=_meta,
+        binding=binding,
         patch=patch,
+        request_text=text,
+        before_webui=before_webui,
+        llm_result=llm_result,
+        auto_apply=auto_apply,
+        _meta=_meta,
     )
-    if pending_action and pending_action.get("id"):
-        patch["pending_action_id"] = pending_action.get("id")
-        session["patches"][-1] = patch
-        session["pending_action_id"] = pending_action.get("id")
-        _save_session(ws, session)
-    not_implemented = patch.get("diff", {}).get("not_implemented") if isinstance(patch.get("diff"), Mapping) else None
-    if patch.get("status") == "partial" and isinstance(not_implemented, list) and not_implemented:
-        message = (
-            f"{AGENT_LABEL}: \u0447\u0430\u0441\u0442\u0438\u0447\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f "
-            f"{session.get('scenario_id')}. \u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {patch['operation']}. "
-            f"\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0440\u0435\u0430\u043b\u0438\u0437\u043e\u0432\u0430\u0442\u044c: {', '.join(str(item) for item in not_implemented)}."
-        )
-    else:
-        message = (
-            f"{AGENT_LABEL}: \u043e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f "
-            f"{session.get('scenario_id')}. \u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: {patch['operation']}."
-        )
-    return {
-        "ok": True,
-        "session_id": session.get("id"),
-        "scenario_id": session.get("scenario_id"),
-        "patch": patch,
-        "preview_state": preview,
-        "workbench": workbench,
-        "prompt_selection": prompt_selection,
-        "topic": {k: v for k, v in topic.items() if k != "stored"},
-        "pending_action": pending_action,
-        "message": message,
-        "dialog": _dialog_state(ws, topic_ref=topic),
-    }
 
 
 @tool(summary="Get Builder session.", side_effects="none")
@@ -3110,6 +3591,63 @@ def get_preview_state(
             _meta=_meta,
         ),
         "workbench": workbench,
+        "dialog": _dialog_state(ws, topic_ref=topic),
+    }
+
+
+@tool(summary="Restore a stored Builder UI revision as current.", side_effects="local_write")
+def set_ui_revision_current(
+    revision: str,
+    session_id: str | None = None,
+    webspace_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _source_webspace_id(webspace_id, _meta)
+    session = _load_session(ws, session_id)
+    if not session:
+        message = f"{AGENT_LABEL}: не нашел Builder-сессию для восстановления ревизии."
+        _safe_emit_chat(message, webspace_id=ws, _meta=_meta)
+        return {"ok": False, "error": "session_not_found", "message": message, "dialog": _dialog_state(ws)}
+    revision_payload = _read_ui_revision(session, revision)
+    if not revision_payload:
+        message = f"{AGENT_LABEL}: не нашел UI-ревизию {revision} для {session.get('scenario_id')}."
+        _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session)
+        return {"ok": False, "error": "revision_not_found", "message": message, "dialog": _dialog_state(ws)}
+    after_webui = revision_payload.get("after_webui") if isinstance(revision_payload.get("after_webui"), Mapping) else {}
+    preview = after_webui.get("preview_state") if isinstance(after_webui.get("preview_state"), Mapping) else revision_payload.get("preview_state")
+    if not isinstance(after_webui, Mapping) or not isinstance(preview, Mapping):
+        message = f"{AGENT_LABEL}: ревизия {revision_payload.get('revision')} не содержит валидный after_webui/preview_state."
+        _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session)
+        return {"ok": False, "error": "revision_invalid", "message": message, "dialog": _dialog_state(ws)}
+    validation = _validate_builder_webui_payload(after_webui, preview)
+    if not validation.get("ok"):
+        message = f"{AGENT_LABEL}: ревизия {revision_payload.get('revision')} не прошла валидацию: {validation.get('detail') or validation.get('error')}."
+        _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session)
+        return {"ok": False, "error": "revision_validation_failed", "validation": validation, "message": message, "dialog": _dialog_state(ws)}
+    session["preview_state"] = copy.deepcopy(dict(preview))
+    session["webui_payload"] = copy.deepcopy(dict(after_webui))
+    session["ui_revision"] = str(revision_payload.get("revision") or revision)
+    _merge_session_from_preview(session, preview)
+    _write_webui_payload(str(session.get("artifact_root") or ""), after_webui)
+    workbench = _ensure_workbench(ws, session=session, preview_state=preview)
+    binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
+    topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+    session["thread_id"] = str(topic.get("thread_id") or "").strip() or None
+    session["topic_id"] = str(topic.get("topic_id") or "").strip() or None
+    session["topic_ref"] = {k: v for k, v in topic.items() if k != "stored"}
+    _save_session(ws, session)
+    message = f"{AGENT_LABEL}: сделал UI-ревизию {session['ui_revision']} текущей для {session.get('scenario_id')}."
+    actions = _revision_chat_actions(session, str(session.get("ui_revision") or ""))
+    _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session, binding=binding, topic_ref=topic, actions=actions)
+    return {
+        "ok": True,
+        "session_id": session.get("id"),
+        "scenario_id": session.get("scenario_id"),
+        "revision": session.get("ui_revision"),
+        "preview_state": preview,
+        "workbench": workbench,
+        "message": message,
+        "message_actions": actions,
         "dialog": _dialog_state(ws, topic_ref=topic),
     }
 
@@ -3226,6 +3764,8 @@ def handle(topic: str, payload: Mapping[str, Any] | None = None) -> dict[str, An
         return update_current_scenario(**data)
     if topic.endswith("get_preview_state"):
         return get_preview_state(**data)
+    if topic.endswith("set_ui_revision_current"):
+        return set_ui_revision_current(**data)
     if topic.endswith("get_session"):
         return get_session(**data)
     if topic.endswith("ensure_dev_webspace"):
