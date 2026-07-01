@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sys
 import time
@@ -176,6 +177,30 @@ def test_webspace_runtime_load_webui_reads_shared_ui_owner_from_skill_manifest(t
 
     assert payload["ui_owner"] == "shared"
     assert payload["ydoc_defaults"]["data/demo_metrics/table"] == {"items": [{"id": "cpu"}]}
+
+
+def test_collect_skill_decls_treats_missing_skill_webui_as_optional(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    runtime_base = tmp_path / "runtime"
+    repo_root = tmp_path / "repo"
+    (runtime_base / "workspace" / "skills" / "service_doctor_skill").mkdir(parents=True, exist_ok=True)
+
+    fake_ctx = SimpleNamespace(paths=_PathsStub(base_dir=runtime_base, repo_root=repo_root))
+    runtime = WebspaceScenarioRuntime(fake_ctx)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "get_local_capacity",
+        lambda: {"skills": [{"name": "service_doctor_skill", "active": True}]},
+    )
+    caplog.set_level(logging.DEBUG, logger="adaos.scenario.webspace_runtime")
+
+    decls = runtime._collect_skill_decls(mode="workspace", include_remote=False)
+
+    assert decls == []
+    assert "webui.json missing for service_doctor_skill" not in caplog.text
 
 
 def test_webspace_runtime_load_webui_cache_refreshes_when_file_changes(tmp_path: Path) -> None:

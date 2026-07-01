@@ -3219,7 +3219,7 @@ class WebspaceScenarioRuntime:
 
     # --- helpers ---------------------------------------------------------
 
-    def _load_webui(self, skill_name: str, space: str) -> Dict[str, Any]:
+    def _load_webui(self, skill_name: str, space: str, *, log_missing: bool = False) -> Dict[str, Any]:
         paths = self.ctx.paths
         base = paths.dev_skills_dir() if space == "dev" else paths.skills_dir()
         skill_dir = Path(base) / skill_name
@@ -3241,7 +3241,7 @@ class WebspaceScenarioRuntime:
                 pass
         if not path.exists():
             _WEBUI_DECL_CACHE.pop(str(path), None)
-            if _log.isEnabledFor(logging.DEBUG):
+            if log_missing and _log.isEnabledFor(logging.DEBUG):
                 stack = " <- ".join(
                     f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
                     for frame in traceback.extract_stack(limit=8)[:-1]
