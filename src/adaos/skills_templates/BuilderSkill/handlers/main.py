@@ -323,7 +323,7 @@ def _publish_review_pending_action(
     patch: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     refs = _source_refs(webspace_id=webspace_id, session=session, _meta=_meta, patch=patch)
-    request_text = _repair_mojibake_text(request_text)
+    request_text = _display_request_text(request_text, patch)
     summary = _repair_mojibake_text(summary)
     action_input: dict[str, Any] = {
         "kind": kind,
@@ -866,7 +866,7 @@ def _write_ui_revision(
         "session_id": session.get("id"),
         "scenario_id": session.get("scenario_id"),
         "draft_id": session.get("draft_id"),
-        "request": {"text": _repair_mojibake_text(request_text)},
+        "request": {"text": _display_request_text(request_text, patch)},
         "patch": _repair_text_tree(copy.deepcopy(dict(patch))),
         "llm": _compact_llm_result(llm_result),
         "before_webui": before_for_revision,
@@ -1663,6 +1663,24 @@ def _text_contains_all_groups(text: str, *groups: Iterable[str]) -> bool:
     return False
 
 
+def _has_lost_cyrillic_markers(text: str) -> bool:
+    return any(len(re.findall(r"\?{2,}", variant)) >= 2 for variant in _text_variants(text))
+
+
+def _display_request_text(request_text: Any, patch: Mapping[str, Any] | None = None) -> str:
+    text = _repair_mojibake_text(request_text)
+    if not _has_lost_cyrillic_markers(text):
+        return text
+    operation = str((patch or {}).get("operation") or "").strip()
+    if operation == "swap_layout_areas":
+        return "\u041f\u0435\u0440\u0435\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043e\u0431\u043b\u0430\u0441\u0442\u0438 Input \u0438 Cards"
+    if operation == "set_card_preview":
+        return "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0432 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u0445 \u0442\u0435\u043a\u0441\u0442\u043e\u0432\u044b\u0439 \u043f\u0440\u0438\u043c\u0435\u0440"
+    if operation == "change_view_representation":
+        return "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c UI \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c\u0438"
+    return text
+
+
 def _wants_add_button_above_form(text: str) -> bool:
     return _text_contains_all_groups(
         text,
@@ -1696,11 +1714,17 @@ def _wants_card_view(text: str) -> bool:
 
 
 def _wants_swap_input_and_cards(text: str) -> bool:
-    return _text_contains_all_groups(
+    if _text_contains_all_groups(
         text,
         ("swap", "switch", "reorder", "change places", "\u043f\u0435\u0440\u0435\u0441\u0442\u0430\u0432", "\u043f\u043e\u043c\u0435\u043d\u044f", "\u043c\u0435\u0441\u0442\u0430\u043c\u0438"),
         ("input", "form", "\u0432\u0432\u043e\u0434", "\u0444\u043e\u0440\u043c"),
         ("card", "cards", "\u043a\u0430\u0440\u0442\u043e\u0447"),
+    ):
+        return True
+    return _has_lost_cyrillic_markers(text) and _text_contains_all_groups(
+        text,
+        ("input", "form"),
+        ("card", "cards"),
     )
 
 
@@ -2350,6 +2374,130 @@ def _workbench_binding(webspace_id: str) -> dict[str, Any]:
         return {}
 
 
+def _existing_dir_path(value: Any) -> str | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        path = Path(token).expanduser()
+    except Exception:
+        return None
+    try:
+        if path.exists() and path.is_dir():
+            return str(path.resolve())
+    except Exception:
+        return None
+    return None
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _artifact_root_from_draft_payload(payload: Mapping[str, Any]) -> str | None:
+    artifact = payload.get("artifact") if isinstance(payload.get("artifact"), Mapping) else {}
+    for raw in (
+        payload.get("artifact_root"),
+        payload.get("draft_root"),
+        artifact.get("draft_root"),
+        artifact.get("root"),
+        artifact.get("artifact_root"),
+    ):
+        resolved = _existing_dir_path(raw)
+        if resolved:
+            return resolved
+    return None
+
+
+def _builder_draft_payloads(session: Mapping[str, Any], binding: Mapping[str, Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    draft_ids = [
+        session.get("draft_id"),
+        session.get("id"),
+        binding.get("active_draft_id"),
+    ]
+    for draft_id in draft_ids:
+        token = str(draft_id or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        try:
+            from adaos.services.runtime_paths import current_state_dir
+
+            payload = _read_json_file(current_state_dir() / "builder" / "drafts" / token / "builder.draft.json")
+        except Exception:
+            payload = {}
+        if payload:
+            payloads.append(payload)
+    for root in (session.get("artifact_root"), binding.get("artifact_root"), binding.get("draft_root"), binding.get("root")):
+        resolved = _existing_dir_path(root)
+        if not resolved:
+            continue
+        payload = _read_json_file(Path(resolved) / "builder.draft.json")
+        if payload:
+            payloads.append(payload)
+    return payloads
+
+
+def _scenario_artifact_root_from_id(scenario_id: str) -> str | None:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(scenario_id or "").strip()).strip("._-")
+    if not token:
+        return None
+    try:
+        from adaos.services.runtime_paths import current_repo_root
+
+        repo_root = current_repo_root()
+    except Exception:
+        repo_root = Path.cwd()
+    if repo_root is None:
+        repo_root = Path.cwd()
+    dev_root = Path(repo_root) / ".adaos" / "dev"
+    try:
+        for path in sorted(dev_root.glob(f"*/scenarios/{token}")):
+            resolved = _existing_dir_path(path)
+            if resolved:
+                return resolved
+    except Exception:
+        return None
+    return None
+
+
+def _ensure_session_artifact_root(session: dict[str, Any], binding: Mapping[str, Any]) -> bool:
+    current = _existing_dir_path(session.get("artifact_root"))
+    if current:
+        if session.get("artifact_root") != current:
+            session["artifact_root"] = current
+            return True
+        return False
+    for raw in (binding.get("artifact_root"), binding.get("draft_root"), binding.get("root")):
+        resolved = _existing_dir_path(raw)
+        if resolved:
+            session["artifact_root"] = resolved
+            return True
+    for payload in _builder_draft_payloads(session, binding):
+        resolved = _artifact_root_from_draft_payload(payload)
+        if resolved:
+            session["artifact_root"] = resolved
+            artifact = payload.get("artifact") if isinstance(payload.get("artifact"), Mapping) else {}
+            draft_id = str(payload.get("draft_id") or "").strip()
+            scenario_id = str(artifact.get("id") or "").strip()
+            if draft_id and not str(session.get("draft_id") or "").strip():
+                session["draft_id"] = draft_id
+            if scenario_id and not str(session.get("scenario_id") or "").strip():
+                session["scenario_id"] = scenario_id
+            return True
+    scenario_root = _scenario_artifact_root_from_id(str(session.get("scenario_id") or binding.get("runtime_scenario_id") or ""))
+    if scenario_root:
+        session["artifact_root"] = scenario_root
+        return True
+    return False
+
+
 def _session_matches_binding(session: Mapping[str, Any], binding: Mapping[str, Any]) -> bool:
     draft_id = str(binding.get("active_draft_id") or "").strip()
     scenario_id = str(binding.get("runtime_scenario_id") or "").strip()
@@ -2365,15 +2513,24 @@ def _target_session(webspace_id: str) -> tuple[dict[str, Any] | None, dict[str, 
     draft_id = str(binding.get("active_draft_id") or "").strip()
     scenario_id = str(binding.get("runtime_scenario_id") or "").strip()
     sessions = _sessions(webspace_id)
+    def resolved(session: Mapping[str, Any]) -> dict[str, Any]:
+        item = copy.deepcopy(dict(session))
+        if _ensure_session_artifact_root(item, binding) and item.get("id"):
+            sessions[str(item["id"])] = item
+            _save_sessions(webspace_id, sessions)
+        return item
+
     if draft_id or scenario_id:
         for session in sessions.values():
             if draft_id and str(session.get("draft_id") or session.get("id") or "").strip() == draft_id:
-                return copy.deepcopy(session), binding
+                return resolved(session), binding
             if scenario_id and str(session.get("scenario_id") or "").strip() == scenario_id:
-                return copy.deepcopy(session), binding
+                return resolved(session), binding
         return None, binding
     session = _load_session(webspace_id)
     if session and _session_matches_binding(session, binding):
+        if _ensure_session_artifact_root(session, binding):
+            _save_session(webspace_id, session)
         return session, binding
     return None, binding
 
@@ -3350,6 +3507,7 @@ def _finalize_scenario_update(
     auto_apply: bool,
     _meta: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    _ensure_session_artifact_root(session, binding)
     session.setdefault("patches", []).append(patch)
     next_revision = _next_ui_revision_label(session)
     session["version"] = f"v{next_revision}"

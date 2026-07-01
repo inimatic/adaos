@@ -258,6 +258,104 @@ def test_update_current_scenario_swaps_input_and_cards(monkeypatch, tmp_path) ->
     assert not any(item["id"] == "prototype-table" for item in widgets)
 
 
+def test_update_current_scenario_swaps_input_and_cards_with_lost_cyrillic(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "todo_swap_lost_cyrillic"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"todo_swap_lost_cyrillic","version":"0.1.0","name":"todo_swap_lost_cyrillic","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": "draft.todo.swap.lost"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-swap-lost-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-swap-lost")
+    result = skill.update_current_scenario("????????? ??????? ??????? input ? cards", webspace_id="builder-swap-lost")
+
+    assert result["patch"]["operation"] == "swap_layout_areas"
+    assert result["preview_state"]["layout_order"] == "cards_first"
+    revision = json.loads((artifact_root / "ui_revisions" / "002.json").read_text(encoding="utf-8"))
+    assert revision["request"]["text"] == "\u041f\u0435\u0440\u0435\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043e\u0431\u043b\u0430\u0441\u0442\u0438 Input \u0438 Cards"
+
+
+def test_update_current_scenario_recovers_artifact_root_for_ui_revisions(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "todo_recover_artifact"
+    state_dir = tmp_path / "state"
+    draft_id = "draft.todo.recover"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"todo_recover","version":"0.1.0","name":"todo_recover","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": draft_id}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def get_workspace_binding(self, _webspace_id):
+            return {"active_draft_id": draft_id, "runtime_scenario_id": "todo_recover"}
+
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-recover-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+    import adaos.services.runtime_paths as runtime_paths
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(runtime_paths, "current_state_dir", lambda: state_dir)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-recover")
+    draft_payload = {
+        "draft_id": draft_id,
+        "artifact": {"kind": "scenario", "id": "todo_recover", "draft_root": str(artifact_root)},
+    }
+    draft_path = state_dir / "builder" / "drafts" / draft_id / "builder.draft.json"
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    draft_path.write_text(json.dumps(draft_payload), encoding="utf-8")
+    sessions = skill._FALLBACK_MEMORY[skill._scoped_key(skill.SESSIONS_KEY, "builder-recover")]
+    for session in sessions.values():
+        session.pop("artifact_root", None)
+        session["scenario_id"] = "todo_recover"
+        session["draft_id"] = draft_id
+
+    result = skill.update_current_scenario("show cards", webspace_id="builder-recover")
+
+    assert result["ui_revision"]["revision"] == "002"
+    assert "Ревизия UI: 002" in result["message"]
+    assert result["message_actions"]
+    assert (artifact_root / "ui_revisions" / "002.json").exists()
+
+
 def test_update_current_scenario_adds_execution_checkbox(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "todo_checkbox"
