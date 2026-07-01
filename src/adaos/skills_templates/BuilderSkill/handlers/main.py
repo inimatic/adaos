@@ -24,6 +24,7 @@ MAX_SESSIONS = 50
 WORKBENCH_REFRESH_TOPIC = "builder.workbench.ensure_requested"
 PROMPT_IDE_SCENARIO_ID = "prompt_engineer_scenario"
 CHAT_APPEND_TIMEOUT_S = 0.75
+PROMPT_SELECTION_ASYNC_TOPICS = ("prompt.project.changed", "builder.preview.selected")
 
 _FALLBACK_MEMORY: dict[str, Any] = {}
 
@@ -1752,6 +1753,26 @@ def _request_workbench_refresh(payload: Mapping[str, Any]) -> dict[str, Any]:
         return {"ok": False, "topic": WORKBENCH_REFRESH_TOPIC, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _publish_prompt_selection_async(payload: Mapping[str, Any]) -> dict[str, Any]:
+    safe_payload = dict(payload)
+
+    def _runner() -> None:
+        try:
+            from adaos.sdk.data import events
+
+            for topic in PROMPT_SELECTION_ASYNC_TOPICS:
+                try:
+                    events.publish(topic, safe_payload, source=SKILL_ID)
+                except Exception:
+                    continue
+        except Exception:
+            return
+
+    thread = threading.Thread(target=_runner, name="builder-prompt-selection-events", daemon=True)
+    thread.start()
+    return {"ok": True, "mode": "thread", "topics": list(PROMPT_SELECTION_ASYNC_TOPICS)}
+
+
 def _publish_prompt_project_selection(
     webspace_id: str,
     *,
@@ -1783,11 +1804,12 @@ def _publish_prompt_project_selection(
             },
             source=SKILL_ID,
         )
-        events.publish("prompt.project.changed", payload_base, source=SKILL_ID)
-        events.publish("builder.preview.selected", payload_base, source=SKILL_ID)
+        scheduled = _publish_prompt_selection_async(payload_base)
         return {
             "ok": True,
-            "published": ["scenario.workflow.set_state", "prompt.project.changed", "builder.preview.selected"],
+            "published": ["scenario.workflow.set_state"],
+            "scheduled": scheduled.get("topics") or [],
+            "schedule": scheduled,
             "payload": payload_base,
         }
     except Exception as exc:

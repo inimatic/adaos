@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -822,6 +823,38 @@ def test_builder_command_parser_prioritises_project_commands() -> None:
     assert switch["project_ref"] == "demo_scenario"
     assert delete_field["intent"] == "none"
     assert create["intent"] == "project.create"
+
+
+def test_prompt_project_selection_defers_heavy_events(monkeypatch) -> None:
+    skill = _load_module()
+    calls: list[str] = []
+    async_seen = threading.Event()
+
+    import adaos.sdk.data.events as events
+
+    def _publish(topic, payload, source=None):
+        calls.append(topic)
+        if topic == "prompt.project.changed":
+            time.sleep(0.3)
+        if topic == "builder.preview.selected":
+            async_seen.set()
+
+    monkeypatch.setattr(events, "publish", _publish)
+
+    started = time.perf_counter()
+    result = skill._publish_prompt_project_selection(
+        "desktop",
+        session={"scenario_id": "todo_list", "draft_id": "draft.todo"},
+        reason="test",
+    )
+    elapsed = time.perf_counter() - started
+
+    assert result["ok"] is True
+    assert result["published"] == ["scenario.workflow.set_state"]
+    assert result["scheduled"] == ["prompt.project.changed", "builder.preview.selected"]
+    assert elapsed < 0.2
+    assert calls[:1] == ["scenario.workflow.set_state"]
+    assert async_seen.wait(timeout=1.0)
 
 
 def test_chat_handles_builder_project_commands(monkeypatch, tmp_path) -> None:
