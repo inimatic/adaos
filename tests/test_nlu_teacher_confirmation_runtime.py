@@ -3,6 +3,72 @@ import time
 import pytest
 
 
+@pytest.mark.anyio
+async def test_voice_confirmation_consumes_russian_yes_from_canonical_store(monkeypatch):
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+
+    class _Txn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Map(dict):
+        def set(self, txn, key, value):  # noqa: ARG002
+            self[key] = value
+
+    class _Doc:
+        def __init__(self, teacher: dict | None = None) -> None:
+            self._maps = {"data": _Map()}
+            if teacher is not None:
+                self._maps["data"]["nlu_teacher"] = teacher
+
+        def get_map(self, name: str):
+            return self._maps.setdefault(name, _Map())
+
+        def begin_transaction(self):
+            return _Txn()
+
+    class _AsyncDoc:
+        def __init__(self, doc: _Doc) -> None:
+            self.doc = doc
+
+        async def __aenter__(self):
+            return self.doc
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    webspace_id = "ws-test-teacher-confirmation-russian-yes"
+    live_doc = _Doc({"pending_confirmations": []})
+    canonical_doc = _Doc(
+        {
+            "pending_confirmations": [
+                {
+                    "id": "confirm.russian.yes",
+                    "ts": time.time(),
+                    "status": "awaiting_user",
+                    "candidate_id": "cand.russian.yes",
+                    "request_id": "req.russian.yes",
+                    "request_text": "Покажи установленные навыки",
+                    "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+                }
+            ],
+            "events": [],
+        }
+    )
+
+    def _fake_async_get_ydoc(_webspace_id: str, **kwargs):
+        return _AsyncDoc(live_doc if kwargs.get("prefer_live_room") else canonical_doc)
+
+    monkeypatch.setattr(conf, "async_get_ydoc", _fake_async_get_ydoc)
+
+    assert conf.is_confirmation_answer("Да")
+    assert conf._classify_answer("Да") == "yes"
+    assert await conf.should_consume_voice_confirmation_answer(webspace_id, "Да")
+
+
 def test_confirmation_question_shows_canonical_action_for_stt_variant():
     from adaos.services.nlu import teacher_confirmation_runtime as conf
 

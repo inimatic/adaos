@@ -109,6 +109,19 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str:
     return default_webspace_id()
 
 
+_TEACHER_LIST_KEYS = (
+    "pending_confirmations",
+    "clarification_sessions",
+    "candidates",
+    "events",
+    "revisions",
+    "dataset",
+    "items",
+    "plan",
+    "llm_logs",
+)
+
+
 def _teacher_obj(data_map: Any) -> dict[str, Any]:
     return coerce_dict(getattr(data_map, "get", lambda _k: None)("nlu_teacher"))
 
@@ -117,6 +130,54 @@ def _as_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, (str, bytes, bytearray)) or isinstance(value, Mapping) or not isinstance(value, Iterable):
         return []
     return [dict(x) for x in iter_mappings(value)]
+
+
+def _item_identity(item: Mapping[str, Any], index: int) -> str:
+    for key in ("id", "candidate_id", "request_id", "session_id"):
+        token = str(item.get(key) or "").strip()
+        if token:
+            return f"{key}:{token}"
+    return f"idx:{index}"
+
+
+def _item_marker(item: Mapping[str, Any]) -> float:
+    for key in ("answered_at", "updated_at", "apply_requested_at", "ts"):
+        try:
+            marker = float(item.get(key) or 0.0)
+        except Exception:
+            marker = 0.0
+        if marker > 0:
+            return marker
+    return 0.0
+
+
+def _merge_teacher_lists(*sources: Any, max_items: int = 500) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for source in sources:
+        for index, item in enumerate(_as_list(source)):
+            ident = _item_identity(item, index)
+            current = by_id.get(ident)
+            if current is None:
+                by_id[ident] = dict(item)
+                order.append(ident)
+                continue
+            if _item_marker(item) >= _item_marker(current):
+                by_id[ident] = dict(item)
+    merged = [by_id[ident] for ident in order if ident in by_id]
+    merged.sort(key=_item_marker)
+    return merged[-max_items:]
+
+
+def _merge_teacher_state(*, canonical: Mapping[str, Any], live: Mapping[str, Any]) -> dict[str, Any]:
+    merged = {**dict(canonical or {}), **dict(live or {})}
+    for key in _TEACHER_LIST_KEYS:
+        values = _merge_teacher_lists((canonical or {}).get(key), (live or {}).get(key))
+        if values:
+            merged[key] = values
+        elif key in merged:
+            merged[key] = []
+    return merged
 
 
 def _route_id(meta: Mapping[str, Any]) -> str:
@@ -503,14 +564,33 @@ def _latest_active_clarification(teacher: Mapping[str, Any]) -> dict[str, Any] |
     return items[0]
 
 
-async def _read_teacher(webspace_id: str) -> dict[str, Any]:
-    async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+async def _read_teacher_ydoc(webspace_id: str, *, prefer_live_room: bool) -> dict[str, Any]:
+    async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=prefer_live_room, load_mark_roots=["data"]) as ydoc:
         return _teacher_obj(ydoc.get_map("data"))
+
+
+async def _read_teacher(webspace_id: str) -> dict[str, Any]:
+    live: dict[str, Any] = {}
+    canonical: dict[str, Any] = {}
+    try:
+        live = await _read_teacher_ydoc(webspace_id, prefer_live_room=True)
+    except Exception:
+        live = {}
+    try:
+        canonical = await _read_teacher_ydoc(webspace_id, prefer_live_room=False)
+    except Exception:
+        canonical = {}
+    return _merge_teacher_state(canonical=canonical, live=live)
 
 
 async def _write_teacher(webspace_id: str, mutator) -> dict[str, Any]:
     async with _nlu_confirmation_write_meta():
-        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+        async with async_get_ydoc(
+            webspace_id,
+            prefer_live_room=False,
+            publish_live_room=True,
+            load_mark_roots=["data"],
+        ) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             mutator(teacher)

@@ -1359,7 +1359,7 @@ async def test_voice_chat_confirmation_answer_is_not_routed_to_nlu(monkeypatch) 
             return False
 
     async def _fake_consume_confirmation_answer(webspace_id: str, text: str, **_kwargs) -> bool:
-        return webspace_id == "desktop" and text == "yes"
+        return webspace_id == "desktop" and text == "Да"
 
     doc = _Doc()
     bus = LocalEventBus()
@@ -1379,12 +1379,12 @@ async def test_voice_chat_confirmation_answer_is_not_routed_to_nlu(monkeypatch) 
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
 
     bus.publish(
-        Event(
-            type="voice.chat.user",
+            Event(
+            type="dialog.user_message",
             source="test",
             ts=1.0,
             payload={
-                "text": "yes",
+                "text": "Да",
                 "webspace_id": "desktop",
                 "_meta": {"route_id": "voice_chat"},
             },
@@ -1395,7 +1395,7 @@ async def test_voice_chat_confirmation_answer_is_not_routed_to_nlu(monkeypatch) 
 
     messages = doc.get_map("data")["nodes"]["hub-node"]["voice_chat"]["messages"]
     assert messages[-1]["from"] == "user"
-    assert messages[-1]["text"] == "yes"
+    assert messages[-1]["text"] == "Да"
     assert seen_nlu == []
 
 
