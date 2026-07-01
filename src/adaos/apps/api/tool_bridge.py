@@ -101,6 +101,7 @@ def _looks_readonly_tool(public_tool: str) -> bool:
         "check_",
         "inspect_",
         "prompt_list_",
+        "prompt_read_",
     )
     return token in {"get_snapshot", "snapshot"} or token.startswith(readonly_prefixes)
 

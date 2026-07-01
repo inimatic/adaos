@@ -135,6 +135,28 @@ def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch)
     assert published[0]["domain_ref"]["tool"] == "files_skill:delete_file"
 
 
+def test_runtime_action_risk_treats_prompt_read_tools_as_readonly() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="prompt_engineer_skill:prompt_read_project_file",
+        arguments={
+            "object_type": "scenario",
+            "object_id": "todo_list_5b9319fa",
+            "path": "scenario.json",
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="prompt_engineer_skill",
+        public_tool="prompt_read_project_file",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "safe"
+    assert risk["approval_required"] is False
+
+
 def test_call_tool_allows_high_risk_runtime_action_with_approval(monkeypatch) -> None:
     calls: list[str] = []
 
