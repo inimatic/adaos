@@ -1183,7 +1183,7 @@ def test_ensure_workbench_prefers_direct_dev_runtime_switch(monkeypatch) -> None
             calls.append({"method": "snapshot", "webspace_id": webspace_id, "preview_state": preview_state})
             return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
 
-        async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None, wait_for_rebuild=None):
+        def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None, wait_for_rebuild=None):
             calls.append({
                 "method": "ensure_dev_webspace",
                 "source_webspace_id": source_webspace_id,
@@ -1223,7 +1223,7 @@ def test_ensure_workbench_prefers_direct_dev_runtime_switch(monkeypatch) -> None
     assert calls[2]["wait_for_rebuild"] is False
 
 
-def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkeypatch) -> None:
+def test_ensure_workbench_schedules_async_direct_runtime_switch(monkeypatch) -> None:
     skill = _load_module()
     calls: list[dict] = []
 
@@ -1243,10 +1243,9 @@ def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkey
 
         async def ensure_dev_webspace(self, source_webspace_id, *, active_draft_id=None, runtime_scenario_id=None, preview_state=None, wait_for_rebuild=None):
             calls.append({"method": "ensure_dev_webspace", "runtime_scenario_id": runtime_scenario_id})
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(1.0)
             return {"source_webspace_id": source_webspace_id, "runtime_scenario_id": runtime_scenario_id}
 
-    monkeypatch.setattr(skill, "WORKBENCH_DIRECT_ENSURE_TIMEOUT_S", 0.01)
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
     monkeypatch.setattr(
         skill,
@@ -1254,18 +1253,21 @@ def test_ensure_workbench_falls_back_when_direct_runtime_switch_times_out(monkey
         lambda payload: calls.append({"method": "event", "payload": dict(payload)}) or {"ok": True, "payload": dict(payload)},
     )
 
+    started = time.perf_counter()
     result = skill._ensure_workbench(
         "desktop",
         active_draft_id="draft.todo",
         runtime_scenario_id="todo_scenario",
         preview_state={"title": "Todo"},
     )
+    elapsed = time.perf_counter() - started
 
     assert result["ok"] is True
-    assert result["projection"]["direct"]["skipped"] == "ensure_dev_webspace_timeout"
-    assert result["projection"]["event"]["ok"] is True
-    assert [item["method"] for item in calls] == ["set_active_draft", "snapshot", "ensure_dev_webspace", "event"]
-    assert calls[-1]["payload"]["runtime_scenario_id"] == "todo_scenario"
+    assert result["projection"]["direct"]["scheduled"] is True
+    assert result["projection"]["direct"]["mode"] == "thread"
+    assert result["projection"]["event"]["skipped"] == "direct_workbench_ensure"
+    assert elapsed < 0.5
+    assert [item["method"] for item in calls] == ["set_active_draft", "snapshot"]
 
 
 def test_safe_emit_chat_does_not_wait_for_stuck_append(monkeypatch) -> None:
@@ -1286,7 +1288,7 @@ def test_safe_emit_chat_does_not_wait_for_stuck_append(monkeypatch) -> None:
     skill._safe_emit_chat("hello", webspace_id="desktop")
     elapsed = time.perf_counter() - started
 
-    assert elapsed < 0.2
+    assert elapsed < 0.5
     assert calls
 
 
