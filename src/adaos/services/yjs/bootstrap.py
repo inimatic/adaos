@@ -21,6 +21,7 @@ from adaos.services.yjs.store import AdaosMemoryYStore, get_ystore_for_webspace,
 
 _log = logging.getLogger("adaos.yjs.bootstrap")
 _BOOTSTRAP_REBUILD_NUDGE_LAST: dict[tuple[str, str], float] = {}
+BOOTSTRAP_RUNTIME_KEY = "bootstrap"
 
 
 def _bootstrap_rebuild_nudge_min_interval_s() -> float:
@@ -114,12 +115,90 @@ def _seed_application_payload() -> dict[str, Any]:
     return _coerce_dict(_coerce_dict(SEED.get("ui") or {}).get("application") or {})
 
 
-def _resolve_requested_scenario(ui_map: Any, default_scenario_id: str) -> str:
+def _resolve_requested_scenario(
+    ui_map: Any,
+    default_scenario_id: str,
+    *,
+    prefer_default_scenario: bool = False,
+) -> str:
+    requested = str(default_scenario_id or "").strip()
+    if prefer_default_scenario and requested:
+        return requested
     current = str(ui_map.get("current_scenario") or "").strip()
     if current:
         return current
-    requested = str(default_scenario_id or "").strip()
     return requested or "web_desktop"
+
+
+def runtime_bootstrap_payload(
+    *,
+    webspace_id: str,
+    scenario_id: str,
+    state: str,
+    stage: str,
+    ready: bool = False,
+    mode: str | None = None,
+    error: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    now = time.time()
+    payload: dict[str, Any] = {
+        "version": 1,
+        "webspace_id": str(webspace_id or "").strip() or default_webspace_id(),
+        "scenario_id": str(scenario_id or "").strip() or "web_desktop",
+        "state": str(state or "").strip() or "running",
+        "stage": str(stage or "").strip() or "bootstrap",
+        "ready": bool(ready),
+        "source": "yjs.bootstrap",
+        "updated_at": now,
+    }
+    mode_text = str(mode or "").strip()
+    if mode_text:
+        payload["mode"] = mode_text
+    error_text = str(error or "").strip()
+    if error_text:
+        payload["error"] = error_text[:500]
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            key_text = str(key or "").strip()
+            if key_text and key_text not in payload:
+                payload[key_text] = _clone_json_like(value)
+    return payload
+
+
+def write_runtime_bootstrap_state(
+    ydoc: Y.YDoc,
+    *,
+    webspace_id: str,
+    scenario_id: str,
+    state: str,
+    stage: str,
+    ready: bool = False,
+    mode: str | None = None,
+    error: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> bool:
+    runtime_map = ydoc.get_map("runtime")
+    payload = runtime_bootstrap_payload(
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        state=state,
+        stage=stage,
+        ready=ready,
+        mode=mode,
+        error=error,
+        extra=extra,
+    )
+    current = _coerce_dict(runtime_map.get(BOOTSTRAP_RUNTIME_KEY) or {})
+    comparable_current = dict(current)
+    comparable_payload = dict(payload)
+    comparable_current.pop("updated_at", None)
+    comparable_payload.pop("updated_at", None)
+    if comparable_current == comparable_payload:
+        return False
+    with ydoc.begin_transaction() as txn:
+        runtime_map.set(txn, BOOTSTRAP_RUNTIME_KEY, payload)
+    return True
 
 
 def _has_projected_scenario_seed(ui_map: Any, data_map: Any, scenario_id: str) -> bool:
@@ -285,6 +364,7 @@ async def ensure_webspace_seeded_from_scenario(
     space: str = "workspace",
     emit_event: bool = True,
     ydoc: Y.YDoc | None = None,
+    prefer_default_scenario: bool = False,
 ) -> dict[str, Any]:
     """
     If the YDoc has no ui.application yet, try to seed it from a scenario
@@ -297,6 +377,7 @@ async def ensure_webspace_seeded_from_scenario(
         "scenario_id": str(default_scenario_id or "").strip() or "web_desktop",
         "space": str(space or "").strip() or "workspace",
         "used_provided_ydoc": bool(ydoc is not None),
+        "prefer_default_scenario": bool(prefer_default_scenario),
         "mode": "unknown",
         "persisted_via": None,
         "apply_updates_ms": 0.0,
@@ -348,6 +429,7 @@ async def ensure_webspace_seeded_from_scenario(
     ui_map = target_doc.get_map("ui")
     data_map = target_doc.get_map("data")
     runtime_environment_changed = _project_runtime_environment(target_doc)
+    bootstrap_marker_changed = False
 
     def _is_seeded_state(app: object, catalog: object) -> bool:
         if not isinstance(app, dict) or not app:
@@ -368,10 +450,46 @@ async def ensure_webspace_seeded_from_scenario(
         return True
 
     application = ui_map.get("application")
-    requested_scenario_id = _resolve_requested_scenario(ui_map, default_scenario_id)
+    requested_scenario_id = _resolve_requested_scenario(
+        ui_map,
+        default_scenario_id,
+        prefer_default_scenario=prefer_default_scenario,
+    )
     result["scenario_id"] = requested_scenario_id
-    if _is_seeded_state(application, data_map.get("catalog")):
-        if runtime_environment_changed:
+    previous_current_scenario = str(ui_map.get("current_scenario") or "").strip() or None
+    result["previous_scenario_id"] = previous_current_scenario
+    current_scenario_overridden = False
+    if prefer_default_scenario and previous_current_scenario != requested_scenario_id:
+        with target_doc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", requested_scenario_id)
+        current_scenario_overridden = True
+        result["current_scenario_overridden"] = True
+    bootstrap_marker_changed = write_runtime_bootstrap_state(
+        target_doc,
+        webspace_id=webspace_id,
+        scenario_id=requested_scenario_id,
+        state="running",
+        stage="seed_from_scenario",
+        ready=False,
+        extra={
+            "space": result["space"],
+            "used_provided_ydoc": result["used_provided_ydoc"],
+            "previous_scenario_id": previous_current_scenario,
+            "prefer_default_scenario": bool(prefer_default_scenario),
+        },
+    )
+    if not current_scenario_overridden and _is_seeded_state(application, data_map.get("catalog")):
+        bootstrap_marker_changed = write_runtime_bootstrap_state(
+            target_doc,
+            webspace_id=webspace_id,
+            scenario_id=requested_scenario_id,
+            state="ready",
+            stage="already_seeded",
+            ready=True,
+            mode="already_seeded",
+            extra={"space": result["space"]},
+        ) or bootstrap_marker_changed
+        if runtime_environment_changed or bootstrap_marker_changed:
             result["persisted_via"] = await _persist_bootstrap_seed_update(
                 ystore,
                 target_doc,
@@ -386,7 +504,17 @@ async def ensure_webspace_seeded_from_scenario(
         return _finish("already_seeded_runtime_refreshed" if runtime_environment_changed else "already_seeded")
 
     if _has_projected_scenario_seed(ui_map, data_map, requested_scenario_id):
-        if runtime_environment_changed:
+        bootstrap_marker_changed = write_runtime_bootstrap_state(
+            target_doc,
+            webspace_id=webspace_id,
+            scenario_id=requested_scenario_id,
+            state="materializing",
+            stage="projected_seed_reuse",
+            ready=False,
+            mode="projected_seed_reuse",
+            extra={"space": result["space"]},
+        ) or bootstrap_marker_changed
+        if runtime_environment_changed or bootstrap_marker_changed:
             result["persisted_via"] = await _persist_bootstrap_seed_update(
                 ystore,
                 target_doc,
@@ -406,6 +534,16 @@ async def ensure_webspace_seeded_from_scenario(
         _log.info("seeding webspace %s from scenario %s (space=%s)", webspace_id, requested_scenario_id, space)
         if ydoc is not None:
             mgr.project_scenario_to_doc(target_doc, requested_scenario_id, space=space)
+            write_runtime_bootstrap_state(
+                target_doc,
+                webspace_id=webspace_id,
+                scenario_id=requested_scenario_id,
+                state="materializing",
+                stage="scenario_projected",
+                ready=False,
+                mode="scenario_projection",
+                extra={"space": result["space"]},
+            )
             persisted_via = await _persist_bootstrap_seed_update(
                 ystore,
                 target_doc,
@@ -417,7 +555,7 @@ async def ensure_webspace_seeded_from_scenario(
                 result["emitted_rebuild_nudge"] = True
             return _finish("scenario_projection")
 
-        if runtime_environment_changed:
+        if runtime_environment_changed or bootstrap_marker_changed:
             result["runtime_persisted_via"] = await _persist_bootstrap_seed_update(
                 ystore,
                 target_doc,
@@ -442,7 +580,18 @@ async def ensure_webspace_seeded_from_scenario(
         result["scenario_seed_error"] = f"{type(exc).__name__}: {exc}"
 
     if webspace_id != default_webspace_id():
-        if runtime_environment_changed:
+        bootstrap_marker_changed = write_runtime_bootstrap_state(
+            target_doc,
+            webspace_id=webspace_id,
+            scenario_id=requested_scenario_id,
+            state="blocked",
+            stage="scenario_seed_failed",
+            ready=False,
+            mode="non_default_unseeded",
+            error=result.get("scenario_seed_error"),
+            extra={"space": result["space"]},
+        ) or bootstrap_marker_changed
+        if runtime_environment_changed or bootstrap_marker_changed:
             result["persisted_via"] = await _persist_bootstrap_seed_update(
                 ystore,
                 target_doc,
@@ -452,6 +601,16 @@ async def ensure_webspace_seeded_from_scenario(
 
     fallback_scenario_id = str(default_scenario_id or "").strip() or "web_desktop"
     _project_seed_payload_to_compat_branches(target_doc, scenario_id=fallback_scenario_id)
+    write_runtime_bootstrap_state(
+        target_doc,
+        webspace_id=webspace_id,
+        scenario_id=fallback_scenario_id,
+        state="materializing",
+        stage="compatibility_fallback_projected",
+        ready=False,
+        mode="compatibility_fallback",
+        extra={"space": result["space"]},
+    )
     result["scenario_id"] = fallback_scenario_id
 
     try:

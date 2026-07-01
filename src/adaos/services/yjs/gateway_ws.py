@@ -33,7 +33,7 @@ except ImportError as exc:  # pragma: no cover - import guard for dev envs
     raise RuntimeError("ypy_websocket is required for AdaOS realtime collaboration. " "Install dependencies via `pip install -e .[dev]` or `pip install ypy-websocket`.") from exc
 
 from adaos.services.workspaces import ensure_workspace, get_workspace
-from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario
+from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario, write_runtime_bootstrap_state
 from adaos.services.yjs.observers import attach_room_observers, forget_room_observers
 from adaos.services.yjs.store import evict_ystore_for_webspace, get_ystore_for_webspace, ystore_write_metadata_sync
 from adaos.services.yjs.store import ystore_write_metadata
@@ -4570,6 +4570,16 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         ystore = get_ystore_for_webspace(webspace_id)
                         row = get_workspace(webspace_id)
                         space = _space_mode(webspace_id)
+                        target_scenario_id = row.effective_home_scenario if row and row.home_scenario else "web_desktop"
+                        prefer_manifest_home = bool(
+                            row
+                            and row.home_scenario
+                            and (
+                                row.is_dev
+                                or row.effective_source_mode == "dev"
+                                or str(webspace_id or "").strip().endswith("-dev")
+                            )
+                        )
                         room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
                         room._webspace_id = webspace_id
                         room._thread_id = threading.get_ident()
@@ -4594,9 +4604,10 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             ensure_webspace_seeded_from_scenario(
                                 ystore,
                                 webspace_id=webspace_id,
-                                default_scenario_id=(row.effective_home_scenario if row and row.home_scenario else "web_desktop"),
+                                default_scenario_id=target_scenario_id,
                                 space=space,
                                 ydoc=room.ydoc,
+                                prefer_default_scenario=prefer_manifest_home,
                             ),
                         )
                         await _await_bootstrap_step(
@@ -5133,7 +5144,7 @@ async def _ensure_room_effective_materialized(
         before = Y.encode_state_vector(ydoc)
         runtime = WebspaceScenarioRuntime()
         with ystore_write_metadata_sync(
-            root_names=["ui", "data", "registry"],
+            root_names=["ui", "data", "registry", "runtime"],
             source="yjs.gateway_ws.room_bootstrap",
             owner="core:yjs_gateway",
             channel="core.yjs.gateway.bootstrap",
@@ -5155,11 +5166,41 @@ async def _ensure_room_effective_materialized(
             )
             return False
 
+        try:
+            ui_map = ydoc.get_map("ui")
+            scenario_id = str(
+                (seed_result or {}).get("scenario_id")
+                or ui_map.get("current_scenario")
+                or "web_desktop"
+            ).strip() or "web_desktop"
+            with ystore_write_metadata_sync(
+                root_names=["runtime"],
+                source="yjs.gateway_ws.room_bootstrap.ready",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.bootstrap",
+                governed=True,
+            ):
+                write_runtime_bootstrap_state(
+                    ydoc,
+                    webspace_id=webspace_id,
+                    scenario_id=scenario_id,
+                    state="ready",
+                    stage="room_bootstrap_ready",
+                    ready=True,
+                    mode=str((seed_result or {}).get("mode") or ""),
+                    extra={
+                        "space": str((seed_result or {}).get("space") or "").strip() or None,
+                        "room_effective_materialized": True,
+                    },
+                )
+        except Exception:
+            _ylog.debug("failed to write ready bootstrap marker webspace=%s", webspace_id, exc_info=True)
+
         update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
         persisted = False
         if update:
             async with ystore_write_metadata(
-                root_names=["ui", "data", "registry"],
+                root_names=["ui", "data", "registry", "runtime"],
                 source="yjs.gateway_ws.room_bootstrap",
                 owner="core:yjs_gateway",
                 channel="core.yjs.gateway.bootstrap",
@@ -5290,6 +5331,18 @@ async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None
         base_scenario = row.effective_home_scenario
     if not base_scenario:
         base_scenario = "web_desktop"
+    prefer_default_scenario = bool(
+        scenario_id
+        or (
+            row
+            and row.home_scenario
+            and (
+                row.is_dev
+                or row.effective_source_mode == "dev"
+                or str(webspace_id or "").strip().endswith("-dev")
+            )
+        )
+    )
 
     try:
         await ensure_webspace_seeded_from_scenario(
@@ -5297,6 +5350,7 @@ async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None
             webspace_id=webspace_id,
             default_scenario_id=base_scenario,
             space=space,
+            prefer_default_scenario=prefer_default_scenario,
         )
     finally:
         try:

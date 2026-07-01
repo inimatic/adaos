@@ -8,7 +8,9 @@ import time
 import types
 from types import SimpleNamespace
 
-if "y_py" not in sys.modules:
+try:
+    import y_py  # noqa: F401
+except ImportError:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=object,
         apply_update=lambda *args, **kwargs: None,
@@ -943,7 +945,15 @@ def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
     captured: list[dict[str, object]] = []
     fake_store = _FakeYStore()
 
-    async def _fake_seed(ystore, *, webspace_id: str, default_scenario_id: str, space: str, ydoc=None) -> None:  # noqa: ANN001
+    async def _fake_seed(
+        ystore,
+        *,
+        webspace_id: str,
+        default_scenario_id: str,
+        space: str,
+        ydoc=None,
+        prefer_default_scenario: bool = False,
+    ) -> None:  # noqa: ANN001
         captured.append(
             {
                 "ystore": ystore,
@@ -951,6 +961,7 @@ def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
                 "default_scenario_id": default_scenario_id,
                 "space": space,
                 "ydoc": ydoc,
+                "prefer_default_scenario": prefer_default_scenario,
             }
         )
 
@@ -966,6 +977,7 @@ def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
             "default_scenario_id": "prompt_engineer_scenario",
             "space": "dev",
             "ydoc": None,
+            "prefer_default_scenario": True,
         }
     ]
     assert fake_store.stop_calls == 1
@@ -985,7 +997,15 @@ def test_ensure_webspace_ready_explicit_scenario_overrides_manifest_home(monkeyp
     captured: list[dict[str, object]] = []
     fake_store = _FakeYStore()
 
-    async def _fake_seed(ystore, *, webspace_id: str, default_scenario_id: str, space: str, ydoc=None) -> None:  # noqa: ANN001
+    async def _fake_seed(
+        ystore,
+        *,
+        webspace_id: str,
+        default_scenario_id: str,
+        space: str,
+        ydoc=None,
+        prefer_default_scenario: bool = False,
+    ) -> None:  # noqa: ANN001
         captured.append(
             {
                 "ystore": ystore,
@@ -993,6 +1013,7 @@ def test_ensure_webspace_ready_explicit_scenario_overrides_manifest_home(monkeyp
                 "default_scenario_id": default_scenario_id,
                 "space": space,
                 "ydoc": ydoc,
+                "prefer_default_scenario": prefer_default_scenario,
             }
         )
 
@@ -1008,6 +1029,7 @@ def test_ensure_webspace_ready_explicit_scenario_overrides_manifest_home(monkeyp
             "default_scenario_id": "custom_scenario",
             "space": "workspace",
             "ydoc": None,
+            "prefer_default_scenario": True,
         }
     ]
 
@@ -1026,7 +1048,15 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     captured: list[dict[str, object]] = []
     fake_store = _FakeYStore()
 
-    async def _fake_seed(ystore, *, webspace_id: str, default_scenario_id: str, space: str, ydoc=None) -> dict[str, object]:  # noqa: ANN001
+    async def _fake_seed(
+        ystore,
+        *,
+        webspace_id: str,
+        default_scenario_id: str,
+        space: str,
+        ydoc=None,
+        prefer_default_scenario: bool = False,
+    ) -> dict[str, object]:  # noqa: ANN001
         captured.append(
             {
                 "ystore": ystore,
@@ -1034,6 +1064,7 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
                 "default_scenario_id": default_scenario_id,
                 "space": space,
                 "ydoc": ydoc,
+                "prefer_default_scenario": prefer_default_scenario,
             }
         )
         return {
@@ -1071,6 +1102,7 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
             "default_scenario_id": "prompt_engineer_scenario",
             "space": "dev",
             "ydoc": room.ydoc,
+            "prefer_default_scenario": True,
         }
     ]
     room_info = gateway_module.gateway_transport_snapshot()["rooms"][webspace_id]

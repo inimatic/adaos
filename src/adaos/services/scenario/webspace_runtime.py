@@ -5489,6 +5489,7 @@ async def _seed_webspace_from_scenario_with_options(
             default_scenario_id=scenario_id or "web_desktop",
             space=source_mode,
             emit_event=emit_event,
+            prefer_default_scenario=True,
         )
     except Exception:
         _log.warning("failed to seed webspace=%s from scenario=%s", webspace_id, scenario_id, exc_info=True)
