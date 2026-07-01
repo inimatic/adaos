@@ -385,6 +385,17 @@ _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_
 _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", True)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
+_YROOM_EFFECTIVE_REQUIRED_DATA_KEYS = tuple(
+    key.strip()
+    for key in str(
+        os.getenv(
+            "ADAOS_YJS_EFFECTIVE_REQUIRED_DATA_KEYS",
+            "catalog,installed,desktop,webspaces,webio,nodes,routing,builder,dialog,scenarios",
+        )
+        or ""
+    ).split(",")
+    if key.strip()
+)
 
 
 def _yws_single_client_reconnect_escalation_limit() -> int:
@@ -4765,6 +4776,8 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
             return False
         if not _room_effective_data_desktop_ready(data_map.get("desktop")):
             return False
+        if _room_effective_missing_required_data_keys(data_map):
+            return False
         return True
     except Exception:
         return False
@@ -4804,6 +4817,18 @@ def _room_effective_data_desktop_ready(desktop: Any) -> bool:
     return isinstance(desktop, dict)
 
 
+def _room_effective_missing_required_data_keys(data_map: Any) -> list[str]:
+    missing: list[str] = []
+    for key in _YROOM_EFFECTIVE_REQUIRED_DATA_KEYS:
+        try:
+            value = data_map.get(key)
+        except Exception:
+            value = None
+        if value is None:
+            missing.append(key)
+    return missing
+
+
 def _room_effective_top_level_ready(ydoc: Any) -> bool:
     """
     Cheap hot-path invariant check for the shared desktop document.
@@ -4828,6 +4853,7 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
             and _room_effective_catalog_ready(catalog)
             and _room_effective_installed_ready(installed)
             and _room_effective_data_desktop_ready(desktop)
+            and not _room_effective_missing_required_data_keys(data_map)
         )
     except Exception:
         return False
@@ -4873,10 +4899,16 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
     if ydoc is None:
         return {"ready": False, "error": "missing_ydoc"}
     if not _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS:
+        try:
+            data_map = ydoc.get_map("data")
+            missing_required_data_keys = _room_effective_missing_required_data_keys(data_map)
+        except Exception:
+            missing_required_data_keys = []
         return {
             "ready": _room_effective_top_level_ready(ydoc),
             "mode": "top_level_snapshot",
             "details": "disabled",
+            "missing_required_data_keys": missing_required_data_keys,
         }
     try:
         ui_map = ydoc.get_map("ui")
@@ -4891,11 +4923,14 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         catalog = data_map.get("catalog")
         installed = data_map.get("installed")
         desktop = data_map.get("desktop")
+        missing_required_data_keys = _room_effective_missing_required_data_keys(data_map)
         snapshot = {
             "ready": _room_effective_branches_ready(ydoc),
             "ui_keys": ui_keys,
             "data_keys": data_keys,
             "registry_keys": registry_keys,
+            "required_data_keys": list(_YROOM_EFFECTIVE_REQUIRED_DATA_KEYS),
+            "missing_required_data_keys": missing_required_data_keys,
             "has_application": isinstance(application, dict) and bool(application),
             "has_application_desktop": isinstance(application_desktop, dict) and bool(application_desktop),
             "has_application_page_schema": isinstance(application_desktop, dict)

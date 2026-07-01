@@ -6,7 +6,8 @@ import logging
 import os
 import time
 from pathlib import Path
-from adaos.sdk.data.bus import on, emit
+from types import SimpleNamespace
+from adaos.sdk.data.bus import on, emit, _thread_safe_plain
 from adaos.sdk.data.context import set_current_skill, clear_current_skill
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkRuntimeNotInitialized
@@ -94,6 +95,25 @@ def _run_sync_subscription_in_thread(topic: str) -> bool:
         return _topic_matches_any(topic, patterns)
     except Exception:
         return False
+
+
+def _thread_safe_subscription_event(evt: Any) -> Any:
+    if hasattr(evt, "payload"):
+        payload = getattr(evt, "payload", None)
+        safe_payload = _thread_safe_plain(payload)
+        if safe_payload is payload:
+            return evt
+        return SimpleNamespace(
+            type=getattr(evt, "type", None),
+            payload=safe_payload,
+            source=getattr(evt, "source", None),
+            ts=getattr(evt, "ts", None),
+        )
+    if isinstance(evt, dict) and "payload" in evt:
+        safe_evt = dict(evt)
+        safe_evt["payload"] = _thread_safe_plain(evt.get("payload"))
+        return safe_evt
+    return _thread_safe_plain(evt)
 
 
 def _local_node_id() -> str:
@@ -558,7 +578,17 @@ async def register_subscriptions(
                         return _fn(evt)
 
                     if _run_sync_subscription_in_thread(_topic):
-                        return await asyncio.to_thread(_call_sync_handler)
+                        safe_evt = _thread_safe_subscription_event(evt)
+
+                        def _call_thread_safe_sync_handler():
+                            payload = getattr(safe_evt, "payload", None) if hasattr(safe_evt, "payload") else None
+                            meta = payload.get("_meta") if isinstance(payload, dict) else None
+                            if isinstance(meta, dict):
+                                with io_meta(meta):
+                                    return _fn(safe_evt)
+                            return _fn(safe_evt)
+
+                        return await asyncio.to_thread(_call_thread_safe_sync_handler)
                     return _call_sync_handler()
                 finally:
                     if pushed:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 import time
 from types import SimpleNamespace
@@ -64,6 +65,40 @@ def _run_sync_handler_in_thread(topic: str) -> bool:
         return _topic_matches_any(topic, patterns)
     except Exception:
         return False
+
+
+def _thread_safe_plain(value: Any, *, _depth: int = 0) -> Any:
+    """Return a plain payload copy that can be dropped on a worker thread.
+
+    y_py values are thread-affine on Windows. A synchronous subscription handler
+    running via ``asyncio.to_thread`` must not receive live YMap/YArray objects,
+    otherwise Python may drop the final reference on the worker thread.
+    """
+
+    if _depth > 40:
+        return repr(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _thread_safe_plain(item, _depth=_depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_thread_safe_plain(item, _depth=_depth + 1) for item in value]
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            raw = to_json()
+            if isinstance(raw, str):
+                raw = json.loads(raw)
+            return _thread_safe_plain(raw, _depth=_depth + 1)
+        except Exception:
+            pass
+    items = getattr(value, "items", None)
+    if callable(items):
+        try:
+            return {str(key): _thread_safe_plain(item, _depth=_depth + 1) for key, item in items()}
+        except Exception:
+            pass
+    return value
 
 
 async def emit(topic: str, payload: dict, **kw: Any):
@@ -132,7 +167,7 @@ async def on(topic: str, handler: Callable[[dict], Awaitable[Any]]):
         if inspect.iscoroutinefunction(handler):
             return await handler(data)
         if _run_sync_handler_in_thread(topic):
-            return await asyncio.to_thread(handler, data)
+            return await asyncio.to_thread(handler, _thread_safe_plain(data))
         return handler(data)
 
     try:
