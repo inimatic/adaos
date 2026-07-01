@@ -3,8 +3,24 @@ name: AdaOS CI
 on:
   push:
     branches: [rev2026]
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
   workflow_dispatch:
+    inputs:
+      include_windows:
+        description: "Also run Windows CI"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 2 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -15,13 +31,10 @@ permissions:
 
 jobs:
   tests:
-    name: Python tests
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python: ["3.11"]
-    runs-on: ${{ matrix.os }}
+    name: Python tests (Ubuntu)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       PYTHONIOENCODING: utf-8
       MONOREPO_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaoskills.git' }}
@@ -32,17 +45,7 @@ jobs:
       GIT_COMMITTER_EMAIL: "ci-bot@example.com"
       ADAOS_TESTING: "1"
     steps:
-      - name: Force UTF-8 on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          chcp.com 65001 > $null
-          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-          $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
-          $env:PYTHONUTF8=1
-
       - name: Force UTF-8 on Linux
-        if: runner.os == 'Linux'
         run: |
           export PYTHONUTF8=1
           export PYTHONIOENCODING=utf-8
@@ -50,10 +53,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.python }}
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.11"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -70,14 +73,75 @@ jobs:
 
       - name: Run skills tests
         run: |
-          uv run adaos tests run -- -q --junitxml=reports/skills-junit.xml
+          uv run adaos tests run --only-skills -- -q --junitxml=reports/skills-junit.xml
 
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: junit-${{ matrix.os }}-py${{ matrix.python }}
+          name: junit-ubuntu-latest-py3.11
           path: reports/*.xml
+          retention-days: 3
+
+  windows_nightly:
+    name: Python tests (Windows nightly)
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.include_windows)
+      }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      PYTHONIOENCODING: utf-8
+      MONOREPO_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaoskills.git' }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GIT_AUTHOR_NAME: "AdaOS CI Bot"
+      GIT_AUTHOR_EMAIL: "ci-bot@example.com"
+      GIT_COMMITTER_NAME: "AdaOS CI Bot"
+      GIT_COMMITTER_EMAIL: "ci-bot@example.com"
+      ADAOS_TESTING: "1"
+    steps:
+      - name: Force UTF-8 on Windows
+        shell: pwsh
+        run: |
+          chcp.com 65001 > $null
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+          $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
+          $env:PYTHONUTF8=1
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install project + dev deps
+        run: |
+          uv sync --locked --extra dev
+
+      - name: Run SDK tests (only)
+        run: |
+          uv run adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+
+      - name: Run skills tests
+        run: |
+          uv run adaos tests run --only-skills -- -q --junitxml=reports/skills-junit.xml
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-windows-latest-py3.11
+          path: reports/*.xml
+          retention-days: 3
 
   bump_patch_version:
     name: Bump patch version
@@ -89,6 +153,7 @@ jobs:
         !startsWith(github.event.head_commit.message, 'chore: bump adaos version')
       }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -154,5 +219,5 @@ jobs:
           git config user.name "AdaOS CI Bot"
           git config user.email "ci-bot@example.com"
           git add pyproject.toml uv.lock
-          git commit -m "chore: bump adaos version to ${{ steps.bump.outputs.new_version }}"
+          git commit -m "chore: bump adaos version to ${{ steps.bump.outputs.new_version }} [skip ci]"
           git push origin HEAD:rev2026

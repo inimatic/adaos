@@ -1,15 +1,25 @@
 # .github/workflows/sdk-export.yml
 name: SDK Export
+
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-export-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sdk-tests:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11"] # можно расширить матрицу позже
+        python-version: ["3.11"]
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +36,7 @@ jobs:
           which python || where python
 
       - name: Install deps
-        run: pip install -e ".[dev]" # ваш способ установки
+        run: pip install -e ".[dev]"
 
       - name: Run SDK tests (Linux)
         if: runner.os == 'Linux'
