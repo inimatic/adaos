@@ -25,6 +25,7 @@ MAX_SESSIONS = 50
 WORKBENCH_REFRESH_TOPIC = "builder.workbench.ensure_requested"
 PROMPT_IDE_SCENARIO_ID = "prompt_engineer_scenario"
 CHAT_APPEND_TIMEOUT_S = 0.75
+PENDING_ACTION_TIMEOUT_S = 1.5
 PROMPT_SELECTION_ASYNC_TOPICS = ("prompt.project.changed", "builder.preview.selected")
 
 _FALLBACK_MEMORY: dict[str, Any] = {}
@@ -346,48 +347,69 @@ def _publish_review_pending_action(
         }
     try:
         from adaos.services.pending_actions import publish_pending_action
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-        return publish_pending_action(
-            webspace_id=webspace_id,
-            kind=kind,
-            title="Review Builder change",
-            summary=summary,
-            request_text=request_text,
-            producer={"type": "skill", "skill_id": SKILL_ID},
-            owner_scope={
-                "owner": f"skill:{SKILL_ID}",
-                "webspace_id": webspace_id,
-                "conversation_id": refs.get("conversation_id"),
-                "thread_id": refs.get("thread_id"),
-            },
-            domain_ref={
-                "skill_id": SKILL_ID,
-                "session_id": refs.get("session_id"),
-                "scenario_id": refs.get("scenario_id"),
-                "draft_id": refs.get("draft_id"),
-                "patch_id": refs.get("patch_id"),
-                "operation": refs.get("operation"),
-                "conversation_id": refs.get("conversation_id"),
-                "thread_id": refs.get("thread_id"),
-            },
-            actions=["preview", "approve", "refuse", "postpone"],
-            response_topic="builder.pending_action.response",
-            payload_ref={
-                "kind": "builder.session",
-                "session_id": refs.get("session_id"),
-                "scenario_id": refs.get("scenario_id"),
-            },
-            metadata={
-                "source": "builder_skill",
-                "source_refs": refs,
-                "patch": dict(patch or {}),
-                "approval_policy": {
-                    "decision": "human_review_required",
-                    "reason": "builder_review_pending_action",
-                    "action_risk": action_risk,
+        def _publish() -> dict[str, Any]:
+            return publish_pending_action(
+                webspace_id=webspace_id,
+                kind=kind,
+                title="Review Builder change",
+                summary=summary,
+                request_text=request_text,
+                producer={"type": "skill", "skill_id": SKILL_ID},
+                owner_scope={
+                    "owner": f"skill:{SKILL_ID}",
+                    "webspace_id": webspace_id,
+                    "conversation_id": refs.get("conversation_id"),
+                    "thread_id": refs.get("thread_id"),
                 },
-            },
-        )
+                domain_ref={
+                    "skill_id": SKILL_ID,
+                    "session_id": refs.get("session_id"),
+                    "scenario_id": refs.get("scenario_id"),
+                    "draft_id": refs.get("draft_id"),
+                    "patch_id": refs.get("patch_id"),
+                    "operation": refs.get("operation"),
+                    "conversation_id": refs.get("conversation_id"),
+                    "thread_id": refs.get("thread_id"),
+                },
+                actions=["preview", "approve", "refuse", "postpone"],
+                response_topic="builder.pending_action.response",
+                payload_ref={
+                    "kind": "builder.session",
+                    "session_id": refs.get("session_id"),
+                    "scenario_id": refs.get("scenario_id"),
+                },
+                metadata={
+                    "source": "builder_skill",
+                    "source_refs": refs,
+                    "patch": dict(patch or {}),
+                    "approval_policy": {
+                        "decision": "human_review_required",
+                        "reason": "builder_review_pending_action",
+                        "action_risk": action_risk,
+                    },
+                },
+            )
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(_publish)
+            try:
+                return future.result(timeout=PENDING_ACTION_TIMEOUT_S)
+            except FuturesTimeoutError:
+                future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+                pool = None
+                return {
+                    "ok": False,
+                    "error": "pending_action_publish_timeout",
+                    "timeout_s": PENDING_ACTION_TIMEOUT_S,
+                    "metadata": {"source_refs": refs},
+                }
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True)
     except Exception as exc:
         return {
             "ok": False,
@@ -1775,6 +1797,34 @@ def _wants_execution_checkbox(text: str) -> bool:
 
 def _wants_english_ui(text: str) -> bool:
     return _text_contains_any(text, ("english", "in english", "\u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a", "\u043d\u0430 \u0430\u043d\u0433\u043b"))
+
+
+def _has_deterministic_builder_update(text: str) -> bool:
+    lowered = _repair_mojibake_text(text).lower()
+    if any(
+        (
+            _wants_swap_input_and_cards(text),
+            _wants_card_text_preview(text),
+            _wants_card_view(text),
+            _wants_hide_list_or_table(text),
+            _wants_execution_checkbox(text),
+            _wants_add_button_above_form(text),
+            _wants_done_checkbox_first(text),
+            _wants_sample_data(text),
+        )
+    ):
+        return True
+    if _requested_known_fields(text) or _requested_filter_field_ids(text):
+        return True
+    if _mentions_date(text) and (
+        "field" in lowered
+        or "column" in lowered
+        or "\u043f\u043e\u043b\u0435" in lowered
+        or "\u043a\u043e\u043b\u043e\u043d" in lowered
+        or _wants_date_values(text)
+    ):
+        return True
+    return bool(_extract_field_label(text) or (_text_contains_any(text, ("\u0446\u0435\u043d", "price"))))
 
 
 def _english_title(value: str) -> str:
@@ -3648,7 +3698,8 @@ def update_current_scenario(
     base_preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
     before_webui = _current_webui_payload(session, base_preview)
     llm_result: dict[str, Any] | None = None
-    if text and _builder_llm_primary_enabled(_meta):
+    deterministic_update = _has_deterministic_builder_update(text)
+    if text and _builder_llm_primary_enabled(_meta) and not deterministic_update:
         llm_result = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
         if llm_result.get("ok"):
             preview_from_llm = llm_result.get("preview_state") if isinstance(llm_result.get("preview_state"), Mapping) else base_preview

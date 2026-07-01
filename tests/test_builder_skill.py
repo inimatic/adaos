@@ -297,6 +297,47 @@ def test_update_current_scenario_swaps_input_and_cards_with_lost_cyrillic(monkey
     assert revision["request"]["text"] == "\u041f\u0435\u0440\u0435\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043e\u0431\u043b\u0430\u0441\u0442\u0438 Input \u0438 Cards"
 
 
+def test_update_current_scenario_skips_llm_for_deterministic_swap(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "todo_swap_no_llm"
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
+    llm_calls: list[dict] = []
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            return {"ok": True, "draft": {"draft_id": "draft.todo.swap.no.llm"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-swap-no-llm-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(
+        skill,
+        "_apply_llm_webui_transform",
+        lambda **kwargs: llm_calls.append(dict(kwargs)) or {"ok": True, "preview_state": {}, "payload": {}},
+    )
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-swap-no-llm")
+    result = skill.update_current_scenario("swap input and cards", webspace_id="builder-swap-no-llm")
+
+    assert result["patch"]["operation"] == "swap_layout_areas"
+    assert result["ui_revision"]["revision"] == "002"
+    assert llm_calls == []
+
+
 def test_update_current_scenario_recovers_artifact_root_for_ui_revisions(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "todo_recover_artifact"
@@ -786,6 +827,52 @@ def test_update_current_scenario_publishes_patch_pending_action(monkeypatch, tmp
     assert action["metadata"]["source_refs"]["turn_trace_id"] == "trace.patch.1"
     assert action["metadata"]["approval_policy"]["action_risk"]["risk_class"] == "local_write"
     assert result["patch"]["pending_action_id"] == "pa.builder.2"
+
+
+def test_update_current_scenario_does_not_wait_forever_for_pending_action(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "pending_timeout"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"pending_timeout","version":"0.1.0","name":"pending_timeout","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": "draft.pending.timeout"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-pending-timeout-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+    import adaos.services.pending_actions as pending_actions
+
+    def _slow_publish(**_kwargs):
+        time.sleep(0.2)
+        return {"id": "pa.too-late"}
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(skill, "PENDING_ACTION_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(pending_actions, "publish_pending_action", _slow_publish)
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-pending-timeout")
+    result = skill.update_current_scenario("show cards", webspace_id="builder-pending-timeout")
+
+    assert result["ui_revision"]["revision"] == "002"
+    assert result["pending_action"]["error"] == "pending_action_publish_timeout"
+    assert result["message_actions"]
+    assert "Ревизия UI: 002" in result["message"]
 
 
 def test_update_current_scenario_adds_product_units_and_filters(monkeypatch, tmp_path) -> None:
