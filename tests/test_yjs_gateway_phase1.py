@@ -197,6 +197,10 @@ def test_gateway_initial_effective_repair_is_opt_in_by_default() -> None:
     assert gateway_module._YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES == 0
 
 
+def test_gateway_default_required_data_keys_do_not_require_scenarios_branch() -> None:
+    assert "scenarios" not in gateway_module._YROOM_EFFECTIVE_REQUIRED_DATA_KEYS
+
+
 def test_room_bootstrap_rebuild_status_finalizer_is_lightweight() -> None:
     class _Doc:
         def get_map(self, name: str) -> dict[str, object]:
