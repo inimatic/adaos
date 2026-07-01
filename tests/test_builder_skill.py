@@ -209,6 +209,53 @@ def test_card_view_hides_table_in_generated_page_schema(monkeypatch, tmp_path) -
     widgets = page["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     assert any(item["id"] == "prototype-cards" for item in widgets)
     assert not any(item["id"] == "prototype-table" for item in widgets)
+    cards = next(item for item in widgets if item["id"] == "prototype-cards")
+    assert cards["inputs"]["previewKey"]
+
+
+def test_update_current_scenario_swaps_input_and_cards(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "todo_swap"
+
+    class _Service:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def create_draft(self, **_kwargs):
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root / "scenario.json").write_text(
+                '{"id":"todo_swap","version":"0.1.0","name":"todo_swap","steps":[]}',
+                encoding="utf-8",
+            )
+            return {"ok": True, "draft": {"draft_id": "draft.todo.swap"}, "artifact_root": str(artifact_root)}
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-swap-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Service)
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+
+    skill.create_scenario_draft("create todo list", webspace_id="builder-swap")
+    result = skill.update_current_scenario("Переставь местами область Input и Cards", webspace_id="builder-swap")
+
+    assert result["patch"]["operation"] == "swap_layout_areas"
+    assert result["preview_state"]["layout_order"] == "cards_first"
+    page = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    widgets = page["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    form = next(item for item in widgets if item["id"] == "prototype-form")
+    cards = next(item for item in widgets if item["id"] == "prototype-cards")
+    assert form["area"] == "right"
+    assert cards["area"] == "main"
+    assert cards["inputs"]["previewKey"]
+    assert not any(item["id"] == "prototype-table" for item in widgets)
 
 
 def test_update_current_scenario_adds_execution_checkbox(monkeypatch, tmp_path) -> None:
@@ -335,8 +382,14 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
 
     created = skill.create_scenario_draft("create todo list", webspace_id="builder-revision")
     assert created["ui_revision"]["revision"] == "001"
+    created_revision = json.loads((artifact_root / "ui_revisions" / "001.json").read_text(encoding="utf-8"))
+    assert created_revision["preview_state"]["version"] == "v001"
+    assert created_revision["after_webui"]["preview_state"]["version"] == "v001"
     updated = skill.update_current_scenario("show cards", webspace_id="builder-revision")
     assert updated["ui_revision"]["revision"] == "002"
+    updated_revision = json.loads((artifact_root / "ui_revisions" / "002.json").read_text(encoding="utf-8"))
+    assert updated_revision["preview_state"]["version"] == "v002"
+    assert updated_revision["after_webui"]["preview_state"]["version"] == "v002"
     assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
 
     restored = skill.set_ui_revision_current("001", webspace_id="builder-revision")

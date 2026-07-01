@@ -323,6 +323,8 @@ def _publish_review_pending_action(
     patch: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     refs = _source_refs(webspace_id=webspace_id, session=session, _meta=_meta, patch=patch)
+    request_text = _repair_mojibake_text(request_text)
+    summary = _repair_mojibake_text(summary)
     action_input: dict[str, Any] = {
         "kind": kind,
         "request_text": request_text,
@@ -510,6 +512,7 @@ async def _on_builder_pending_action_response(evt: Any) -> None:
         preview = copy.deepcopy(dict(session["preview_state"]))
     else:
         preview = _preview_state(session=session)
+    preview = _repair_text_tree(dict(preview))
     if (
         matched_patch
         and matched_patch.get("operation") == "llm_webui_transform"
@@ -587,6 +590,30 @@ def _ui_texts(session: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _field_ids(fields: Sequence[Mapping[str, Any]]) -> list[str]:
+    return [str(item.get("id") or "").strip() for item in fields if str(item.get("id") or "").strip()]
+
+
+def _preferred_card_preview_key(fields: Sequence[Mapping[str, Any]], *, prefer_text: bool = False) -> str:
+    ids = _field_ids(fields)
+    if not ids:
+        return "preview"
+    if prefer_text:
+        for candidate in ("notes", "description", "details", "text", "comment", "summary"):
+            if candidate in ids:
+                return candidate
+    for candidate in ids[2:] + ids[1:2]:
+        if candidate:
+            return candidate
+    return ids[0]
+
+
+def _card_key_from_template(value: Any) -> str:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}", text)
+    return match.group(1) if match else text
+
+
 def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
     filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
@@ -596,6 +623,8 @@ def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
     mock_rows = [dict(item) for item in stored_mock_rows if isinstance(item, Mapping)] if isinstance(stored_mock_rows, list) else _mock_rows(fields)
     action_position = str(session.get("form_action_position") or "").strip().lower()
     text = _ui_texts(session)
+    layout_order = str(session.get("layout_order") or "").strip().lower()
+    card_preview_key = str(session.get("card_preview_key") or "").strip() or _preferred_card_preview_key(fields)
     ui = {
         "schema": "adaos.declarative_ui.v1",
         "id": str(session.get("scenario_id") or "prototype"),
@@ -629,10 +658,11 @@ def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
                 "binding": datasource_id,
                 "title": f"{{{{{fields[0]['id']}}}}}" if fields else "{{title}}",
                 "subtitle": f"{{{{{fields[1]['id']}}}}}" if len(fields) > 1 else "",
+                "preview": f"{{{{{card_preview_key}}}}}" if card_preview_key else "",
                 "visible": True,
             }
         )
-    return {
+    result = {
         "session_id": session.get("id"),
         "title": session.get("title"),
         "current_ui": ui,
@@ -648,10 +678,13 @@ def _preview_state(*, session: Mapping[str, Any]) -> dict[str, Any]:
         "mock_data": {datasource_id: mock_rows},
         "filters": filters,
         "form_action_position": "top" if action_position == "top" else "bottom",
+        "layout_order": layout_order or "input_first",
+        "card_preview_key": card_preview_key,
         "pending_patches": [item for item in session.get("patches", []) if item.get("status") == "proposed"],
         "user_summary": session.get("user_summary") if isinstance(session.get("user_summary"), Mapping) else _draft_user_summary(session),
         "version": str(session.get("version") or "v1"),
     }
+    return _repair_text_tree(result)
 
 
 def _mock_rows(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -708,6 +741,7 @@ def _write_webui(artifact_root: str | None, preview_state: Mapping[str, Any]) ->
     root = Path(artifact_root)
     if not root.exists():
         return
+    preview_state = _repair_text_tree(dict(preview_state))
     payload = {
         "schema": "adaos.webui.prototype.v1",
         "generated_by": SKILL_ID,
@@ -742,7 +776,7 @@ def _write_webui_payload(artifact_root: str | None, payload: Mapping[str, Any]) 
     root = Path(artifact_root)
     if not root.exists():
         return
-    data = dict(payload)
+    data = _repair_text_tree(dict(payload))
     preview_state = data.get("preview_state") if isinstance(data.get("preview_state"), Mapping) else {}
     data.setdefault("schema", "adaos.webui.prototype.v1")
     data.setdefault("generated_by", SKILL_ID)
@@ -770,6 +804,20 @@ def _next_ui_revision_number(revision_dir: Path) -> int:
     return max_seen + 1
 
 
+def _next_ui_revision_label(session: Mapping[str, Any]) -> str:
+    revision_dir = _ui_revision_dir(str(session.get("artifact_root") or ""))
+    if revision_dir is None:
+        return "001"
+    return f"{_next_ui_revision_number(revision_dir):03d}"
+
+
+def _sync_preview_revision_version(preview_state: Mapping[str, Any], revision: str) -> dict[str, Any]:
+    preview = _repair_text_tree(copy.deepcopy(dict(preview_state)))
+    if revision:
+        preview["version"] = f"v{revision}"
+    return preview
+
+
 def _compact_llm_result(result: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(result, Mapping):
         return None
@@ -794,13 +842,23 @@ def _write_ui_revision(
     after_webui: Mapping[str, Any] | None,
     preview_state: Mapping[str, Any],
     llm_result: Mapping[str, Any] | None = None,
+    revision: str | None = None,
 ) -> dict[str, Any] | None:
     revision_dir = _ui_revision_dir(str(session.get("artifact_root") or ""))
     if revision_dir is None:
         return None
     revision_dir.mkdir(parents=True, exist_ok=True)
-    revision = f"{_next_ui_revision_number(revision_dir):03d}"
+    revision = str(revision or f"{_next_ui_revision_number(revision_dir):03d}").strip()
+    match = re.search(r"(\d+)", revision)
+    revision = f"{int(match.group(1)):03d}" if match else f"{_next_ui_revision_number(revision_dir):03d}"
     path = revision_dir / f"{revision}.json"
+    preview_for_revision = _sync_preview_revision_version(preview_state, revision)
+    before_for_revision = _repair_text_tree(copy.deepcopy(dict(before_webui or {})))
+    after_for_revision = _repair_text_tree(copy.deepcopy(dict(after_webui or {})))
+    if isinstance(before_for_revision.get("preview_state"), dict):
+        before_for_revision["preview_state"]["version"] = f"v{revision}"
+    if isinstance(after_for_revision.get("preview_state"), dict):
+        after_for_revision["preview_state"]["version"] = f"v{revision}"
     payload = {
         "schema": "adaos.builder.ui_revision.v1",
         "revision": revision,
@@ -808,12 +866,12 @@ def _write_ui_revision(
         "session_id": session.get("id"),
         "scenario_id": session.get("scenario_id"),
         "draft_id": session.get("draft_id"),
-        "request": {"text": str(request_text or "")},
-        "patch": copy.deepcopy(dict(patch)),
+        "request": {"text": _repair_mojibake_text(request_text)},
+        "patch": _repair_text_tree(copy.deepcopy(dict(patch))),
         "llm": _compact_llm_result(llm_result),
-        "before_webui": copy.deepcopy(dict(before_webui or {})),
-        "after_webui": copy.deepcopy(dict(after_webui or {})),
-        "preview_state": copy.deepcopy(dict(preview_state)),
+        "before_webui": before_for_revision,
+        "after_webui": after_for_revision,
+        "preview_state": preview_for_revision,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (revision_dir / "current.txt").write_text(revision + "\n", encoding="utf-8")
@@ -995,6 +1053,8 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
     mock_data = preview_state.get("mock_data") if isinstance(preview_state.get("mock_data"), Mapping) else {}
     rows = mock_data.get(datasource_id) if isinstance(mock_data.get(datasource_id), list) else []
     filters = [dict(item) for item in preview_state.get("filters", []) if isinstance(item, Mapping)]
+    layout_order = str(preview_state.get("layout_order") or ui.get("layout_order") or "").strip().lower()
+    cards_first = layout_order in {"cards_first", "cards-first", "cards_left", "cards-left", "cards_main", "cards-main"}
     has_card_view = any(
         isinstance(child, Mapping) and str(child.get("type") or "") == "card_list"
         for child in (ui.get("children") if isinstance(ui.get("children"), list) else [])
@@ -1015,6 +1075,8 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
         {},
     )
     submit_placement = str(editor.get("action_position") or preview_state.get("form_action_position") or "").strip().lower()
+    form_area = "right" if cards_first and has_card_view else "main"
+    cards_area = "main" if cards_first and has_card_view else "right"
     form_inputs = {
         "fields": [
             {
@@ -1032,7 +1094,7 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
         {
             "id": "prototype-form",
             "type": "ui.form",
-            "area": "main",
+            "area": form_area,
             "title": "Input",
             "inputs": form_inputs,
             "actions": [{"on": "submit", "type": "updateState", "params": {"lastPrototypeSubmit": "$event.values"}}],
@@ -1058,7 +1120,7 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
             {
                 "id": f"prototype-filter-{field_id}",
                 "type": "input.commandBar",
-                "area": "main",
+                "area": form_area,
                 "title": filter_obj.get("label") or field_id,
                 "inputs": {
                     "variant": "segmented",
@@ -1074,7 +1136,7 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
             {
                 "id": "prototype-table",
                 "type": "ui.table",
-                "area": "main",
+                "area": form_area,
                 "title": "List",
                 "dataSource": {"kind": "static", "value": rows},
                 "inputs": {
@@ -1102,17 +1164,34 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
     if has_card_view:
         first = str(fields[0].get("id") if fields else "title")
         second = str(fields[1].get("id") if len(fields) > 1 else "")
+        card_child = next(
+            (
+                child
+                for child in (ui.get("children") if isinstance(ui.get("children"), list) else [])
+                if isinstance(child, Mapping) and str(child.get("type") or "") == "card_list"
+            ),
+            {},
+        )
+        preview_key = str(preview_state.get("card_preview_key") or "").strip()
+        if not preview_key and isinstance(card_child, Mapping):
+            preview_key = _card_key_from_template(card_child.get("preview"))
+        if not preview_key:
+            preview_key = _preferred_card_preview_key(fields)
+        subtitle_key = second
+        if preview_key and subtitle_key == preview_key and len(fields) > 2:
+            subtitle_key = str(fields[2].get("id") or "")
         widgets.append(
             {
                 "id": "prototype-cards",
                 "type": "ui.list",
-                "area": "right",
+                "area": cards_area,
                 "title": "Cards",
                 "dataSource": {"kind": "static", "value": rows},
                 "inputs": {
                     "variant": "cards",
                     "titleKey": first,
-                    "subtitleKey": second,
+                    "subtitleKey": subtitle_key,
+                    "previewKey": preview_key,
                     "emptyText": "No cards yet",
                 },
             }
@@ -1134,8 +1213,8 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
             "type": "split",
             "pattern": "split",
             "areas": [
-                {"id": "main", "role": "main"},
-                {"id": "right", "role": "aux"},
+                {"id": "main", "role": "preview" if cards_first and has_card_view else "main"},
+                {"id": "right", "role": "editor" if cards_first and has_card_view else "aux"},
             ],
         },
         "widgets": widgets,
@@ -1143,6 +1222,7 @@ def _page_schema_from_preview(preview_state: Mapping[str, Any]) -> dict[str, Any
 
 
 def _write_scenario_page_schema(root: Path, preview_state: Mapping[str, Any]) -> None:
+    preview_state = _repair_text_tree(dict(preview_state))
     manifest = root / "scenario.json"
     if not manifest.exists():
         return
@@ -1152,6 +1232,7 @@ def _write_scenario_page_schema(root: Path, preview_state: Mapping[str, Any]) ->
         return
     if not isinstance(scenario, dict):
         return
+    scenario = _repair_text_tree(scenario)
     scenario.setdefault("id", root.name)
     scenario.setdefault("name", root.name)
     scenario.setdefault("type", "desktop")
@@ -1529,6 +1610,38 @@ def _text_variants(text: str) -> list[str]:
     return variants
 
 
+def _repair_mojibake_text(value: Any) -> str:
+    raw = str(value or "")
+    if not raw:
+        return raw
+    candidates = [raw]
+    for encoding in ("cp1251", "latin1"):
+        try:
+            candidates.append(raw.encode(encoding).decode("utf-8"))
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+
+    def score(candidate: str) -> tuple[int, int, int]:
+        bad_pairs = sum(candidate.count(token) for token in ("Р", "С", "Ð", "Ñ", "\ufffd"))
+        bad_question_runs = len(re.findall(r"\?{2,}", candidate))
+        cyrillic = sum(1 for ch in candidate if "\u0400" <= ch <= "\u04ff")
+        return (bad_pairs + bad_question_runs * 4, -cyrillic, len(candidate))
+
+    return min(candidates, key=score)
+
+
+def _repair_text_tree(value: Any) -> Any:
+    if isinstance(value, str):
+        return _repair_mojibake_text(value)
+    if isinstance(value, list):
+        return [_repair_text_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_repair_text_tree(item) for item in value)
+    if isinstance(value, Mapping):
+        return {str(key): _repair_text_tree(item) for key, item in value.items()}
+    return value
+
+
 def _text_contains_any(text: str, tokens: Iterable[str]) -> bool:
     token_list = [str(token or "").lower() for token in tokens if str(token or "")]
     if not token_list:
@@ -1580,6 +1693,32 @@ def _wants_date_values(text: str) -> bool:
 
 def _wants_card_view(text: str) -> bool:
     return _text_contains_any(text, ("card", "cards", "\u043a\u0430\u0440\u0442\u043e\u0447", "\u043f\u043b\u0438\u0442\u043a"))
+
+
+def _wants_swap_input_and_cards(text: str) -> bool:
+    return _text_contains_all_groups(
+        text,
+        ("swap", "switch", "reorder", "change places", "\u043f\u0435\u0440\u0435\u0441\u0442\u0430\u0432", "\u043f\u043e\u043c\u0435\u043d\u044f", "\u043c\u0435\u0441\u0442\u0430\u043c\u0438"),
+        ("input", "form", "\u0432\u0432\u043e\u0434", "\u0444\u043e\u0440\u043c"),
+        ("card", "cards", "\u043a\u0430\u0440\u0442\u043e\u0447"),
+    )
+
+
+def _wants_card_text_preview(text: str) -> bool:
+    return _wants_card_view(text) and _text_contains_any(
+        text,
+        (
+            "json",
+            "not json",
+            "text",
+            "example",
+            "preview",
+            "\u0442\u0435\u043a\u0441\u0442",
+            "\u043f\u0440\u0438\u043c\u0435\u0440",
+            "\u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
+            "\u0440\u0430\u0437\u043c\u0435\u0449",
+        ),
+    )
 
 
 def _wants_hide_list_or_table(text: str) -> bool:
@@ -1899,6 +2038,7 @@ def _normalise_llm_webui_payload(
 
 
 def _merge_session_from_preview(session: dict[str, Any], preview_state: Mapping[str, Any]) -> None:
+    preview_state = _repair_text_tree(dict(preview_state))
     title = str(preview_state.get("title") or "").strip()
     if title:
         session["title"] = title
@@ -1925,6 +2065,19 @@ def _merge_session_from_preview(session: dict[str, Any], preview_state: Mapping[
         isinstance(child, Mapping) and str(child.get("type") or "") == "card_list" and child.get("visible") is not False
         for child in children
     )
+    card_child = next(
+        (
+            child
+            for child in children
+            if isinstance(child, Mapping) and str(child.get("type") or "") == "card_list" and child.get("visible") is not False
+        ),
+        {},
+    )
+    preview_key = str(preview_state.get("card_preview_key") or "").strip()
+    if not preview_key and isinstance(card_child, Mapping):
+        preview_key = _card_key_from_template(card_child.get("preview"))
+    if preview_key:
+        session["card_preview_key"] = preview_key
     table_children = [
         child
         for child in children
@@ -1945,6 +2098,21 @@ def _merge_session_from_preview(session: dict[str, Any], preview_state: Mapping[
     action_position = str(editor.get("action_position") or preview_state.get("form_action_position") or "").strip().lower() if isinstance(editor, Mapping) else ""
     if action_position:
         session["form_action_position"] = "top" if action_position == "top" else "bottom"
+    layout_order = str(preview_state.get("layout_order") or ui.get("layout_order") or "").strip().lower()
+    page_schema = preview_state.get("page_schema") if isinstance(preview_state.get("page_schema"), Mapping) else {}
+    widgets = page_schema.get("widgets") if isinstance(page_schema.get("widgets"), list) else []
+    if not layout_order and widgets:
+        form_widget = next((item for item in widgets if isinstance(item, Mapping) and str(item.get("id") or "") == "prototype-form"), {})
+        cards_widget = next((item for item in widgets if isinstance(item, Mapping) and str(item.get("id") or "") == "prototype-cards"), {})
+        if isinstance(form_widget, Mapping) and isinstance(cards_widget, Mapping):
+            if str(cards_widget.get("area") or "") == "main" and str(form_widget.get("area") or "") == "right":
+                layout_order = "cards_first"
+            inputs = cards_widget.get("inputs") if isinstance(cards_widget.get("inputs"), Mapping) else {}
+            schema_preview_key = str(inputs.get("previewKey") or "").strip()
+            if schema_preview_key:
+                session["card_preview_key"] = schema_preview_key
+    if layout_order:
+        session["layout_order"] = "cards_first" if layout_order in {"cards_first", "cards-first", "cards_left", "cards-left", "cards_main", "cards-main"} else "input_first"
 
 
 def _apply_llm_webui_transform(
@@ -3063,7 +3231,7 @@ def create_scenario_draft(
         "datasource_id": "shopping_items" if "shopping" in sid else "prototype_items",
         "fields": fields,
         "patches": [],
-        "version": "v1",
+        "version": "v001",
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -3089,6 +3257,8 @@ def create_scenario_draft(
         session["status"] = "degraded"
         session["draft_error"] = f"{type(exc).__name__}: {exc}"
     session["user_summary"] = _draft_user_summary(session)
+    initial_revision = _next_ui_revision_label(session)
+    session["version"] = f"v{initial_revision}"
     preview = _preview_state(session=session)
     _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
@@ -3110,6 +3280,7 @@ def create_scenario_draft(
         after_webui=_current_webui_payload(session, preview),
         preview_state=preview,
         llm_result=None,
+        revision=initial_revision,
     )
     _save_session(ws, session)
     workbench = _ensure_workbench(ws, session=session, preview_state=preview)
@@ -3180,14 +3351,20 @@ def _finalize_scenario_update(
     _meta: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     session.setdefault("patches", []).append(patch)
-    session["version"] = f"v{len(session.get('patches') or []) + 1}"
+    next_revision = _next_ui_revision_label(session)
+    session["version"] = f"v{next_revision}"
     session["user_summary"] = _draft_user_summary(session)
     if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("preview_state"), Mapping):
         preview = copy.deepcopy(dict(session["preview_state"]))
+        preview["version"] = f"v{next_revision}"
     else:
         preview = _preview_state(session=session)
+    preview = _repair_text_tree(dict(preview))
     if patch.get("operation") == "llm_webui_transform" and isinstance(session.get("webui_payload"), Mapping):
-        _write_webui_payload(str(session.get("artifact_root") or ""), session["webui_payload"])
+        payload = copy.deepcopy(dict(session["webui_payload"]))
+        payload["preview_state"] = copy.deepcopy(dict(preview))
+        session["webui_payload"] = payload
+        _write_webui_payload(str(session.get("artifact_root") or ""), payload)
     else:
         _write_webui(str(session.get("artifact_root") or ""), preview)
     session["preview_state"] = preview
@@ -3200,6 +3377,7 @@ def _finalize_scenario_update(
         after_webui=after_webui,
         preview_state=preview,
         llm_result=llm_result,
+        revision=next_revision,
     )
     if revision_info:
         patch["revision"] = revision_info.get("revision")
@@ -3295,7 +3473,7 @@ def update_current_scenario(
             "topic": topic,
             "dialog": _dialog_state(ws, topic_ref=topic),
         }
-    text = str(instruction or "").strip()
+    text = _repair_mojibake_text(instruction).strip()
     lowered = text.lower()
     patch = {
         "id": f"patch_{_hash_suffix(session['id'] + text + str(_now()))}",
@@ -3340,7 +3518,27 @@ def update_current_scenario(
                 auto_apply=auto_apply,
                 _meta=_meta,
             )
-    if _wants_card_view(text):
+    if _wants_swap_input_and_cards(text):
+        session["card_view"] = True
+        session["hide_table"] = True
+        session["layout_order"] = "cards_first"
+        session["card_preview_key"] = str(session.get("card_preview_key") or "").strip() or _preferred_card_preview_key(fields)
+        patch["operation"] = "swap_layout_areas"
+        patch["diff"] = {
+            "layout_order": "cards_first",
+            "form_area": "right",
+            "cards_area": "main",
+            "hide_table": True,
+            "card_preview_key": session["card_preview_key"],
+        }
+        lowered = ""
+    elif _wants_card_text_preview(text):
+        session["card_view"] = True
+        session["card_preview_key"] = _preferred_card_preview_key(fields, prefer_text=True)
+        patch["operation"] = "set_card_preview"
+        patch["diff"] = {"card_preview_key": session["card_preview_key"], "card_view": True}
+        lowered = ""
+    elif _wants_card_view(text):
         session["card_view"] = True
         session["hide_table"] = True
         patch["operation"] = "change_view_representation"
