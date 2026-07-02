@@ -23,6 +23,12 @@ class _Caps:
         return None
 
 
+def test_tool_timeout_parser_accepts_timeout_seconds_and_legacy_timeout() -> None:
+    assert SkillManager._tool_timeout_seconds({"timeout_seconds": 120}, 30.0) == 120.0
+    assert SkillManager._tool_timeout_seconds({"timeout": 90}, 30.0) == 90.0
+    assert SkillManager._tool_timeout_seconds({}, 30.0) == 30.0
+
+
 def test_slot_skill_env_uses_shared_runtime_store() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())

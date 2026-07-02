@@ -1008,6 +1008,14 @@ class SkillManager:
                 existing = tools.get(tool_name)
                 if isinstance(existing, dict):
                     changed = False
+                    timeout_seconds = self._tool_timeout_seconds(entry, default_timeout)
+                    if float(existing.get("timeout_seconds") or default_timeout) != timeout_seconds:
+                        existing["timeout_seconds"] = timeout_seconds
+                        changed = True
+                    retries = entry.get("retries")
+                    if retries is not None and existing.get("retries") != retries:
+                        existing["retries"] = retries
+                        changed = True
                     for meta_key in ("side_effects", "read_only", "yjs_governance"):
                         if meta_key in entry and existing.get(meta_key) != entry.get(meta_key):
                             existing[meta_key] = entry.get(meta_key)
@@ -1025,7 +1033,7 @@ class SkillManager:
                 "name": tool_name,
                 "module": module,
                 "callable": attr,
-                "timeout_seconds": default_timeout,
+                "timeout_seconds": self._tool_timeout_seconds(entry, default_timeout),
                 "retries": default_retries,
                 "schema": {
                     "input": input_schema,
@@ -4348,6 +4356,18 @@ class SkillManager:
             "default_max_rss_mb": getattr(settings, "default_max_rss_mb", None),
         }
 
+    @staticmethod
+    def _tool_timeout_seconds(tool_spec: Mapping[str, Any], default: float) -> float:
+        raw = tool_spec.get("timeout_seconds")
+        if raw is None:
+            raw = tool_spec.get("timeout")
+        try:
+            if raw is not None:
+                return float(raw)
+        except Exception:
+            pass
+        return float(default)
+
     def _enrich_manifest(
         self,
         *,
@@ -4373,7 +4393,7 @@ class SkillManager:
                 "name": tool_name,
                 "module": module_path,
                 "callable": attr,
-                "timeout_seconds": item.get("timeout", defaults.timeout_seconds),
+                "timeout_seconds": self._tool_timeout_seconds(item, defaults.timeout_seconds),
                 "retries": item.get("retries", defaults.retry_count),
                 "schema": {
                     "input": item.get("input_schema"),
