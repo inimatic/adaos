@@ -55,6 +55,12 @@ runtime.
 - [Персонализация Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md):
   реализованный backend store, policy decision, revocation, replay-guard и
   audit kernel для Phase 1
+- [Персонализация Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md):
+  реализованный profile/preference vertical slice, SDK compatibility, header
+  settings, projection и redacted audit
+- [Персонализация Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md):
+  реализованные public guest join, targeted invite, consent preview, binding,
+  revoke и cutoff hooks
 - [Pointer/Projection roadmap для переключения сценариев webspace](webspace-scenario-pointer-projection-roadmap.md):
   целевая архитектура и чеклист миграции от materialize-and-copy к
   pointer-first semantic rebuild

@@ -296,6 +296,8 @@ Authoritative docs:
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md)
 - [Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md)
 - [Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md)
+- [Personalization Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md)
+- [Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md)
 - [User and Scenario Personalization](../concepts/personalization.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
 - [Pending Actions](pending-actions.md)
@@ -342,12 +344,19 @@ Current status:
   replay guards; and audit query helpers.
 - [x] The existing `local-owner` baseline has a regression test for implicit
   owner admin without UI or skill-local state.
-- [ ] SDK/API routes, projections, and user-facing surfaces still need to adopt
-  the Phase 1 kernel; current runtime paths do not yet enforce it globally.
-- [ ] Profile/preference migration remains open beyond the Phase 1 profile fact
-  storage contract.
-- [ ] Join flows are not yet separated into public guest join, targeted invite,
-  device pairing, and admin recovery.
+- [x] Phase 2 profile/preferences slice preserves the old settings SDK API,
+  writes versioned profile/preference records, rejects role/membership profile
+  fields, exposes current-user profile/preference/header helpers, projects
+  preferences through KV, and emits redacted audit.
+- [x] Phase 3 join/invite slice separates public guest joins from targeted
+  invites, provides consent preview data, rejects profile-bound guest joins and
+  wrong-scope/reused/expired material, issues backing grants/memberships, and
+  bulk-revokes guest sessions through session/access-link cutoff hooks.
+- [ ] API routes and browser UI surfaces still need to adopt the Phase 1-3
+  services; current runtime paths do not yet enforce the kernel globally.
+- [ ] Direct websocket disconnect orchestration for revoked guest/browser
+  sessions remains a runtime integration task; Phase 3 provides the cutoff hook.
+- [ ] Device pairing and admin recovery remain open.
 - [ ] User-private data zones are not enforced by product UI.
 - [ ] User management is not yet a shared owner/admin control-plane surface.
 

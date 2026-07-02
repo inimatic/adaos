@@ -45,6 +45,12 @@ AdaOS already has several pieces that this architecture builds on:
 - Phase 1 implements a reusable backend access kernel for persisted identity
   facts, session/device-aware policy decisions, revocation facts, replay guards,
   and audit queries.
+- Phase 2 keeps profile settings compatibility while adding versioned profile
+  and preference records, current-user SDK helpers, header settings, and
+  redacted profile/preference audit.
+- Phase 3 implements backend guest join and targeted invite flows with consent
+  preview data, scoped claims, grant issuance, bulk revocation, and
+  session/access-link cutoff hooks.
 
 Those mechanisms are useful foundations, but they do not yet form a single
 end-to-end profile UI, join flow, API middleware, and SDK enforcement surface.

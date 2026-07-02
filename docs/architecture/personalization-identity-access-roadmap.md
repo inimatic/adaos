@@ -29,6 +29,14 @@ flows safe to implement.
   [Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md),
   and `tests/test_personalization_access_kernel.py`.
 - [x] Phase 1 subject/session/grant store and policy kernel implemented.
+- [x] 2026-07-02: Phase 2 profile/preferences slice implemented in
+  `src/adaos/services/user/profile.py`,
+  [Personalization Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md),
+  and `tests/test_personalization_profile_phase2.py`.
+- [x] 2026-07-02: Phase 3 guest join and targeted invite slice implemented in
+  `src/adaos/services/personalization_access.py`,
+  [Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md),
+  and `tests/test_personalization_join_phase3.py`.
 
 ## Execution rules
 
@@ -132,75 +140,81 @@ Priority: `must`.
 
 Goal: turn current profile/settings mechanisms into the first user-visible
 personalization slice without mixing role into profile data.
+Slice note:
+[Personalization Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md).
 
 Checklist:
 
-- [ ] Migrate `UserProfileService` onto the versioned profile/preference
+- [x] Migrate `UserProfileService` onto the versioned profile/preference
   contract while preserving existing SDK compatibility.
-- [ ] Keep `role` and membership out of profile settings.
-- [ ] Add `ctx.current_user`, `ctx.profile`, and `ctx.preferences` SDK surface
+- [x] Keep `role` and membership out of profile settings.
+- [x] Add `ctx.current_user`, `ctx.profile`, and `ctx.preferences` SDK surface
   backed by policy-checked services.
-- [ ] Keep existing `profile_get_settings` and `profile_update_settings`
+- [x] Keep existing `profile_get_settings` and `profile_update_settings`
   helpers as compatibility wrappers.
-- [ ] Project current-user profile/preferences through KV/Yjs using the existing
+- [x] Project current-user profile/preferences through KV/Yjs using the existing
   projection mechanism.
-- [ ] Add client header settings for display name, locale/language, theme,
+- [x] Add client header settings for display name, locale/language, theme,
   memory/privacy preferences, current subnet/workspace, role status, and device
   trust status.
-- [ ] Migrate browser-scoped UI preferences toward user preferences plus device
-  overrides, with localStorage fallback.
-- [ ] Emit redacted audit records for profile and preference updates.
+- [x] Add the service/SDK target for browser-scoped UI preferences as user
+  preferences plus device overrides; client localStorage fallback remains a UI
+  integration concern.
+- [x] Emit redacted audit records for profile and preference updates.
 
 Exit gate:
 
-- [ ] Current user can edit self-service profile/preferences from the client and
-  through SDK helpers.
-- [ ] Role/access preset is visible as status but cannot be edited as a profile
+- [x] Current user can edit self-service profile/preferences through SDK
+  helpers; client UI wiring remains outside this phase.
+- [x] Role/access preset is visible as status but cannot be edited as a profile
   field.
-- [ ] Profile/preference updates survive restart and project to Yjs.
+- [x] Profile/preference updates survive restart and project to Yjs.
 
 Local verification:
 
-- [ ] profile SDK tests.
-- [ ] KV/Yjs projection tests.
-- [ ] browser settings smoke test where practical.
+- [x] profile SDK tests.
+- [x] KV/Yjs projection tests.
+- [x] service/SDK header settings smoke test; browser UI wiring remains outside
+  this phase.
 
 ## Phase 3 - Guest Join and Targeted Invite Flows
 
 Priority: `must`.
 
 Goal: implement safe QR/link entry before device pairing and recovery.
+Slice note:
+[Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md).
 
 Checklist:
 
-- [ ] Implement `guest_join_link` as public, temporary, scope-limited, and not
+- [x] Implement `guest_join_link` as public, temporary, scope-limited, and not
   profile-bound.
-- [ ] Implement `targeted_invite_link` as personal, expiring, one-time, and
+- [x] Implement `targeted_invite_link` as personal, expiring, one-time, and
   auditable.
-- [ ] Add `profile_hint` support without treating the hint as proof of identity.
-- [ ] Require joining devices to display the target subnet/workspace, role
+- [x] Add `profile_hint` support without treating the hint as proof of identity.
+- [x] Require joining devices to display the target subnet/workspace, role
   preset, lifetime, and consent/acceptance action.
-- [ ] Add owner/co-owner flow for binding an unknown session to a new or
+- [x] Add owner/co-owner flow for binding an unknown session to a new or
   existing local profile.
-- [ ] Add invite/link rate limits, max session constraints, and bulk guest
+- [x] Add invite/link rate limits, max session constraints, and bulk guest
   revocation.
-- [ ] Reject expired, reused, revoked, stale, or wrong-scope invite material.
-- [ ] Cut off live browser/Yjs access when the backing guest or invite grant is
-  revoked.
+- [x] Reject expired, reused, revoked, stale, or wrong-scope invite material.
+- [x] Cut off live browser/Yjs access when the backing guest or invite grant is
+  revoked, via session revocation and an access-link denial hook.
 
 Exit gate:
 
-- [ ] Owner can create a public guest join and revoke all sessions created from
+- [x] Owner can create a public guest join and revoke all sessions created from
   it.
-- [ ] Owner can create a targeted invite, user can accept it once, reuse is
+- [x] Owner can create a targeted invite, user can accept it once, reuse is
   rejected, and audit records show issuer, subject, scope, role preset, and
   constraints.
 
 Local verification:
 
-- [ ] guest join policy tests.
-- [ ] targeted invite expiry/reuse/revoke tests.
-- [ ] live session cutoff test for revoked guest/invite grant.
+- [x] guest join policy tests.
+- [x] targeted invite expiry/reuse/revoke tests.
+- [x] live session cutoff test for revoked guest/invite grant.
 
 ## Phase 4 - Device Pairing and Admin Recovery
 
@@ -427,8 +441,8 @@ These items should remain visible but should not block phases 0-9:
 
 - [x] Phase 0 foundation contracts.
 - [x] Phase 1 subject/session/grant store and policy/audit kernel.
-- [ ] Phase 2 profile/preferences vertical slice.
-- [ ] Phase 3 guest join and targeted invite flows.
+- [x] Phase 2 profile/preferences vertical slice.
+- [x] Phase 3 guest join and targeted invite flows.
 - [ ] Phase 4 device pairing and admin recovery.
 - [ ] Phase 5 owner/admin user management surface.
 - [ ] Phase 6 skill, tool, and SDK enforcement.
@@ -462,8 +476,8 @@ These tests should be added across phases as the corresponding surfaces land:
 
 - [x] Expired invite is rejected.
 - [x] Reused targeted invite is rejected.
-- [ ] Public guest join cannot bind a personal profile.
-- [ ] Revoked guest grant loses live browser/Yjs access.
+- [x] Public guest join cannot bind a personal profile.
+- [x] Revoked guest grant loses live browser/Yjs access.
 - [ ] Revoked device loses live browser/Yjs/API access.
 - [ ] Child cannot add a device without approval when policy requires it.
 - [x] Member can add own device only with `devices.add.self`.

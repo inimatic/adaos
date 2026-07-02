@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from adaos.domain.personalization_access import (
     AuditRecord,
     DeviceKey,
     Grant,
+    GrantConstraint,
     Invite,
     Membership,
     PolicyDecision,
+    Preference,
     RecoveryAction,
     ROLE_PRESET_CAPABILITIES,
     ScopeRef,
@@ -59,6 +61,30 @@ def _scope_from_dict(value: Mapping[str, Any]) -> ScopeRef:
     return ScopeRef(str(value.get("kind") or ""), str(value.get("id") or ""))
 
 
+def _scopes_from_list(value: Any) -> tuple[ScopeRef, ...]:
+    scopes: list[ScopeRef] = []
+    for item in _list(value):
+        data = _dict(item)
+        if not data:
+            continue
+        scopes.append(_scope_from_dict(data))
+    return tuple(scopes)
+
+
+def _grant_constraint_from_dict(value: Mapping[str, Any] | None, *, fallback_expires_at: Any = None) -> GrantConstraint:
+    data = _dict(value)
+    expires_at = data.get("expires_at", fallback_expires_at)
+    return GrantConstraint(
+        expires_at=float(expires_at) if expires_at is not None else None,
+        requires_approval_for=tuple(str(item) for item in _list(data.get("requires_approval_for"))),
+        child_mode=bool(data.get("child_mode", False)),
+        allowed_scopes=_scopes_from_list(data.get("allowed_scopes")),
+        allowed_skill_classes=tuple(str(item) for item in _list(data.get("allowed_skill_classes"))),
+        allowed_tool_classes=tuple(str(item) for item in _list(data.get("allowed_tool_classes"))),
+        delegation=tuple(str(item) for item in _list(data.get("delegation"))),
+    )
+
+
 def _scope_matches(grant_scope: Mapping[str, Any] | None, requested_scope: ScopeRef | None) -> bool:
     if requested_scope is None:
         return True
@@ -97,6 +123,7 @@ class PersonalizationAccessStore:
     _BUCKETS = (
         "users",
         "profiles",
+        "preferences",
         "user_keys",
         "device_keys",
         "sessions",
@@ -160,6 +187,44 @@ class PersonalizationAccessStore:
         self._data["profiles"][profile.user_id] = data
         self.save()
         return data
+
+    def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        data = self._data["profiles"].get(str(user_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def put_preference(self, preference: Preference) -> dict[str, Any]:
+        data = preference.to_dict()
+        key = self._preference_key(preference.subject, preference.key, preference.scope)
+        self._data["preferences"][key] = data
+        self.save()
+        return data
+
+    def get_preference(
+        self,
+        subject: SubjectRef,
+        key: str,
+        scope: ScopeRef | None = None,
+    ) -> dict[str, Any] | None:
+        data = self._data["preferences"].get(self._preference_key(subject, key, scope))
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def list_preferences(self, subject: SubjectRef, scope: ScopeRef | None = None) -> list[dict[str, Any]]:
+        scope_key = scope.ref() if scope else ""
+        result: list[dict[str, Any]] = []
+        for raw in self._data["preferences"].values():
+            if not isinstance(raw, Mapping):
+                continue
+            item = dict(raw)
+            if _ref_key(item.get("subject")) != subject.ref():
+                continue
+            if scope is not None and _ref_key(item.get("scope")) != scope_key:
+                continue
+            result.append(item)
+        result.sort(key=lambda item: str(item.get("key") or ""))
+        return result
+
+    def _preference_key(self, subject: SubjectRef, key: str, scope: ScopeRef | None = None) -> str:
+        return "\0".join([subject.ref(), scope.ref() if scope else "", str(key or "").strip()])
 
     def put_user_key(self, key: UserKey) -> dict[str, Any]:
         data = key.to_dict()
@@ -308,6 +373,13 @@ class PersonalizationAccessStore:
             if isinstance(item, Mapping) and _record_status(item) == status
         ]
 
+    def iter_invites(self, *, status: str = "pending") -> list[dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._data["invites"].values()
+            if isinstance(item, Mapping) and _record_status(item) == status
+        ]
+
     def iter_grants(self, *, status: str = "active") -> list[dict[str, Any]]:
         return [
             dict(item)
@@ -375,9 +447,16 @@ class PersonalizationAccessStore:
 class PersonalizationAccessService:
     """Phase 1 policy/audit kernel over the Phase 0 contract records."""
 
-    def __init__(self, store: PersonalizationAccessStore | None = None, *, owner: SubjectRef | None = None) -> None:
+    def __init__(
+        self,
+        store: PersonalizationAccessStore | None = None,
+        *,
+        owner: SubjectRef | None = None,
+        access_link_denier: Callable[[str], Any] | None = None,
+    ) -> None:
         self.store = store or PersonalizationAccessStore()
         self.owner = owner or SubjectRef("user", "owner")
+        self.access_link_denier = access_link_denier
 
     def put_user(
         self,
@@ -404,6 +483,21 @@ class PersonalizationAccessService:
             redacted_diff={"profile": "<redacted>"},
         )
         return data
+
+    def put_preference(self, preference: Preference, *, actor: SubjectRef | None = None) -> dict[str, Any]:
+        data = self.store.put_preference(preference)
+        self._audit(
+            "preference.updated",
+            actor=actor or preference.subject,
+            subject=preference.subject,
+            scope=preference.scope,
+            redacted_diff={"preference": "<redacted>", "key": preference.key},
+            metadata={"key": preference.key, "device_override": preference.device_override},
+        )
+        return data
+
+    def list_preferences(self, subject: SubjectRef, scope: ScopeRef | None = None) -> list[dict[str, Any]]:
+        return self.store.list_preferences(subject, scope=scope)
 
     def put_user_key(self, key: UserKey, *, actor: SubjectRef | None = None) -> dict[str, Any]:
         data = self.store.put_user_key(key)
@@ -553,32 +647,318 @@ class PersonalizationAccessService:
         )
         return data
 
-    def claim_invite(self, invite_id: str, *, accepted_by: SubjectRef, actor: SubjectRef | None = None) -> dict[str, Any]:
+    def create_guest_join_link(
+        self,
+        *,
+        invite_id: str,
+        scope: ScopeRef,
+        issued_by: SubjectRef,
+        expires_at: float | None,
+        max_sessions: int = 50,
+        max_pending_per_issuer: int = 5,
+    ) -> dict[str, Any]:
+        if expires_at is None:
+            raise PersonalizationAccessError("guest_join_link requires expires_at")
+        self._check_invite_rate(issued_by, "guest_join_link", max_pending_per_issuer)
+        return self.put_invite(
+            Invite(
+                invite_id=invite_id,
+                kind="guest_join_link",
+                scope=scope,
+                role="guest",
+                issued_by=issued_by,
+                expires_at=expires_at,
+                single_use=False,
+                max_sessions=max_sessions,
+            )
+        )
+
+    def create_targeted_invite_link(
+        self,
+        *,
+        invite_id: str,
+        scope: ScopeRef,
+        role: str,
+        issued_by: SubjectRef,
+        profile_hint: str,
+        expires_at: float | None,
+        constraints: GrantConstraint | None = None,
+        max_pending_per_issuer: int = 20,
+    ) -> dict[str, Any]:
+        if expires_at is None:
+            raise PersonalizationAccessError("targeted_invite_link requires expires_at")
+        self._check_invite_rate(issued_by, "targeted_invite_link", max_pending_per_issuer)
+        return self.put_invite(
+            Invite(
+                invite_id=invite_id,
+                kind="targeted_invite_link",
+                scope=scope,
+                role=role,  # type: ignore[arg-type]
+                issued_by=issued_by,
+                profile_hint=profile_hint,
+                expires_at=expires_at,
+                single_use=True,
+                max_sessions=1,
+                constraints=constraints or GrantConstraint(),
+            )
+        )
+
+    def preview_invite(self, invite_id: str, *, expected_scope: ScopeRef | None = None) -> dict[str, Any]:
+        invite = self.store.get_invite(invite_id)
+        if invite is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        scope = _scope_from_dict(_dict(invite.get("scope")))
+        if expected_scope is not None and scope.ref() != expected_scope.ref():
+            raise PersonalizationAccessError(f"invite scope mismatch: {invite_id}")
+        status = _record_status(invite)
+        can_accept = status == "pending" and _not_expired(invite, now=_now_ts())
+        return {
+            "invite_id": invite_id,
+            "kind": invite.get("kind"),
+            "scope": scope.to_dict(),
+            "role": invite.get("role"),
+            "expires_at": invite.get("expires_at"),
+            "profile_hint": invite.get("profile_hint"),
+            "requires_acceptance": True,
+            "status": status,
+            "can_accept": can_accept,
+            "claim_count": int(invite.get("claim_count") or 0),
+            "max_sessions": int(invite.get("max_sessions") or 1),
+        }
+
+    def claim_invite(
+        self,
+        invite_id: str,
+        *,
+        accepted_by: SubjectRef,
+        actor: SubjectRef | None = None,
+        expected_scope: ScopeRef | None = None,
+        session_id: str | None = None,
+        create_grant: bool = True,
+    ) -> dict[str, Any]:
         invite = self.store.get_invite(invite_id)
         if invite is None:
             raise PersonalizationAccessError(f"invite not found: {invite_id}")
         now = _now_ts()
+        scope = _scope_from_dict(_dict(invite.get("scope")))
+        if expected_scope is not None and scope.ref() != expected_scope.ref():
+            raise PersonalizationAccessError(f"invite scope mismatch: {invite_id}")
         if _record_status(invite) != "pending":
             raise PersonalizationAccessError(f"invite is not pending: {invite_id}")
         if not _not_expired(invite, now=now):
             self.store.update_invite(invite_id, {"status": "expired"})
             raise PersonalizationAccessError(f"invite expired: {invite_id}")
+        claims = [dict(item) for item in _list(invite.get("claims")) if isinstance(item, Mapping)]
+        max_sessions = max(1, int(invite.get("max_sessions") or 1))
+        if len(claims) >= max_sessions:
+            self.store.update_invite(invite_id, {"status": "accepted"})
+            raise PersonalizationAccessError(f"invite session limit reached: {invite_id}")
+        kind = str(invite.get("kind") or "")
+        if kind == "guest_join_link" and accepted_by.kind == "user":
+            raise PersonalizationAccessError("guest_join_link cannot bind a personal profile")
+        claim = {
+            "subject": accepted_by.to_dict(),
+            "accepted_at": now,
+        }
+        clean_session_id = str(session_id or "").strip() or None
+        if clean_session_id:
+            claim["session_id"] = clean_session_id
+        claims.append(claim)
+        single_use = bool(invite.get("single_use", True))
+        new_status = "accepted" if single_use or len(claims) >= max_sessions else "pending"
         data = self.store.update_invite(
             invite_id,
             {
-                "status": "accepted",
+                "status": new_status,
                 "accepted_by": accepted_by.to_dict(),
                 "accepted_at": now,
+                "claim_count": len(claims),
+                "claims": claims,
             },
         )
+        grant_id: str | None = None
+        if create_grant:
+            grant_id = self._issue_invite_grant(data, accepted_by=accepted_by, actor=actor or accepted_by, session_id=clean_session_id)
         self._audit(
             "invite.accepted",
             actor=actor or accepted_by,
             subject=accepted_by,
-            scope=_scope_from_dict(_dict(data.get("scope"))),
-            metadata={"invite_id": invite_id, "kind": data.get("kind")},
+            scope=scope,
+            session=SubjectRef("session", clean_session_id) if clean_session_id else None,
+            metadata={"invite_id": invite_id, "kind": data.get("kind"), "grant_id": grant_id},
         )
         return data
+
+    def bind_session_to_profile(
+        self,
+        *,
+        session_id: str,
+        subject: SubjectRef,
+        actor: SubjectRef,
+        profile: UserProfile | None = None,
+    ) -> dict[str, Any]:
+        if subject.kind != "user":
+            raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
+        self.put_user(subject, actor=actor)
+        if profile is not None:
+            self.put_profile(profile, actor=actor)
+        existing = self.store.get_session(session_id)
+        patch = {"subject": subject.to_dict(), "status": "active"}
+        if existing is None:
+            data = self.put_session(SessionKey(session_id=session_id, key_id=f"profile-bind:{session_id}", subject=subject))
+        else:
+            data = self.store.update_session(session_id, patch)
+        self._audit(
+            "session.bound",
+            actor=actor,
+            subject=subject,
+            session=SubjectRef("session", session_id),
+            metadata={"session_id": session_id},
+        )
+        return data
+
+    def revoke_invite(
+        self,
+        invite_id: str,
+        *,
+        actor: SubjectRef,
+        reason: str | None = None,
+        deny_access_link: Callable[[str], Any] | None = None,
+    ) -> dict[str, Any]:
+        invite = self.store.get_invite(invite_id)
+        if invite is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        data = self.store.update_invite(invite_id, {"status": "revoked", "revoked_at": _now_ts()})
+        revoked_grants: list[str] = []
+        for grant in self.store.iter_grants():
+            metadata = _dict(grant.get("metadata"))
+            grant_id = str(grant.get("grant_id") or "")
+            if metadata.get("invite_id") != invite_id and not grant_id.startswith(f"invite:{invite_id}:"):
+                continue
+            self.revoke_grant(grant_id, actor=actor, reason=reason or "invite_revoked")
+            revoked_grants.append(grant_id)
+        revoked_sessions: list[str] = []
+        denier = deny_access_link or self.access_link_denier
+        for claim in _list(data.get("claims")):
+            claim_data = _dict(claim)
+            session_id = str(claim_data.get("session_id") or "").strip()
+            if not session_id:
+                subject = _dict(claim_data.get("subject"))
+                if str(subject.get("kind") or "") == "session":
+                    session_id = str(subject.get("id") or "").strip()
+            if not session_id:
+                continue
+            if self.store.get_session(session_id):
+                self.revoke_session(session_id, actor=actor, reason=reason or "invite_revoked")
+            if callable(denier):
+                denier(session_id)
+            revoked_sessions.append(session_id)
+        self._audit(
+            "invite.revoked",
+            actor=actor,
+            scope=_scope_from_dict(_dict(data.get("scope"))),
+            metadata={
+                "invite_id": invite_id,
+                "reason": str(reason or "").strip() or None,
+                "revoked_grants": revoked_grants,
+                "revoked_sessions": revoked_sessions,
+            },
+        )
+        return data
+
+    def revoke_guest_join_sessions(
+        self,
+        invite_id: str,
+        *,
+        actor: SubjectRef,
+        reason: str | None = None,
+        deny_access_link: Callable[[str], Any] | None = None,
+    ) -> dict[str, Any]:
+        invite = self.store.get_invite(invite_id)
+        if invite is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        if str(invite.get("kind") or "") != "guest_join_link":
+            raise PersonalizationAccessError(f"invite is not a guest join link: {invite_id}")
+        return self.revoke_invite(invite_id, actor=actor, reason=reason, deny_access_link=deny_access_link)
+
+    def _check_invite_rate(self, issued_by: SubjectRef, kind: str, max_pending: int) -> None:
+        if max_pending <= 0:
+            return
+        now = _now_ts()
+        count = 0
+        for invite in self.store.iter_invites():
+            if str(invite.get("kind") or "") != kind:
+                continue
+            if _ref_key(invite.get("issued_by")) != issued_by.ref():
+                continue
+            if not _not_expired(invite, now=now):
+                continue
+            count += 1
+        if count >= max_pending:
+            raise PersonalizationAccessError(f"pending invite rate limit reached for {issued_by.ref()}")
+
+    def _issue_invite_grant(
+        self,
+        invite: Mapping[str, Any],
+        *,
+        accepted_by: SubjectRef,
+        actor: SubjectRef,
+        session_id: str | None,
+    ) -> str:
+        invite_id = str(invite.get("invite_id") or "")
+        kind = str(invite.get("kind") or "")
+        role = str(invite.get("role") or "guest")
+        scope = _scope_from_dict(_dict(invite.get("scope")))
+        grant_id = f"invite:{invite_id}:{accepted_by.ref()}"
+        constraints = _grant_constraint_from_dict(_dict(invite.get("constraints")), fallback_expires_at=invite.get("expires_at"))
+        grant = Grant(
+            grant_id=grant_id,
+            subject=accepted_by,
+            scope=scope,
+            role=role,  # type: ignore[arg-type]
+            constraints=constraints,
+            issued_by=actor,
+        )
+        self.put_grant(grant, actor=actor)
+        self.store.update_grant(
+            grant_id,
+            {
+                "metadata": {
+                    "invite_id": invite_id,
+                    "invite_kind": kind,
+                    "session_id": session_id,
+                }
+            },
+        )
+        if accepted_by.kind == "user":
+            self.put_user(accepted_by, actor=actor)
+            self.put_membership(
+                Membership(
+                    subject=accepted_by,
+                    scope=scope,
+                    role=role,  # type: ignore[arg-type]
+                    grant_id=f"membership:{grant_id}",
+                    issued_by=actor,
+                    expires_at=invite.get("expires_at"),
+                ),
+                actor=actor,
+            )
+        if session_id:
+            existing = self.store.get_session(session_id)
+            patch = {"subject": accepted_by.to_dict(), "status": "active"}
+            if existing is None:
+                self.put_session(
+                    SessionKey(
+                        session_id=session_id,
+                        key_id=f"invite:{invite_id}",
+                        subject=accepted_by,
+                        device_id=session_id,
+                        expires_at=invite.get("expires_at"),
+                    )
+                )
+            else:
+                self.store.update_session(session_id, patch)
+        return grant_id
 
     def put_recovery_action(self, action: RecoveryAction) -> dict[str, Any]:
         data = self.store.put_recovery_action(action)
@@ -762,6 +1142,26 @@ class PersonalizationAccessService:
                 resource=resource,
                 reason_code="grant_capability",
                 grant_ids=tuple(str(record.get("grant_id") or "") for _ in [0] if record.get("grant_id")),
+            )
+        if (
+            subject is not None
+            and actor.ref() == subject.ref()
+            and (scope is None or scope.kind == "user_private")
+            and action in {
+            "profile.read.self",
+            "profile.write.self",
+            "preferences.read.self",
+            "preferences.write.self",
+            }
+        ):
+            return PolicyDecision(
+                decision="allow",
+                actor=actor,
+                action=action,
+                subject=subject,
+                scope=scope,
+                resource=resource,
+                reason_code="self_profile_preference",
             )
         return PolicyDecision(
             decision="deny",

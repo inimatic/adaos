@@ -178,6 +178,8 @@ nav:
       - Personalization Identity Access Roadmap: architecture/personalization-identity-access-roadmap.md
       - Personalization Phase 0 Contracts: architecture/personalization-identity-access-phase0-contracts.md
       - Personalization Phase 1 Access Kernel: architecture/personalization-identity-access-phase1-kernel.md
+      - Personalization Phase 2 Profile Preferences: architecture/personalization-identity-access-phase2-profile-preferences.md
+      - Personalization Phase 3 Join Invites: architecture/personalization-identity-access-phase3-join-invites.md
       - Post-Deploy E2E Testing: architecture/post-deploy-e2e-testing.md
       - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
   - CLI:

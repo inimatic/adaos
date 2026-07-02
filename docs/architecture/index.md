@@ -63,6 +63,8 @@ Current target-state control-plane extensions are documented in:
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md): MoSCoW checklist for landing profile/preferences, user management, grants, recovery, and optional external identity
 - [Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md): implemented draft contract anchor for scope lattice, versioned schemas, migration stance, threat model, audit, and regression matrix
 - [Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md): implemented backend store, policy decision, revocation, replay-guard, and audit kernel for Phase 1
+- [Personalization Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md): implemented profile/preference vertical slice, SDK compatibility, header settings, projection, and redacted audit
+- [Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md): implemented public guest join, targeted invite, consent preview, binding, revoke, and cutoff hooks
 - [Endpoint Infrastructure](endpoint-infrastructure.md): target architecture for ReDevice/browser endpoints, endpoint registry, assignments, router-owned commands, events, streams, and the Yjs boundary
 - [Endpoint Audio Service](endpoint-audio-service.md): target architecture for endpoint audio sessions, activation, STT routing, Bluetooth audio, dialog/dictation modes, and audio transport policy
 - [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane

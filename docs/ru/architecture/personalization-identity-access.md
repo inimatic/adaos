@@ -46,6 +46,12 @@ membership, policy и границы персональных данных.
 - Phase 1 реализует reusable backend access kernel для persisted identity
   facts, session/device-aware policy decisions, revocation facts, replay guards
   и audit queries.
+- Phase 2 сохраняет profile settings compatibility и добавляет versioned
+  profile/preference records, current-user SDK helpers, header settings и
+  redacted profile/preference audit.
+- Phase 3 реализует backend guest join и targeted invite flows с consent
+  preview data, scoped claims, grant issuance, bulk revocation и
+  session/access-link cutoff hooks.
 
 Эти механизмы полезны, но пока не собраны в end-to-end profile UI, join flow,
 API middleware и SDK enforcement surface.

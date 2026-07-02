@@ -1472,7 +1472,7 @@ class ProjectionService:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)
 
     def _apply_kv(self, scope: str, slot: str, value: Any, *, user_id: Optional[str]) -> None:
-        # For MVP treat (current_user, "profile.settings") specially and
+        # For MVP treat current_user profile slots specially and
         # route it through the UserProfileService, so profile can be
         # managed via ctx.current_user.set("profile.settings", ...).
         if scope == "current_user" and slot == "profile.settings":
@@ -1481,6 +1481,12 @@ class ProjectionService:
                 svc.update_profile(value, user_id=user_id)
             else:
                 _log.debug("profile.settings expects a mapping, got %r", type(value))
+        elif scope == "current_user" and slot == "profile.preferences":
+            svc = UserProfileService(self.ctx)
+            if isinstance(value, dict):
+                svc.update_preferences(value, user_id=user_id)
+            else:
+                _log.debug("profile.preferences expects a mapping, got %r", type(value))
         else:
             _log.debug("kv projection ignored for scope=%s slot=%s (no handler)", scope, slot)
 
