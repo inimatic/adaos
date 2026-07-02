@@ -294,6 +294,7 @@ Authoritative docs:
 
 - [Personalization, Identity, and Access](personalization-identity-access.md)
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md)
+- [Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md)
 - [User and Scenario Personalization](../concepts/personalization.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
 - [Pending Actions](pending-actions.md)
@@ -314,6 +315,10 @@ Code anchors:
 
 Current status:
 
+- [x] Phase 0 versioned contract anchor exists in
+  `src/adaos/domain/personalization_access.py`, with scope lattice, role
+  presets, capability vocabulary, join-flow contracts, data zones, audit record
+  shape, migration sources, and security regression matrix.
 - [x] MVP profile settings exist through `UserProfileService`, SDK helpers, KV
   storage, profile-changed events, and scenario projection rules.
 - [x] Current-user profile settings can be projected through KV/Yjs targets for
@@ -327,7 +332,8 @@ Current status:
 - [x] Named entities and aliases provide localized names for device/browser
   resolution and can be extended to profile-owned aliases.
 - [ ] Profile, identity, device, membership, grant, capability, and preference
-  schemas are not frozen.
+  schemas are only draft contracts; durable storage, policy service, migration,
+  and enforcement remain open.
 - [ ] Owner/co-owner/admin/member/child/guest role presets are not implemented
   as shared policy objects.
 - [ ] `actor`, `current_user`, and `subject_user` are not consistently modeled

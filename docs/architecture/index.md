@@ -61,6 +61,7 @@ Current target-state control-plane extensions are documented in:
 - [Device Access and Browsers](device-access-and-browsers.md): target architecture for durable device identity, browser and member access policy, device-centric desktop UX, and reusable access management surfaces
 - [Personalization, Identity, and Access](personalization-identity-access.md): target local-first model for profiles, user keys, devices, memberships, roles, capabilities, QR/link join flows, privacy zones, and audit
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md): MoSCoW checklist for landing profile/preferences, user management, grants, recovery, and optional external identity
+- [Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md): implemented draft contract anchor for scope lattice, versioned schemas, migration stance, threat model, audit, and regression matrix
 - [Endpoint Infrastructure](endpoint-infrastructure.md): target architecture for ReDevice/browser endpoints, endpoint registry, assignments, router-owned commands, events, streams, and the Yjs boundary
 - [Endpoint Audio Service](endpoint-audio-service.md): target architecture for endpoint audio sessions, activation, STT routing, Bluetooth audio, dialog/dictation modes, and audio transport policy
 - [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane

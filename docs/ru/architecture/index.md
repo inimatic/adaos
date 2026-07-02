@@ -49,6 +49,9 @@ runtime.
 - [Персонализация, identity и доступ: дорожная карта](personalization-identity-access-roadmap.md):
   MoSCoW-чеклист для profile/preferences, user management, grants, recovery и
   optional external identity
+- [Персонализация Phase 0 Contracts](personalization-identity-access-phase0-contracts.md):
+  реализованный draft contract anchor для scope lattice, versioned schemas,
+  migration stance, threat model, audit и regression matrix
 - [Pointer/Projection roadmap для переключения сценариев webspace](webspace-scenario-pointer-projection-roadmap.md):
   целевая архитектура и чеклист миграции от materialize-and-copy к
   pointer-first semantic rebuild

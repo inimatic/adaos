@@ -176,6 +176,7 @@ nav:
       - Device Access Roadmap: architecture/device-access-roadmap.md
       - Personalization Identity Access: architecture/personalization-identity-access.md
       - Personalization Identity Access Roadmap: architecture/personalization-identity-access-roadmap.md
+      - Personalization Phase 0 Contracts: architecture/personalization-identity-access-phase0-contracts.md
       - Post-Deploy E2E Testing: architecture/post-deploy-e2e-testing.md
       - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
   - CLI:

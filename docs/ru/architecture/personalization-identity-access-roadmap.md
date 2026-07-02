@@ -17,7 +17,13 @@ durable identity, policy, audit и privacy foundations, чтобы послед�
   gates и local verification requirements.
 - [x] 2026-07-02: открыт Phase 0 gate; следующая implementation work -
   versioned schemas, threat model, scope lattice и migration notes.
-- [ ] Phase 0 foundation contracts implemented.
+- [x] 2026-07-02: Phase 0 foundation contracts implemented в
+  `src/adaos/domain/personalization_access.py`,
+  [Персонализация Phase 0 Contracts](personalization-identity-access-phase0-contracts.md)
+  и `tests/test_personalization_access_contracts.py`.
+- [x] 2026-07-02: Phase 0 local verification passed через targeted pytest,
+  adjacent domain tests, `git diff --check` и MkDocs strict build.
+- [x] Phase 0 foundation contracts implemented.
 
 ## Правила выполнения
 
@@ -39,42 +45,44 @@ Priority: `must`.
 
 Цель: сделать модель реализуемой, не заморозив неверные абстракции. Эта фаза
 порождает versioned draft contracts, а не необратимые final schemas.
+Contract note:
+[Персонализация Phase 0 Contracts](personalization-identity-access-phase0-contracts.md).
 
 Checklist:
 
-- [ ] Определить scope lattice: `subnet`, `workspace`, `webspace`, `scenario`,
+- [x] Определить scope lattice: `subnet`, `workspace`, `webspace`, `scenario`,
   `skill`, `device/session`, `user_private` и shared workspace data.
-- [ ] Определить versioned draft schemas для `UserProfile`, `UserKey`,
+- [x] Определить versioned draft schemas для `UserProfile`, `UserKey`,
   `DeviceKey`, `SessionKey`, `Membership`, `Grant`, `Capability`,
   `Preference`, `Invite`, `RecoveryAction` и `ExternalIdentityBinding`.
-- [ ] Определить schema-version и migration rules для identity/access records.
-- [ ] Описать миграцию из текущих `Settings.owner_id`, `local-owner`,
+- [x] Определить schema-version и migration rules для identity/access records.
+- [x] Описать миграцию из текущих `Settings.owner_id`, `local-owner`,
   `UserProfileService`, `profile.settings` projections, `access_links` и
   browser scoped storage.
-- [ ] Определить первый capability vocabulary и role presets: `owner`,
+- [x] Определить первый capability vocabulary и role presets: `owner`,
   `co_owner`, `admin`, `member`, `child`, `guest`.
-- [ ] Определить grant constraints: `expires_at`, `requires_approval_for`,
+- [x] Определить grant constraints: `expires_at`, `requires_approval_for`,
   `child_mode`, allowed scopes, allowed skill/tool classes и delegation.
-- [ ] Определить actor semantics: `actor`, `current_user`, `subject_user`,
+- [x] Определить actor semantics: `actor`, `current_user`, `subject_user`,
   service identity и skill `on_behalf_of`.
-- [ ] Определить threat model для public QR abuse, targeted invite leakage,
+- [x] Определить threat model для public QR abuse, targeted invite leakage,
   stolen devices, owner/co-owner key loss, skill privilege abuse, revoked live
   sessions и cross-subnet identity correlation.
-- [ ] Определить audit event schemas, redaction rules, retention defaults и
+- [x] Определить audit event schemas, redaction rules, retention defaults и
   query dimensions.
-- [ ] Определить обязательную security regression matrix для следующих фаз.
+- [x] Определить обязательную security regression matrix для следующих фаз.
 
 Exit gate:
 
-- [ ] Architecture и roadmap docs описывают все контракты выше с позицией по
+- [x] Architecture и roadmap docs описывают все контракты выше с позицией по
   versioning и migration.
-- [ ] Runtime implementation не блокируется неопределенными терминами subject,
+- [x] Runtime implementation не блокируется неопределенными терминами subject,
   session, membership, grant, capability или audit.
 
 Local verification:
 
-- [ ] `git diff --check`
-- [ ] Targeted docs build или link check завершается локально, либо failure
+- [x] `git diff --check`
+- [x] Targeted docs build или link check завершается локально, либо failure
   записан с точной командой и причиной.
 
 ## Phase 1 - Subject, Session, Grant Store и Policy Kernel
@@ -418,7 +426,7 @@ Local verification:
 
 ### Must
 
-- [ ] Phase 0 foundation contracts.
+- [x] Phase 0 foundation contracts.
 - [ ] Phase 1 subject/session/grant store and policy/audit kernel.
 - [ ] Phase 2 profile/preferences vertical slice.
 - [ ] Phase 3 guest join and targeted invite flows.

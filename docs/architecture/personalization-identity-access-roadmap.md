@@ -17,7 +17,13 @@ flows safe to implement.
   gates, and local verification requirements.
 - [x] 2026-07-02: Phase 0 gate opened; next implementation work is versioned
   schemas, threat model, scope lattice, and migration notes.
-- [ ] Phase 0 foundation contracts implemented.
+- [x] 2026-07-02: Phase 0 foundation contracts implemented in
+  `src/adaos/domain/personalization_access.py`,
+  [Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md),
+  and `tests/test_personalization_access_contracts.py`.
+- [x] 2026-07-02: Phase 0 local verification passed with targeted pytest,
+  adjacent domain tests, `git diff --check`, and MkDocs strict build.
+- [x] Phase 0 foundation contracts implemented.
 
 ## Execution rules
 
@@ -38,42 +44,44 @@ Priority: `must`.
 
 Goal: make the model implementable without freezing the wrong abstractions.
 This phase produces versioned draft contracts, not irreversible final schemas.
+Contract note:
+[Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md).
 
 Checklist:
 
-- [ ] Define the scope lattice: `subnet`, `workspace`, `webspace`, `scenario`,
+- [x] Define the scope lattice: `subnet`, `workspace`, `webspace`, `scenario`,
   `skill`, `device/session`, `user_private`, and shared workspace data.
-- [ ] Define versioned draft schemas for `UserProfile`, `UserKey`,
+- [x] Define versioned draft schemas for `UserProfile`, `UserKey`,
   `DeviceKey`, `SessionKey`, `Membership`, `Grant`, `Capability`,
   `Preference`, `Invite`, `RecoveryAction`, and `ExternalIdentityBinding`.
-- [ ] Define schema-version and migration rules for identity/access records.
-- [ ] Document migration from current `Settings.owner_id`, `local-owner`,
+- [x] Define schema-version and migration rules for identity/access records.
+- [x] Document migration from current `Settings.owner_id`, `local-owner`,
   `UserProfileService`, `profile.settings` projections, `access_links`, and
   browser scoped storage.
-- [ ] Define the first capability vocabulary and role presets:
+- [x] Define the first capability vocabulary and role presets:
   `owner`, `co_owner`, `admin`, `member`, `child`, and `guest`.
-- [ ] Define grant constraints: `expires_at`, `requires_approval_for`,
+- [x] Define grant constraints: `expires_at`, `requires_approval_for`,
   `child_mode`, allowed scopes, allowed skill/tool classes, and delegation.
-- [ ] Define actor semantics: `actor`, `current_user`, `subject_user`,
+- [x] Define actor semantics: `actor`, `current_user`, `subject_user`,
   service identity, and skill `on_behalf_of`.
-- [ ] Define the threat model for public QR abuse, targeted invite leakage,
+- [x] Define the threat model for public QR abuse, targeted invite leakage,
   stolen devices, owner/co-owner key loss, skill privilege abuse, revoked live
   sessions, and cross-subnet identity correlation.
-- [ ] Define audit event schemas, redaction rules, retention defaults, and
+- [x] Define audit event schemas, redaction rules, retention defaults, and
   query dimensions.
-- [ ] Define the required security regression matrix for later phases.
+- [x] Define the required security regression matrix for later phases.
 
 Exit gate:
 
-- [ ] Architecture and roadmap documents describe every contract above with a
+- [x] Architecture and roadmap documents describe every contract above with a
   versioning and migration stance.
-- [ ] No runtime implementation is blocked on undefined terms for subject,
+- [x] No runtime implementation is blocked on undefined terms for subject,
   session, membership, grant, capability, or audit.
 
 Local verification:
 
-- [ ] `git diff --check`
-- [ ] targeted docs build or link check completes locally, or the failure is
+- [x] `git diff --check`
+- [x] targeted docs build or link check completes locally, or the failure is
   recorded with exact command and cause.
 
 ## Phase 1 - Subject, Session, Grant Store, and Policy Kernel
@@ -410,7 +418,7 @@ These items should remain visible but should not block phases 0-9:
 
 ### Must
 
-- [ ] Phase 0 foundation contracts.
+- [x] Phase 0 foundation contracts.
 - [ ] Phase 1 subject/session/grant store and policy/audit kernel.
 - [ ] Phase 2 profile/preferences vertical slice.
 - [ ] Phase 3 guest join and targeted invite flows.
