@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import traceback
+from urllib.parse import quote
 
 import y_py as Y
 import yaml
@@ -1226,7 +1227,7 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
         for key, value in raw_resources.items():
             token = str(key or "").strip()
             if token and token not in resources:
-                resources[token] = _clone_json_like(value)
+                resources[token] = _materialize_skill_resource_descriptor(value, skill_name=skill_name)
         raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
         if raw_interface and skill_name and skill_name not in interfaces:
             interfaces[skill_name] = _clone_skill_ui_interface(raw_interface, skill=skill_name, source=source)
@@ -1802,6 +1803,42 @@ def _clone_json_like(value: Any) -> Any:
             except Exception:
                 return value
         return value
+
+
+def _skill_asset_delivery_url(skill_name: str, path: str) -> str | None:
+    skill_token = str(skill_name or "").strip()
+    raw_path = str(path or "").strip().replace("\\", "/")
+    if not skill_token or not raw_path.startswith("assets/"):
+        return None
+    relative = raw_path[len("assets/") :].strip("/")
+    if not relative:
+        return None
+    parts = [part for part in relative.split("/") if part]
+    if not parts or any(part in (".", "..") for part in parts):
+        return None
+    encoded_skill = quote(skill_token, safe="")
+    encoded_path = "/".join(quote(part, safe="") for part in parts)
+    return f"/api/node/skills/{encoded_skill}/assets/{encoded_path}"
+
+
+def _materialize_skill_resource_descriptor(value: Any, *, skill_name: str | None = None) -> Any:
+    descriptor = _clone_json_like(value)
+    if not isinstance(descriptor, dict):
+        return descriptor
+    skill_token = str(skill_name or "").strip()
+    if not skill_token:
+        return descriptor
+    descriptor.setdefault("scope", "skill")
+    descriptor.setdefault("owner", f"skill:{skill_token}")
+    delivery = str(descriptor.get("delivery") or "core").strip().lower()
+    if delivery == "external":
+        return descriptor
+    if descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
+        return descriptor
+    url = _skill_asset_delivery_url(skill_token, str(descriptor.get("path") or ""))
+    if url:
+        descriptor["url"] = url
+    return descriptor
 
 
 def _json_like_equal(current: Any, next_value: Any) -> bool:
@@ -4017,7 +4054,7 @@ class WebspaceScenarioRuntime:
             for key, value in raw_resources.items():
                 token = str(key or "").strip()
                 if token and token not in skill_resources:
-                    skill_resources[token] = _clone_json_like(value)
+                    skill_resources[token] = _materialize_skill_resource_descriptor(value, skill_name=skill_name)
             raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
             if raw_interface and skill_name:
                 interface_copy = _clone_skill_ui_interface(raw_interface, skill=str(skill_name), source=source)

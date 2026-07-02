@@ -5,7 +5,9 @@ import hashlib
 import json
 import logging
 import gc
+import mimetypes
 import os
+import re
 import sys
 import time
 import threading
@@ -74,6 +76,7 @@ from adaos.services.scenario.webspace_runtime import (
     switch_webspace_scenario,
 )
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.runtime import SkillDirectoryNotFoundError, find_skill_dir
 from adaos.services.realtime_sidecar import (
     realtime_sidecar_listener_snapshot,
     restart_realtime_sidecar_subprocess,
@@ -182,6 +185,13 @@ _YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S = _env_float(
     "ADAOS_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S",
     2.5,
     minimum=0.1,
+)
+_BROWSER_RESOURCE_MAX_BYTES = int(
+    _env_float(
+        "ADAOS_BROWSER_RESOURCE_MAX_BYTES",
+        5 * 1024 * 1024,
+        minimum=1024,
+    )
 )
 
 
@@ -5372,6 +5382,82 @@ async def delete_media_file(filename: str) -> dict[str, Any]:
         "deleted": existed,
         "items": list_media_files(),
     }
+
+
+def _resolve_skill_asset_file(skill_name: str, asset_path: str) -> Path:
+    skill_token = str(skill_name or "").strip()
+    if not skill_token or not re.match(r"^[A-Za-z0-9_.-]+$", skill_token):
+        _raise_400("invalid_skill_name")
+    raw_path = str(asset_path or "").strip().replace("\\", "/")
+    if not raw_path or raw_path.startswith("/") or "\x00" in raw_path:
+        _raise_400("invalid_asset_path")
+    try:
+        relative = Path(raw_path)
+        if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+            _raise_400("invalid_asset_path")
+        skill_dir = find_skill_dir(skill_token)
+    except SkillDirectoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="skill_not_found") from exc
+    assets_root = (skill_dir / "assets").resolve()
+    target = (assets_root / relative).resolve()
+    try:
+        target.relative_to(assets_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="asset_path_forbidden") from exc
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="skill_asset_not_found")
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="skill_asset_not_found") from exc
+    if size > _BROWSER_RESOURCE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="skill_asset_too_large")
+    return target
+
+
+def _browser_resource_media_type(path: Path) -> str:
+    guessed, _encoding = mimetypes.guess_type(str(path))
+    return guessed or "application/octet-stream"
+
+
+def _browser_resource_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@router.get("/skills/{skill_name}/assets/{asset_path:path}")
+async def skill_asset_content(
+    skill_name: str,
+    asset_path: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_adaos_token: str | None = Header(default=None),
+):
+    await _require_request_token(
+        request,
+        authorization=authorization,
+        x_adaos_token=x_adaos_token,
+    )
+    target = _resolve_skill_asset_file(skill_name, asset_path)
+    digest = _browser_resource_sha256(target)
+    etag = f'"sha256:{digest}"'
+    headers = {
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "ETag": etag,
+        "X-AdaOS-Cache-Key": f"sha256:{digest}",
+        "X-AdaOS-Resource-Scope": "skill",
+        "X-AdaOS-Resource-Owner": str(skill_name),
+    }
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return FileResponse(
+        path=target,
+        media_type=_browser_resource_media_type(target),
+        headers=headers,
+    )
 
 
 @router.get("/media/files/content/{filename}")

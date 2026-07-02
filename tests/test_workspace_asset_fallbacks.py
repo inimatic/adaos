@@ -25,6 +25,35 @@ from adaos.services.scenario import webspace_runtime as webspace_runtime_module
 from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime
 
 
+def test_skill_resource_descriptor_materializes_asset_delivery_url() -> None:
+    descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
+        {
+            "kind": "svg",
+            "path": "assets/icons/voice mic.svg",
+            "mime": "image/svg+xml",
+        },
+        skill_name="voice_chat_skill",
+    )
+
+    assert descriptor["scope"] == "skill"
+    assert descriptor["owner"] == "skill:voice_chat_skill"
+    assert descriptor["url"] == "/api/node/skills/voice_chat_skill/assets/icons/voice%20mic.svg"
+
+
+def test_external_resource_descriptor_keeps_authored_url() -> None:
+    descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
+        {
+            "kind": "image",
+            "delivery": "external",
+            "url": "https://cdn.example/avatar.webp",
+            "path": "assets/avatar.webp",
+        },
+        skill_name="voice_chat_skill",
+    )
+
+    assert descriptor["url"] == "https://cdn.example/avatar.webp"
+
+
 class _PathsStub:
     def __init__(self, *, base_dir: Path, repo_root: Path) -> None:
         self._base_dir = base_dir
