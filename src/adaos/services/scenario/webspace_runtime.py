@@ -65,6 +65,9 @@ _SKILL_RUNTIME_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
 _SKILL_RUNTIME_REBUILD_PENDING: dict[str, Dict[str, Any]] = {}
 _SKILL_RUNTIME_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
 _WEBSPACE_LISTING_SYNC_TASK: asyncio.Task[Any] | None = None
+_WORKFLOW_SYNC_TASKS: dict[str, asyncio.Task[Any]] = {}
+_WORKFLOW_SYNC_PENDING: dict[str, Dict[str, Any]] = {}
+_WORKFLOW_SYNC_STATS: dict[str, Dict[str, Any]] = {}
 _WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
 _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -2671,6 +2674,23 @@ def _scenario_switch_inline_listing_sync_enabled() -> bool:
     if os.getenv("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC") is None:
         return False
     return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC")
+
+
+def _defer_workflow_sync_for_rebuild(action: str) -> bool:
+    if str(action or "").strip() != "scenario_switch_rebuild":
+        return False
+    if os.getenv("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_WORKFLOW_SYNC") is None:
+        return False
+    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_WORKFLOW_SYNC")
+
+
+def _workflow_sync_debounce_s() -> float:
+    raw = os.getenv("ADAOS_WEBSPACE_WORKFLOW_SYNC_DEBOUNCE_S")
+    try:
+        value = float(str(raw or "").strip())
+    except Exception:
+        value = 0.2
+    return max(0.0, min(value, 10.0))
 
 
 def _scenario_switch_subprocess_enabled() -> bool:
@@ -5542,6 +5562,119 @@ def _schedule_webspace_listing_sync(*, reason: str) -> dict[str, Any]:
     }
 
 
+def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
+    key = str(webspace_id or "").strip()
+    stats = _WORKFLOW_SYNC_STATS.get(key)
+    if stats is None:
+        stats = {
+            "requested_total": 0,
+            "scheduled_total": 0,
+            "coalesced_total": 0,
+            "completed_total": 0,
+            "failed_total": 0,
+            "last_reason": "",
+            "last_scenario_id": "",
+            "last_requested_at": 0.0,
+            "last_completed_at": 0.0,
+        }
+        _WORKFLOW_SYNC_STATS[key] = stats
+    return stats
+
+
+def _schedule_workflow_sync(
+    ctx: AgentContext,
+    *,
+    webspace_id: str,
+    scenario_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    key = str(webspace_id or "").strip()
+    scenario_token = str(scenario_id or "").strip()
+    if not key or not scenario_token:
+        return {"scheduled": False, "reason": "missing_target"}
+
+    stats = _workflow_sync_stats(key)
+    stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
+    stats["last_reason"] = str(reason or "").strip()
+    stats["last_scenario_id"] = scenario_token
+    stats["last_requested_at"] = time.time()
+
+    request = {
+        "webspace_id": key,
+        "scenario_id": scenario_token,
+        "reason": str(reason or "").strip() or "workflow_sync",
+    }
+    current = _WORKFLOW_SYNC_TASKS.get(key)
+    if current is not None and not current.done():
+        _WORKFLOW_SYNC_PENDING[key] = request
+        stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
+        return {
+            "scheduled": True,
+            "deferred": True,
+            "coalesced": True,
+            "task": current.get_name(),
+            "scenario_id": scenario_token,
+        }
+
+    async def _runner(initial: dict[str, Any]) -> None:
+        current_request = dict(initial)
+        try:
+            while True:
+                delay = _workflow_sync_debounce_s()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                pending_before_start = _WORKFLOW_SYNC_PENDING.pop(key, None)
+                if pending_before_start:
+                    current_request = dict(pending_before_start)
+                started = time.perf_counter()
+                active_scenario = str(current_request.get("scenario_id") or "").strip()
+                active_reason = str(current_request.get("reason") or "").strip() or "workflow_sync"
+                try:
+                    wf = ScenarioWorkflowRuntime(ctx)
+                    await wf.sync_workflow_for_webspace(active_scenario, key)
+                    stats = _workflow_sync_stats(key)
+                    stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
+                    stats["last_completed_at"] = time.time()
+                    _log.info(
+                        "deferred workflow sync completed webspace=%s scenario=%s reason=%s duration_ms=%.3f",
+                        key,
+                        active_scenario,
+                        active_reason,
+                        _elapsed_ms(started),
+                    )
+                except Exception:
+                    stats = _workflow_sync_stats(key)
+                    stats["failed_total"] = int(stats.get("failed_total") or 0) + 1
+                    _log.warning(
+                        "deferred workflow sync failed webspace=%s scenario=%s reason=%s",
+                        key,
+                        active_scenario,
+                        active_reason,
+                        exc_info=True,
+                    )
+                next_request = _WORKFLOW_SYNC_PENDING.pop(key, None)
+                if not next_request:
+                    break
+                current_request = dict(next_request)
+        finally:
+            if _WORKFLOW_SYNC_TASKS.get(key) is task:
+                _WORKFLOW_SYNC_TASKS.pop(key, None)
+
+    task = asyncio.create_task(
+        _runner(request),
+        name=f"workflow-sync:{key}:{scenario_token}"[:120],
+    )
+    _WORKFLOW_SYNC_TASKS[key] = task
+    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
+    return {
+        "scheduled": True,
+        "deferred": True,
+        "coalesced": False,
+        "task": task.get_name(),
+        "scenario_id": scenario_token,
+    }
+
+
 class WebspaceService:
     """
     Helper for managing webspaces (workspaces) from core services and SDK.
@@ -6804,20 +6937,48 @@ async def rebuild_webspace_from_sources(
         _record_timing(timings_ms, "resolve_active_scenario", stage_started)
 
     should_sync_workflow = requested_action in {"scenario_switch_rebuild", "restore", "reload", "reset"}
+    workflow_sync_result: dict[str, Any] | None = None
     if target_scenario and should_sync_workflow:
-        stage_started = time.perf_counter()
-        try:
-            wf = ScenarioWorkflowRuntime(ctx)
-            await wf.sync_workflow_for_webspace(target_scenario, webspace_id)
-        except Exception:
-            _log.warning(
-                "failed to sync workflow during semantic rebuild webspace=%s scenario=%s action=%s",
-                webspace_id,
-                target_scenario,
-                requested_action,
-                exc_info=True,
+        if _defer_workflow_sync_for_rebuild(requested_action):
+            workflow_sync_result = _schedule_workflow_sync(
+                ctx,
+                webspace_id=webspace_id,
+                scenario_id=target_scenario,
+                reason=f"semantic_rebuild:{requested_action}",
             )
-        _record_timing(timings_ms, "workflow_sync", stage_started)
+            timings_ms["workflow_sync_deferred"] = 0.0
+        else:
+            stage_started = time.perf_counter()
+            try:
+                wf = ScenarioWorkflowRuntime(ctx)
+                await wf.sync_workflow_for_webspace(target_scenario, webspace_id)
+                workflow_sync_result = {
+                    "scheduled": False,
+                    "deferred": False,
+                    "scenario_id": target_scenario,
+                }
+            except Exception:
+                workflow_sync_result = {
+                    "scheduled": False,
+                    "deferred": False,
+                    "error": "workflow_sync_failed",
+                    "scenario_id": target_scenario,
+                }
+                _log.warning(
+                    "failed to sync workflow during semantic rebuild webspace=%s scenario=%s action=%s",
+                    webspace_id,
+                    target_scenario,
+                    requested_action,
+                    exc_info=True,
+                )
+            _record_timing(timings_ms, "workflow_sync", stage_started)
+    elif should_sync_workflow:
+        workflow_sync_result = {
+            "scheduled": False,
+            "deferred": False,
+            "skipped": True,
+            "reason": "scenario_unresolved",
+        }
 
     event_topic = None
     if requested_action in {"reload", "reset"}:
@@ -6883,6 +7044,7 @@ async def rebuild_webspace_from_sources(
         "materialization": final_materialization,
         "live_room_publish": bool(publish_live_room),
         "live_room_refresh": live_room_refresh_result,
+        "workflow_sync": workflow_sync_result,
         "fresh_doc_rebuild": bool(fresh_doc_rebuild),
     }
     if requested_action == "reset" or reset_room_result is not None:
