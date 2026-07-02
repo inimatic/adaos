@@ -1,13 +1,16 @@
 from __future__ import annotations
 import asyncio
+import ipaddress
 import json
 import hashlib
 import os
 import re
+import socket
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -58,7 +61,16 @@ from adaos.services.root_mcp.sessions import (
 )
 from adaos.services.root_mcp.targets import upsert_managed_target
 from adaos.services.root_mcp.tokens import issue_access_token, list_access_tokens, revoke_access_token, validate_access_token
-from adaos.services.browser_assets import assets_root, public_assets_root
+from adaos.services.browser_assets import (
+    PUBLIC_ASSET_MAX_BYTES,
+    BrowserAssetPublishError,
+    assets_root,
+    browser_asset_diagnostics,
+    collect_browser_asset_garbage,
+    public_blob_delivery_url,
+    public_blob_file_for_digest,
+    publish_public_blob_bytes,
+)
 
 router = APIRouter()
 root_router = APIRouter(prefix="/v1/root", tags=["root"])
@@ -1504,6 +1516,15 @@ class RootMcpSessionLeaseRevokeRequest(BaseModel):
 class RootBrowserAssetEnsureRequest(BaseModel):
     cacheKey: str | None = None
     digest: str | None = None
+    sourceUrl: str | None = None
+    filename: str | None = None
+    mime: str | None = None
+    sizeBytes: int | None = Field(default=None, ge=0)
+
+
+class RootBrowserAssetGcRequest(BaseModel):
+    dryRun: bool = True
+    olderThanSeconds: float = Field(default=0.0, ge=0.0)
 
 
 def _safe_asset_owner_token(value: str) -> str:
@@ -1521,34 +1542,83 @@ def _normalize_browser_asset_digest(*, cache_key: str | None = None, digest: str
 
 
 def _public_browser_asset_blob_file(digest: str) -> Path | None:
-    public_root = public_assets_root(get_ctx()).resolve()
-    root = public_root / "blobs" / "sha256" / digest[:2] / digest[2:4] / digest
-    try:
-        resolved_root = root.resolve()
-        resolved_root.relative_to(public_root)
-    except Exception:
-        return None
-    if not resolved_root.is_dir():
-        return None
-    for item in sorted(resolved_root.iterdir(), key=lambda path: path.name):
-        if item.is_file():
-            return item
-    return None
+    return public_blob_file_for_digest(digest, ctx=get_ctx())
 
 
 def _public_browser_asset_delivery_url(path: Path) -> str:
-    public_root = public_assets_root(get_ctx()).resolve()
     try:
-        relative = path.resolve().relative_to(public_root)
+        return public_blob_delivery_url(path, ctx=get_ctx())
     except Exception as exc:
         raise HTTPException(status_code=404, detail="browser_asset_not_found") from exc
-    return "/assets/" + "/".join(quote(part, safe="") for part in relative.parts)
 
 
 def _browser_asset_manifest_path(owner_kind: str, owner_id: str) -> Path:
     kind = _safe_asset_owner_token(owner_kind)
     bucket = kind if kind.endswith("s") else f"{kind}s"
     return assets_root(get_ctx()) / "manifests" / bucket / f"{_safe_asset_owner_token(owner_id)}.json"
+
+
+def _source_filename(source_url: str, fallback_digest: str) -> str:
+    parsed = urlparse(source_url)
+    name = Path(parsed.path or "").name
+    return name or f"{fallback_digest}.bin"
+
+
+def _is_public_browser_asset_host(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        pass
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)}
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=502, detail="browser_asset_source_unresolvable") from exc
+    if not addresses:
+        raise HTTPException(status_code=502, detail="browser_asset_source_unresolvable")
+    for address in addresses:
+        try:
+            if not ipaddress.ip_address(address).is_global:
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+def _validate_public_browser_asset_source_url(source_url: str) -> None:
+    parsed = urlparse(str(source_url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=422, detail="invalid_browser_asset_source_url")
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=422, detail="invalid_browser_asset_source_url")
+    if not _is_public_browser_asset_host(parsed.hostname):
+        raise HTTPException(status_code=422, detail="browser_asset_source_private_host")
+
+
+class _BrowserAssetRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        _validate_public_browser_asset_source_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_public_browser_asset_source(source_url: str) -> tuple[bytes, str | None]:
+    source_url = str(source_url or "").strip()
+    _validate_public_browser_asset_source_url(source_url)
+    req = urllib.request.Request(
+        source_url,
+        headers={"User-Agent": "AdaOS-Root-BrowserAssetCache/1.0"},
+    )
+    try:
+        opener = urllib.request.build_opener(_BrowserAssetRedirectHandler)
+        with opener.open(req, timeout=10) as response:
+            data = response.read(PUBLIC_ASSET_MAX_BYTES + 1)
+            mime = response.headers.get("Content-Type")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="browser_asset_source_unreachable") from exc
+    if len(data) > PUBLIC_ASSET_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="browser_asset_source_too_large")
+    return data, mime
 
 
 @router.post("/v1/hub/control/report")
@@ -1975,8 +2045,28 @@ async def root_browser_assets_cache_ensure(
     auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
     scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
     _enforce_mcp_capability("development.read.contracts", auth=auth)
+    if body.sourceUrl:
+        _enforce_mcp_capability("operations.write.targets", auth=auth)
     digest = _normalize_browser_asset_digest(cache_key=body.cacheKey, digest=body.digest)
     blob = _public_browser_asset_blob_file(digest)
+    pulled = False
+    if blob is None and body.sourceUrl:
+        data, source_mime = await asyncio.to_thread(_fetch_public_browser_asset_source, body.sourceUrl)
+        if body.sizeBytes is not None and int(body.sizeBytes) != len(data):
+            raise HTTPException(status_code=409, detail="browser_asset_size_mismatch")
+        try:
+            publish_public_blob_bytes(
+                data,
+                filename=str(body.filename or "").strip() or _source_filename(body.sourceUrl, digest),
+                mime=str(body.mime or source_mime or "").strip() or None,
+                expected_digest=digest,
+                ctx=get_ctx(),
+            )
+        except BrowserAssetPublishError as exc:
+            status = 409 if str(exc) == "asset_digest_mismatch" else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        pulled = True
+        blob = _public_browser_asset_blob_file(digest)
     delivery_url = _public_browser_asset_delivery_url(blob) if blob is not None else None
     return {
         "ok": True,
@@ -1984,6 +2074,7 @@ async def root_browser_assets_cache_ensure(
         "scope": scope,
         "cacheKey": f"sha256:{digest}",
         "present": blob is not None,
+        "pulled": pulled,
         "deliveryUrl": delivery_url,
         "byteServing": "static:/assets" if blob is not None else None,
     }
@@ -2034,6 +2125,47 @@ async def root_browser_assets_manifest(
         "scope": scope,
         "subnetId": subnet_id,
         "manifest": manifest,
+    }
+
+
+@root_router.get("/browser-assets/diagnostics")
+async def root_browser_assets_diagnostics(
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("development.read.contracts", auth=auth)
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "diagnostics": browser_asset_diagnostics(ctx=get_ctx()),
+    }
+
+
+@root_router.post("/browser-assets/gc")
+async def root_browser_assets_gc(
+    body: RootBrowserAssetGcRequest,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("operations.write.targets", auth=auth)
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "gc": collect_browser_asset_garbage(
+            dry_run=bool(body.dryRun),
+            older_than_s=float(body.olderThanSeconds or 0.0),
+            ctx=get_ctx(),
+        ),
     }
 
 

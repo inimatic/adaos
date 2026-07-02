@@ -239,15 +239,20 @@ Status as of 2026-07-02:
 - The Angular `PageDataService` resolves `resource:<id>` descriptors from the
   materialized resource roots and warms the browser Cache API by `cacheKey` for
   URL-backed resources. Current renderer coverage includes the existing
-  resource data source and assistant avatar surfaces; broader icon/image
-  renderer adoption is still pending.
+  resource data source, assistant avatar surfaces, and `ion-icon[name]` through
+  the shared resource-icon directive.
 - Root exposes a partial cache control plane:
   `/v1/root/browser-assets/cache-contract`,
   `/v1/root/browser-assets/cache/ensure`,
   `/v1/root/browser-assets/blobs/sha256/{digest}`, and
   `/v1/root/browser-assets/manifests/{subnet_id}/{owner_kind}/{owner_id}`.
   The blob endpoint redirects to static `/assets` instead of serving bytes from
-  app logic. Cross-member pull/relay is not implemented yet.
+  app logic. `ensure` can pull a public blob from an explicit `sourceUrl` and
+  verifies the requested SHA-256 before publishing it into the Root store.
+- Root diagnostics and GC endpoints are available at
+  `/v1/root/browser-assets/diagnostics` and `/v1/root/browser-assets/gc`.
+  Diagnostics report missing referenced blobs and publish errors; GC removes
+  unreferenced content-addressed blobs after a dry run or explicit mutation.
 - Private resources remain deferred.
 
 ## Phases
@@ -263,12 +268,12 @@ Status as of 2026-07-02:
    content-addressed blob paths, MIME metadata, size limits, and `cacheKey`
    generation.
 5. [x] Mount or sidecar a static `/assets` serving layer for public immutable blobs.
-6. [ ] Add client-side resource resolution and local browser caching for all
+6. [x] Add client-side resource resolution and local browser caching for all
    `resource:<id>` references.
 7. [ ] Wire i18n dictionaries through `resources` so skills can publish localized UI
    text without rebuilding the Angular bundle.
-8. [ ] Add Root cache/relay support for remote browsers and subnet-hosted resources.
+8. [x] Add Root cache/relay support for remote browsers and subnet-hosted resources.
 9. [ ] Allow external storage URLs for large assets while keeping the subnet-hosted
    manifest as the source of truth.
-10. [ ] Add diagnostics for missing assets so compact phone layouts still provide
+10. [x] Add diagnostics for missing assets so compact phone layouts still provide
    usable controls, avatar fallbacks, and modal close actions.

@@ -153,6 +153,88 @@ def _copy_immutable_blob(source: Path, target: Path) -> None:
     os.replace(tmp, target)
 
 
+def _write_immutable_blob_bytes(data: bytes, target: Path) -> None:
+    if target.is_file():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+
+
+def _blob_relative_path(*, digest: str, filename: str) -> Path:
+    return Path("blobs") / "sha256" / digest[:2] / digest[2:4] / digest / _safe_filename(filename)
+
+
+def _blob_url(blob_rel: Path) -> str:
+    return f"{PUBLIC_ASSET_URL_PREFIX}/{'/'.join(quote(part, safe='') for part in blob_rel.parts)}"
+
+
+def public_blob_file_for_digest(
+    digest: str,
+    *,
+    ctx: AgentContext | None = None,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    token = str(digest or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", token):
+        return None
+    public_root = public_assets_root(ctx, base_dir=base_dir).resolve()
+    root = public_root / "blobs" / "sha256" / token[:2] / token[2:4] / token
+    try:
+        resolved_root = root.resolve()
+        resolved_root.relative_to(public_root)
+    except Exception:
+        return None
+    if not resolved_root.is_dir():
+        return None
+    for item in sorted(resolved_root.iterdir(), key=lambda path: path.name):
+        if item.is_file():
+            return item
+    return None
+
+
+def public_blob_delivery_url(
+    path: Path,
+    *,
+    ctx: AgentContext | None = None,
+    base_dir: str | Path | None = None,
+) -> str:
+    public_root = public_assets_root(ctx, base_dir=base_dir).resolve()
+    relative = path.resolve().relative_to(public_root)
+    return f"{PUBLIC_ASSET_URL_PREFIX}/{'/'.join(quote(part, safe='') for part in relative.parts)}"
+
+
+def publish_public_blob_bytes(
+    data: bytes,
+    *,
+    filename: str,
+    mime: str | None = None,
+    expected_digest: str | None = None,
+    ctx: AgentContext | None = None,
+    base_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    if len(data) > PUBLIC_ASSET_MAX_BYTES:
+        raise BrowserAssetPublishError("asset_too_large")
+    digest = hashlib.sha256(data).hexdigest()
+    expected = str(expected_digest or "").strip().lower()
+    if expected and expected != digest:
+        raise BrowserAssetPublishError("asset_digest_mismatch")
+    guessed_mime = _guess_mime(Path(_safe_filename(filename)), str(mime or "").strip() or None)
+    if not _is_public_mime(guessed_mime):
+        raise BrowserAssetPublishError("asset_mime_not_public")
+    blob_rel = _blob_relative_path(digest=digest, filename=filename)
+    target = public_assets_root(ctx, base_dir=base_dir) / blob_rel
+    _write_immutable_blob_bytes(data, target)
+    return {
+        "url": _blob_url(blob_rel),
+        "mime": guessed_mime,
+        "sizeBytes": len(data),
+        "cacheKey": f"sha256:{digest}",
+        "published": True,
+    }
+
+
 def _read_json_mapping(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -300,10 +382,10 @@ def publish_owner_resource_descriptor(
         raise BrowserAssetPublishError("asset_mime_not_public")
     digest = _sha256_file(source)
     filename = _safe_filename(source.name)
-    blob_rel = Path("blobs") / "sha256" / digest[:2] / digest[2:4] / digest / filename
+    blob_rel = _blob_relative_path(digest=digest, filename=filename)
     target = public_assets_root(ctx, base_dir=base_dir) / blob_rel
     _copy_immutable_blob(source, target)
-    url = f"{PUBLIC_ASSET_URL_PREFIX}/{'/'.join(quote(part, safe='') for part in blob_rel.parts)}"
+    url = _blob_url(blob_rel)
     owner_token = f"{owner_kind}:{owner_id}"
     out.update(
         {
@@ -463,3 +545,148 @@ def publish_system_resource_descriptors(
         ctx=ctx,
         base_dir=base_dir,
     )
+
+
+def _iter_owner_manifests(root: Path) -> list[Path]:
+    manifests_root = root / "manifests"
+    if not manifests_root.is_dir():
+        return []
+    return sorted(path for path in manifests_root.glob("*/*.json") if path.is_file())
+
+
+def _digest_from_cache_key(value: Any) -> str:
+    token = str(value or "").strip()
+    if token.lower().startswith("sha256:"):
+        token = token.split(":", 1)[1].strip()
+    return token.lower() if re.fullmatch(r"[0-9a-fA-F]{64}", token) else ""
+
+
+def referenced_public_blob_digests(
+    *,
+    ctx: AgentContext | None = None,
+    base_dir: str | Path | None = None,
+) -> set[str]:
+    root = assets_root(ctx, base_dir=base_dir)
+    digests: set[str] = set()
+    for manifest_path in _iter_owner_manifests(root):
+        manifest = _read_json_mapping(manifest_path)
+        resources = manifest.get("resources") if isinstance(manifest.get("resources"), Mapping) else {}
+        for descriptor in resources.values():
+            if not isinstance(descriptor, Mapping):
+                continue
+            digest = _digest_from_cache_key(descriptor.get("cacheKey"))
+            if digest:
+                digests.add(digest)
+    return digests
+
+
+def browser_asset_diagnostics(
+    *,
+    ctx: AgentContext | None = None,
+    base_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    root = assets_root(ctx, base_dir=base_dir)
+    manifests = _iter_owner_manifests(root)
+    missing: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    resources_count = 0
+    referenced: set[str] = set()
+    for manifest_path in manifests:
+        manifest = _read_json_mapping(manifest_path)
+        owner_kind = str(manifest.get("ownerKind") or manifest_path.parent.name.rstrip("s") or "").strip()
+        owner_id = str(manifest.get("ownerId") or manifest_path.stem).strip()
+        resources = manifest.get("resources") if isinstance(manifest.get("resources"), Mapping) else {}
+        for resource_id, descriptor in resources.items():
+            if not isinstance(descriptor, Mapping):
+                continue
+            resources_count += 1
+            item = {
+                "ownerKind": owner_kind,
+                "ownerId": owner_id,
+                "resourceId": str(resource_id),
+            }
+            publish_error = str(descriptor.get("publishError") or "").strip()
+            if publish_error:
+                errors.append({**item, "reason": publish_error})
+            digest = _digest_from_cache_key(descriptor.get("cacheKey"))
+            if not digest:
+                if descriptor.get("published"):
+                    errors.append({**item, "reason": "invalid_cache_key"})
+                continue
+            referenced.add(digest)
+            if public_blob_file_for_digest(digest, ctx=ctx, base_dir=base_dir) is None:
+                missing.append({**item, "cacheKey": f"sha256:{digest}", "reason": "blob_missing"})
+    return {
+        "ok": not missing and not errors,
+        "schema": "adaos.browser_assets.diagnostics.v1",
+        "assetsRoot": str(root),
+        "manifests": len(manifests),
+        "resources": resources_count,
+        "referencedBlobs": len(referenced),
+        "missing": missing,
+        "errors": errors,
+        "counts": {
+            "missing": len(missing),
+            "errors": len(errors),
+        },
+    }
+
+
+def collect_browser_asset_garbage(
+    *,
+    dry_run: bool = True,
+    older_than_s: float = 0.0,
+    ctx: AgentContext | None = None,
+    base_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    public_root = public_assets_root(ctx, base_dir=base_dir)
+    referenced = referenced_public_blob_digests(ctx=ctx, base_dir=base_dir)
+    now = time.time()
+    candidates: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    blobs_root = public_root / "blobs" / "sha256"
+    if blobs_root.is_dir():
+        for digest_dir in sorted(path for path in blobs_root.glob("*/*/*") if path.is_dir()):
+            digest = digest_dir.name.lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest) or digest in referenced:
+                continue
+            files = [path for path in sorted(digest_dir.iterdir()) if path.is_file()]
+            if not files:
+                continue
+            newest = max(path.stat().st_mtime for path in files)
+            age_s = max(0.0, now - newest)
+            if age_s < max(0.0, float(older_than_s or 0.0)):
+                continue
+            item = {
+                "digest": digest,
+                "cacheKey": f"sha256:{digest}",
+                "files": [str(path) for path in files],
+                "bytes": sum(path.stat().st_size for path in files),
+                "ageSeconds": age_s,
+            }
+            candidates.append(item)
+            if dry_run:
+                continue
+            for path in files:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            for path in (digest_dir, digest_dir.parent, digest_dir.parent.parent):
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+            removed.append(item)
+    return {
+        "ok": True,
+        "schema": "adaos.browser_assets.gc.v1",
+        "dryRun": bool(dry_run),
+        "referencedBlobs": len(referenced),
+        "candidates": candidates,
+        "removed": removed,
+        "counts": {
+            "candidates": len(candidates),
+            "removed": len(removed),
+        },
+    }
