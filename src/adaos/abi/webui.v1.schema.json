@@ -318,6 +318,8 @@
         "input.selector",
         "desktop.widgets",
         "media.videoBrowser",
+        "media.cvCamera",
+        "host.cvRuntime",
         "host.webspaceControls"
       ],
       "description": "Client-supported widget renderer type."
