@@ -839,7 +839,8 @@ Recommended demo data shape:
   skill and scenario authoring
 - [x] `[could]` connect modal addresses to URL/deeplink history after the
   runtime contract is stable
-- [ ] `[could]` add a browser diagnostics panel consuming the contract
+- [x] `[could]` add a browser diagnostics panel consuming the contract
   diagnostics endpoint
 - [ ] `[deferred]` remove legacy `openModal` compatibility once migrated
-  skills and scenarios have enough coverage
+  skills and scenarios have enough coverage; current runtime centralizes the
+  compatibility path and records deprecation diagnostics for remaining callers

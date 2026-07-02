@@ -595,7 +595,9 @@ Status note:
 - [ ] `[deferred]` design a universal cross-plane query/router language beyond
   browser-facing UI views
 - [ ] `[deferred]` migrate every historical `openModal` declaration to
-  `navigate` until the compatibility path has telemetry coverage
+  `navigate`/`navigateModal` where a public view/route contract exists;
+  remaining modal-id-only callers now pass through one compatibility handler
+  with deprecation diagnostics
 
 ### 4a. Stand-Oriented Demo Readiness
 
