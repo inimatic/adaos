@@ -25,7 +25,10 @@ def test_manifest_declares_builder_dialog_agent() -> None:
     manifest = yaml.safe_load((SKILL_ROOT / "skill.yaml").read_text(encoding="utf-8"))
 
     tools = {item["name"] for item in manifest["tools"]}
+    tools_by_name = {item["name"]: item for item in manifest["tools"]}
     assert {"start", "chat", "create_scenario_draft", "update_current_scenario", "get_preview_state"}.issubset(tools)
+    assert tools_by_name["chat"]["timeout_seconds"] >= 120
+    assert tools_by_name["update_current_scenario"]["timeout_seconds"] >= 120
     assert manifest["default_tool"] == "chat"
     assert manifest["conversation"]["dialog_channel"]["id"] == "builder"
     assert manifest["conversation"]["agents"][0]["id"] == "agent:builder_skill:builder"
