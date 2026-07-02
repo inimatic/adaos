@@ -540,8 +540,14 @@ class PersonalizationAccessService:
         return data
 
     def revoke_device(self, device_id: str, *, actor: SubjectRef, reason: str | None = None) -> dict[str, Any]:
+        decision = self.evaluate(actor=actor, action="devices.revoke.any", subject=SubjectRef("device", device_id))
+        if decision.decision != "allow":
+            raise PermissionError(f"policy denied: {decision.reason_code or 'devices.revoke.any'}")
         data = self.store.update_device_key(device_id, {"status": "revoked", "revoked_at": _now_ts()})
         revoked_sessions: list[str] = []
+        denier = self.access_link_denier
+        if callable(denier):
+            denier(device_id)
         for session in self.store.iter_sessions():
             if str(session.get("device_id") or "") != device_id:
                 continue
@@ -549,6 +555,8 @@ class PersonalizationAccessService:
             if not session_id:
                 continue
             self.store.update_session(session_id, {"status": "revoked", "revoked_at": _now_ts()})
+            if callable(denier):
+                denier(session_id)
             revoked_sessions.append(session_id)
         self.store.append_revocation(
             {
@@ -703,6 +711,267 @@ class PersonalizationAccessService:
             )
         )
 
+    def create_device_pairing_link(
+        self,
+        *,
+        invite_id: str,
+        subject: SubjectRef,
+        scope: ScopeRef,
+        role: str,
+        issued_by: SubjectRef,
+        expires_at: float | None,
+        device_id: str | None = None,
+        device_name: str | None = None,
+        max_pending_per_issuer: int = 20,
+    ) -> dict[str, Any]:
+        if subject.kind != "user":
+            raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
+        if expires_at is None:
+            raise PersonalizationAccessError("device_pairing_link requires expires_at")
+        action = "devices.add.self" if issued_by.ref() == subject.ref() else "devices.add.any"
+        decision = self.evaluate(actor=issued_by, action=action, subject=subject)
+        if decision.decision != "allow":
+            raise PermissionError(f"policy denied: {decision.reason_code or action}")
+        self._check_invite_rate(issued_by, "device_pairing_link", max_pending_per_issuer)
+        invite = self.put_invite(
+            Invite(
+                invite_id=invite_id,
+                kind="device_pairing_link",
+                scope=scope,
+                role=role,  # type: ignore[arg-type]
+                issued_by=issued_by,
+                profile_hint=subject.id,
+                expires_at=expires_at,
+                single_use=True,
+                max_sessions=1,
+            )
+        )
+        return self.store.update_invite(
+            invite_id,
+            {
+                **invite,
+                "subject_id": subject.id,
+                "device_id": str(device_id or "").strip() or None,
+                "device_name": str(device_name or "").strip() or None,
+            },
+        )
+
+    def claim_device_pairing_link(
+        self,
+        invite_id: str,
+        *,
+        subject: SubjectRef,
+        actor: SubjectRef | None = None,
+        device_id: str,
+        key_id: str | None = None,
+        public_key_ref: str | None = None,
+        session_id: str | None = None,
+        device_name: str | None = None,
+    ) -> dict[str, Any]:
+        invite = self.store.get_invite(invite_id)
+        if invite is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        if str(invite.get("kind") or "") != "device_pairing_link":
+            raise PersonalizationAccessError(f"invite is not a device pairing link: {invite_id}")
+        expected_subject_id = str(invite.get("subject_id") or invite.get("profile_hint") or "").strip()
+        if expected_subject_id and subject.id != expected_subject_id:
+            raise PersonalizationAccessError("device pairing subject mismatch")
+        clean_device_id = str(device_id or invite.get("device_id") or "").strip()
+        if not clean_device_id:
+            raise PersonalizationAccessError("device_id is required for device pairing")
+        clean_session_id = str(session_id or clean_device_id).strip()
+        accepted = self.claim_invite(
+            invite_id,
+            accepted_by=subject,
+            actor=actor or subject,
+            session_id=clean_session_id,
+            create_grant=False,
+        )
+        self.put_user(subject, actor=actor or subject)
+        key = DeviceKey(
+            user_id=subject.id,
+            device_id=clean_device_id,
+            key_id=str(key_id or f"device:{clean_device_id}").strip(),
+            public_key_ref=str(public_key_ref or f"local-device:{clean_device_id}").strip(),
+            trust_level="trusted",
+            created_at=_now_ts(),
+            last_used_at=_now_ts(),
+        )
+        device = self.put_device_key(key, actor=actor or subject)
+        session = self.put_session(
+            SessionKey(
+                session_id=clean_session_id,
+                key_id=key.key_id,
+                subject=subject,
+                device_id=clean_device_id,
+                expires_at=accepted.get("expires_at"),
+            )
+        )
+        data = self.store.update_invite(
+            invite_id,
+            {
+                "paired_device_id": clean_device_id,
+                "device_name": str(device_name or invite.get("device_name") or "").strip() or None,
+                "session_id": clean_session_id,
+            },
+        )
+        self._audit(
+            "device.pairing_completed",
+            actor=actor or subject,
+            subject=subject,
+            scope=_scope_from_dict(_dict(data.get("scope"))),
+            device=SubjectRef("device", clean_device_id),
+            session=SubjectRef("session", clean_session_id),
+            metadata={"invite_id": invite_id, "device_id": clean_device_id, "session_id": clean_session_id},
+        )
+        return {"invite": data, "device": device, "session": session}
+
+    def create_admin_recovery_link(
+        self,
+        *,
+        invite_id: str,
+        recovery_id: str,
+        subject: SubjectRef,
+        scope: ScopeRef,
+        issued_by: SubjectRef,
+        expires_at: float | None,
+        replacement_device_id: str | None = None,
+        revoked_device_ids: tuple[str, ...] = (),
+        reason: str | None = None,
+        max_pending_per_issuer: int = 20,
+    ) -> dict[str, Any]:
+        if subject.kind != "user":
+            raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
+        if expires_at is None:
+            raise PersonalizationAccessError("admin_recovery_link requires expires_at")
+        decision = self.evaluate(actor=issued_by, action="devices.add.any", subject=subject)
+        if decision.decision != "allow":
+            raise PermissionError(f"policy denied: {decision.reason_code or 'devices.add.any'}")
+        self._check_invite_rate(issued_by, "admin_recovery_link", max_pending_per_issuer)
+        recovery = self.put_recovery_action(
+            RecoveryAction(
+                recovery_id=recovery_id,
+                subject=subject,
+                issued_by=issued_by,
+                replacement_device_id=replacement_device_id,
+                revoked_device_ids=revoked_device_ids,
+                reason=reason,
+                created_at=_now_ts(),
+            )
+        )
+        invite = self.put_invite(
+            Invite(
+                invite_id=invite_id,
+                kind="admin_recovery_link",
+                scope=scope,
+                role="member",
+                issued_by=issued_by,
+                profile_hint=subject.id,
+                expires_at=expires_at,
+                single_use=True,
+                max_sessions=1,
+            )
+        )
+        data = self.store.update_invite(
+            invite_id,
+            {
+                **invite,
+                "subject_id": subject.id,
+                "recovery_id": recovery_id,
+                "replacement_device_id": str(replacement_device_id or "").strip() or None,
+                "revoked_device_ids": list(revoked_device_ids),
+                "reason": str(reason or "").strip() or None,
+            },
+        )
+        return {"invite": data, "recovery": recovery}
+
+    def complete_admin_recovery_link(
+        self,
+        invite_id: str,
+        *,
+        subject: SubjectRef,
+        actor: SubjectRef | None = None,
+        replacement_device_id: str,
+        key_id: str | None = None,
+        public_key_ref: str | None = None,
+        session_id: str | None = None,
+        revoke_device_ids: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        invite = self.store.get_invite(invite_id)
+        if invite is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        if str(invite.get("kind") or "") != "admin_recovery_link":
+            raise PersonalizationAccessError(f"invite is not an admin recovery link: {invite_id}")
+        expected_subject_id = str(invite.get("subject_id") or invite.get("profile_hint") or "").strip()
+        if expected_subject_id and subject.id != expected_subject_id:
+            raise PersonalizationAccessError("recovery subject mismatch")
+        clean_device_id = str(replacement_device_id or invite.get("replacement_device_id") or "").strip()
+        if not clean_device_id:
+            raise PersonalizationAccessError("replacement_device_id is required for admin recovery")
+        clean_session_id = str(session_id or clean_device_id).strip()
+        issued_by = _subject_from_dict(_dict(invite.get("issued_by")))
+        admin_actor = actor or issued_by
+        accepted = self.claim_invite(
+            invite_id,
+            accepted_by=subject,
+            actor=subject,
+            session_id=clean_session_id,
+            create_grant=False,
+        )
+        self.put_user(subject, actor=admin_actor)
+        key = DeviceKey(
+            user_id=subject.id,
+            device_id=clean_device_id,
+            key_id=str(key_id or f"device:{clean_device_id}").strip(),
+            public_key_ref=str(public_key_ref or f"local-device:{clean_device_id}").strip(),
+            trust_level="trusted",
+            created_at=_now_ts(),
+            last_used_at=_now_ts(),
+        )
+        device = self.put_device_key(key, actor=admin_actor)
+        session = self.put_session(
+            SessionKey(
+                session_id=clean_session_id,
+                key_id=key.key_id,
+                subject=subject,
+                device_id=clean_device_id,
+                expires_at=accepted.get("expires_at"),
+            )
+        )
+        revoked_devices: list[str] = []
+        for item in [*list(revoke_device_ids), *list(_list(invite.get("revoked_device_ids")))]:
+            old_device_id = str(item or "").strip()
+            if not old_device_id or old_device_id in revoked_devices:
+                continue
+            if self.store.get_device_key(old_device_id):
+                self.revoke_device(old_device_id, actor=admin_actor, reason="admin_recovery")
+                revoked_devices.append(old_device_id)
+        recovery_id = str(invite.get("recovery_id") or "").strip()
+        recovery = self.complete_recovery_action(recovery_id, actor=admin_actor) if recovery_id else None
+        data = self.store.update_invite(
+            invite_id,
+            {
+                "replacement_device_id": clean_device_id,
+                "session_id": clean_session_id,
+                "revoked_device_ids": revoked_devices,
+            },
+        )
+        self._audit(
+            "admin_recovery.completed",
+            actor=admin_actor,
+            subject=subject,
+            scope=_scope_from_dict(_dict(data.get("scope"))),
+            device=SubjectRef("device", clean_device_id),
+            session=SubjectRef("session", clean_session_id),
+            metadata={
+                "invite_id": invite_id,
+                "recovery_id": recovery_id or None,
+                "replacement_device_id": clean_device_id,
+                "revoked_device_ids": revoked_devices,
+            },
+        )
+        return {"invite": data, "recovery": recovery, "device": device, "session": session}
+
     def preview_invite(self, invite_id: str, *, expected_scope: ScopeRef | None = None) -> dict[str, Any]:
         invite = self.store.get_invite(invite_id)
         if invite is None:
@@ -719,6 +988,11 @@ class PersonalizationAccessService:
             "role": invite.get("role"),
             "expires_at": invite.get("expires_at"),
             "profile_hint": invite.get("profile_hint"),
+            "subject_id": invite.get("subject_id"),
+            "device_id": invite.get("device_id") or invite.get("replacement_device_id"),
+            "device_name": invite.get("device_name"),
+            "recovery_id": invite.get("recovery_id"),
+            "revoked_device_ids": list(_list(invite.get("revoked_device_ids"))),
             "requires_acceptance": True,
             "status": status,
             "can_accept": can_accept,
@@ -959,6 +1233,77 @@ class PersonalizationAccessService:
             else:
                 self.store.update_session(session_id, patch)
         return grant_id
+
+    def grant_role_preset(
+        self,
+        *,
+        subject: SubjectRef,
+        scope: ScopeRef,
+        role: str,
+        actor: SubjectRef,
+        expires_at: float | None = None,
+    ) -> dict[str, Any]:
+        decision = self.evaluate(actor=actor, action="memberships.grant", subject=subject, scope=scope)
+        if decision.decision != "allow":
+            raise PermissionError(f"policy denied: {decision.reason_code or 'memberships.grant'}")
+        grant_id = f"grant:{scope.ref()}:{subject.ref()}:{role}:{uuid4().hex}"
+        grant = Grant(
+            grant_id=grant_id,
+            subject=subject,
+            scope=scope,
+            role=role,  # type: ignore[arg-type]
+            constraints=GrantConstraint(expires_at=expires_at),
+            issued_by=actor,
+        )
+        grant_data = self.put_grant(grant, actor=actor)
+        membership = Membership(
+            subject=subject,
+            scope=scope,
+            role=role,  # type: ignore[arg-type]
+            grant_id=f"membership:{grant_id}",
+            issued_by=actor,
+            expires_at=expires_at,
+        )
+        membership_data = self.put_membership(membership, actor=actor)
+        self.put_user(subject, actor=actor, metadata={"source": "admin_grant"})
+        return {"grant": grant_data, "membership": membership_data}
+
+    def admin_summary(self, *, actor: SubjectRef, audit_limit: int = 50) -> dict[str, Any]:
+        decision = self.evaluate(actor=actor, action="users.manage")
+        if decision.decision != "allow":
+            raise PermissionError(f"policy denied: {decision.reason_code or 'users.manage'}")
+        snapshot = self.store.snapshot()
+
+        def values(bucket: str) -> list[dict[str, Any]]:
+            raw = snapshot.get(bucket)
+            if not isinstance(raw, Mapping):
+                return []
+            return [dict(item) for item in raw.values() if isinstance(item, Mapping)]
+
+        profiles: list[dict[str, Any]] = []
+        for item in values("profiles"):
+            profiles.append(
+                {
+                    "user_id": item.get("user_id"),
+                    "display_name": item.get("display_name"),
+                    "preferred_name": item.get("preferred_name"),
+                    "locale": item.get("locale"),
+                    "language": item.get("language"),
+                    "timezone": item.get("timezone"),
+                    "metadata_only": True,
+                }
+            )
+        return {
+            "users": values("users"),
+            "profiles": profiles,
+            "devices": values("device_keys"),
+            "sessions": values("sessions"),
+            "memberships": values("memberships"),
+            "grants": values("grants"),
+            "invites": values("invites"),
+            "recovery_actions": values("recovery_actions"),
+            "audit": self.store.list_audit(limit=audit_limit),
+        }
 
     def put_recovery_action(self, action: RecoveryAction) -> dict[str, Any]:
         data = self.store.put_recovery_action(action)

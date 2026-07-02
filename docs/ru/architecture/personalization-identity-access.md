@@ -455,9 +455,11 @@ preferences текущего пользователя.
 
 Role не должен быть profile field. Role и membership принадлежат access policy.
 
-Текущая реализация: backend service/SDK shape для header settings уже есть, но
-browser header и settings panel пока его не используют. Roadmap считает эту API
-и UI integration отдельной must-have фазой.
+Текущая реализация: browser header/settings panel уже используют current-user
+settings API для profile, locale, timezone, theme, membership и device context.
+AdaOS Connect также показывает owner/admin surface для join, device pairing,
+recovery, grants и revoke. Более глубокое privacy-zone enforcement и skill/tool
+SDK enforcement остаются отдельными фазами roadmap.
 
 ## User management skill
 

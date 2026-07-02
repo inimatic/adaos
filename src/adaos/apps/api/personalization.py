@@ -82,10 +82,43 @@ class InviteClaimRequest(BaseModel):
     subject_kind: str | None = None
     subject_id: str | None = None
     session_id: str | None = None
+    device_id: str | None = None
+    device_name: str | None = None
+    key_id: str | None = None
+    public_key_ref: str | None = None
     expected_scope: ScopePayload | None = None
 
 
 class InviteRevokeRequest(BaseModel):
+    reason: str | None = None
+
+
+class DevicePairingLinkCreateRequest(BaseModel):
+    scope: ScopePayload = Field(default_factory=ScopePayload)
+    subject_id: str
+    role: str = "member"
+    device_id: str | None = None
+    device_name: str | None = None
+    expires_in_minutes: int = Field(default=15, ge=1, le=60 * 24 * 7)
+
+
+class AdminRecoveryLinkCreateRequest(BaseModel):
+    scope: ScopePayload = Field(default_factory=ScopePayload)
+    subject_id: str
+    replacement_device_id: str | None = None
+    revoked_device_ids: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    expires_in_minutes: int = Field(default=30, ge=1, le=60 * 24 * 7)
+
+
+class AdminGrantRequest(BaseModel):
+    subject_id: str
+    scope: ScopePayload = Field(default_factory=ScopePayload)
+    role: str
+    expires_in_minutes: int | None = Field(default=None, ge=1, le=60 * 24 * 365)
+
+
+class AdminRevokeRequest(BaseModel):
     reason: str | None = None
 
 
@@ -101,6 +134,10 @@ def _actor(ctx: AgentContext) -> SubjectRef:
     return SubjectRef("user", personalization_runtime.current_user_id(ctx))
 
 
+def _user_subject(value: str, *, fallback: str = "user") -> SubjectRef:
+    return SubjectRef("user", _safe_id(value, fallback=fallback))
+
+
 def _scope(payload: ScopePayload | None, ctx: AgentContext) -> ScopeRef:
     if payload is None:
         return ScopeRef("workspace", "default")
@@ -111,9 +148,45 @@ def _expires_in(minutes: int) -> float:
     return time.time() + max(1, int(minutes)) * 60.0
 
 
+def _optional_expires_in(minutes: int | None) -> float | None:
+    return _expires_in(minutes) if minutes is not None else None
+
+
 def _safe_id(value: str, *, fallback: str) -> str:
     token = _ID_RE.sub("-", str(value or "").strip()).strip("-")
     return token or fallback
+
+
+def _sync_browser_device_link(device_id: str, *, display_name: str | None = None) -> None:
+    token = str(device_id or "").strip()
+    if not token:
+        return
+    try:
+        from adaos.services import access_links
+
+        patch: dict[str, Any] = {
+            "access_class": "device",
+            "admission_policy": "allow",
+            "lifetime_mode": "permanent",
+        }
+        name = str(display_name or "").strip()
+        if name:
+            patch["display_name"] = name
+        access_links.upsert_link("browser", token, patch)
+    except Exception:
+        pass
+
+
+def _deny_browser_link(device_id: str) -> None:
+    token = str(device_id or "").strip()
+    if not token:
+        return
+    try:
+        from adaos.services import access_links
+
+        access_links.deny_link("browser", token)
+    except Exception:
+        pass
 
 
 def _setting_text(ctx: AgentContext, name: str, fallback: str = "") -> str:
@@ -524,6 +597,55 @@ async def create_targeted_invite(
         raise _http_error(exc) from exc
 
 
+@router.post("/devices/pairing-links", dependencies=[Depends(require_token)])
+async def create_device_pairing_link(
+    body: DevicePairingLinkCreateRequest,
+    request: Request,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    try:
+        invite_id = f"device-{uuid4().hex}"
+        invite = _access(ctx).create_device_pairing_link(
+            invite_id=invite_id,
+            subject=_user_subject(body.subject_id, fallback="paired-user"),
+            scope=_scope(body.scope, ctx),
+            role=body.role,
+            issued_by=_actor(ctx),
+            expires_at=_expires_in(body.expires_in_minutes),
+            device_id=body.device_id,
+            device_name=body.device_name,
+        )
+        return {"ok": True, "invite": _public_invite_view(invite, request, ctx)}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/recovery/admin-links", dependencies=[Depends(require_token)])
+async def create_admin_recovery_link(
+    body: AdminRecoveryLinkCreateRequest,
+    request: Request,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    try:
+        invite_id = f"recovery-{uuid4().hex}"
+        recovery_id = f"recovery-{uuid4().hex}"
+        result = _access(ctx).create_admin_recovery_link(
+            invite_id=invite_id,
+            recovery_id=recovery_id,
+            subject=_user_subject(body.subject_id, fallback="recovery-user"),
+            scope=_scope(body.scope, ctx),
+            issued_by=_actor(ctx),
+            expires_at=_expires_in(body.expires_in_minutes),
+            replacement_device_id=body.replacement_device_id,
+            revoked_device_ids=tuple(_safe_id(item, fallback="device") for item in body.revoked_device_ids),
+            reason=body.reason,
+        )
+        invite = _public_invite_view(result["invite"], request, ctx)
+        return {"ok": True, "invite": invite, "recovery": result["recovery"]}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
 @router.get("/invites", dependencies=[Depends(require_token)])
 async def list_invites(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     service = _access(ctx)
@@ -551,6 +673,43 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
         session_id = str(body.session_id or body.subject_id or f"join-{uuid4().hex}").strip()
         if kind == "guest_join_link":
             subject = SubjectRef("session", _safe_id(session_id, fallback=f"join-{uuid4().hex}"))
+        elif kind == "device_pairing_link":
+            subject_id = str(body.subject_id or preview.get("subject_id") or preview.get("profile_hint") or "").strip()
+            if not subject_id:
+                raise ValueError("subject_id is required for device pairing claim")
+            device_id = str(body.device_id or preview.get("device_id") or session_id or "").strip()
+            if not device_id:
+                raise ValueError("device_id is required for device pairing claim")
+            result = service.claim_device_pairing_link(
+                invite_id,
+                subject=_user_subject(subject_id, fallback="paired-user"),
+                actor=_user_subject(subject_id, fallback="paired-user"),
+                device_id=_safe_id(device_id, fallback="paired-device"),
+                key_id=body.key_id,
+                public_key_ref=body.public_key_ref,
+                session_id=_safe_id(session_id or device_id, fallback="paired-session"),
+                device_name=body.device_name,
+            )
+            _sync_browser_device_link(device_id, display_name=body.device_name)
+            return {"ok": True, **result}
+        elif kind == "admin_recovery_link":
+            subject_id = str(body.subject_id or preview.get("subject_id") or preview.get("profile_hint") or "").strip()
+            if not subject_id:
+                raise ValueError("subject_id is required for admin recovery claim")
+            replacement_device_id = str(body.device_id or preview.get("device_id") or session_id or "").strip()
+            if not replacement_device_id:
+                raise ValueError("device_id is required for admin recovery claim")
+            result = service.complete_admin_recovery_link(
+                invite_id,
+                subject=_user_subject(subject_id, fallback="recovery-user"),
+                replacement_device_id=_safe_id(replacement_device_id, fallback="replacement-device"),
+                key_id=body.key_id,
+                public_key_ref=body.public_key_ref,
+                session_id=_safe_id(session_id or replacement_device_id, fallback="recovery-session"),
+                revoke_device_ids=tuple(str(item or "").strip() for item in preview.get("revoked_device_ids") or []),
+            )
+            _sync_browser_device_link(replacement_device_id, display_name=body.device_name)
+            return {"ok": True, **result}
         else:
             subject_kind = str(body.subject_kind or "user")
             subject_id = str(body.subject_id or "").strip()
@@ -565,6 +724,62 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
             session_id=_safe_id(session_id, fallback=subject.id) if session_id else None,
         )
         return {"ok": True, "invite": data}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/admin/summary", dependencies=[Depends(require_token)])
+async def admin_summary(
+    audit_limit: int = Query(default=50, ge=1, le=200),
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "summary": _access(ctx).admin_summary(actor=_actor(ctx), audit_limit=audit_limit)}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/admin/grants", dependencies=[Depends(require_token)])
+async def admin_grant_role(body: AdminGrantRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+    try:
+        result = _access(ctx).grant_role_preset(
+            subject=_user_subject(body.subject_id, fallback="granted-user"),
+            scope=_scope(body.scope, ctx),
+            role=body.role,
+            actor=_actor(ctx),
+            expires_at=_optional_expires_in(body.expires_in_minutes),
+        )
+        return {"ok": True, **result}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/admin/devices/{device_id}/revoke", dependencies=[Depends(require_token)])
+async def admin_revoke_device(
+    device_id: str,
+    body: AdminRevokeRequest,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    try:
+        token = _safe_id(device_id, fallback="device")
+        data = _access(ctx).revoke_device(token, actor=_actor(ctx), reason=body.reason)
+        _deny_browser_link(token)
+        return {"ok": True, "device": data}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/admin/sessions/{session_id}/revoke", dependencies=[Depends(require_token)])
+async def admin_revoke_session(
+    session_id: str,
+    body: AdminRevokeRequest,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    try:
+        token = _safe_id(session_id, fallback="session")
+        data = _access(ctx).revoke_session(token, actor=_actor(ctx), reason=body.reason)
+        _deny_browser_link(token)
+        return {"ok": True, "session": data}
     except Exception as exc:
         raise _http_error(exc) from exc
 

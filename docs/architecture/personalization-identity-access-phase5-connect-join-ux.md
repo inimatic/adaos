@@ -61,8 +61,7 @@ Not implemented in this phase:
 - profile picker/create UX instead of free-form profile id entry;
 - audit-history drill-down in the link panel;
 - direct websocket disconnect orchestration for already-connected browser
-  sessions;
-- device pairing and owner/co-owner-assisted recovery.
+  sessions.
 
 ## Required Local Verification
 

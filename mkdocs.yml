@@ -182,6 +182,8 @@ nav:
       - Personalization Phase 3 Join Invites: architecture/personalization-identity-access-phase3-join-invites.md
       - Personalization Phase 4 Current User UI: architecture/personalization-identity-access-phase4-current-user-ui.md
       - Personalization Phase 5 Connect Join UX: architecture/personalization-identity-access-phase5-connect-join-ux.md
+      - Personalization Phase 6 Device Pairing Recovery: architecture/personalization-identity-access-phase6-device-pairing-recovery.md
+      - Personalization Phase 7 Admin Surface: architecture/personalization-identity-access-phase7-admin-surface.md
       - Post-Deploy E2E Testing: architecture/post-deploy-e2e-testing.md
       - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
   - CLI:

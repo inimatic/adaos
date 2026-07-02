@@ -453,9 +453,11 @@ It should expose:
 It should not treat role as a profile field. Role and membership belong to
 access policy.
 
-Current implementation note: the backend service/SDK header-settings shape
-exists, but the browser header and settings panel do not yet consume it. The
-roadmap treats that API and UI integration as a separate must-have phase.
+Current implementation note: the browser header/settings panel now consume the
+current-user settings API for profile, locale, timezone, theme, membership, and
+device context. AdaOS Connect also exposes the owner/admin join, device pairing,
+recovery, grant, and revoke surface. Deeper privacy-zone enforcement and
+skill/tool SDK enforcement remain separate roadmap phases.
 
 ## User management skill
 

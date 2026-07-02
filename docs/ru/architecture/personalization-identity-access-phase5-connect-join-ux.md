@@ -62,7 +62,6 @@ database edits.
 - audit-history drill-down в link panel;
 - direct websocket disconnect orchestration для already-connected browser
   sessions;
-- device pairing и owner/co-owner-assisted recovery.
 
 ## Required Local Verification
 

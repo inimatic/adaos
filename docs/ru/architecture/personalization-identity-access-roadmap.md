@@ -375,40 +375,42 @@ Priority: `must`.
 
 Checklist:
 
-- [ ] Реализовать `device_pairing_link` для добавления нового device к
+- [x] Реализовать `device_pairing_link` для добавления нового device к
   существующему trusted user.
-- [ ] Использовать OAuth device-flow interaction shape для pairing: новое
-  устройство показывает code/QR, trusted device подтверждает, backend записывает
-  pending/approved/expired.
-- [ ] Поддержать member self-service device pairing, когда policy разрешает
+- [x] Использовать OAuth device-flow interaction shape для pairing: новое
+  устройство открывает short-lived link/code, trusted device подтверждает,
+  backend записывает pending/accepted/expired. QR image rendering остается
+  deferred.
+- [x] Поддержать member self-service device pairing, когда policy разрешает
   `devices.add.self`.
-- [ ] По умолчанию требовать owner/co-owner approval для child device pairing.
+- [x] По умолчанию требовать owner/co-owner approval для child device pairing.
 - [ ] Добавить optional WebAuthn/passkey-backed device authenticators, где это
   поддерживает browser platform; local device keys остаются AdaOS authority.
-- [ ] Реализовать `admin_recovery_link` для owner/co-owner assisted recovery.
-- [ ] Добавить lost-device flow: bind replacement device, revoke old device и
+- [x] Реализовать `admin_recovery_link` для owner/co-owner assisted recovery.
+- [x] Добавить lost-device flow: bind replacement device, revoke old device и
   invalidate active sessions.
-- [ ] Добавить device key lifecycle: generation, storage, rotation hooks,
-  revocation, last-used metadata и session invalidation.
+- [x] Добавить device key lifecycle storage, revocation, last-used metadata и
+  session invalidation.
+- [ ] Добавить device key generation и rotation hooks beyond local key refs.
 - [ ] Добавить recovery-code design для пользователей, у которых еще есть
   trusted session или device; recovery без previous trust factor остается
   deferred.
-- [ ] Описать owner key backup, co-owner recovery и ownership transfer как
+- [x] Описать owner key backup, co-owner recovery и ownership transfer как
   explicit later work, если они не реализованы в этой фазе.
 
 Exit gate:
 
-- [ ] User может добавить второе устройство через уже trusted device, когда
+- [x] User может добавить второе устройство через уже trusted device, когда
   policy это разрешает.
-- [ ] Owner/co-owner может привязать replacement device к существующему profile
+- [x] Owner/co-owner может привязать replacement device к существующему profile
   и отозвать lost device в том же flow.
-- [ ] Lost/revoked devices не сохраняют active browser/Yjs/API access.
+- [x] Lost/revoked devices не сохраняют active browser/Yjs/API access.
 
 Local verification:
 
-- [ ] Device pairing tests.
-- [ ] Child approval tests.
-- [ ] Lost-device revoke/session invalidation tests.
+- [x] Device pairing tests.
+- [ ] Child approval tests beyond default policy denial.
+- [x] Lost-device revoke/session invalidation tests.
 - [ ] Recovery-code lifecycle tests, если recovery codes включены.
 
 ## Phase 7 - Owner and Admin User Management Surface
@@ -420,38 +422,39 @@ skill или UI в source of truth.
 
 Checklist:
 
-- [ ] Добавить shared runtime service API для users, profiles, devices,
+- [x] Добавить shared runtime service API для users, profiles, devices,
   memberships, grants, invites и recovery actions.
-- [ ] Добавить owner/co-owner/admin-facing user management skill или
+- [x] Добавить owner/co-owner/admin-facing user management skill или
   control-plane UI.
-- [ ] Использовать access presets для common flows: family member, child, guest,
-  admin и custom.
-- [ ] Показывать active grants, expired grants, revoked grants, pending invites,
+- [x] Использовать access presets для common flows: family member, child, guest
+  и admin. Custom capability editing остается future work.
+- [x] Показывать active grants, expired grants, revoked grants, pending invites,
   devices, sessions и audit history.
-- [ ] Разрешать role preset changes через policy-checked shared services.
-- [ ] Разрешать device/session revoke через shared services.
-- [ ] Показывать admin-visible privacy metadata без показа private content.
+- [x] Разрешать role preset changes через policy-checked shared services.
+- [x] Разрешать device/session revoke через shared services.
+- [x] Показывать admin-visible privacy metadata без показа private content.
 - [ ] Использовать Pending Actions для sensitive conversational requests:
   binding device, granting membership, changing active user или dangerous tool
   invocation.
-- [ ] Явно поддержать several administrators: owner, co_owner, scoped admin,
+- [x] Явно поддержать several administrators: owner, co_owner, scoped admin,
   workspace admin, device admin и guest moderator являются grants, а не profile
   fields.
 
 Exit gate:
 
-- [ ] Owner/co-owner может управлять users, memberships, devices, invites и
+- [x] Owner/co-owner может управлять users, memberships, devices, invites и
   revocation без прямых database edits.
-- [ ] Все actions проходят через shared policy/audit services.
-- [ ] Admin surfaces делают common presets простыми, но оставляют путь к
+- [x] Все actions проходят через shared policy/audit services.
+- [x] Admin surfaces делают common presets простыми, но оставляют путь к
   expanded capability view.
 
 Local verification:
 
-- [ ] API/service tests.
-- [ ] Skill/UI action tests.
-- [ ] Multi-admin grant и denial tests.
-- [ ] Audit query smoke tests.
+- [x] API/service tests.
+- [x] Browser UI build smoke test.
+- [ ] Dedicated skill action tests.
+- [ ] Multi-admin grant и denial tests beyond owner/co-owner preset creation.
+- [x] Audit query smoke tests.
 
 ## Phase 8 - Privacy Zone Enforcement и User Data Management
 
@@ -634,10 +637,10 @@ Local verification:
 - [x] Phase 1 subject/session/grant store and policy/audit kernel.
 - [x] Phase 2 profile/preferences backend slice.
 - [x] Phase 3 guest join and targeted invite backend slice.
-- [ ] Phase 4 current-user settings API and browser UI.
-- [ ] Phase 5 AdaOS Connect join UX and link management.
-- [ ] Phase 6 device pairing and authenticator lifecycle.
-- [ ] Phase 7 owner/admin user management surface.
+- [x] Phase 4 current-user settings API and browser UI.
+- [x] Phase 5 AdaOS Connect join UX and link management.
+- [x] Phase 6 device pairing and authenticator lifecycle.
+- [x] Phase 7 owner/admin user management surface.
 - [ ] Phase 8 privacy-zone enforcement and user data management.
 - [ ] Phase 9 skill, tool, and SDK enforcement.
 
