@@ -271,12 +271,15 @@ Implemented in the current pass:
 6. heavy background refresh work for `infrascope_skill` and `infrastate_skill` no longer runs on the event loop thread
 7. shutdown handling now suppresses executor-closing races for those background refresh workers
 8. skill context resolution now prefers workspace registry metadata before falling back to repository `ensure()` logic
+9. SDK subscription wrappers now evaluate activation policy before calling user handlers
+10. lazy and on-demand subscription handlers are skipped cheaply when the policy does not admit the current event payload
+11. skipped lazy subscription events are logged with the skill name, topic, activation mode, and skip reason
 
 Important current limitation:
 
 - AdaOS does not yet have a global activation service.
-- Lazy skills are still loaded and subscribed at startup.
-- The current implementation only makes their hot paths cheaper and prevents the known startup stalls.
+- Lazy skills may still be loaded and subscribed at startup.
+- The current implementation gates SDK-decorated subscription handlers, but it does not yet centralize activation state, background worker lifecycle, or client-presence accounting.
 
 This is an intentional transitional step:
 
@@ -286,8 +289,8 @@ This is an intentional transitional step:
 Current subscription decision:
 
 - eager skills may use normal always-registered handlers
-- lazy and on-demand skills should keep early subscriptions but behave as `cheap while inactive`
-- central runtime activation should eventually decide whether heavy work is admitted, but handler registration itself does not need to be deferred in the first production-safe rollout
+- lazy and on-demand skills may keep early subscriptions, but SDK-decorated handlers must pass activation-policy admission before user code runs
+- central runtime activation should eventually decide whether background workers and non-SDK entry points are admitted, but handler registration itself does not need to be deferred in the first production-safe rollout
 
 ## Migration Guidance
 
@@ -306,7 +309,7 @@ Still required for the target architecture:
 1. introduce a shared activation runtime that tracks `loaded` vs `active`
 2. respect `startup_allowed`, `background_refresh`, and `client_presence` centrally
 3. decide whether lazy skills should use:
-   - cheap always-registered handlers while inactive
+   - cheap always-registered handlers with policy admission at handler entry
    - or truly deferred subscription wiring for a later optimization pass
 4. move more hot-path metadata reads from repository/git/config access into registry or SQLite-backed fast paths
 5. convert UI-heavy scenario skills to true on-demand detail loading instead of broad eager projection rebuilds

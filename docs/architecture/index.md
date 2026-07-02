@@ -55,6 +55,7 @@ Current target-state control-plane extensions are documented in:
 - [Root MCP Roadmap](root-mcp-roadmap.md): sequencing for planes, descriptor cache, session leases, and companion slices such as `ProfileOps`
 - [AdaOS Supervisor](adaos-supervisor.md): local always-on process and update supervision authority above the restartable runtime
 - [Runtime Guarding](runtime-guarding.md): target shared guard architecture and roadmap for memory, CPU, Yjs pressure, HTTP health, skill overload, quarantine, supervisor hard safety, and diagnostic snapshots
+- [Realtime Rebuild Lag Hardening](realtime-rebuild-lag-hardening.md): implemented coalescing, deferral, activation-admission, YStore, and event-loop lag diagnostics for rebuild and stream snapshot storms
 - [Incident Registry](incident-registry.md): production direction for normalizing transport, runtime, skill, sync, and pressure symptoms into domain-attributed incidents for humans and LLM planning
 - [Member-Hub Connectivity](member-hub-connectivity.md): target control-plane architecture for member join, member-hub lifecycle ownership, restart-aware health semantics, and QR onboarding
 - [Hub-Browser Connectivity](hub-browser-connectivity.md): target guarantees, protocol ladder, quality gates, and implementation checklist for local and root-routed browser links to a hub
