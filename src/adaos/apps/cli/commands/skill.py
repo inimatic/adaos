@@ -1840,7 +1840,7 @@ def status(
             names = []
             if root.exists():
                 for child in root.iterdir():
-                    if child.is_dir():
+                    if child.is_dir() and not child.name.startswith((".", "_")):
                         names.append(child.name)
             names = sorted(set(names))
         else:
