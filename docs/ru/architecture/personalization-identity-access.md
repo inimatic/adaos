@@ -41,9 +41,14 @@ membership, policy и границы персональных данных.
   lifetime, revocation и device observability.
 - Named entities и aliases дают локализованные human-facing имена.
 - Browser client имеет subnet-scoped UI preferences для части настроек.
+- Phase 0 contracts задают общий vocabulary для scope, subject, role,
+  capability, invite, recovery, decision и audit.
+- Phase 1 реализует reusable backend access kernel для persisted identity
+  facts, session/device-aware policy decisions, revocation facts, replay guards
+  и audit queries.
 
-Эти механизмы полезны, но пока не собраны в единый контракт profile, identity,
-membership и authorization.
+Эти механизмы полезны, но пока не собраны в end-to-end profile UI, join flow,
+API middleware и SDK enforcement surface.
 
 ## Модель доверия
 

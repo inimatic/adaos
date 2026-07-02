@@ -52,6 +52,9 @@ runtime.
 - [Персонализация Phase 0 Contracts](personalization-identity-access-phase0-contracts.md):
   реализованный draft contract anchor для scope lattice, versioned schemas,
   migration stance, threat model, audit и regression matrix
+- [Персонализация Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md):
+  реализованный backend store, policy decision, revocation, replay-guard и
+  audit kernel для Phase 1
 - [Pointer/Projection roadmap для переключения сценариев webspace](webspace-scenario-pointer-projection-roadmap.md):
   целевая архитектура и чеклист миграции от materialize-and-copy к
   pointer-first semantic rebuild

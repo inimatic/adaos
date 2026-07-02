@@ -24,6 +24,11 @@ flows safe to implement.
 - [x] 2026-07-02: Phase 0 local verification passed with targeted pytest,
   adjacent domain tests, `git diff --check`, and MkDocs strict build.
 - [x] Phase 0 foundation contracts implemented.
+- [x] 2026-07-02: Phase 1 access kernel implemented in
+  `src/adaos/services/personalization_access.py`,
+  [Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md),
+  and `tests/test_personalization_access_kernel.py`.
+- [x] Phase 1 subject/session/grant store and policy kernel implemented.
 
 ## Execution rules
 
@@ -89,35 +94,37 @@ Local verification:
 Priority: `must`.
 
 Goal: land the backend decision layer before user-facing access flows.
+Kernel note:
+[Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md).
 
 Checklist:
 
-- [ ] Add durable storage/service contracts for users, profiles, user keys,
+- [x] Add durable storage/service contracts for users, profiles, user keys,
   device keys, sessions, memberships, grants, invites, and revocations.
-- [ ] Add a minimal policy evaluator:
+- [x] Add a minimal policy evaluator:
   `is_allowed(actor, action, subject, scope, resource, context)`.
-- [ ] Implement owner implicit subnet-admin semantics.
-- [ ] Implement initial `co_owner`, `admin`, `member`, `child`, and `guest`
+- [x] Implement owner implicit subnet-admin semantics.
+- [x] Implement initial `co_owner`, `admin`, `member`, `child`, and `guest`
   role presets as grants/capability bundles.
-- [ ] Return structured allow/deny decisions with reason codes.
-- [ ] Add append-only audit records for grants, denials, profile/preference
+- [x] Return structured allow/deny decisions with reason codes.
+- [x] Add append-only audit records for grants, denials, profile/preference
   changes, join/invite actions, device actions, and recovery actions.
-- [ ] Add audit query helpers by actor, subject, scope, device/session, source,
+- [x] Add audit query helpers by actor, subject, scope, device/session, source,
   decision, and time range.
-- [ ] Implement revocation propagation rules for grants, sessions, and devices.
-- [ ] Add replay/stale-write protections for invite and recovery material.
+- [x] Implement revocation propagation rules for grants, sessions, and devices.
+- [x] Add replay/stale-write protections for invite and recovery material.
 
 Exit gate:
 
-- [ ] A local test can create a user, grant scoped membership, allow an
+- [x] A local test can create a user, grant scoped membership, allow an
   authorized action, deny an unauthorized action, revoke the grant, and observe
   the audit trail.
-- [ ] Policy decisions do not depend on UI state or skill-local state.
+- [x] Policy decisions do not depend on UI state or skill-local state.
 
 Local verification:
 
-- [ ] unit tests for policy allow/deny/revoke/audit paths.
-- [ ] migration test from the existing owner/local profile baseline.
+- [x] unit tests for policy allow/deny/revoke/audit paths.
+- [x] migration test from the existing owner/local profile baseline.
 
 ## Phase 2 - Profile and Preferences Vertical Slice
 
@@ -419,7 +426,7 @@ These items should remain visible but should not block phases 0-9:
 ### Must
 
 - [x] Phase 0 foundation contracts.
-- [ ] Phase 1 subject/session/grant store and policy/audit kernel.
+- [x] Phase 1 subject/session/grant store and policy/audit kernel.
 - [ ] Phase 2 profile/preferences vertical slice.
 - [ ] Phase 3 guest join and targeted invite flows.
 - [ ] Phase 4 device pairing and admin recovery.
@@ -453,19 +460,19 @@ These items should remain visible but should not block phases 0-9:
 
 These tests should be added across phases as the corresponding surfaces land:
 
-- [ ] Expired invite is rejected.
-- [ ] Reused targeted invite is rejected.
+- [x] Expired invite is rejected.
+- [x] Reused targeted invite is rejected.
 - [ ] Public guest join cannot bind a personal profile.
 - [ ] Revoked guest grant loses live browser/Yjs access.
 - [ ] Revoked device loses live browser/Yjs/API access.
 - [ ] Child cannot add a device without approval when policy requires it.
-- [ ] Member can add own device only with `devices.add.self`.
-- [ ] Member cannot invite users without `users.invite`.
+- [x] Member can add own device only with `devices.add.self`.
+- [x] Member cannot invite users without `users.invite`.
 - [ ] Skill cannot read another user's private memory without a grant.
 - [ ] Skill cannot write long-term memory without the required policy path.
 - [ ] Owner/admin UI can see user-private metadata but not private content.
 - [ ] Global identity verification does not grant subnet access by itself.
-- [ ] Denied tool invocation records a policy decision and reason code.
+- [x] Denied tool invocation records a policy decision and reason code.
 
 ## Completion definition
 

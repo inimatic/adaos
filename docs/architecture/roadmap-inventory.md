@@ -295,6 +295,7 @@ Authoritative docs:
 - [Personalization, Identity, and Access](personalization-identity-access.md)
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md)
 - [Personalization Phase 0 Contracts](personalization-identity-access-phase0-contracts.md)
+- [Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md)
 - [User and Scenario Personalization](../concepts/personalization.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
 - [Pending Actions](pending-actions.md)
@@ -303,6 +304,8 @@ Authoritative docs:
 Code anchors:
 
 - `src/adaos/services/user/profile.py`
+- `src/adaos/domain/personalization_access.py`
+- `src/adaos/services/personalization_access.py`
 - `src/adaos/sdk/data/profile.py`
 - `src/adaos/sdk/data/ctx.py`
 - `src/adaos/services/scenario/projection_registry.py`
@@ -331,13 +334,18 @@ Current status:
   revocation, and first observability surfaces.
 - [x] Named entities and aliases provide localized names for device/browser
   resolution and can be extended to profile-owned aliases.
-- [ ] Profile, identity, device, membership, grant, capability, and preference
-  schemas are only draft contracts; durable storage, policy service, migration,
-  and enforcement remain open.
-- [ ] Owner/co-owner/admin/member/child/guest role presets are not implemented
-  as shared policy objects.
-- [ ] `actor`, `current_user`, and `subject_user` are not consistently modeled
-  across SDK, policy checks, and audit.
+- [x] Phase 1 access kernel exists in
+  `src/adaos/services/personalization_access.py`: JSON-backed users/profile,
+  user-key, device-key, session, membership, grant, invite, recovery,
+  revocation, and audit facts; owner implicit admin; role-preset capability
+  expansion; structured allow/deny decisions; session/device-aware evaluation;
+  replay guards; and audit query helpers.
+- [x] The existing `local-owner` baseline has a regression test for implicit
+  owner admin without UI or skill-local state.
+- [ ] SDK/API routes, projections, and user-facing surfaces still need to adopt
+  the Phase 1 kernel; current runtime paths do not yet enforce it globally.
+- [ ] Profile/preference migration remains open beyond the Phase 1 profile fact
+  storage contract.
 - [ ] Join flows are not yet separated into public guest join, targeted invite,
   device pairing, and admin recovery.
 - [ ] User-private data zones are not enforced by product UI.

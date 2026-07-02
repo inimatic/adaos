@@ -40,9 +40,14 @@ AdaOS already has several pieces that this architecture builds on:
   lifetime, revocation, and device observability.
 - Named entities and aliases provide localized human-facing names.
 - The browser client has subnet-scoped UI preferences for several settings.
+- Phase 0 contracts define the shared scope, subject, role, capability, invite,
+  recovery, decision, and audit vocabulary.
+- Phase 1 implements a reusable backend access kernel for persisted identity
+  facts, session/device-aware policy decisions, revocation facts, replay guards,
+  and audit queries.
 
 Those mechanisms are useful foundations, but they do not yet form a single
-profile, identity, membership, and authorization contract.
+end-to-end profile UI, join flow, API middleware, and SDK enforcement surface.
 
 ## Trust model
 

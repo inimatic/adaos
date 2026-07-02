@@ -1,0 +1,821 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import time
+from typing import Any, Mapping
+from uuid import uuid4
+
+from adaos.domain.personalization_access import (
+    AuditRecord,
+    DeviceKey,
+    Grant,
+    Invite,
+    Membership,
+    PolicyDecision,
+    RecoveryAction,
+    ROLE_PRESET_CAPABILITIES,
+    ScopeRef,
+    SessionKey,
+    SubjectRef,
+    UserKey,
+    UserProfile,
+    validate_capability,
+)
+
+
+class PersonalizationAccessError(RuntimeError):
+    """Raised when the Phase 1 access kernel rejects a state transition."""
+
+
+def _now_ts() -> float:
+    return float(time.time())
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _ref_key(ref: SubjectRef | ScopeRef | Mapping[str, Any] | None) -> str:
+    if ref is None:
+        return ""
+    if isinstance(ref, (SubjectRef, ScopeRef)):
+        return ref.ref()
+    data = _dict(ref)
+    kind = str(data.get("kind") or "").strip()
+    ref_id = str(data.get("id") or "").strip()
+    return f"{kind}:{ref_id}" if kind and ref_id else ""
+
+
+def _subject_from_dict(value: Mapping[str, Any]) -> SubjectRef:
+    return SubjectRef(str(value.get("kind") or ""), str(value.get("id") or ""))
+
+
+def _scope_from_dict(value: Mapping[str, Any]) -> ScopeRef:
+    return ScopeRef(str(value.get("kind") or ""), str(value.get("id") or ""))
+
+
+def _scope_matches(grant_scope: Mapping[str, Any] | None, requested_scope: ScopeRef | None) -> bool:
+    if requested_scope is None:
+        return True
+    if not isinstance(grant_scope, Mapping):
+        return False
+    if _ref_key(grant_scope) == requested_scope.ref():
+        return True
+    # A subnet-level grant is intentionally broad for Phase 1.
+    return str(grant_scope.get("kind") or "") == "subnet"
+
+
+def _not_expired(record: Mapping[str, Any], *, now: float) -> bool:
+    expires_at = record.get("expires_at")
+    if expires_at is None:
+        constraints = _dict(record.get("constraints"))
+        expires_at = constraints.get("expires_at")
+    if expires_at is None:
+        return True
+    try:
+        return float(expires_at) > now
+    except Exception:
+        return False
+
+
+def _record_status(record: Mapping[str, Any]) -> str:
+    return str(record.get("status") or "active").strip() or "active"
+
+
+class PersonalizationAccessStore:
+    """Small JSON-backed Phase 1 store for identity/access facts.
+
+    The store persists JSON-able contract dictionaries. Runtime services can
+    later replace this backend without changing the policy kernel contract.
+    """
+
+    _BUCKETS = (
+        "users",
+        "profiles",
+        "user_keys",
+        "device_keys",
+        "sessions",
+        "memberships",
+        "grants",
+        "invites",
+        "recovery_actions",
+        "revocations",
+        "audit",
+    )
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = Path(path) if path else None
+        self._data: dict[str, Any] = {key: ({} if key != "audit" else []) for key in self._BUCKETS}
+        if self.path and self.path.exists():
+            self._load()
+
+    def _load(self) -> None:
+        if self.path is None:
+            return
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        for key in self._BUCKETS:
+            if key == "audit":
+                self._data[key] = _list(payload.get(key))
+            else:
+                self._data[key] = _dict(payload.get(key))
+
+    def save(self) -> None:
+        if self.path is None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps(self._data, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        return json.loads(json.dumps(self._data, ensure_ascii=False))
+
+    def put_user(self, subject: SubjectRef, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if subject.kind != "user":
+            raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
+        data = {
+            "user_id": subject.id,
+            "subject": subject.to_dict(),
+            "metadata": dict(metadata or {}),
+        }
+        self._data["users"][subject.id] = data
+        self.save()
+        return data
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        data = self._data["users"].get(str(user_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def put_profile(self, profile: UserProfile) -> dict[str, Any]:
+        data = profile.to_dict()
+        self._data["profiles"][profile.user_id] = data
+        self.save()
+        return data
+
+    def put_user_key(self, key: UserKey) -> dict[str, Any]:
+        data = key.to_dict()
+        self._data["user_keys"][key.key_id] = data
+        self.save()
+        return data
+
+    def get_user_key(self, key_id: str) -> dict[str, Any] | None:
+        data = self._data["user_keys"].get(str(key_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def update_user_key(self, key_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
+        data = self.get_user_key(key_id)
+        if data is None:
+            raise PersonalizationAccessError(f"user key not found: {key_id}")
+        data.update(dict(patch))
+        self._data["user_keys"][key_id] = data
+        self.save()
+        return data
+
+    def put_device_key(self, key: DeviceKey) -> dict[str, Any]:
+        data = key.to_dict()
+        self._data["device_keys"][key.device_id] = data
+        self.save()
+        return data
+
+    def get_device_key(self, device_id: str) -> dict[str, Any] | None:
+        data = self._data["device_keys"].get(str(device_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def update_device_key(self, device_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
+        data = self.get_device_key(device_id)
+        if data is None:
+            raise PersonalizationAccessError(f"device key not found: {device_id}")
+        data.update(dict(patch))
+        self._data["device_keys"][device_id] = data
+        self.save()
+        return data
+
+    def put_session(self, session: SessionKey) -> dict[str, Any]:
+        data = session.to_dict()
+        self._data["sessions"][session.session_id] = data
+        self.save()
+        return data
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        data = self._data["sessions"].get(str(session_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def update_session(self, session_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
+        data = self.get_session(session_id)
+        if data is None:
+            raise PersonalizationAccessError(f"session not found: {session_id}")
+        data.update(dict(patch))
+        self._data["sessions"][session_id] = data
+        self.save()
+        return data
+
+    def put_membership(self, membership: Membership) -> dict[str, Any]:
+        data = membership.to_dict()
+        key = membership.grant_id or f"{membership.subject.ref()}@{membership.scope.ref()}"
+        self._data["memberships"][key] = data
+        self.save()
+        return data
+
+    def put_grant(self, grant: Grant) -> dict[str, Any]:
+        data = grant.to_dict()
+        self._data["grants"][grant.grant_id] = data
+        self.save()
+        return data
+
+    def get_grant(self, grant_id: str) -> dict[str, Any] | None:
+        data = self._data["grants"].get(str(grant_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def update_grant(self, grant_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
+        data = self.get_grant(grant_id)
+        if data is None:
+            raise PersonalizationAccessError(f"grant not found: {grant_id}")
+        data.update(dict(patch))
+        self._data["grants"][grant_id] = data
+        self.save()
+        return data
+
+    def put_invite(self, invite: Invite) -> dict[str, Any]:
+        existing = _dict(self._data["invites"].get(invite.invite_id))
+        if existing and _record_status(existing) in {"accepted", "expired", "revoked"}:
+            raise PersonalizationAccessError(f"invite is not mutable: {invite.invite_id}")
+        data = invite.to_dict()
+        self._data["invites"][invite.invite_id] = data
+        self.save()
+        return data
+
+    def get_invite(self, invite_id: str) -> dict[str, Any] | None:
+        data = self._data["invites"].get(str(invite_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def update_invite(self, invite_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
+        data = self.get_invite(invite_id)
+        if data is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        data.update(dict(patch))
+        self._data["invites"][invite_id] = data
+        self.save()
+        return data
+
+    def put_recovery_action(self, action: RecoveryAction) -> dict[str, Any]:
+        existing = _dict(self._data["recovery_actions"].get(action.recovery_id))
+        if existing and _record_status(existing) in {"accepted", "expired", "revoked"}:
+            raise PersonalizationAccessError(f"recovery action is not mutable: {action.recovery_id}")
+        data = action.to_dict()
+        self._data["recovery_actions"][action.recovery_id] = data
+        self.save()
+        return data
+
+    def get_recovery_action(self, recovery_id: str) -> dict[str, Any] | None:
+        data = self._data["recovery_actions"].get(str(recovery_id or "").strip())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def update_recovery_action(self, recovery_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
+        data = self.get_recovery_action(recovery_id)
+        if data is None:
+            raise PersonalizationAccessError(f"recovery action not found: {recovery_id}")
+        data.update(dict(patch))
+        self._data["recovery_actions"][recovery_id] = data
+        self.save()
+        return data
+
+    def append_audit(self, record: AuditRecord) -> dict[str, Any]:
+        data = record.to_dict()
+        self._data["audit"].append(data)
+        self.save()
+        return data
+
+    def append_revocation(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        data = dict(record)
+        data.setdefault("ts", _now_ts())
+        self._data["revocations"][str(data.get("revocation_id") or f"revocation-{uuid4().hex}")] = data
+        self.save()
+        return data
+
+    def iter_sessions(self, *, status: str = "active") -> list[dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._data["sessions"].values()
+            if isinstance(item, Mapping) and _record_status(item) == status
+        ]
+
+    def iter_grants(self, *, status: str = "active") -> list[dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._data["grants"].values()
+            if isinstance(item, Mapping) and _record_status(item) == status
+        ]
+
+    def iter_memberships(self, *, status: str = "active") -> list[dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self._data["memberships"].values()
+            if isinstance(item, Mapping) and _record_status(item) == status
+        ]
+
+    def list_audit(
+        self,
+        *,
+        actor: SubjectRef | None = None,
+        subject: SubjectRef | None = None,
+        scope: ScopeRef | None = None,
+        device: SubjectRef | None = None,
+        session: SubjectRef | None = None,
+        source: str | None = None,
+        decision: str | None = None,
+        event_type: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        max_items = max(1, int(limit))
+        matches: list[dict[str, Any]] = []
+        for raw in reversed(self._data["audit"]):
+            if not isinstance(raw, Mapping):
+                continue
+            item = dict(raw)
+            if actor is not None and _ref_key(item.get("actor")) != actor.ref():
+                continue
+            if subject is not None and _ref_key(item.get("subject")) != subject.ref():
+                continue
+            if scope is not None and _ref_key(item.get("scope")) != scope.ref():
+                continue
+            if device is not None and _ref_key(item.get("device")) != device.ref():
+                continue
+            if session is not None and _ref_key(item.get("session")) != session.ref():
+                continue
+            if source and str(item.get("source") or "") != source:
+                continue
+            if event_type and str(item.get("event_type") or "") != event_type:
+                continue
+            ts = float(item.get("ts") or 0)
+            if since is not None and ts < float(since):
+                continue
+            if until is not None and ts > float(until):
+                continue
+            if decision:
+                item_decision = _dict(item.get("decision"))
+                if str(item_decision.get("decision") or "") != decision:
+                    continue
+            matches.append(item)
+            if len(matches) >= max_items:
+                break
+        return matches
+
+
+class PersonalizationAccessService:
+    """Phase 1 policy/audit kernel over the Phase 0 contract records."""
+
+    def __init__(self, store: PersonalizationAccessStore | None = None, *, owner: SubjectRef | None = None) -> None:
+        self.store = store or PersonalizationAccessStore()
+        self.owner = owner or SubjectRef("user", "owner")
+
+    def put_user(
+        self,
+        subject: SubjectRef,
+        *,
+        actor: SubjectRef | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        data = self.store.put_user(subject, metadata=metadata)
+        self._audit(
+            "user.created",
+            actor=actor or SubjectRef("service", "personalization_access"),
+            subject=subject,
+            metadata={"user_id": subject.id},
+        )
+        return data
+
+    def put_profile(self, profile: UserProfile, *, actor: SubjectRef | None = None) -> dict[str, Any]:
+        data = self.store.put_profile(profile)
+        self._audit(
+            "profile.updated",
+            actor=actor or SubjectRef("service", "personalization_access"),
+            subject=SubjectRef("user", profile.user_id),
+            redacted_diff={"profile": "<redacted>"},
+        )
+        return data
+
+    def put_user_key(self, key: UserKey, *, actor: SubjectRef | None = None) -> dict[str, Any]:
+        data = self.store.put_user_key(key)
+        self._audit(
+            "key.user_created",
+            actor=actor or SubjectRef("service", "personalization_access"),
+            subject=SubjectRef("user", key.user_id),
+            metadata={"key_id": key.key_id, "status": key.status},
+        )
+        return data
+
+    def revoke_user_key(self, key_id: str, *, actor: SubjectRef, reason: str | None = None) -> dict[str, Any]:
+        data = self.store.update_user_key(key_id, {"status": "revoked", "revoked_at": _now_ts()})
+        self.store.append_revocation(
+            {
+                "revocation_id": f"user_key:{key_id}",
+                "kind": "user_key",
+                "key_id": key_id,
+                "actor": actor.to_dict(),
+                "reason": str(reason or "").strip() or None,
+            }
+        )
+        self._audit(
+            "key.user_revoked",
+            actor=actor,
+            subject=SubjectRef("user", str(data.get("user_id") or "")),
+            metadata={"key_id": key_id, "reason": str(reason or "").strip() or None},
+        )
+        return data
+
+    def put_device_key(self, key: DeviceKey, *, actor: SubjectRef | None = None) -> dict[str, Any]:
+        data = self.store.put_device_key(key)
+        self._audit(
+            "device.paired",
+            actor=actor or SubjectRef("service", "personalization_access"),
+            subject=SubjectRef("user", key.user_id),
+            device=SubjectRef("device", key.device_id),
+            metadata={"device_id": key.device_id, "key_id": key.key_id, "trust_level": key.trust_level},
+        )
+        return data
+
+    def revoke_device(self, device_id: str, *, actor: SubjectRef, reason: str | None = None) -> dict[str, Any]:
+        data = self.store.update_device_key(device_id, {"status": "revoked", "revoked_at": _now_ts()})
+        revoked_sessions: list[str] = []
+        for session in self.store.iter_sessions():
+            if str(session.get("device_id") or "") != device_id:
+                continue
+            session_id = str(session.get("session_id") or "")
+            if not session_id:
+                continue
+            self.store.update_session(session_id, {"status": "revoked", "revoked_at": _now_ts()})
+            revoked_sessions.append(session_id)
+        self.store.append_revocation(
+            {
+                "revocation_id": f"device:{device_id}",
+                "kind": "device",
+                "device_id": device_id,
+                "actor": actor.to_dict(),
+                "revoked_sessions": revoked_sessions,
+                "reason": str(reason or "").strip() or None,
+            }
+        )
+        self._audit(
+            "device.revoked",
+            actor=actor,
+            subject=SubjectRef("user", str(data.get("user_id") or "")),
+            device=SubjectRef("device", device_id),
+            metadata={
+                "device_id": device_id,
+                "revoked_sessions": revoked_sessions,
+                "reason": str(reason or "").strip() or None,
+            },
+        )
+        return data
+
+    def put_session(self, session: SessionKey) -> dict[str, Any]:
+        data = self.store.put_session(session)
+        self._audit(
+            "session.created",
+            actor=session.subject or SubjectRef("service", "personalization_access"),
+            subject=session.subject,
+            session=SubjectRef("session", session.session_id),
+            metadata={"session_id": session.session_id, "device_id": session.device_id, "status": session.status},
+        )
+        return data
+
+    def revoke_session(self, session_id: str, *, actor: SubjectRef, reason: str | None = None) -> dict[str, Any]:
+        data = self.store.update_session(session_id, {"status": "revoked", "revoked_at": _now_ts()})
+        self.store.append_revocation(
+            {
+                "revocation_id": f"session:{session_id}",
+                "kind": "session",
+                "session_id": session_id,
+                "actor": actor.to_dict(),
+                "reason": str(reason or "").strip() or None,
+            }
+        )
+        self._audit(
+            "session.revoked",
+            actor=actor,
+            subject=_subject_from_dict(_dict(data.get("subject"))) if data.get("subject") else None,
+            session=SubjectRef("session", session_id),
+            metadata={"session_id": session_id, "reason": str(reason or "").strip() or None},
+        )
+        return data
+
+    def put_membership(self, membership: Membership, *, actor: SubjectRef | None = None) -> dict[str, Any]:
+        data = self.store.put_membership(membership)
+        self._audit(
+            "membership.granted",
+            actor=actor or membership.issued_by or SubjectRef("service", "personalization_access"),
+            subject=membership.subject,
+            scope=membership.scope,
+            metadata={"role": membership.role, "status": membership.status},
+        )
+        return data
+
+    def put_grant(self, grant: Grant, *, actor: SubjectRef | None = None) -> dict[str, Any]:
+        data = self.store.put_grant(grant)
+        self._audit(
+            "grant.created",
+            actor=actor or grant.issued_by or SubjectRef("service", "personalization_access"),
+            subject=grant.subject,
+            scope=grant.scope,
+            metadata={"grant_id": grant.grant_id, "role": grant.role, "capabilities": list(grant.capabilities)},
+        )
+        return data
+
+    def revoke_grant(self, grant_id: str, *, actor: SubjectRef, reason: str | None = None) -> dict[str, Any]:
+        data = self.store.update_grant(grant_id, {"status": "revoked", "revoked_at": _now_ts()})
+        self._audit(
+            "grant.revoked",
+            actor=actor,
+            subject=_subject_from_dict(_dict(data.get("subject"))),
+            scope=_scope_from_dict(_dict(data.get("scope"))),
+            metadata={"grant_id": grant_id, "reason": str(reason or "").strip() or None},
+        )
+        return data
+
+    def put_invite(self, invite: Invite) -> dict[str, Any]:
+        data = self.store.put_invite(invite)
+        self._audit(
+            "invite.created",
+            actor=invite.issued_by,
+            scope=invite.scope,
+            metadata={"invite_id": invite.invite_id, "kind": invite.kind, "role": invite.role},
+        )
+        return data
+
+    def claim_invite(self, invite_id: str, *, accepted_by: SubjectRef, actor: SubjectRef | None = None) -> dict[str, Any]:
+        invite = self.store.get_invite(invite_id)
+        if invite is None:
+            raise PersonalizationAccessError(f"invite not found: {invite_id}")
+        now = _now_ts()
+        if _record_status(invite) != "pending":
+            raise PersonalizationAccessError(f"invite is not pending: {invite_id}")
+        if not _not_expired(invite, now=now):
+            self.store.update_invite(invite_id, {"status": "expired"})
+            raise PersonalizationAccessError(f"invite expired: {invite_id}")
+        data = self.store.update_invite(
+            invite_id,
+            {
+                "status": "accepted",
+                "accepted_by": accepted_by.to_dict(),
+                "accepted_at": now,
+            },
+        )
+        self._audit(
+            "invite.accepted",
+            actor=actor or accepted_by,
+            subject=accepted_by,
+            scope=_scope_from_dict(_dict(data.get("scope"))),
+            metadata={"invite_id": invite_id, "kind": data.get("kind")},
+        )
+        return data
+
+    def put_recovery_action(self, action: RecoveryAction) -> dict[str, Any]:
+        data = self.store.put_recovery_action(action)
+        self._audit(
+            "recovery.started",
+            actor=action.issued_by,
+            subject=action.subject,
+            metadata={"recovery_id": action.recovery_id, "replacement_device_id": action.replacement_device_id},
+        )
+        return data
+
+    def complete_recovery_action(self, recovery_id: str, *, actor: SubjectRef) -> dict[str, Any]:
+        action = self.store.get_recovery_action(recovery_id)
+        if action is None:
+            raise PersonalizationAccessError(f"recovery action not found: {recovery_id}")
+        if _record_status(action) != "pending":
+            raise PersonalizationAccessError(f"recovery action is not pending: {recovery_id}")
+        data = self.store.update_recovery_action(recovery_id, {"status": "accepted", "completed_at": _now_ts()})
+        self._audit(
+            "recovery.completed",
+            actor=actor,
+            subject=_subject_from_dict(_dict(data.get("subject"))),
+            metadata={"recovery_id": recovery_id, "replacement_device_id": data.get("replacement_device_id")},
+        )
+        return data
+
+    def evaluate(
+        self,
+        *,
+        actor: SubjectRef,
+        action: str,
+        subject: SubjectRef | None = None,
+        scope: ScopeRef | None = None,
+        resource: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> PolicyDecision:
+        capability = validate_capability(action)
+        context_data = _dict(context)
+        now = _now_ts()
+        actor_for_policy = actor
+        session_ref: SubjectRef | None = None
+        device_ref: SubjectRef | None = None
+        if actor.kind == "session":
+            session_ref = actor
+            session_record = self.store.get_session(actor.id)
+            if session_record is None or _record_status(session_record) != "active" or not _not_expired(
+                session_record, now=now
+            ):
+                decision = PolicyDecision(
+                    decision="deny",
+                    actor=actor,
+                    action=capability,
+                    subject=subject,
+                    scope=scope,
+                    resource=resource,
+                    reason_code="inactive_session",
+                )
+                self._audit(
+                    "policy.deny",
+                    actor=actor,
+                    subject=subject,
+                    scope=scope,
+                    session=session_ref,
+                    decision=decision,
+                    metadata={"resource": resource, "reason_code": decision.reason_code},
+                )
+                return decision
+            session_subject = _dict(session_record.get("subject"))
+            if session_subject:
+                actor_for_policy = _subject_from_dict(session_subject)
+            device_id = str(session_record.get("device_id") or "").strip()
+            if device_id:
+                device_ref = SubjectRef("device", device_id)
+                device_record = self.store.get_device_key(device_id)
+                if device_record and _record_status(device_record) != "active":
+                    decision = PolicyDecision(
+                        decision="deny",
+                        actor=actor,
+                        action=capability,
+                        subject=subject,
+                        scope=scope,
+                        resource=resource,
+                        reason_code="inactive_device",
+                    )
+                    self._audit(
+                        "policy.deny",
+                        actor=actor,
+                        subject=subject,
+                        scope=scope,
+                        device=device_ref,
+                        session=session_ref,
+                        decision=decision,
+                        metadata={"resource": resource, "reason_code": decision.reason_code},
+                    )
+                    return decision
+        decision = self._evaluate_without_audit(
+            actor=actor_for_policy,
+            action=capability,
+            subject=subject,
+            scope=scope,
+            resource=resource,
+            context=context_data,
+            now=now,
+        )
+        if actor_for_policy.ref() != actor.ref():
+            decision = PolicyDecision(
+                decision=decision.decision,
+                actor=actor,
+                action=decision.action,
+                subject=decision.subject,
+                scope=decision.scope,
+                resource=decision.resource,
+                reason_code=decision.reason_code,
+                grant_ids=decision.grant_ids,
+                trace_id=decision.trace_id,
+            )
+        self._audit(
+            f"policy.{decision.decision}",
+            actor=actor,
+            subject=subject,
+            scope=scope,
+            device=device_ref,
+            session=session_ref,
+            decision=decision,
+            metadata={"resource": resource, "reason_code": decision.reason_code},
+        )
+        return decision
+
+    def list_audit(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self.store.list_audit(**kwargs)
+
+    def _evaluate_without_audit(
+        self,
+        *,
+        actor: SubjectRef,
+        action: str,
+        subject: SubjectRef | None,
+        scope: ScopeRef | None,
+        resource: str | None,
+        context: Mapping[str, Any],
+        now: float,
+    ) -> PolicyDecision:
+        if actor.ref() == self.owner.ref():
+            return PolicyDecision(
+                decision="allow",
+                actor=actor,
+                action=action,
+                subject=subject,
+                scope=scope,
+                resource=resource,
+                reason_code="owner_implicit_subnet_admin",
+            )
+        for record in [*self.store.iter_grants(), *self.store.iter_memberships()]:
+            if not _not_expired(record, now=now):
+                continue
+            if _ref_key(record.get("subject")) != actor.ref():
+                continue
+            if not _scope_matches(_dict(record.get("scope")), scope):
+                continue
+            if not self._action_allowed_by_record(record, action):
+                continue
+            constraints = _dict(record.get("constraints"))
+            requires_approval_for = set(str(item) for item in _list(constraints.get("requires_approval_for")))
+            if action in requires_approval_for and not str(context.get("approval_id") or "").strip():
+                return PolicyDecision(
+                    decision="deny",
+                    actor=actor,
+                    action=action,
+                    subject=subject,
+                    scope=scope,
+                    resource=resource,
+                    reason_code="approval_required",
+                    grant_ids=tuple(str(record.get("grant_id") or "") for _ in [0] if record.get("grant_id")),
+                )
+            return PolicyDecision(
+                decision="allow",
+                actor=actor,
+                action=action,
+                subject=subject,
+                scope=scope,
+                resource=resource,
+                reason_code="grant_capability",
+                grant_ids=tuple(str(record.get("grant_id") or "") for _ in [0] if record.get("grant_id")),
+            )
+        return PolicyDecision(
+            decision="deny",
+            actor=actor,
+            action=action,
+            subject=subject,
+            scope=scope,
+            resource=resource,
+            reason_code="missing_capability",
+        )
+
+    def _action_allowed_by_record(self, record: Mapping[str, Any], action: str) -> bool:
+        capabilities = set(str(item) for item in _list(record.get("capabilities")))
+        role = str(record.get("role") or "").strip()
+        if role:
+            capabilities.update(ROLE_PRESET_CAPABILITIES.get(role, ()))
+        if action in capabilities:
+            return True
+        prefix = action.split(".", 1)[0] + ".*"
+        return prefix in capabilities
+
+    def _audit(
+        self,
+        event_type: str,
+        *,
+        actor: SubjectRef,
+        subject: SubjectRef | None = None,
+        scope: ScopeRef | None = None,
+        device: SubjectRef | None = None,
+        session: SubjectRef | None = None,
+        decision: PolicyDecision | None = None,
+        redacted_diff: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_metadata = {key: value for key, value in dict(metadata or {}).items() if value is not None}
+        record = AuditRecord(
+            audit_id=f"audit-{uuid4().hex}",
+            event_type=event_type,
+            actor=actor,
+            subject=subject,
+            scope=scope,
+            device=device,
+            session=session,
+            source="personalization_access",
+            decision=decision,
+            redacted_diff=redacted_diff or {},
+            metadata=clean_metadata,
+            ts=_now_ts(),
+        )
+        return self.store.append_audit(record)
+
+
+__all__ = [
+    "PersonalizationAccessError",
+    "PersonalizationAccessService",
+    "PersonalizationAccessStore",
+]
