@@ -1872,6 +1872,41 @@ async def root_mcp_contracts(
     }
 
 
+@root_router.get("/browser-assets/cache-contract")
+async def root_browser_assets_cache_contract(
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("development.read.contracts", auth=auth)
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "contract": {
+            "schema": "adaos.root.browser_assets.cache_contract.v1",
+            "state": "planned",
+            "cacheKey": {
+                "algorithm": "sha256",
+                "format": "sha256:<hex>",
+                "immutable": True,
+            },
+            "memberManifestSource": "materialized webspace resources",
+            "rootStore": ".adaos/assets/public/blobs/sha256",
+            "plannedEndpoints": {
+                "getBlob": "/v1/root/browser-assets/blobs/sha256/{digest}",
+                "ensureBlob": "/v1/root/browser-assets/cache/ensure",
+                "manifest": "/v1/root/browser-assets/manifests/{subnet_id}/{owner_kind}/{owner_id}",
+            },
+            "deliveryUrl": "/assets/blobs/sha256/<aa>/<bb>/<digest>/<filename>",
+            "privateResources": "deferred",
+        },
+    }
+
+
 @root_router.get("/mcp/descriptors")
 async def root_mcp_descriptors(
     authorization: str | None = Header(default=None),
