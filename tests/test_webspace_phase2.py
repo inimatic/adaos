@@ -3822,7 +3822,23 @@ def test_phase4_rebuild_from_sources_succeeds_without_materialized_yjs_scenario_
     assert "scenarios" not in fake_state["registry"]
 
 
-def test_phase3_resolver_outputs_are_explicit_and_reusable() -> None:
+def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-0")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Node 0",
+            "node_compact_label": "N0",
+            "node_index": 0,
+            "node_color": "",
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="hub", node_id="node-0", node_settings=SimpleNamespace(node_names=[])),
+    )
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     resolved = runtime.resolve_webspace(
         webspace_runtime_module.WebspaceResolverInputs(
@@ -3899,6 +3915,82 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable() -> None:
     assert resolved.application["modals"]["widgets_catalog"]["schema"]["widgets"][0]["load"]["offFocusReadyState"] == "hydrating"
     assert resolved.desktop["installed"]["apps"] == ["scenario-app", "scenario:other_scenario", "skill-app"]
     assert resolved.routing["routes"] == {}
+
+
+def test_phase3_resolver_attaches_webui_contract_diagnostics(monkeypatch) -> None:
+    captured: list[object] = []
+
+    def _capture_contract_issues(issues, *, webspace_id=None, source="webui_contract") -> None:  # noqa: ANN001
+        captured.extend(issues)
+
+    monkeypatch.setattr(webspace_runtime_module, "log_webui_contract_issues", _capture_contract_issues)
+
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    resolved = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="phase3-webui-contract-diagnostics",
+            scenario_id="prompt_engineer_scenario",
+            source_mode="workspace",
+            scenario_application={"desktop": {"pageSchema": {"id": "contract-page"}}},
+            scenario_catalog={"apps": [], "widgets": []},
+            scenario_registry={"modals": [], "widgets": []},
+            overlay_snapshot={"installed": {"apps": [], "widgets": []}},
+            live_state={"desktop": {"installed": {}}, "routing": {}},
+            skill_decls=[
+                {
+                    "skill": "demo_skill",
+                    "space": "default",
+                    "interface": {
+                        "schema": "adaos.ui.skill_interface.v1",
+                        "defaultView": "demo.note.edit",
+                        "views": {
+                            "demo.note.edit": {
+                                "surfaces": ["modal"],
+                                "params": {
+                                    "note_id": {"type": "string", "required": True},
+                                },
+                            }
+                        },
+                    },
+                    "registry": {
+                        "modals": {
+                            "demo_modal": {
+                                "implements": ["demo.note.edit"],
+                                "schema": {
+                                    "id": "demo_modal",
+                                    "interface": {
+                                        "schema": "adaos.ui.modal.interface.v1",
+                                        "defaultRoute": "note.edit",
+                                        "routes": {
+                                            "note.edit": {
+                                                "view": "demo.note.edit",
+                                                "params": {},
+                                                "state": {"selectedNoteId": "$params.note_id"},
+                                            }
+                                        },
+                                    },
+                                    "widgets": [],
+                                },
+                            }
+                        }
+                    },
+                }
+            ],
+            desktop_scenarios=[],
+        )
+    )
+
+    diagnostics = resolved.application["diagnostics"]["webui_contract"]
+    codes = {item["code"] for item in diagnostics["issues"]}
+
+    assert diagnostics["status"] == "invalid"
+    assert diagnostics["error_count"] >= 2
+    assert "webui.modal.route_missing_view_param" in codes
+    assert "webui.modal.state_unknown_param" in codes
+    assert {issue.code for issue in captured} >= {
+        "webui.modal.route_missing_view_param",
+        "webui.modal.state_unknown_param",
+    }
 
 
 def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() -> None:

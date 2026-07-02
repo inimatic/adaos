@@ -39,6 +39,10 @@ from adaos.services.yjs.store import get_ystore_for_webspace, ystore_write_metad
 from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario
 from adaos.services.yjs.seed import SEED
 from adaos.services.eventbus import emit
+from adaos.services.webui_contract import (
+    log_webui_contract_issues,
+    validate_application_ui_contract,
+)
 from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
 from .workflow_runtime import ScenarioWorkflowRuntime
@@ -4300,6 +4304,28 @@ class WebspaceScenarioRuntime:
         desktop_config["widgetOrder"] = list(overlay_widget_order)
         desktop_config["hiddenSections"] = list(overlay_hidden_sections)
         app_with_modals["desktop"] = desktop_config
+        webui_contract_issues = validate_application_ui_contract(
+            app_with_modals,
+            source=f"webspace:{inputs.webspace_id}:ui.application",
+        )
+        if webui_contract_issues:
+            diagnostics = _coerce_dict(app_with_modals.get("diagnostics") or {})
+            diagnostics["webui_contract"] = {
+                "schema": "adaos.ui.webui_contract.diagnostics.v1",
+                "status": "invalid"
+                if any(issue.level == "error" for issue in webui_contract_issues)
+                else "warning",
+                "issue_count": len(webui_contract_issues),
+                "error_count": sum(1 for issue in webui_contract_issues if issue.level == "error"),
+                "warning_count": sum(1 for issue in webui_contract_issues if issue.level == "warning"),
+                "issues": [issue.to_dict() for issue in webui_contract_issues[:40]],
+            }
+            app_with_modals["diagnostics"] = diagnostics
+            log_webui_contract_issues(
+                webui_contract_issues,
+                webspace_id=inputs.webspace_id,
+                source="webspace.materialization",
+            )
 
         desktop_next = _coerce_dict((inputs.live_state or {}).get("desktop") or {})
         desktop_installed = _coerce_dict(desktop_next.get("installed") or {})

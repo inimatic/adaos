@@ -545,6 +545,35 @@ Status note:
 - [x] add repository examples covering shared, node-scoped, and local browser
   state
 
+### 4b. UI Contract Hardening
+
+- [x] `[must]` validate `webui.interface.defaultView`, transitions, modal
+  `implements`, `schema.interface.defaultRoute`, route views, route params,
+  state `$params.*` tokens, and `navigate`/`navigateModal` action targets
+  before `skill push`
+- [x] `[must]` run the same modal-address contract validation during webspace
+  materialization and log mismatches into skill UI diagnostics
+- [x] `[must]` expose materialization-time WebUI contract diagnostics under
+  `ui.application.diagnostics.webui_contract`
+- [ ] `[must]` add a browser e2e contract test for widget click -> addressed
+  modal -> edit -> Yjs soft reload -> same entity/view restored
+- [ ] `[must]` define the ownership split between skill domain state, modal
+  route state, browser-local view state, and durable persistence confirmation
+- [ ] `[should]` publish a stable diagnostic code catalog with severity,
+  owner, and recommended remediation for UI contract failures
+- [ ] `[should]` generate TypeScript/Python helper types from the WebUI ABI so
+  skills do not hand-author route and param contracts from scratch
+- [ ] `[should]` add Builder/LLM authoring helpers that emit `interface.views`,
+  modal routes, and matching actions as one checked unit
+- [ ] `[could]` add URL/deeplink and browser back-stack integration for modal
+  addresses once the in-Yjs route contract is stable
+- [ ] `[could]` support non-modal surfaces for the same public view refs
+  without changing skill action declarations
+- [ ] `[deferred]` design a universal cross-plane query/router language beyond
+  browser-facing UI views
+- [ ] `[deferred]` migrate every historical `openModal` declaration to
+  `navigate` until the compatibility path has telemetry coverage
+
 ### 4a. Stand-Oriented Demo Readiness
 
 - [x] repository demo manifests use `y:`, `stream:`, `view:`, and `action:`

@@ -777,3 +777,25 @@ Recommended demo data shape:
 - [ ] remove browser-core special cases once semantic equivalents are proven
 - [ ] keep legacy compatibility paths only where the runtime still depends on
   them
+
+### 8a. Contract Hardening
+
+- [x] `[must]` reject broken WebUI view/modal/action cross-links during
+  `skill push` before version bump or publication
+- [x] `[must]` validate materialized `ui.application.interfaces` and
+  `ui.application.modals` together so remote/member declarations cannot fail
+  silently in the browser
+- [x] `[must]` preserve validation evidence in `ui.application.diagnostics`
+  and skill UI diagnostics logs
+- [ ] `[must]` add Notebook as the reference e2e for addressed modal
+  navigation, editor persistence, and Yjs soft reload recovery
+- [ ] `[must]` formalize modal domain states as declarative route/state
+  contracts rather than incidental page-state keys
+- [ ] `[should]` add a compact UI-contract diagnostics panel for operators and
+  Builder reviews
+- [ ] `[should]` generate authoring helpers and contract fixtures from the ABI
+  for skills and scenario templates
+- [ ] `[could]` connect modal addresses to URL/deeplink history after the
+  runtime contract is stable
+- [ ] `[deferred]` remove legacy `openModal` compatibility once migrated
+  skills and scenarios have enough coverage

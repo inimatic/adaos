@@ -1378,6 +1378,20 @@ class SkillManager:
         sub = name.strip()
         subpath = f"skills/{sub}"
         self._ensure_skill_subpath_materialized(root, sub)
+        try:
+            from adaos.services.skill.validation import validate_webui_file_contract
+
+            webui_issues = validate_webui_file_contract(root / "skills" / sub, skill_name=sub)
+        except Exception as exc:
+            raise RuntimeError(f"skill webui contract validation failed: {exc}") from exc
+        webui_errors = [issue for issue in webui_issues if issue.level == "error"]
+        if webui_errors:
+            preview = "; ".join(
+                f"{issue.code}: {issue.message} ({issue.where})"
+                for issue in webui_errors[:5]
+            )
+            suffix = f"; +{len(webui_errors) - 5} more" if len(webui_errors) > 5 else ""
+            raise ValueError(f"skill webui contract invalid: {preview}{suffix}")
         version = self._bump_skill_manifest_for_push(root / "skills" / sub) if bump else None
         upsert_workspace_registry_entry(root, "skills", root / "skills" / sub)
         self._push_declared_model_artifacts(

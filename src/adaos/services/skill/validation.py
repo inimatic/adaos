@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator, ValidationError
 import importlib.resources as ir
 
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.webui_contract import validate_webui_contract
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
 WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
@@ -84,6 +85,28 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
         raise RuntimeError(f"failed to read yaml: {e}")
 
 
+def validate_webui_file_contract(skill_dir: Path, *, skill_name: str | None = None) -> List[Issue]:
+    """Validate only webui.json schema and UI addressing/domain contract."""
+
+    issues: List[Issue] = []
+    webui = skill_dir / "webui.json"
+    if not webui.exists():
+        return issues
+    try:
+        raw = json.loads(webui.read_text(encoding="utf-8-sig") or "{}")
+        if not isinstance(raw, dict):
+            issues.append(Issue("error", "webui.invalid_type", "webui.json must be a JSON object", "webui.json"))
+            return issues
+        Draft202012Validator(_load_webui_schema()).validate(raw)
+        for issue in validate_webui_contract(raw, skill_id=skill_name, source="webui.json"):
+            issues.append(Issue(issue.level, issue.code, issue.message, issue.where))
+    except ValidationError as e:
+        issues.append(Issue("error", "webui.schema.invalid", f"webui.json schema violation: {e.message}", "webui.json"))
+    except Exception as e:
+        issues.append(Issue("error", "webui.read.failed", f"failed to read/parse webui.json: {e}", "webui.json"))
+    return issues
+
+
 def _normalize_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     s = copy.deepcopy(spec or {})
     if s.get("description") is None:
@@ -151,19 +174,9 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
             if not isinstance(v, str) or not v.strip():
                 issues.append(Issue("error", f"events.{key}.invalid", f"events.{key}[{i}] must be non-empty string", f"events.{key}[{i}]"))
 
-    # webui.json (optional): validate declarative WebUI contributions.
-    webui = skill_dir / "webui.json"
-    if webui.exists():
-        try:
-            raw = json.loads(webui.read_text(encoding="utf-8-sig") or "{}")
-            if not isinstance(raw, dict):
-                issues.append(Issue("error", "webui.invalid_type", "webui.json must be a JSON object", "webui.json"))
-            else:
-                Draft202012Validator(_load_webui_schema()).validate(raw)
-        except ValidationError as e:
-            issues.append(Issue("error", "webui.schema.invalid", f"webui.json schema violation: {e.message}", "webui.json"))
-        except Exception as e:
-            issues.append(Issue("error", "webui.read.failed", f"failed to read/parse webui.json: {e}", "webui.json"))
+    # webui.json (optional): validate declarative WebUI contributions and
+    # cross-link the public skill interface with modal routes/actions.
+    issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
     return issues
 

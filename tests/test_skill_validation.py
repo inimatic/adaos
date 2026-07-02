@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from adaos.services.agent_context import get_ctx
-from adaos.services.skill.validation import SkillValidationService
+from adaos.services.skill.validation import SkillValidationService, validate_webui_file_contract
 
 
 def _write_skill(
@@ -130,3 +130,188 @@ def ping():
     assert report.ok is True
     assert {"conversation.manifest_missing", "conversation.memory_policy_missing"}.issubset(codes)
     assert all(issue.level == "warning" for issue in report.issues if issue.code in codes)
+
+
+def test_skill_validation_rejects_broken_webui_modal_contract(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        extra_files={
+            "webui.json": """
+{
+  "interface": {
+    "schema": "adaos.ui.skill_interface.v1",
+    "defaultView": "demo.note.edit",
+    "views": {
+      "demo.note.edit": {
+        "surfaces": ["modal"],
+        "params": {
+          "note_id": { "type": "string", "required": true }
+        }
+      }
+    }
+  },
+  "registry": {
+    "modals": {
+      "demo_modal": {
+        "implements": ["demo.note.edit"],
+        "schema": {
+          "id": "demo_modal",
+          "layout": {
+            "type": "single",
+            "areas": [{ "id": "main" }]
+          },
+          "interface": {
+            "schema": "adaos.ui.modal.interface.v1",
+            "defaultRoute": "note.edit",
+            "routes": {
+              "note.edit": {
+                "view": "demo.note.edit",
+                "params": {},
+                "state": {
+                  "selectedNoteId": "$params.note_id"
+                }
+              }
+            }
+          },
+          "widgets": [
+              {
+                "id": "back",
+                "type": "input.commandBar",
+                "area": "main",
+                "actions": [
+                { "type": "navigateModal", "params": { "route": "missing.route" } }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+""",
+        },
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, install_mode=True)
+
+    codes = {issue.code for issue in report.issues}
+    assert report.ok is False
+    assert "webui.modal.route_missing_view_param" in codes
+    assert "webui.modal.state_unknown_param" in codes
+    assert "webui.action.navigate_modal_unknown_route" in codes
+
+
+def test_webui_push_contract_helper_accepts_valid_addressed_modal(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        extra_files={
+            "webui.json": """
+{
+  "interface": {
+    "schema": "adaos.ui.skill_interface.v1",
+    "defaultView": "demo.notes.list",
+    "views": {
+      "demo.notes.list": { "surfaces": ["modal"], "params": {} },
+      "demo.note.edit": {
+        "surfaces": ["modal"],
+        "params": {
+          "note_id": { "type": "string", "required": true }
+        }
+      }
+    },
+    "transitions": [
+      {
+        "from": "demo.notes.list",
+        "to": "demo.note.edit",
+        "surface": "modal",
+        "params": { "note_id": "$event.id" }
+      }
+    ]
+  },
+  "widgets": [
+    {
+      "id": "latest",
+      "type": "ui.list",
+      "area": "main",
+      "actions": [
+        {
+          "type": "navigate",
+          "params": {
+            "to": "demo.note.edit",
+            "surface": "modal",
+            "params": { "note_id": "$event.id" }
+          }
+        }
+      ]
+    }
+  ],
+  "registry": {
+    "modals": {
+      "demo_modal": {
+        "implements": ["demo.notes.list", "demo.note.edit"],
+        "schema": {
+          "id": "demo_modal",
+          "layout": {
+            "type": "single",
+            "areas": [{ "id": "main" }]
+          },
+          "interface": {
+            "schema": "adaos.ui.modal.interface.v1",
+            "defaultRoute": "notes.list",
+            "routes": {
+              "notes.list": {
+                "view": "demo.notes.list",
+                "params": {},
+                "state": { "viewMode": "list" }
+              },
+              "note.edit": {
+                "view": "demo.note.edit",
+                "params": {
+                  "note_id": { "type": "string", "required": true }
+                },
+                "state": { "viewMode": "edit", "selectedNoteId": "$params.note_id" }
+              }
+            }
+          },
+          "widgets": [
+              {
+                "id": "notes",
+                "type": "ui.list",
+                "area": "main",
+                "actions": [
+                {
+                  "type": "navigateModal",
+                  "params": {
+                    "route": "note.edit",
+                    "params": { "note_id": "$event.id" }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+""",
+        },
+    )
+
+    issues = validate_webui_file_contract(skill_dir, skill_name="demo_skill")
+
+    assert issues == []
