@@ -344,21 +344,30 @@ Current status:
   replay guards; and audit query helpers.
 - [x] The existing `local-owner` baseline has a regression test for implicit
   owner admin without UI or skill-local state.
-- [x] Phase 2 profile/preferences slice preserves the old settings SDK API,
-  writes versioned profile/preference records, rejects role/membership profile
-  fields, exposes current-user profile/preference/header helpers, projects
-  preferences through KV, and emits redacted audit.
-- [x] Phase 3 join/invite slice separates public guest joins from targeted
-  invites, provides consent preview data, rejects profile-bound guest joins and
-  wrong-scope/reused/expired material, issues backing grants/memberships, and
-  bulk-revokes guest sessions through session/access-link cutoff hooks.
-- [ ] API routes and browser UI surfaces still need to adopt the Phase 1-3
-  services; current runtime paths do not yet enforce the kernel globally.
+- [x] Phase 2 profile/preferences backend slice preserves the old settings SDK
+  API, writes versioned profile/preference records, rejects role/membership
+  profile fields, exposes current-user profile/preference/header helpers,
+  projects preferences through KV, and emits redacted audit.
+- [x] Phase 3 join/invite backend slice separates public guest joins from
+  targeted invites, provides consent preview data, rejects profile-bound guest
+  joins and wrong-scope/reused/expired material, issues backing
+  grants/memberships, and bulk-revokes guest sessions through
+  session/access-link cutoff hooks.
+- [ ] Current-user settings API routes and browser header/settings UI still
+  need to adopt the Phase 1-2 services; current browser UI does not yet expose
+  profile/preference editing through the new kernel.
+- [ ] AdaOS Connect and Join Browser still need to adopt the Phase 3 services
+  for guest QR/link, targeted invite, preview/consent, link listing, and
+  revocation UX.
+- [ ] Runtime API/UI paths do not yet enforce the personalization access kernel
+  globally.
 - [ ] Direct websocket disconnect orchestration for revoked guest/browser
   sessions remains a runtime integration task; Phase 3 provides the cutoff hook.
-- [ ] Device pairing and admin recovery remain open.
+- [ ] Device pairing, authenticator lifecycle, and admin recovery remain open.
 - [ ] User-private data zones are not enforced by product UI.
 - [ ] User management is not yet a shared owner/admin control-plane surface.
+- [ ] Skill/tool manifest enforcement is not yet wired across sensitive
+  invocations.
 
 Developer-doc gap:
 

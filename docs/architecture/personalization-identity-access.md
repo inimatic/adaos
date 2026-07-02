@@ -46,14 +46,35 @@ AdaOS already has several pieces that this architecture builds on:
   facts, session/device-aware policy decisions, revocation facts, replay guards,
   and audit queries.
 - Phase 2 keeps profile settings compatibility while adding versioned profile
-  and preference records, current-user SDK helpers, header settings, and
-  redacted profile/preference audit.
+  and preference records, current-user SDK helpers, a header-settings service
+  model, and redacted profile/preference audit.
 - Phase 3 implements backend guest join and targeted invite flows with consent
   preview data, scoped claims, grant issuance, bulk revocation, and
   session/access-link cutoff hooks.
 
 Those mechanisms are useful foundations, but they do not yet form a single
-end-to-end profile UI, join flow, API middleware, and SDK enforcement surface.
+end-to-end profile UI, join flow, API middleware, AdaOS Connect surface, and SDK
+enforcement surface. Phase 2 and Phase 3 are backend/service slices; browser
+settings and Join Browser visibility are separate roadmap gates.
+
+## Standard Practice Anchors
+
+AdaOS is local-first, but its identity flows should map to established patterns
+where possible:
+
+- Web browser credentials should align with WebAuthn/passkeys: public-key
+  credentials are scoped to a relying-party origin and require user consent.
+- QR and code-based pairing should follow the OAuth device authorization
+  interaction shape: one device starts a short-lived pending flow, another
+  trusted surface approves or completes it, and the user sees the requested
+  scope before consent.
+- Root-server and enterprise identity should align with OIDC/OAuth federation:
+  external providers verify identity and claims; subnet grants still authorize
+  local access.
+- Enterprise provisioning should expose SCIM-like adapters for users and
+  groups instead of inventing an unrelated directory model.
+- Recovery, lost devices, revocation, and reauthentication should be treated as
+  one authenticator lifecycle, not as disconnected product flows.
 
 ## Trust model
 
@@ -109,7 +130,12 @@ Examples:
 
 - `inimatic_root`;
 - OIDC/SAML/LDAP enterprise IdP;
+- SCIM-style enterprise provisioning adapter;
 - future local directory service.
+
+An external provider can propose a subject, claims, groups, or memberships. It
+must not silently bypass local subnet policy unless an owner/admin has
+explicitly configured automatic provisioning for that provider and scope.
 
 ## Core objects
 
@@ -427,6 +453,10 @@ It should expose:
 It should not treat role as a profile field. Role and membership belong to
 access policy.
 
+Current implementation note: the backend service/SDK header-settings shape
+exists, but the browser header and settings panel do not yet consume it. The
+roadmap treats that API and UI integration as a separate must-have phase.
+
 ## User management skill
 
 AdaOS should provide an owner/admin-facing user management skill or control
@@ -444,6 +474,10 @@ Capabilities:
 - revoke devices and sessions;
 - inspect policy decisions and audit trails;
 - manage child-mode constraints and temporary access expiry.
+
+The default UI should expose simple access presets first. Expanded capability
+editing, policy simulation, and enterprise group synchronization are advanced
+governance surfaces, not prerequisites for the first household/classroom flow.
 
 ## SDK and manifest surface
 

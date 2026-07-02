@@ -47,8 +47,9 @@ runtime.
   целевая local-first модель профилей, user keys, устройств, memberships,
   ролей, capabilities, QR/link join flows, privacy zones и audit
 - [Персонализация, identity и доступ: дорожная карта](personalization-identity-access-roadmap.md):
-  MoSCoW-чеклист для profile/preferences, user management, grants, recovery и
-  optional external identity
+  MoSCoW-чеклист для backend slices, current-user browser settings, AdaOS
+  Connect join UX, user management, grants, recovery, privacy и optional
+  external identity
 - [Персонализация Phase 0 Contracts](personalization-identity-access-phase0-contracts.md):
   реализованный draft contract anchor для scope lattice, versioned schemas,
   migration stance, threat model, audit и regression matrix
@@ -56,11 +57,13 @@ runtime.
   реализованный backend store, policy decision, revocation, replay-guard и
   audit kernel для Phase 1
 - [Персонализация Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md):
-  реализованный profile/preference vertical slice, SDK compatibility, header
-  settings, projection и redacted audit
+  реализованный service/SDK slice для profile/preferences, SDK compatibility,
+  header-settings model, projection и redacted audit; browser settings UI
+  остается отдельной roadmap-фазой
 - [Персонализация Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md):
-  реализованные public guest join, targeted invite, consent preview, binding,
-  revoke и cutoff hooks
+  реализованные backend public guest join, targeted invite, consent preview,
+  binding, revoke и cutoff hooks; AdaOS Connect/Join Browser UI остается
+  отдельной roadmap-фазой
 - [Pointer/Projection roadmap для переключения сценариев webspace](webspace-scenario-pointer-projection-roadmap.md):
   целевая архитектура и чеклист миграции от materialize-and-copy к
   pointer-first semantic rebuild

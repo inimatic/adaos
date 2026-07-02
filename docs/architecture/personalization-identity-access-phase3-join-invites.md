@@ -1,6 +1,7 @@
 # Personalization Phase 3 Guest Join and Targeted Invites
 
-Status: implemented backend join/invite slice.
+Status: implemented backend join/invite slice; AdaOS Connect and Join Browser
+UI are not implemented in this phase.
 
 Roadmap:
 [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md).
@@ -15,6 +16,10 @@ Code anchors:
 Phase 3 makes QR/link entry safe at the backend layer before device-pairing and
 recovery UX are built. It covers public guest joins and targeted invites, while
 keeping identity proof separate from profile hints.
+
+This phase provides service contracts, policy checks, preview data, and cutoff
+hooks. The visible owner/joiner experience is tracked separately as the AdaOS
+Connect join UX and link-management phase.
 
 ## Guest Join
 
@@ -114,6 +119,7 @@ Implemented now:
 Not implemented in Phase 3:
 
 - actual Join Browser UI wiring;
+- API routes consumed by AdaOS Connect;
 - QR/link transport parameterization in AdaOS Connect;
 - direct websocket disconnect orchestration;
 - device pairing and admin recovery flows.

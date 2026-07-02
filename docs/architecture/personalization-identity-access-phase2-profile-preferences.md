@@ -1,6 +1,7 @@
 # Personalization Phase 2 Profile and Preferences
 
-Status: implemented vertical slice for profile/preferences.
+Status: implemented service/SDK slice for profile/preferences; browser settings
+UI is not implemented in this phase.
 
 Roadmap:
 [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md).
@@ -18,6 +19,10 @@ Code anchors:
 Phase 2 keeps the existing profile settings compatibility API while moving the
 runtime contract toward explicit profile and preference records. Role and
 membership stay out of profile data.
+
+This phase is intentionally backend-facing. The visible web header and settings
+panel are tracked in the roadmap as the current-user settings API/browser UI
+phase.
 
 ## Implemented Surface
 
@@ -107,6 +112,7 @@ Implemented now:
 Not implemented in Phase 2:
 
 - browser UI wiring for the header settings panel;
+- current-user settings API routes for the web client;
 - global API middleware enforcement;
 - full user-private data-zone enforcement outside profile/preferences;
 - encrypted private preferences.

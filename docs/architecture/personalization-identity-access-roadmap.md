@@ -10,6 +10,13 @@ large user-management UI; it is to land the minimum durable identity, policy,
 audit, and privacy foundations that make later QR/link and personalization
 flows safe to implement.
 
+2026-07-02 critical revision: the first Phase 2 and Phase 3 implementation
+passes landed backend/service/SDK slices, not browser-visible product flows.
+This roadmap now separates backend readiness from user-facing acceptance. A
+checked backend slice does not mean the feature is visible in client settings,
+AdaOS Connect, or the Join Browser until the corresponding API/UI phase is
+checked.
+
 ## Progress
 
 - [x] 2026-07-02: target architecture and initial roadmap published.
@@ -37,11 +44,19 @@ flows safe to implement.
   `src/adaos/services/personalization_access.py`,
   [Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md),
   and `tests/test_personalization_join_phase3.py`.
+- [x] 2026-07-02: roadmap critically revised after user-facing review; Phase 2
+  and Phase 3 are explicitly backend slices, and new must-have phases cover
+  Web API/client settings and AdaOS Connect join UX before the roadmap can
+  claim visible personalization.
 
 ## Execution rules
 
 - Each phase must have schema, service, SDK/API, UI/projection, audit, and test
   implications reviewed before it is marked complete.
+- A phase may be checked as a backend slice only when its exit gate says so
+  explicitly. Any wording such as "user can", "owner can", "display", or
+  "visible" requires API/client integration evidence or an explicit boundary
+  note.
 - Later design work may proceed in docs, but runtime implementation should not
   skip a gate unless the skip is documented in this roadmap.
 - A user-facing flow is not complete until policy enforcement and audit records
@@ -50,6 +65,33 @@ flows safe to implement.
   still preserve user-private data boundaries.
 - Root-server or external identity can verify who a user is; subnet grants
   decide what that identity may do inside the subnet.
+- Prefer standard identity patterns where they fit: WebAuthn/passkeys for
+  browser public-key authenticators, OAuth device authorization semantics for
+  QR/device flows, OIDC/OAuth for external authentication, and SCIM-style
+  provisioning for enterprise users and groups.
+
+## Practice Anchors
+
+The AdaOS model is local-first, but it should not invent avoidable identity
+machinery:
+
+- [W3C WebAuthn](https://www.w3.org/TR/webauthn-3/) is the reference shape for
+  browser-origin-scoped public-key credentials and future passkey-backed user
+  or device authenticators.
+- [OAuth 2.0 Device Authorization Grant, RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)
+  is the reference interaction model for QR/code flows where one device starts
+  and another trusted surface approves or completes the flow.
+- [OAuth 2.0, RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) and
+  [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html)
+  are the reference model for external authentication and claims. In AdaOS,
+  those claims can propose or verify identity; local grants still authorize
+  subnet access.
+- [SCIM, RFC 7644](https://datatracker.ietf.org/doc/html/rfc7644) is the
+  reference pattern for enterprise user/group provisioning. AdaOS should expose
+  adapters instead of inventing a separate enterprise directory protocol.
+- [NIST SP 800-63B](https://csrc.nist.gov/pubs/sp/800/63/b/upd2/final)
+  anchors authenticator lifecycle thinking: enrollment, revocation, loss,
+  recovery, and reauthentication are part of the same model.
 
 ## Phase 0 - Foundation Contracts
 
@@ -134,12 +176,13 @@ Local verification:
 - [x] unit tests for policy allow/deny/revoke/audit paths.
 - [x] migration test from the existing owner/local profile baseline.
 
-## Phase 2 - Profile and Preferences Vertical Slice
+## Phase 2 - Profile and Preferences Backend Slice
 
 Priority: `must`.
 
-Goal: turn current profile/settings mechanisms into the first user-visible
-personalization slice without mixing role into profile data.
+Goal: turn current profile/settings mechanisms into the first policy-checked
+service and SDK slice without mixing role into profile data. This phase does
+not make the feature visible in the browser settings panel by itself.
 Slice note:
 [Personalization Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md).
 
@@ -154,9 +197,9 @@ Checklist:
   helpers as compatibility wrappers.
 - [x] Project current-user profile/preferences through KV/Yjs using the existing
   projection mechanism.
-- [x] Add client header settings for display name, locale/language, theme,
-  memory/privacy preferences, current subnet/workspace, role status, and device
-  trust status.
+- [x] Add the client-facing header settings service model for display name,
+  locale/language, theme, memory/privacy preferences, current subnet/workspace,
+  role status, and device trust status.
 - [x] Add the service/SDK target for browser-scoped UI preferences as user
   preferences plus device overrides; client localStorage fallback remains a UI
   integration concern.
@@ -164,8 +207,8 @@ Checklist:
 
 Exit gate:
 
-- [x] Current user can edit self-service profile/preferences through SDK
-  helpers; client UI wiring remains outside this phase.
+- [x] Current user can edit self-service profile/preferences through service
+  and SDK helpers; browser UI wiring remains outside this phase.
 - [x] Role/access preset is visible as status but cannot be edited as a profile
   field.
 - [x] Profile/preference updates survive restart and project to Yjs.
@@ -175,13 +218,14 @@ Local verification:
 - [x] profile SDK tests.
 - [x] KV/Yjs projection tests.
 - [x] service/SDK header settings smoke test; browser UI wiring remains outside
-  this phase.
+  this phase and is tracked in Phase 4.
 
-## Phase 3 - Guest Join and Targeted Invite Flows
+## Phase 3 - Guest Join and Targeted Invite Backend Slice
 
 Priority: `must`.
 
-Goal: implement safe QR/link entry before device pairing and recovery.
+Goal: implement safe QR/link entry at the backend layer before device pairing,
+recovery, and AdaOS Connect UI wiring.
 Slice note:
 [Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md).
 
@@ -192,8 +236,8 @@ Checklist:
 - [x] Implement `targeted_invite_link` as personal, expiring, one-time, and
   auditable.
 - [x] Add `profile_hint` support without treating the hint as proof of identity.
-- [x] Require joining devices to display the target subnet/workspace, role
-  preset, lifetime, and consent/acceptance action.
+- [x] Provide consent-preview data that joining devices can display: target
+  subnet/workspace, role preset, lifetime, and acceptance status.
 - [x] Add owner/co-owner flow for binding an unknown session to a new or
   existing local profile.
 - [x] Add invite/link rate limits, max session constraints, and bulk guest
@@ -204,37 +248,136 @@ Checklist:
 
 Exit gate:
 
-- [x] Owner can create a public guest join and revoke all sessions created from
-  it.
-- [x] Owner can create a targeted invite, user can accept it once, reuse is
-  rejected, and audit records show issuer, subject, scope, role preset, and
-  constraints.
+- [x] Backend service can create a public guest join and revoke all sessions
+  created from it.
+- [x] Backend service can create a targeted invite, a subject can accept it
+  once, reuse is rejected, and audit records show issuer, subject, scope, role
+  preset, and constraints.
 
 Local verification:
 
 - [x] guest join policy tests.
 - [x] targeted invite expiry/reuse/revoke tests.
-- [x] live session cutoff test for revoked guest/invite grant.
+- [x] live session cutoff hook test for revoked guest/invite grant. Browser UI
+  and direct websocket disconnect integration are tracked in Phase 5.
 
-## Phase 4 - Device Pairing and Admin Recovery
+## Phase 4 - Current-User Settings API and Browser UI
 
 Priority: `must`.
 
-Goal: let trusted users add devices and let owner/co-owner recover users without
-creating unsafe account-takeover shortcuts.
+Goal: make the Phase 2 profile/preference slice visible and usable from the
+web client without turning the UI into the source of truth.
+
+Checklist:
+
+- [ ] Add shared runtime/API routes for current-user profile, preferences,
+  header settings, and policy explanations.
+- [ ] Load header settings in the browser shell and show display name, avatar
+  or initials, role/access status, active subnet/workspace, and device trust
+  status.
+- [ ] Add a current-user settings panel for display name, preferred name,
+  language/locale/timezone, theme, UI density, memory/privacy preferences, and
+  accessibility preferences.
+- [ ] Keep role and membership read-only in current-user settings; route any
+  access change to owner/admin flows.
+- [ ] Treat browser localStorage as migration/fallback only. The service store
+  remains authoritative for user preferences.
+- [ ] Show policy denial messages from structured decisions instead of generic
+  UI failures.
+- [ ] Add an identity switcher only for sessions with multiple valid local or
+  external identities; switching identity must be an explicit authenticated
+  action and must be audited.
+- [ ] Add client-side and API tests for profile/preference load, edit, refresh,
+  denied edit, and audit emission.
+
+Exit gate:
+
+- [ ] A signed-in user can edit allowed profile/preferences in the web UI and
+  sees the updated header after reload/restart.
+- [ ] Role/access status is visible but cannot be edited through profile
+  settings.
+- [ ] API and UI paths route through the Phase 1-2 policy/audit services.
+
+Local verification:
+
+- [ ] API tests for current-user profile/preference/header routes.
+- [ ] Browser unit tests or E2E smoke tests for settings panel and header
+  refresh.
+- [ ] Audit smoke test for profile/preference updates and denied edits.
+
+## Phase 5 - AdaOS Connect Join UX and Link Management
+
+Priority: `must`.
+
+Goal: make Phase 3 join/invite semantics usable through AdaOS Connect and the
+Join Browser, following standard device-flow interaction patterns.
+
+Checklist:
+
+- [ ] Add API routes for guest join creation, targeted invite creation, invite
+  preview, invite claim, invite revoke, and guest-session bulk revoke.
+- [ ] Parameterize QR/link generation by flow kind, scope, role preset, expiry,
+  max sessions, and optional profile hint.
+- [ ] Let owner/co-owner create a public guest QR/link for classrooms, museums,
+  events, demos, and temporary visitors.
+- [ ] Let owner/co-owner create a targeted invite by selecting or creating a
+  local profile, choosing scope, choosing access preset, and setting expiry.
+- [ ] Make the joining device show target subnet/workspace, issuer, role
+  preset, expiry, profile hint when present, and consent/acceptance action.
+- [ ] Keep public guest joins session-bound and profile-unbound.
+- [ ] Make targeted invites one-time by default and visibly unsafe to display
+  publicly.
+- [ ] List pending, accepted, expired, and revoked links for owner/co-owner,
+  with revoke actions and audit history.
+- [ ] Wire invite/session revocation to access-link denial and browser/Yjs
+  admission so revoked sessions are cut off in the running web interface.
+- [ ] Model the UX after OAuth device authorization: short-lived material,
+  pending/accepted/expired states, user-visible scope, and explicit consent.
+
+Exit gate:
+
+- [ ] Owner can display a public guest QR/link and later revoke all sessions
+  created from it through AdaOS Connect.
+- [ ] Owner can invite a named user such as Masha with a selected local profile,
+  scope, role preset, and expiry; the joining browser can preview and accept
+  the invite once.
+- [ ] Revoked guest/invite sessions lose browser/Yjs/API access without manual
+  database edits.
+
+Local verification:
+
+- [ ] API tests for create/preview/claim/revoke flows.
+- [ ] Browser or AdaOS Connect tests for guest QR and targeted invite flows.
+- [ ] Revoked-session admission/cutoff test through the runtime path, not only
+  the service hook.
+- [ ] Audit query smoke tests for issuer, subject, scope, role preset,
+  constraints, and revoked sessions.
+
+## Phase 6 - Device Pairing and Authenticator Lifecycle
+
+Priority: `must`.
+
+Goal: let trusted users add devices and let owner/co-owner recover users
+without creating unsafe account-takeover shortcuts.
 
 Checklist:
 
 - [ ] Implement `device_pairing_link` for adding a new device to an existing
   trusted user.
+- [ ] Use the OAuth device-flow interaction shape for pairing: new device shows
+  code/QR, trusted device approves, backend records pending/approved/expired.
 - [ ] Support member self-service device pairing when policy allows
   `devices.add.self`.
 - [ ] Require owner/co-owner approval for child device pairing by default.
+- [ ] Add optional WebAuthn/passkey-backed device authenticators where browser
+  platform support is available; keep local device keys as the AdaOS authority.
 - [ ] Implement `admin_recovery_link` for owner/co-owner assisted recovery.
 - [ ] Add lost-device flow: bind replacement device, revoke old device, and
   invalidate active sessions.
 - [ ] Add device key lifecycle: generation, storage, rotation hooks,
   revocation, last-used metadata, and session invalidation.
+- [ ] Add recovery-code design for users who still have a trusted session or
+  device; recovery without any previous trust factor remains deferred.
 - [ ] Document owner key backup, co-owner recovery, and ownership transfer as
   explicit later work if not implemented in this phase.
 
@@ -251,8 +394,9 @@ Local verification:
 - [ ] device pairing tests.
 - [ ] child approval tests.
 - [ ] lost-device revoke/session invalidation tests.
+- [ ] recovery-code lifecycle tests if recovery codes are included.
 
-## Phase 5 - Owner and Admin User Management Surface
+## Phase 7 - Owner and Admin User Management Surface
 
 Priority: `must`.
 
@@ -274,20 +418,63 @@ Checklist:
 - [ ] Use Pending Actions for sensitive conversational requests such as binding
   a device, granting membership, changing active user, or invoking dangerous
   tools.
+- [ ] Support multiple administrators explicitly: owner, co_owner, scoped admin,
+  workspace admin, device admin, and guest moderator are grants, not profile
+  fields.
 
 Exit gate:
 
 - [ ] Owner/co-owner can manage users, memberships, devices, invites, and
   revocation without direct database edits.
 - [ ] All actions route through the shared policy/audit services.
+- [ ] Admin surfaces make common presets easy while still allowing a future
+  expanded capability view.
 
 Local verification:
 
 - [ ] API/service tests.
 - [ ] skill/UI action tests.
+- [ ] multi-admin grant and denial tests.
 - [ ] audit query smoke tests.
 
-## Phase 6 - Skill, Tool, and SDK Enforcement
+## Phase 8 - Privacy Zone Enforcement and User Data Management
+
+Priority: `must`.
+
+Goal: enforce privacy below UI conventions and give users control over their
+own data before multi-user personalization is treated as product-complete.
+
+Checklist:
+
+- [ ] Add service-level data classification for shared workspace data,
+  user-private data, admin-visible metadata, and encrypted/private future data.
+- [ ] Enforce user-private read/write policy in memory, conversation, profile,
+  preference, and projection services.
+- [ ] Add user-owned memory/profile search, edit, export, and redaction flows.
+- [ ] Add admin-visible metadata views that show existence, usage, policy
+  events, and retention without revealing private content.
+- [ ] Add retention defaults and redaction audit trails for user-private data.
+- [ ] Add compatibility checks so existing owner-superuser paths do not become
+  ordinary product read APIs for private user data.
+- [ ] Add UI copy and policy explanations for private-data denials that are
+  clear to both owner and non-owner users.
+
+Exit gate:
+
+- [ ] Product UI respects privacy zones.
+- [ ] Service/API/projection paths enforce the same privacy zones.
+- [ ] User can inspect and manage their own private profile/memory data.
+- [ ] Owner/admin UI can manage access and retention metadata without exposing
+  private content through ordinary product APIs.
+
+Local verification:
+
+- [ ] user-private access tests.
+- [ ] admin metadata/no-content tests.
+- [ ] export/redaction tests.
+- [ ] projection leakage tests.
+
+## Phase 9 - Skill, Tool, and SDK Enforcement
 
 Priority: `must`.
 
@@ -324,39 +511,7 @@ Local verification:
 - [ ] sensitive tool denial tests.
 - [ ] memory/profile cross-user denial tests.
 
-## Phase 7 - Privacy Zone Enforcement and User Data Management
-
-Priority: `should`.
-
-Goal: enforce privacy below UI conventions and give users control over their
-own data.
-
-Checklist:
-
-- [ ] Add service-level data classification for shared workspace data,
-  user-private data, admin-visible metadata, and encrypted/private future data.
-- [ ] Enforce user-private read/write policy in memory, conversation, profile,
-  and preference services.
-- [ ] Add user-owned memory/profile search, edit, export, and redaction flows.
-- [ ] Add admin-visible metadata views that show existence, usage, policy
-  events, and retention without revealing private content.
-- [ ] Add retention defaults and redaction audit trails for user-private data.
-- [ ] Add compatibility checks so existing owner-superuser paths do not become
-  ordinary product read APIs for private user data.
-
-Exit gate:
-
-- [ ] Product UI respects privacy zones.
-- [ ] Service/API paths enforce the same privacy zones.
-- [ ] User can inspect and manage their own private profile/memory data.
-
-Local verification:
-
-- [ ] user-private access tests.
-- [ ] admin metadata/no-content tests.
-- [ ] export/redaction tests.
-
-## Phase 8 - Optional Global Identity and Root-Server Trust
+## Phase 10 - Optional Global Identity and Root-Server Trust
 
 Priority: `could`.
 
@@ -368,10 +523,13 @@ Checklist:
 - [ ] Add `ExternalIdentityBinding` service and API.
 - [ ] Add pairwise public key support to reduce cross-subnet correlation.
 - [ ] Add optional root-server verification for targeted remote invites.
-- [ ] Add passkey-backed global identity as an optional recovery provider.
+- [ ] Add passkey/WebAuthn-backed global identity as an optional authentication
+  and recovery provider.
 - [ ] Let login choose between known local subnet identity, global identity,
   guest join, and access request.
 - [ ] Enforce the rule: root verifies identity, subnet grants access.
+- [ ] Treat OIDC/OAuth providers as external identity verifiers, not local
+  authorization sources.
 - [ ] Add profile portability tooling between subnets with destination owner
   acceptance.
 
@@ -387,8 +545,9 @@ Local verification:
 - [ ] external identity binding tests.
 - [ ] local-grant-required tests.
 - [ ] invite verification tests where implemented.
+- [ ] identity-choice login tests.
 
-## Phase 9 - Enterprise and Advanced Governance
+## Phase 11 - Enterprise and Advanced Governance
 
 Priority: `could`.
 
@@ -397,10 +556,14 @@ local-first household model.
 
 Checklist:
 
-- [ ] Add `TrustProvider` SDK/service interface for OIDC, SAML, LDAP, and local
-  directory providers.
+- [ ] Add `TrustProvider` SDK/service interface for OIDC, SAML, LDAP, SCIM, and
+  local directory providers.
 - [ ] Add first SSO/IdP pilot that maps external claims to proposed local
   memberships and capabilities.
+- [ ] Add SCIM-style user/group provisioning adapter for enterprise-managed
+  subjects without making SCIM mandatory for household subnets.
+- [ ] Add deprovisioning behavior for external users: disable memberships,
+  revoke sessions/devices where policy requires it, and emit audit records.
 - [ ] Add admin scopes such as workspace admin, device admin, and guest
   moderator.
 - [ ] Add policy simulation UI before committing grants.
@@ -410,7 +573,9 @@ Checklist:
 
 Exit gate:
 
-- [ ] External IdP can propose, but not silently grant, local subnet access.
+- [ ] External IdP or SCIM provider can propose, but not silently grant, local
+  subnet access unless a local policy explicitly allows automatic provisioning
+  for that provider and scope.
 - [ ] Admin scopes are enforced through the same policy engine as household
   roles.
 
@@ -418,11 +583,12 @@ Local verification:
 
 - [ ] trust-provider contract tests.
 - [ ] claim-to-proposed-grant tests.
+- [ ] SCIM provision/deprovision adapter tests.
 - [ ] admin-scope policy tests.
 
 ## Deferred
 
-These items should remain visible but should not block phases 0-9:
+These items should remain visible but should not block phases 0-11:
 
 - [ ] Full cryptographic isolation of user-private data from the subnet owner.
 - [ ] Secret-store redesign for per-user and per-device encryption keys.
@@ -434,6 +600,8 @@ These items should remain visible but should not block phases 0-9:
 - [ ] Quorum-based administration for high-security deployments.
 - [ ] Hardware-backed key management requirements for all trusted devices.
 - [ ] Mature SSO group-to-capability synchronization and deprovisioning.
+- [ ] Custom identity federation protocols where OIDC/OAuth, WebAuthn,
+  OAuth device authorization, or SCIM already fit the use case.
 
 ## MoSCoW coverage
 
@@ -441,26 +609,31 @@ These items should remain visible but should not block phases 0-9:
 
 - [x] Phase 0 foundation contracts.
 - [x] Phase 1 subject/session/grant store and policy/audit kernel.
-- [x] Phase 2 profile/preferences vertical slice.
-- [x] Phase 3 guest join and targeted invite flows.
-- [ ] Phase 4 device pairing and admin recovery.
-- [ ] Phase 5 owner/admin user management surface.
-- [ ] Phase 6 skill, tool, and SDK enforcement.
+- [x] Phase 2 profile/preferences backend slice.
+- [x] Phase 3 guest join and targeted invite backend slice.
+- [ ] Phase 4 current-user settings API and browser UI.
+- [ ] Phase 5 AdaOS Connect join UX and link management.
+- [ ] Phase 6 device pairing and authenticator lifecycle.
+- [ ] Phase 7 owner/admin user management surface.
+- [ ] Phase 8 privacy-zone enforcement and user data management.
+- [ ] Phase 9 skill, tool, and SDK enforcement.
 
 ### Should
 
-- [ ] Phase 7 privacy-zone enforcement and user data management.
 - [ ] Recovery codes generated while a user still has a trusted device.
 - [ ] Stronger admin-visible privacy metadata and user-private export/redaction.
 - [ ] More complete policy explanations and user-facing denial messages.
+- [ ] More complete policy simulation before committing grants.
+- [ ] Richer invite, recovery, and denial localization.
 
 ### Could
 
-- [ ] Phase 8 optional global identity and root-server trust.
-- [ ] Phase 9 enterprise and advanced governance.
+- [ ] Phase 10 optional global identity and root-server trust.
+- [ ] Phase 11 enterprise and advanced governance.
 - [ ] Pairwise global identity bindings.
 - [ ] Policy simulation UI.
 - [ ] Profile portability between subnets.
+- [ ] SCIM-style enterprise provisioning adapter.
 
 ### Deferred
 
@@ -469,6 +642,7 @@ These items should remain visible but should not block phases 0-9:
 - [ ] Autonomous recovery without any prior trust factor.
 - [ ] Cross-subnet federation without local owner/admin grants.
 - [ ] Quorum/hardware-backed high-security administration.
+- [ ] Custom replacement protocols for mature identity standards.
 
 ## Required security regression matrix
 
@@ -478,14 +652,24 @@ These tests should be added across phases as the corresponding surfaces land:
 - [x] Reused targeted invite is rejected.
 - [x] Public guest join cannot bind a personal profile.
 - [x] Revoked guest grant loses live browser/Yjs access.
+- [ ] Browser settings UI cannot write role/membership as profile data.
+- [ ] Browser settings UI survives refresh/restart and remains backed by the
+  shared profile/preference store.
+- [ ] Public guest QR is scope-limited and visibly temporary in the joining UI.
+- [ ] Targeted invite preview shows subnet/workspace, issuer, role preset,
+  expiry, and consent before claim.
 - [ ] Revoked device loses live browser/Yjs/API access.
 - [ ] Child cannot add a device without approval when policy requires it.
 - [x] Member can add own device only with `devices.add.self`.
 - [x] Member cannot invite users without `users.invite`.
+- [ ] Recovery without owner/co-owner, trusted device, recovery code, passkey,
+  or external identity provider is rejected.
 - [ ] Skill cannot read another user's private memory without a grant.
 - [ ] Skill cannot write long-term memory without the required policy path.
 - [ ] Owner/admin UI can see user-private metadata but not private content.
 - [ ] Global identity verification does not grant subnet access by itself.
+- [ ] External IdP/SCIM claim cannot silently grant local access unless local
+  policy explicitly allows automatic provisioning for that provider and scope.
 - [x] Denied tool invocation records a policy decision and reason code.
 
 ## Completion definition
@@ -494,8 +678,14 @@ This roadmap is complete when:
 
 - a user can be added as member/child/guest through the documented QR/link
   flows;
+- current-user profile/preferences are visible and editable in the browser
+  settings surface through shared policy/audit services;
+- AdaOS Connect can create, preview, claim, list, and revoke guest and targeted
+  links without direct database edits;
 - owner and co-owner can manage users, devices, memberships, and revocation
   through shared runtime services;
+- a user can add a trusted device or recover through a documented prior-trust
+  factor;
 - skills can declare personalization and permission needs in manifests;
 - SDK calls expose actor/current-user/subject/service semantics;
 - policy enforcement protects profile, memory, device, skill, tool, and

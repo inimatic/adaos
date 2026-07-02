@@ -47,14 +47,35 @@ membership, policy и границы персональных данных.
   facts, session/device-aware policy decisions, revocation facts, replay guards
   и audit queries.
 - Phase 2 сохраняет profile settings compatibility и добавляет versioned
-  profile/preference records, current-user SDK helpers, header settings и
-  redacted profile/preference audit.
+  profile/preference records, current-user SDK helpers, header-settings service
+  model и redacted profile/preference audit.
 - Phase 3 реализует backend guest join и targeted invite flows с consent
   preview data, scoped claims, grant issuance, bulk revocation и
   session/access-link cutoff hooks.
 
 Эти механизмы полезны, но пока не собраны в end-to-end profile UI, join flow,
-API middleware и SDK enforcement surface.
+API middleware, AdaOS Connect surface и SDK enforcement surface. Phase 2 и
+Phase 3 являются backend/service slices; browser settings и Join Browser
+visibility остаются отдельными roadmap gates.
+
+## Стандартные практические ориентиры
+
+AdaOS остается local-first, но identity flows должны маппиться на устойчивые
+паттерны, где это возможно:
+
+- Browser credentials стоит выравнивать с WebAuthn/passkeys: public-key
+  credentials scoped к relying-party origin и требуют user consent.
+- QR/code-based pairing стоит строить по форме OAuth device authorization: одно
+  устройство начинает short-lived pending flow, доверенная поверхность
+  подтверждает или завершает его, а пользователь видит requested scope до
+  consent.
+- Root-server и enterprise identity стоит выравнивать с OIDC/OAuth federation:
+  external providers подтверждают identity и claims; subnet grants все равно
+  авторизуют local access.
+- Enterprise provisioning стоит делать через SCIM-like adapters для users и
+  groups, а не через отдельную самодельную directory model.
+- Recovery, lost devices, revocation и reauthentication должны рассматриваться
+  как единый authenticator lifecycle, а не как несвязанные product flows.
 
 ## Модель доверия
 
@@ -110,7 +131,12 @@ TrustProvider
 
 - `inimatic_root`;
 - OIDC/SAML/LDAP enterprise IdP;
+- SCIM-style enterprise provisioning adapter;
 - будущий local directory service.
+
+External provider может предложить subject, claims, groups или memberships. Он
+не должен silently bypass local subnet policy, если owner/admin явно не
+настроил automatic provisioning для этого provider и scope.
 
 ## Core objects
 
@@ -429,6 +455,10 @@ preferences текущего пользователя.
 
 Role не должен быть profile field. Role и membership принадлежат access policy.
 
+Текущая реализация: backend service/SDK shape для header settings уже есть, но
+browser header и settings panel пока его не используют. Roadmap считает эту API
+и UI integration отдельной must-have фазой.
+
 ## User management skill
 
 AdaOS должен предоставить owner/admin-facing user management skill или control
@@ -446,6 +476,11 @@ authorization model.
 - revoke devices и sessions;
 - inspect policy decisions и audit trails;
 - manage child-mode constraints и temporary access expiry.
+
+Default UI должен сначала показывать простые access presets. Expanded
+capability editing, policy simulation и enterprise group synchronization
+являются advanced governance surfaces, а не prerequisites для первого
+household/classroom flow.
 
 ## SDK и manifest surface
 

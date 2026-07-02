@@ -1,6 +1,7 @@
 # Персонализация Phase 2 Profile and Preferences
 
-Статус: реализованный vertical slice для profile/preferences.
+Статус: реализованный service/SDK slice для profile/preferences; browser
+settings UI не реализован в этой фазе.
 
 Дорожная карта:
 [Персонализация, identity и доступ: дорожная карта](personalization-identity-access-roadmap.md).
@@ -18,6 +19,9 @@ Code anchors:
 Phase 2 сохраняет существующий compatibility API для profile settings, но
 переводит runtime contract к явным profile и preference records. Role и
 membership остаются вне profile data.
+
+Эта фаза намеренно backend-facing. Видимые web header и settings panel
+отслеживаются в roadmap как current-user settings API/browser UI phase.
 
 ## Реализованная поверхность
 
@@ -106,6 +110,7 @@ Audit records содержат keys и metadata, но не private profile/prefe
 Не реализовано в Phase 2:
 
 - browser UI wiring для header settings panel;
+- current-user settings API routes для web client;
 - global API middleware enforcement;
 - full user-private data-zone enforcement вне profile/preferences;
 - encrypted private preferences.
