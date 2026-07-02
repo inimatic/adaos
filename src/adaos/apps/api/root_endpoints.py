@@ -3,10 +3,14 @@ import asyncio
 import json
 import hashlib
 import os
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from adaos.adapters.db import sqlite as sqlite_db
@@ -54,10 +58,13 @@ from adaos.services.root_mcp.sessions import (
 )
 from adaos.services.root_mcp.targets import upsert_managed_target
 from adaos.services.root_mcp.tokens import issue_access_token, list_access_tokens, revoke_access_token, validate_access_token
+from adaos.services.browser_assets import assets_root, public_assets_root
 
 router = APIRouter()
 root_router = APIRouter(prefix="/v1/root", tags=["root"])
 subnet_router = APIRouter(prefix="/v1/subnets", tags=["subnets"])
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_SAFE_ASSET_OWNER_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def _iso_utc(ts: float) -> str:
@@ -1494,6 +1501,56 @@ class RootMcpSessionLeaseRevokeRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=512)
 
 
+class RootBrowserAssetEnsureRequest(BaseModel):
+    cacheKey: str | None = None
+    digest: str | None = None
+
+
+def _safe_asset_owner_token(value: str) -> str:
+    return _SAFE_ASSET_OWNER_RE.sub("_", str(value or "").strip()).strip("._-") or "unknown"
+
+
+def _normalize_browser_asset_digest(*, cache_key: str | None = None, digest: str | None = None) -> str:
+    token = str(digest or "").strip()
+    if not token:
+        raw_cache_key = str(cache_key or "").strip()
+        token = raw_cache_key.split(":", 1)[1].strip() if raw_cache_key.lower().startswith("sha256:") else raw_cache_key
+    if not _SHA256_RE.match(token):
+        raise HTTPException(status_code=422, detail="invalid_sha256_digest")
+    return token.lower()
+
+
+def _public_browser_asset_blob_file(digest: str) -> Path | None:
+    public_root = public_assets_root(get_ctx()).resolve()
+    root = public_root / "blobs" / "sha256" / digest[:2] / digest[2:4] / digest
+    try:
+        resolved_root = root.resolve()
+        resolved_root.relative_to(public_root)
+    except Exception:
+        return None
+    if not resolved_root.is_dir():
+        return None
+    for item in sorted(resolved_root.iterdir(), key=lambda path: path.name):
+        if item.is_file():
+            return item
+    return None
+
+
+def _public_browser_asset_delivery_url(path: Path) -> str:
+    public_root = public_assets_root(get_ctx()).resolve()
+    try:
+        relative = path.resolve().relative_to(public_root)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="browser_asset_not_found") from exc
+    return "/assets/" + "/".join(quote(part, safe="") for part in relative.parts)
+
+
+def _browser_asset_manifest_path(owner_kind: str, owner_id: str) -> Path:
+    kind = _safe_asset_owner_token(owner_kind)
+    bucket = kind if kind.endswith("s") else f"{kind}s"
+    return assets_root(get_ctx()) / "manifests" / bucket / f"{_safe_asset_owner_token(owner_id)}.json"
+
+
 @router.post("/v1/hub/control/report")
 async def hub_control_report_ingest(
     request: Request,
@@ -1888,7 +1945,7 @@ async def root_browser_assets_cache_contract(
         "scope": scope,
         "contract": {
             "schema": "adaos.root.browser_assets.cache_contract.v1",
-            "state": "planned",
+            "state": "partial",
             "cacheKey": {
                 "algorithm": "sha256",
                 "format": "sha256:<hex>",
@@ -1904,6 +1961,79 @@ async def root_browser_assets_cache_contract(
             "deliveryUrl": "/assets/blobs/sha256/<aa>/<bb>/<digest>/<filename>",
             "privateResources": "deferred",
         },
+    }
+
+
+@root_router.post("/browser-assets/cache/ensure")
+async def root_browser_assets_cache_ensure(
+    body: RootBrowserAssetEnsureRequest,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("development.read.contracts", auth=auth)
+    digest = _normalize_browser_asset_digest(cache_key=body.cacheKey, digest=body.digest)
+    blob = _public_browser_asset_blob_file(digest)
+    delivery_url = _public_browser_asset_delivery_url(blob) if blob is not None else None
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "cacheKey": f"sha256:{digest}",
+        "present": blob is not None,
+        "deliveryUrl": delivery_url,
+        "byteServing": "static:/assets" if blob is not None else None,
+    }
+
+
+@root_router.get("/browser-assets/blobs/sha256/{digest}")
+async def root_browser_assets_blob_redirect(
+    digest: str,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> RedirectResponse:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("development.read.contracts", auth=auth)
+    normalized = _normalize_browser_asset_digest(digest=digest)
+    blob = _public_browser_asset_blob_file(normalized)
+    if blob is None:
+        raise HTTPException(status_code=404, detail="browser_asset_not_found")
+    return RedirectResponse(url=_public_browser_asset_delivery_url(blob), status_code=307)
+
+
+@root_router.get("/browser-assets/manifests/{subnet_id}/{owner_kind}/{owner_id}")
+async def root_browser_assets_manifest(
+    subnet_id: str,
+    owner_kind: str,
+    owner_id: str,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("development.read.contracts", auth=auth)
+    path = _browser_asset_manifest_path(owner_kind, owner_id)
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="browser_asset_manifest_not_found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="browser_asset_manifest_unreadable") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=500, detail="browser_asset_manifest_invalid")
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "subnetId": subnet_id,
+        "manifest": manifest,
     }
 
 

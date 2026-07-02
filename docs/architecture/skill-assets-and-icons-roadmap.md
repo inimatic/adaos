@@ -241,9 +241,13 @@ Status as of 2026-07-02:
   URL-backed resources. Current renderer coverage includes the existing
   resource data source and assistant avatar surfaces; broader icon/image
   renderer adoption is still pending.
-- Root exposes the planned cache contract at
-  `/v1/root/browser-assets/cache-contract`; blob relay/fetch endpoints are not
-  implemented yet.
+- Root exposes a partial cache control plane:
+  `/v1/root/browser-assets/cache-contract`,
+  `/v1/root/browser-assets/cache/ensure`,
+  `/v1/root/browser-assets/blobs/sha256/{digest}`, and
+  `/v1/root/browser-assets/manifests/{subnet_id}/{owner_kind}/{owner_id}`.
+  The blob endpoint redirects to static `/assets` instead of serving bytes from
+  app logic. Cross-member pull/relay is not implemented yet.
 - Private resources remain deferred.
 
 ## Phases
