@@ -237,6 +237,7 @@ class LocalEventBus(EventBus):
         self._bounded_queues: DefaultDict[str, deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]]] = defaultdict(deque)
         self._bounded_worker_tasks: set[asyncio.Task[Any]] = set()
         self._bounded_active_workers: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_active_meta: dict[asyncio.Task[Any], dict[str, Any]] = {}
         self._bounded_peak_workers: DefaultDict[str, int] = defaultdict(int)
         self._bounded_queued_by_type: DefaultDict[str, int] = defaultdict(int)
         self._bounded_queued_by_handler: DefaultDict[str, int] = defaultdict(int)
@@ -511,8 +512,44 @@ class LocalEventBus(EventBus):
             ((handler_name, count) for handler_name, count in self._pending_by_handler.items() if count > 0),
             key=lambda item: (-item[1], item[0]),
         )[:5]
+        active_tasks = []
+        for pending_task, (event_type, handler_name, started) in self._pending_task_meta.items():
+            if pending_task.done():
+                continue
+            active_tasks.append(
+                {
+                    "task": pending_task.get_name(),
+                    "event_type": event_type,
+                    "handler": handler_name,
+                    "age_s": round(max(0.0, now - float(started or now)), 3),
+                }
+            )
+        active_tasks.sort(key=lambda item: (-float(item.get("age_s") or 0.0), str(item.get("handler") or "")))
+        active_tasks = active_tasks[:10]
         bounded_queue_total = sum(len(queue) for queue in self._bounded_queues.values())
         bounded_active_workers = sum(int(count or 0) for count in self._bounded_active_workers.values())
+        active_bounded_handlers = []
+        for task, meta in self._bounded_active_meta.items():
+            if task.done():
+                continue
+            started = float(meta.get("started") or now)
+            active_bounded_handlers.append(
+                {
+                    "task": task.get_name(),
+                    "topic": str(meta.get("topic") or ""),
+                    "event_type": str(meta.get("event_type") or ""),
+                    "handler": str(meta.get("handler") or ""),
+                    "source": str(meta.get("source") or ""),
+                    "webspace_id": str(meta.get("webspace_id") or ""),
+                    "receiver": str(meta.get("receiver") or ""),
+                    "node_id": str(meta.get("node_id") or ""),
+                    "age_s": round(max(0.0, now - started), 3),
+                }
+            )
+        active_bounded_handlers.sort(
+            key=lambda item: (-float(item.get("age_s") or 0.0), str(item.get("handler") or ""))
+        )
+        active_bounded_handlers = active_bounded_handlers[:10]
         top_queued_types = sorted(
             ((event_type, count) for event_type, count in self._bounded_queued_by_type.items() if count > 0),
             key=lambda item: (-item[1], item[0]),
@@ -557,6 +594,7 @@ class LocalEventBus(EventBus):
             "oldest_age_s": float(oldest_age_s),
             "top_types": top_types,
             "top_handlers": top_handlers,
+            "top_active_tasks": active_tasks,
             "incoming_total": int(self._incoming_total),
             "top_incoming_types": top_incoming_types,
             "bounded_topics": list(self._bounded_topics),
@@ -565,6 +603,7 @@ class LocalEventBus(EventBus):
             "bounded_queue_total": int(bounded_queue_total),
             "bounded_queue_peak": int(self._bounded_queue_peak),
             "bounded_active_workers": int(bounded_active_workers),
+            "top_active_bounded_handlers": active_bounded_handlers,
             "top_queued_types": top_queued_types,
             "top_queued_handlers": top_queued_handlers,
             "top_bounded_topics": top_bounded_topics,
@@ -592,7 +631,8 @@ class LocalEventBus(EventBus):
             "eventbus backlog pending_tasks=%s peak_pending_tasks=%s oldest_age_s=%.3fs "
             "bounded_queue_total=%s bounded_queue_peak=%s bounded_active_workers=%s "
             "top_types=%s top_handlers=%s top_queued_types=%s top_queued_handlers=%s "
-            "top_bounded_topics=%s top_bounded_drops=%s top_bounded_superseded_topics=%s",
+            "top_active_bounded_handlers=%s top_bounded_topics=%s top_bounded_drops=%s "
+            "top_bounded_superseded_topics=%s",
             int(snapshot["pending_tasks"]),
             int(snapshot["pending_peak"]),
             float(snapshot["oldest_age_s"]),
@@ -603,6 +643,7 @@ class LocalEventBus(EventBus):
             snapshot["top_handlers"],
             snapshot["top_queued_types"],
             snapshot["top_queued_handlers"],
+            snapshot["top_active_bounded_handlers"],
             snapshot["top_bounded_topics"],
             snapshot["top_bounded_drops"],
             snapshot["top_bounded_superseded_topics"],
@@ -731,12 +772,33 @@ class LocalEventBus(EventBus):
                     if queued is None:
                         break
                 coro, handler, event, _event_type, _handler_name, _supersede_key = queued
-                await _run_coro_with_timing(coro, handler, event)
+                task = asyncio.current_task()
+                if task is not None:
+                    with self._lock:
+                        self._bounded_active_meta[task] = {
+                            "topic": topic_key,
+                            "event_type": _event_type,
+                            "handler": _handler_name,
+                            "source": str(getattr(event, "source", "") or ""),
+                            "webspace_id": str(self._event_field(event, "webspace_id", "workspace_id") or ""),
+                            "receiver": str(
+                                self._event_field(event, "receiver", "stream_id", "slot", "projection", "id") or ""
+                            ),
+                            "node_id": str(self._event_field(event, "target_node_id", "node_id") or ""),
+                            "started": time.monotonic(),
+                        }
+                try:
+                    await _run_coro_with_timing(coro, handler, event)
+                finally:
+                    if task is not None:
+                        with self._lock:
+                            self._bounded_active_meta.pop(task, None)
         finally:
             with self._lock:
                 task = asyncio.current_task()
                 if task is not None:
                     self._bounded_worker_tasks.discard(task)
+                    self._bounded_active_meta.pop(task, None)
                 if topic_key in self._bounded_active_workers:
                     self._bounded_active_workers[topic_key] = max(0, int(self._bounded_active_workers[topic_key]) - 1)
                     if self._bounded_active_workers[topic_key] <= 0:

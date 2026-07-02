@@ -206,6 +206,46 @@ async def test_local_event_bus_reports_webio_stream_control_pressure():
 
 
 @pytest.mark.asyncio
+async def test_local_event_bus_reports_active_bounded_handler():
+    bus = LocalEventBus()
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def handler(event: Event):
+        started.set()
+        await release.wait()
+
+    bus.subscribe("webio.stream.snapshot.requested", handler)
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            payload={
+                "webspace_id": "desktop",
+                "receiver": "notebook.notes",
+                "source": "events_ws",
+            },
+            source="test",
+            ts=0.0,
+        )
+    )
+
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    snapshot = bus.backlog_snapshot()
+    active = snapshot["top_active_bounded_handlers"]
+
+    assert len(active) == 1
+    assert active[0]["event_type"] == "webio.stream.snapshot.requested"
+    assert active[0]["receiver"] == "notebook.notes"
+    assert active[0]["handler"] == "test_eventbus_shutdown.handler"
+
+    release.set()
+    ok = await bus.wait_for_idle(timeout=1.0)
+
+    assert ok is True
+    assert bus.backlog_snapshot()["top_active_bounded_handlers"] == []
+
+
+@pytest.mark.asyncio
 async def test_local_event_bus_preserves_each_webio_stream_control_handler(monkeypatch):
     monkeypatch.delenv("ADAOS_EVENTBUS_BOUNDED_TOPICS", raising=False)
     monkeypatch.delenv("ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS", raising=False)

@@ -2420,6 +2420,39 @@ class BootstrapService:
                                         lines.append(f"- task={t.get_name()} done={t.done()} cancelled={t.cancelled()} at={loc}")
                                     except Exception:
                                         continue
+                                try:
+                                    backlog_fn = getattr(core_bus, "backlog_snapshot", None)
+                                    backlog = backlog_fn() if callable(backlog_fn) else {}
+                                    active_bounded = (
+                                        backlog.get("top_active_bounded_handlers")
+                                        if isinstance(backlog, dict)
+                                        else None
+                                    )
+                                    if isinstance(active_bounded, list):
+                                        for item in active_bounded[:dump_top]:
+                                            if not isinstance(item, dict):
+                                                continue
+                                            lines.append(
+                                                "- eventbus.active_bounded "
+                                                f"type={item.get('event_type')} "
+                                                f"handler={item.get('handler')} "
+                                                f"receiver={item.get('receiver')} "
+                                                f"webspace={item.get('webspace_id')} "
+                                                f"age={item.get('age_s')}s"
+                                            )
+                                    active_tasks = backlog.get("top_active_tasks") if isinstance(backlog, dict) else None
+                                    if isinstance(active_tasks, list):
+                                        for item in active_tasks[:dump_top]:
+                                            if not isinstance(item, dict):
+                                                continue
+                                            lines.append(
+                                                "- eventbus.active_task "
+                                                f"type={item.get('event_type')} "
+                                                f"handler={item.get('handler')} "
+                                                f"age={item.get('age_s')}s"
+                                            )
+                                except Exception:
+                                    pass
                                 if lines:
                                     dump = "\n".join(lines)
                                     print("[diag] loop lag dump:\n" + dump)
