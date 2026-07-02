@@ -497,21 +497,22 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
     assert saved["preview_state"]["title"] == "English Todo"
 
 
-def test_update_current_scenario_sample_data_uses_requested_domain_and_refreshes_files(monkeypatch, tmp_path) -> None:
+def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_files(monkeypatch, tmp_path) -> None:
     skill = _load_module()
-    artifact_root = tmp_path / "conference_todo"
+    artifact_root = tmp_path / "llm_sample_data"
     artifact_root.mkdir(parents=True)
     (artifact_root / "scenario.json").write_text(
-        '{"id":"conference_todo","version":"0.1.0","name":"conference_todo","steps":[]}',
+        '{"id":"llm_sample_data","version":"0.1.0","name":"llm_sample_data","steps":[]}',
         encoding="utf-8",
     )
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
     published: list[tuple[str, dict]] = []
 
     class _Workbench:
         def set_active_draft(self, **kwargs):
             return {
                 "source_webspace_id": kwargs.get("source_webspace_id"),
-                "dev_webspace_id": "builder-conference-dev",
+                "dev_webspace_id": "builder-llm-sample-dev",
                 "active_draft_id": kwargs.get("active_draft_id"),
                 "runtime_scenario_id": kwargs.get("runtime_scenario_id"),
             }
@@ -524,17 +525,35 @@ def test_update_current_scenario_sample_data_uses_requested_domain_and_refreshes
 
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
-    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.conference"})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.llm.sample"})
     monkeypatch.setattr(events, "publish", lambda topic, payload, source=None: published.append((topic, dict(payload))))
+
+    def _llm_transform(**kwargs):
+        preview = json.loads(json.dumps(kwargs["preview_state"]))
+        preview["mock_data"] = {
+            "prototype_items": [
+                {"title": "Book venue", "notes": "Confirm room capacity and AV equipment", "status": "In progress", "date": "2026-07-01"},
+                {"title": "Confirm speakers", "notes": "Collect talk titles and short bios", "status": "Planned", "date": "2026-07-02"},
+            ]
+        }
+        return {
+            "ok": True,
+            "payload": {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview},
+            "preview_state": preview,
+            "comment": "Updated mock data for conference preparation.",
+            "validation": {"ok": True},
+        }
+
+    monkeypatch.setattr(skill, "_apply_llm_webui_transform", _llm_transform)
     skill._save_session(
-        "builder-conference",
+        "builder-llm-sample",
         {
-            "id": "builder_session_conference",
-            "webspace_id": "builder-conference",
+            "id": "builder_session_llm_sample",
+            "webspace_id": "builder-llm-sample",
             "status": "drafting",
             "title": "Todo List",
-            "scenario_id": "conference_todo",
-            "draft_id": "draft.conference",
+            "scenario_id": "llm_sample_data",
+            "draft_id": "draft.llm.sample",
             "artifact_root": str(artifact_root),
             "datasource_id": "prototype_items",
             "fields": [
@@ -550,39 +569,39 @@ def test_update_current_scenario_sample_data_uses_requested_domain_and_refreshes
 
     result = skill.update_current_scenario(
         "\u0414\u0430\u043d\u043d\u044b\u0435 \u0441\u0434\u0435\u043b\u0430\u0439 \u043d\u0430 \u043f\u0440\u0438\u043c\u0435\u0440\u0435 \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0438 \u043a \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438. \u041d\u0430\u043f\u0438\u0448\u0438 \u0438\u0445 \u043d\u0430 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u043e\u043c \u044f\u0437\u044b\u043a\u0435",
-        webspace_id="builder-conference",
+        webspace_id="builder-llm-sample",
     )
 
-    assert result["patch"]["operation"] == "update_mock_data"
+    assert result["patch"]["operation"] == "llm_webui_transform"
     rows = result["preview_state"]["mock_data"]["prototype_items"]
     assert rows[0]["title"] == "Book venue"
     assert rows[1]["title"] == "Confirm speakers"
-    assert rows[2]["notes"] == "Export attendee list and prepare registration desk"
-    assert all(row["title"] not in {"Milk", "\u041c\u043e\u043b\u043e\u043a\u043e"} for row in rows)
     assert result["project_files_refresh"]["ok"] is True
     assert any(
         topic == "prompt.project.changed"
         and payload.get("object_type") == "scenario"
-        and payload.get("object_id") == "conference_todo"
+        and payload.get("object_id") == "llm_sample_data"
         and payload.get("reason") == "builder_ui_revision_written"
         for topic, payload in published
     )
     revision = json.loads((artifact_root / "ui_revisions" / "001.json").read_text(encoding="utf-8"))
+    assert revision["llm"]["ok"] is True
     assert revision["preview_state"]["mock_data"]["prototype_items"][0]["title"] == "Book venue"
 
 
-def test_update_current_scenario_translates_existing_mock_data_to_english(monkeypatch, tmp_path) -> None:
+def test_update_current_scenario_does_not_generate_domain_mock_data_without_llm(monkeypatch, tmp_path) -> None:
     skill = _load_module()
-    artifact_root = tmp_path / "translate_rows"
+    artifact_root = tmp_path / "sample_without_llm"
     artifact_root.mkdir(parents=True)
     (artifact_root / "scenario.json").write_text(
-        '{"id":"translate_rows","version":"0.1.0","name":"translate_rows","steps":[]}',
+        '{"id":"sample_without_llm","version":"0.1.0","name":"sample_without_llm","steps":[]}',
         encoding="utf-8",
     )
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_PRIMARY", "0")
 
     class _Workbench:
         def set_active_draft(self, **kwargs):
-            return {"dev_webspace_id": "builder-translate-dev", "active_draft_id": kwargs.get("active_draft_id")}
+            return {"dev_webspace_id": "builder-sample-no-llm-dev", "active_draft_id": kwargs.get("active_draft_id")}
 
         def snapshot(self, *args, **kwargs):
             return {"preview_state": kwargs.get("preview_state") or {}}
@@ -593,16 +612,16 @@ def test_update_current_scenario_translates_existing_mock_data_to_english(monkey
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
     monkeypatch.setattr(events, "publish", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.translate"})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.sample.no.llm"})
     skill._save_session(
-        "builder-translate",
+        "builder-sample-no-llm",
         {
-            "id": "builder_session_translate",
-            "webspace_id": "builder-translate",
+            "id": "builder_session_sample_no_llm",
+            "webspace_id": "builder-sample-no-llm",
             "status": "drafting",
             "title": "Todo List",
-            "scenario_id": "translate_rows",
-            "draft_id": "draft.translate",
+            "scenario_id": "sample_without_llm",
+            "draft_id": "draft.sample.no.llm",
             "artifact_root": str(artifact_root),
             "datasource_id": "prototype_items",
             "fields": [
@@ -611,8 +630,7 @@ def test_update_current_scenario_translates_existing_mock_data_to_english(monkey
                 {"id": "date", "type": "date", "label": "Date", "required": False},
             ],
             "mock_rows": [
-                {"title": "\u041c\u043e\u043b\u043e\u043a\u043e", "notes": "\u041c\u043e\u043b\u043e\u0447\u043d\u044b\u0435", "date": "2026-07-01"},
-                {"title": "\u0425\u043b\u0435\u0431", "notes": "\u0411\u0430\u043a\u0430\u043b\u0435\u044f", "date": "2026-07-02"},
+                {"title": "Existing task", "notes": "Existing note", "date": "2026-07-01"},
             ],
             "patches": [],
             "version": "001",
@@ -620,15 +638,15 @@ def test_update_current_scenario_translates_existing_mock_data_to_english(monkey
     )
 
     result = skill.update_current_scenario(
-        "\u041f\u0435\u0440\u0435\u0432\u0435\u0434\u0438 \u0434\u0430\u043d\u043d\u044b\u0435 \u043d\u0430 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u0438\u0439 \u044f\u0437\u044b\u043a",
-        webspace_id="builder-translate",
+        "\u0414\u0430\u043d\u043d\u044b\u0435 \u0441\u0434\u0435\u043b\u0430\u0439 \u043d\u0430 \u043f\u0440\u0438\u043c\u0435\u0440\u0435 \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0438 \u043a \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438",
+        webspace_id="builder-sample-no-llm",
     )
 
+    assert result["status"] == "noop"
+    assert result["patch"]["operation"] == "noop"
     rows = result["preview_state"]["mock_data"]["prototype_items"]
-    assert rows[0]["title"] == "Milk"
-    assert rows[0]["notes"] == "Dairy"
-    assert rows[1]["title"] == "Bread"
-    assert rows[1]["notes"] == "Bakery"
+    assert rows == [{"title": "Existing task", "notes": "Existing note", "date": "2026-07-01"}]
+    assert not (artifact_root / "ui_revisions").exists()
 
 
 def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) -> None:
@@ -1156,6 +1174,7 @@ def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monk
         encoding="utf-8",
     )
     emitted: list[dict] = []
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
 
     class _Workbench:
         def get_workspace_binding(self, webspace_id):
@@ -1189,6 +1208,24 @@ def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monk
         "chat_append",
         lambda text, *, from_="hub", msg_id=None, ts=None, _meta=None: emitted.append({"text": text, "meta": dict(_meta or {})}) or {"ok": True},
     )
+
+    def _llm_transform(**kwargs):
+        preview = json.loads(json.dumps(kwargs["preview_state"]))
+        preview["mock_data"] = {
+            "shopping_items": [
+                {"item": "Milk", "quantity": 2, "category": "Dairy", "done": False, "price": 89.9},
+                {"item": "Bread", "quantity": 1, "category": "Bakery", "done": True, "price": 54.0},
+            ]
+        }
+        return {
+            "ok": True,
+            "payload": {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview},
+            "preview_state": preview,
+            "comment": "Updated sample data.",
+            "validation": {"ok": True},
+        }
+
+    monkeypatch.setattr(skill, "_apply_llm_webui_transform", _llm_transform)
     skill._save_session(
         "desktop",
         {
@@ -1215,9 +1252,9 @@ def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monk
     result = skill.chat("\u0421\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445 \u043d\u0430 \u043e\u0441\u043d\u043e\u0432\u0435 \u043f\u0440\u043e\u0434\u0443\u043a\u0442\u043e\u0432 \u043f\u0438\u0442\u0430\u043d\u0438\u044f", webspace_id="desktop-dev")
 
     assert result["ok"] is True
-    assert result["patch"]["operation"] == "update_mock_data"
+    assert result["patch"]["operation"] == "llm_webui_transform"
     rows = result["preview_state"]["mock_data"]["shopping_items"]
-    assert rows[0]["item"] == "\u041c\u043e\u043b\u043e\u043a\u043e"
+    assert rows[0]["item"] == "Milk"
     assert {item["meta"]["webspace_id"] for item in emitted} == {"desktop", "desktop-dev"}
 
 

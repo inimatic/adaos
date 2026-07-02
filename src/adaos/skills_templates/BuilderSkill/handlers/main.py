@@ -728,138 +728,6 @@ def _mock_rows(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _food_mock_rows(fields: list[dict[str, Any]], *, english: bool = False) -> list[dict[str, Any]]:
-    products = (
-        [
-            {"item": "Milk", "quantity": 2, "unit": "l", "availability": "in stock", "category": "Dairy", "done": False, "price": 89.9},
-            {"item": "Bread", "quantity": 1, "unit": "pcs", "availability": "in stock", "category": "Bakery", "done": True, "price": 54.0},
-            {"item": "Apples", "quantity": 6, "unit": "kg", "availability": "out of stock", "category": "Fruit", "done": False, "price": 129.5},
-        ]
-        if english
-        else [
-            {"item": "\u041c\u043e\u043b\u043e\u043a\u043e", "quantity": 2, "unit": "\u043b", "availability": "\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438", "category": "\u041c\u043e\u043b\u043e\u0447\u043d\u044b\u0435", "done": False, "price": 89.9},
-            {"item": "\u0425\u043b\u0435\u0431", "quantity": 1, "unit": "\u0448\u0442", "availability": "\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438", "category": "\u0411\u0430\u043a\u0430\u043b\u0435\u044f", "done": True, "price": 54.0},
-            {"item": "\u042f\u0431\u043b\u043e\u043a\u0438", "quantity": 6, "unit": "\u043a\u0433", "availability": "\u043d\u0435\u0442", "category": "\u0424\u0440\u0443\u043a\u0442\u044b", "done": False, "price": 129.5},
-        ]
-    )
-    dates = ["2026-07-01", "2026-07-02", "2026-07-03"]
-    rows: list[dict[str, Any]] = []
-    for index, product in enumerate(products, start=1):
-        row: dict[str, Any] = {}
-        for field in fields:
-            field_id = str(field.get("id") or "")
-            field_type = str(field.get("type") or "string")
-            if field_id in product:
-                row[field_id] = product[field_id]
-            elif field_id in {"title", "name", "product"}:
-                row[field_id] = product["item"]
-            elif field_type == "number":
-                row[field_id] = index
-            elif field_type == "boolean":
-                row[field_id] = index == 2
-            elif field_type == "date" or field_id == "date":
-                row[field_id] = dates[index - 1]
-            else:
-                row[field_id] = str(field.get("label") or field_id or "value")
-        rows.append(row)
-    return rows
-
-
-def _conference_mock_rows(fields: list[dict[str, Any]], *, english: bool = False) -> list[dict[str, Any]]:
-    items = (
-        [
-            {"title": "Book venue", "notes": "Confirm room capacity and AV equipment", "status": "In progress", "date": "2026-07-01", "owner": "Operations"},
-            {"title": "Confirm speakers", "notes": "Collect talk titles and short bios", "status": "Planned", "date": "2026-07-02", "owner": "Program"},
-            {"title": "Print badges", "notes": "Export attendee list and prepare registration desk", "status": "Ready", "date": "2026-07-03", "owner": "Registration"},
-        ]
-        if english
-        else [
-            {"title": "\u0417\u0430\u0431\u0440\u043e\u043d\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043f\u043b\u043e\u0449\u0430\u0434\u043a\u0443", "notes": "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0437\u0430\u043b \u0438 AV-\u043e\u0431\u043e\u0440\u0443\u0434\u043e\u0432\u0430\u043d\u0438\u0435", "status": "\u0412 \u0440\u0430\u0431\u043e\u0442\u0435", "date": "2026-07-01", "owner": "\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u0438"},
-            {"title": "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0441\u043f\u0438\u043a\u0435\u0440\u043e\u0432", "notes": "\u0421\u043e\u0431\u0440\u0430\u0442\u044c \u0442\u0435\u043c\u044b \u0434\u043e\u043a\u043b\u0430\u0434\u043e\u0432 \u0438 \u0431\u0438\u043e", "status": "\u0417\u0430\u043f\u043b\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u043e", "date": "2026-07-02", "owner": "\u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0430"},
-            {"title": "\u041d\u0430\u043f\u0435\u0447\u0430\u0442\u0430\u0442\u044c \u0431\u0435\u0439\u0434\u0436\u0438", "notes": "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a \u0433\u043e\u0441\u0442\u0435\u0439 \u0438 \u0441\u0442\u043e\u0439\u043a\u0443 \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u0438", "status": "\u0413\u043e\u0442\u043e\u0432\u043e", "date": "2026-07-03", "owner": "\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f"},
-        ]
-    )
-    rows: list[dict[str, Any]] = []
-    for index, item in enumerate(items, start=1):
-        row: dict[str, Any] = {}
-        for field in fields:
-            field_id = str(field.get("id") or "")
-            field_type = str(field.get("type") or "string")
-            if field_id in item:
-                row[field_id] = item[field_id]
-            elif field_id in {"item", "name", "task", "summary"}:
-                row[field_id] = item["title"]
-            elif field_id in {"description", "comment", "comments"}:
-                row[field_id] = item["notes"]
-            elif field_type == "number":
-                row[field_id] = index
-            elif field_type == "boolean":
-                row[field_id] = index == 3
-            elif field_type == "date" or field_id == "date":
-                row[field_id] = item["date"]
-            else:
-                row[field_id] = item.get("notes") or str(field.get("label") or field_id or "value")
-        rows.append(row)
-    return rows
-
-
-_ENGLISH_VALUE_TRANSLATIONS = {
-    "\u041c\u043e\u043b\u043e\u043a\u043e": "Milk",
-    "\u0425\u043b\u0435\u0431": "Bread",
-    "\u042f\u0431\u043b\u043e\u043a\u0438": "Apples",
-    "\u043b": "l",
-    "\u0448\u0442": "pcs",
-    "\u043a\u0433": "kg",
-    "\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438": "in stock",
-    "\u043d\u0435\u0442": "out of stock",
-    "\u041c\u043e\u043b\u043e\u0447\u043d\u044b\u0435": "Dairy",
-    "\u0411\u0430\u043a\u0430\u043b\u0435\u044f": "Bakery",
-    "\u0424\u0440\u0443\u043a\u0442\u044b": "Fruit",
-    "\u0412 \u0440\u0430\u0431\u043e\u0442\u0435": "In progress",
-    "\u0417\u0430\u043f\u043b\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u043e": "Planned",
-    "\u0413\u043e\u0442\u043e\u0432\u043e": "Ready",
-}
-
-
-def _wants_english_data(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(token in lowered for token in ("english", "translate", "\u0430\u043d\u0433\u043b", "\u043f\u0435\u0440\u0435\u0432\u0435\u0434"))
-
-
-def _mentions_conference_data(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(token in lowered for token in ("conference", "event prep", "\u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446", "\u0441\u043f\u0438\u043a\u0435\u0440", "\u0434\u043e\u043a\u043b\u0430\u0434", "\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446", "\u043c\u0435\u0440\u043e\u043f\u0440\u0438\u044f\u0442"))
-
-
-def _translate_mock_rows_to_english(rows: Any) -> list[dict[str, Any]]:
-    if not isinstance(rows, list):
-        return []
-    translated: list[dict[str, Any]] = []
-    for source in rows:
-        if not isinstance(source, Mapping):
-            continue
-        row: dict[str, Any] = {}
-        for key, value in source.items():
-            if isinstance(value, str):
-                row[str(key)] = _ENGLISH_VALUE_TRANSLATIONS.get(value, value)
-            else:
-                row[str(key)] = value
-        translated.append(row)
-    return translated
-
-
-def _mock_rows_for_instruction(fields: list[dict[str, Any]], text: str, existing_rows: Any = None) -> list[dict[str, Any]]:
-    english = _wants_english_data(text)
-    if _mentions_conference_data(text):
-        return _conference_mock_rows(fields, english=english)
-    if english:
-        translated = _translate_mock_rows_to_english(existing_rows)
-        if translated:
-            return translated
-        return _food_mock_rows(fields, english=True)
-    return _food_mock_rows(fields)
-
-
 def _write_webui(artifact_root: str | None, preview_state: Mapping[str, Any]) -> None:
     if not artifact_root:
         return
@@ -1702,7 +1570,7 @@ def _move_field_first(fields: list[dict[str, Any]], field_id: str) -> list[dict[
 
 
 def _date_mock_rows(fields: list[dict[str, Any]], existing_rows: Any = None) -> list[dict[str, Any]]:
-    base_rows = [dict(item) for item in existing_rows if isinstance(item, Mapping)] if isinstance(existing_rows, list) else _food_mock_rows(fields)
+    base_rows = [dict(item) for item in existing_rows if isinstance(item, Mapping)] if isinstance(existing_rows, list) else _mock_rows(fields)
     if not base_rows:
         base_rows = _mock_rows(fields)
     dates = ["2026-07-01", "2026-07-02", "2026-07-03"]
@@ -1918,7 +1786,6 @@ def _has_deterministic_builder_update(text: str) -> bool:
             _wants_execution_checkbox(text),
             _wants_add_button_above_form(text),
             _wants_done_checkbox_first(text),
-            _wants_sample_data(text),
         )
     ):
         return True
@@ -2324,6 +2191,9 @@ def _apply_llm_webui_transform(
         "preview_state.current_ui is the compact Builder preview contract. "
         "preview_state.page_schema is optional and may contain a full AdaOS pageSchema with layout/widgets; use it when the user asks to move, remove, or redesign widgets. "
         "Use the supplied adaos.webui.v1 schema as the webui.json compatibility contract. "
+        "You are responsible for all domain-specific content: sample rows, translations, labels, examples, copy, and mock data. "
+        "When the user asks for sample data, realistic examples, a different domain, or translation, update preview_state.mock_data directly for the active datasource instead of leaving old rows in place. "
+        "Do not rely on hidden application code to generate domain examples after your response; your JSON must be complete. "
         "For checkbox/toggle semantics use boolean fields and boolean UI/table kinds; do not represent booleans as literal strings like 'true'/'false' unless the user asks for text. "
         "If you cannot safely satisfy the request, keep the previous UI valid and set unable_reason plus a short comment."
     )
@@ -3337,11 +3207,6 @@ def _is_create_request(text: str) -> bool:
     )
 
 
-def _wants_sample_data(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(token in lowered for token in ("sample", "mock", "example", "\u043f\u0440\u0438\u043c\u0435\u0440", "\u0434\u0430\u043d\u043d", "\u043f\u0440\u043e\u0434\u0443\u043a\u0442", "\u043f\u0438\u0442\u0430\u043d", "\u0435\u0434\u0430"))
-
-
 def _ensure_workbench(
     webspace_id: str,
     *,
@@ -4021,8 +3886,6 @@ def update_current_scenario(
 
         session["fields"] = fields
         session["filters"] = filters
-        rows = _mock_rows_for_instruction(fields, text, session.get("mock_rows"))
-        session["mock_rows"] = rows
         unique_applied = list(dict.fromkeys(applied))
         patch["operation"] = unique_applied[0] if len(unique_applied) == 1 else "multi_update"
         patch["status"] = "partial" if not_implemented else patch["status"]
@@ -4030,7 +3893,6 @@ def update_current_scenario(
             "fields": changed_fields,
             "filters": changed_filters,
             "datasource_id": session.get("datasource_id") or "items",
-            "rows": rows,
             "applied_operations": unique_applied,
             "not_implemented": not_implemented,
         }
@@ -4046,11 +3908,6 @@ def update_current_scenario(
             "datasource_id": session.get("datasource_id") or "items",
             "rows": rows,
         }
-    elif _wants_sample_data(text):
-        rows = _mock_rows_for_instruction(fields, text, session.get("mock_rows"))
-        session["mock_rows"] = rows
-        patch["operation"] = "update_mock_data"
-        patch["diff"] = {"datasource_id": session.get("datasource_id") or "items", "rows": rows}
     else:
         label = _extract_field_label(text) or ("\u0426\u0435\u043d\u0430" if _text_contains_any(text, ("\u0446\u0435\u043d", "price")) else None)
         if label:
