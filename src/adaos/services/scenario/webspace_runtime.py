@@ -68,6 +68,9 @@ _WEBSPACE_LISTING_SYNC_TASK: asyncio.Task[Any] | None = None
 _WORKFLOW_SYNC_TASKS: dict[str, asyncio.Task[Any]] = {}
 _WORKFLOW_SYNC_PENDING: dict[str, Dict[str, Any]] = {}
 _WORKFLOW_SYNC_STATS: dict[str, Dict[str, Any]] = {}
+_LIVE_ROOM_REFRESH_TASKS: dict[str, asyncio.Task[Any]] = {}
+_LIVE_ROOM_REFRESH_PENDING: dict[str, Dict[str, Any]] = {}
+_LIVE_ROOM_REFRESH_STATS: dict[str, Dict[str, Any]] = {}
 _WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
 _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -2664,6 +2667,23 @@ def _publish_live_room_during_rebuild_enabled() -> bool:
 
 def _refresh_live_room_after_rebuild_enabled() -> bool:
     return _env_flag_default_enabled("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM")
+
+
+def _defer_live_room_refresh_for_rebuild(action: str) -> bool:
+    if str(action or "").strip() != "scenario_switch_rebuild":
+        return False
+    if os.getenv("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH") is None:
+        return False
+    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH")
+
+
+def _live_room_refresh_debounce_s() -> float:
+    raw = os.getenv("ADAOS_WEBSPACE_LIVE_ROOM_REFRESH_DEBOUNCE_S")
+    try:
+        value = float(str(raw or "").strip())
+    except Exception:
+        value = 0.2
+    return max(0.0, min(value, 10.0))
 
 
 def _fresh_doc_on_scenario_switch_enabled() -> bool:
@@ -5562,6 +5582,112 @@ def _schedule_webspace_listing_sync(*, reason: str) -> dict[str, Any]:
     }
 
 
+def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
+    key = str(webspace_id or "").strip()
+    stats = _LIVE_ROOM_REFRESH_STATS.get(key)
+    if stats is None:
+        stats = {
+            "requested_total": 0,
+            "scheduled_total": 0,
+            "coalesced_total": 0,
+            "completed_total": 0,
+            "failed_total": 0,
+            "last_reason": "",
+            "last_requested_at": 0.0,
+            "last_completed_at": 0.0,
+        }
+        _LIVE_ROOM_REFRESH_STATS[key] = stats
+    return stats
+
+
+def _schedule_live_room_refresh(
+    *,
+    webspace_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    key = str(webspace_id or "").strip()
+    if not key:
+        return {"scheduled": False, "reason": "missing_webspace"}
+
+    stats = _live_room_refresh_stats(key)
+    stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
+    stats["last_reason"] = str(reason or "").strip()
+    stats["last_requested_at"] = time.time()
+
+    request = {
+        "webspace_id": key,
+        "reason": str(reason or "").strip() or "live_room_refresh",
+    }
+    current = _LIVE_ROOM_REFRESH_TASKS.get(key)
+    if current is not None and not current.done():
+        _LIVE_ROOM_REFRESH_PENDING[key] = request
+        stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
+        return {
+            "scheduled": True,
+            "deferred": True,
+            "coalesced": True,
+            "task": current.get_name(),
+        }
+
+    async def _runner(initial: dict[str, Any]) -> None:
+        current_request = dict(initial)
+        try:
+            while True:
+                delay = _live_room_refresh_debounce_s()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                pending_before_start = _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+                if pending_before_start:
+                    current_request = dict(pending_before_start)
+                active_reason = str(current_request.get("reason") or "").strip() or "live_room_refresh"
+                started = time.perf_counter()
+                try:
+                    from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
+
+                    await refresh_live_webspace_effective_branches(
+                        key,
+                        reason=active_reason,
+                    )
+                    stats = _live_room_refresh_stats(key)
+                    stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
+                    stats["last_completed_at"] = time.time()
+                    _log.info(
+                        "deferred live-room refresh completed webspace=%s reason=%s duration_ms=%.3f",
+                        key,
+                        active_reason,
+                        _elapsed_ms(started),
+                    )
+                except Exception:
+                    stats = _live_room_refresh_stats(key)
+                    stats["failed_total"] = int(stats.get("failed_total") or 0) + 1
+                    _log.warning(
+                        "deferred live-room refresh failed webspace=%s reason=%s",
+                        key,
+                        active_reason,
+                        exc_info=True,
+                    )
+                next_request = _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+                if not next_request:
+                    break
+                current_request = dict(next_request)
+        finally:
+            if _LIVE_ROOM_REFRESH_TASKS.get(key) is task:
+                _LIVE_ROOM_REFRESH_TASKS.pop(key, None)
+
+    task = asyncio.create_task(
+        _runner(request),
+        name=f"live-room-refresh:{key}"[:120],
+    )
+    _LIVE_ROOM_REFRESH_TASKS[key] = task
+    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
+    return {
+        "scheduled": True,
+        "deferred": True,
+        "coalesced": False,
+        "task": task.get_name(),
+    }
+
+
 def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
     stats = _WORKFLOW_SYNC_STATS.get(key)
@@ -6890,34 +7016,41 @@ async def rebuild_webspace_from_sources(
         }
     )
     if should_refresh_live_room:
-        stage_started = time.perf_counter()
-        try:
-            if requested_action in {"scenario_switch_rebuild", "reload", "reset"}:
-                from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
-
-                live_room_refresh_result = await refresh_live_webspace_effective_branches(
-                    webspace_id,
-                    reason=f"semantic_rebuild:{requested_action}",
-                )
-            else:
-                from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
-
-                live_room_refresh_result = await reset_live_webspace_room(
-                    webspace_id,
-                    close_reason=f"semantic_rebuild:{requested_action}",
-                )
-        except Exception as exc:
-            live_room_refresh_result = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            _log.warning(
-                "failed to refresh live YRoom after detached semantic rebuild webspace=%s action=%s",
-                webspace_id,
-                requested_action,
-                exc_info=True,
+        if _defer_live_room_refresh_for_rebuild(requested_action):
+            live_room_refresh_result = _schedule_live_room_refresh(
+                webspace_id=webspace_id,
+                reason=f"semantic_rebuild:{requested_action}",
             )
-        _record_timing(timings_ms, "live_room_refresh", stage_started)
+            timings_ms["live_room_refresh_deferred"] = 0.0
+        else:
+            stage_started = time.perf_counter()
+            try:
+                if requested_action in {"scenario_switch_rebuild", "reload", "reset"}:
+                    from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
+
+                    live_room_refresh_result = await refresh_live_webspace_effective_branches(
+                        webspace_id,
+                        reason=f"semantic_rebuild:{requested_action}",
+                    )
+                else:
+                    from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+
+                    live_room_refresh_result = await reset_live_webspace_room(
+                        webspace_id,
+                        close_reason=f"semantic_rebuild:{requested_action}",
+                    )
+            except Exception as exc:
+                live_room_refresh_result = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                _log.warning(
+                    "failed to refresh live YRoom after detached semantic rebuild webspace=%s action=%s",
+                    webspace_id,
+                    requested_action,
+                    exc_info=True,
+                )
+            _record_timing(timings_ms, "live_room_refresh", stage_started)
 
     if not target_scenario or not resolved_scenario_resolution:
         stage_started = time.perf_counter()
