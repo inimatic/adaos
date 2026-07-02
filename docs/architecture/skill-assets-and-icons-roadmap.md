@@ -236,6 +236,11 @@ Status as of 2026-07-02:
   authored `path` descriptors to `/assets/blobs/sha256/...`.
 - `/assets` is mounted as a static immutable blob layer; app logic publishes and
   validates resources ahead of byte serving.
+- The Angular `PageDataService` resolves `resource:<id>` descriptors from the
+  materialized resource roots and warms the browser Cache API by `cacheKey` for
+  URL-backed resources. Current renderer coverage includes the existing
+  resource data source and assistant avatar surfaces; broader icon/image
+  renderer adoption is still pending.
 - Root exposes the planned cache contract at
   `/v1/root/browser-assets/cache-contract`; blob relay/fetch endpoints are not
   implemented yet.
