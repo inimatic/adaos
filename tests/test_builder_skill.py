@@ -500,6 +500,47 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
     assert saved["preview_state"]["title"] == "English Todo"
 
 
+def test_llm_webui_transform_uses_stable_request_id_and_compact_prompt(monkeypatch) -> None:
+    skill = _load_module()
+    import adaos.sdk.llm.llm_client as llm_client
+
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_TIMEOUT_S", "181")
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", "4321")
+    preview = {
+        "title": "Todo List",
+        "current_ui": {"layout_order": "input_first"},
+        "datasources": [{"id": "prototype_items", "type": "array"}],
+        "mock_data": {"prototype_items": [{"title": "Buy tickets"}]},
+    }
+    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    captured: dict[str, object] = {}
+
+    def _send_response(messages, **kwargs):
+        captured["messages"] = list(messages)
+        captured["kwargs"] = dict(kwargs)
+        return {"output_text": json.dumps({**payload, "comment": "Updated."}, ensure_ascii=False)}
+
+    monkeypatch.setattr(llm_client, "send_response", _send_response)
+    monkeypatch.setattr(skill, "_normalise_llm_webui_payload", lambda parsed, previous_preview: (parsed, parsed["preview_state"]))
+    monkeypatch.setattr(skill, "_validate_builder_webui_payload", lambda payload_arg, preview_arg: {"ok": True})
+
+    result = skill._apply_llm_webui_transform(
+        session={"id": "builder_session_todo", "scenario_id": "todo_list", "version": "001"},
+        instruction="Adapt sample data for conference preparation",
+        preview_state=preview,
+    )
+
+    assert result["ok"] is True
+    kwargs = captured["kwargs"]
+    assert kwargs["timeout"] == 181
+    assert kwargs["max_tokens"] == 4321
+    assert str(kwargs["request_id"]).startswith("builder-ui-")
+    user_prompt = captured["messages"][1]["content"]
+    assert "\n" not in user_prompt
+    assert "webui_v1_schema" in user_prompt
+    assert result["attempts"][0]["request_id"] == kwargs["request_id"]
+
+
 def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_files(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "llm_sample_data"
