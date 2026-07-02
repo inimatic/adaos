@@ -25,6 +25,7 @@ def materialize_response(
     actor_id: str | None = None,
     actor_label: str | None = None,
     actor_icon: str | None = None,
+    actor_avatar_ref: str | None = None,
     request_id: str | None = None,
     turn_trace_id: str | None = None,
     thread_id: str | None = None,
@@ -55,6 +56,8 @@ def materialize_response(
         clean_meta.setdefault("active_agent_label", actor_label)
     if actor_icon:
         clean_meta.setdefault("active_agent_icon", actor_icon)
+    if actor_avatar_ref:
+        clean_meta.setdefault("active_agent_avatar_ref", actor_avatar_ref)
     if request_id:
         clean_meta.setdefault("request_id", request_id)
     if turn_trace_id:
@@ -93,6 +96,8 @@ def materialize_response(
                 payload["active_agent_label"] = actor_label
             if actor_icon:
                 payload["active_agent_icon"] = actor_icon
+            if actor_avatar_ref:
+                payload["active_agent_avatar_ref"] = actor_avatar_ref
             _attach_voice_metadata(payload, clean_meta)
             stored = _append_ledger_message(
                 payload,
@@ -147,6 +152,7 @@ def materialize_tool_result(
     actor_id: str | None = None,
     actor_label: str | None = None,
     actor_icon: str | None = None,
+    actor_avatar_ref: str | None = None,
     request_id: str | None = None,
     turn_trace_id: str | None = None,
     thread_id: str | None = None,
@@ -175,6 +181,7 @@ def materialize_tool_result(
         actor_id=actor_id,
         actor_label=actor_label,
         actor_icon=actor_icon,
+        actor_avatar_ref=actor_avatar_ref,
         request_id=request_id,
         turn_trace_id=turn_trace_id,
         thread_id=thread_id,
@@ -482,6 +489,8 @@ def _attach_voice_metadata(payload: dict[str, Any], meta: Mapping[str, Any]) -> 
         "active_agent_gender",
         "active_agent_voice",
         "active_agent_icon",
+        "active_agent_avatar_ref",
+        "agent_avatar_ref",
         "agent_icon",
     ):
         value = meta.get(key)

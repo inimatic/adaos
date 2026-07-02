@@ -96,6 +96,7 @@ def test_response_envelope_materializes_chat_and_speech() -> None:
             "active_agent_gender": "male",
             "active_agent_voice": "ru-male",
             "active_agent_icon": "male-outline",
+            "active_agent_avatar_ref": "resource:assistant.arseni.avatar",
             "voice_profile": {"gender": "male", "voice": "ru-male", "lang": "ru-RU"},
         },
     )
@@ -104,17 +105,20 @@ def test_response_envelope_materializes_chat_and_speech() -> None:
     assert chat_events[0].payload["text"] == "Envelope reply"
     assert chat_events[0].payload["_meta"]["turn_trace_id"] == "trace.1"
     assert chat_events[0].payload["active_agent_id"] == "agent:test:arseni"
+    assert chat_events[0].payload["active_agent_avatar_ref"] == "resource:assistant.arseni.avatar"
     assert chat_events[0].payload["voice_gender"] == "male"
     assert chat_events[0].payload["voice"] == "ru-male"
     assert say_events[0].payload["text"] == "Speak this"
     assert say_events[0].payload["active_agent_id"] == "agent:test:arseni"
     assert say_events[0].payload["active_agent_gender"] == "male"
+    assert say_events[0].payload["active_agent_avatar_ref"] == "resource:assistant.arseni.avatar"
     assert say_events[0].payload["voice_gender"] == "male"
     assert say_events[0].payload["voice"] == "ru-male"
     assert say_events[0].payload["voice_profile"]["gender"] == "male"
     projection = conversation_store.list_projection("conv.envelope")
     assert projection["messages"][0]["text"] == "Envelope reply"
     assert projection["messages"][0]["voice_gender"] == "male"
+    assert projection["messages"][0]["active_agent_avatar_ref"] == "resource:assistant.arseni.avatar"
 
 
 def test_response_planner_infers_structured_targets() -> None:

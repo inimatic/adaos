@@ -703,6 +703,11 @@ def _agent_voice_profile(agent: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _agent_avatar_ref(agent: Mapping[str, Any]) -> str | None:
+    value = str(agent.get("avatar_ref") or agent.get("avatar") or "").strip()
+    return value or None
+
+
 def _browser_voice_hint(*, voice: Any = None, gender: Any = None) -> str | None:
     gender_token = str(gender or "").strip().lower()
     if gender_token in {"female", "male"}:
@@ -728,6 +733,7 @@ def _agent_projection_from_record(agent: Mapping[str, Any]) -> dict[str, Any]:
         "gender": str(agent.get("gender") or "").strip() or None,
         "voice": str(agent.get("voice") or "").strip() or None,
         "icon": str(agent.get("icon") or "").strip() or None,
+        "avatar_ref": _agent_avatar_ref(agent),
         "voice_profile": _agent_voice_profile(agent),
     }
     if agent.get("skill"):
@@ -764,6 +770,7 @@ def _general_agent_metadata() -> dict[str, Any]:
         "active_agent_gender": gender or None,
         "active_agent_voice": voice or None,
         "active_agent_icon": agent.get("icon"),
+        "active_agent_avatar_ref": agent.get("avatar_ref"),
         "voice_gender": gender or None,
         "voice": voice or None,
         "voice_profile": agent.get("voice_profile") or _agent_voice_profile({"gender": gender, "voice": voice}),
@@ -791,6 +798,13 @@ def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: 
         or (registry_agent or {}).get("icon")
         or ""
     ).strip()
+    avatar_ref = str(
+        active_channel.get("active_agent_avatar_ref")
+        or active_channel.get("agent_avatar_ref")
+        or active_channel.get("active_agent_avatar")
+        or (registry_agent or {}).get("avatar_ref")
+        or ""
+    ).strip()
     return {
         "id": agent_id or f"agent:{channel_id}:active",
         "label": label,
@@ -801,6 +815,7 @@ def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: 
         "gender": gender or None,
         "voice": voice or None,
         "icon": icon or None,
+        "avatar_ref": avatar_ref or None,
         "voice_profile": _agent_voice_profile({"gender": gender, "voice": voice}),
     }
 
@@ -2002,6 +2017,14 @@ class RouterService:
                         or ""
                     ).strip()
                     or None,
+                    active_agent_avatar_ref=str(
+                        channel_meta.get("active_agent_avatar_ref")
+                        or channel_meta.get("agent_avatar_ref")
+                        or active_row.get("active_agent_avatar_ref")
+                        or agent_projection.get("avatar_ref")
+                        or ""
+                    ).strip()
+                    or None,
                     route_id=str(channel.get("route_id") or channel_meta.get("route_id") or "voice_chat").strip() or "voice_chat",
                     source="router.dialog.restore",
                 )
@@ -2043,6 +2066,7 @@ class RouterService:
                         "active_agent_gender": active_channel.get("active_agent_gender"),
                         "active_agent_voice": active_channel.get("active_agent_voice"),
                         "active_agent_icon": active_channel.get("active_agent_icon"),
+                        "active_agent_avatar_ref": active_channel.get("active_agent_avatar_ref"),
                     },
                 )
             except Exception:
@@ -2073,6 +2097,7 @@ class RouterService:
                     "active_agent_gender": general_agent.get("gender"),
                     "active_agent_voice": general_agent.get("voice"),
                     "active_agent_icon": general_agent.get("icon"),
+                    "active_agent_avatar_ref": general_agent.get("avatar_ref"),
                     "route_id": "voice_chat",
                 },
                 event=event,
@@ -2370,6 +2395,7 @@ class RouterService:
                 "active_agent_gender": general_agent.get("gender"),
                 "active_agent_voice": general_agent.get("voice"),
                 "active_agent_icon": general_agent.get("icon"),
+                "active_agent_avatar_ref": general_agent.get("avatar_ref"),
                 "active_agent": general_agent,
                 "policy": _dialog_channel_policy("general", default_tool="voice_chat_skill.handle_text"),
                 "active": active_id == "general",
@@ -2431,6 +2457,7 @@ class RouterService:
                     "active_agent_gender",
                     "active_agent_voice",
                     "active_agent_icon",
+                    "active_agent_avatar_ref",
                 ):
                     if meta.get(key) and not normalized.get(key):
                         normalized[key] = meta.get(key)
@@ -2448,6 +2475,7 @@ class RouterService:
                         "active_agent_gender": active_agent.get("gender"),
                         "active_agent_voice": active_agent.get("voice"),
                         "active_agent_icon": active_agent.get("icon"),
+                        "active_agent_avatar_ref": active_agent.get("avatar_ref"),
                         "active_agent": active_agent,
                         "default_tool": active_dict.get("default_tool"),
                     }
@@ -2464,6 +2492,7 @@ class RouterService:
                     "active_agent_gender": active_agent.get("gender"),
                     "active_agent_voice": active_agent.get("voice"),
                     "active_agent_icon": active_agent.get("icon"),
+                    "active_agent_avatar_ref": active_agent.get("avatar_ref"),
                     "active_agent": active_agent,
                     "default_skill": active_dict.get("default_skill"),
                     "default_tool": active_dict.get("default_tool"),
@@ -2490,6 +2519,7 @@ class RouterService:
                     "active_agent_gender": general_agent.get("gender"),
                     "active_agent_voice": general_agent.get("voice"),
                     "active_agent_icon": general_agent.get("icon"),
+                    "active_agent_avatar_ref": general_agent.get("avatar_ref"),
                     "route_id": "voice_chat",
                 }
             elif active_agent:
@@ -2500,6 +2530,7 @@ class RouterService:
                 active_dict.setdefault("active_agent_gender", active_agent.get("gender"))
                 active_dict.setdefault("active_agent_voice", active_agent.get("voice"))
                 active_dict.setdefault("active_agent_icon", active_agent.get("icon"))
+                active_dict.setdefault("active_agent_avatar_ref", active_agent.get("avatar_ref"))
             for channel in channels:
                 _store_dialog_channel_projection(ws, channel)
             _persist_active_dialog_channel(ws, active_id, active_dict, event=event)
@@ -3198,6 +3229,9 @@ class RouterService:
                 if agent.get("icon"):
                     clean_msg.setdefault("active_agent_icon", str(agent.get("icon") or ""))
                     clean_msg.setdefault("agent_icon", str(agent.get("icon") or ""))
+                if agent.get("avatar_ref"):
+                    clean_msg.setdefault("active_agent_avatar_ref", str(agent.get("avatar_ref") or ""))
+                    clean_msg.setdefault("agent_avatar_ref", str(agent.get("avatar_ref") or ""))
                 if isinstance(agent.get("voice_profile"), dict):
                     clean_msg.setdefault("voice_profile", dict(agent.get("voice_profile") or {}))
             clean_msg["dialog_channel_id"] = channel_id
@@ -4068,7 +4102,9 @@ class RouterService:
                 "active_agent_gender",
                 "active_agent_voice",
                 "active_agent_icon",
+                "active_agent_avatar_ref",
                 "agent_icon",
+                "agent_avatar_ref",
             ):
                 raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():
@@ -4087,9 +4123,13 @@ class RouterService:
                     if label:
                         msg["active_agent_label"] = label
                 if "active_agent_icon" not in msg:
-                    icon = str(active_agent.get("icon") or active_agent.get("avatar") or "").strip()
+                    icon = str(active_agent.get("icon") or "").strip()
                     if icon:
                         msg["active_agent_icon"] = icon
+                if "active_agent_avatar_ref" not in msg:
+                    avatar_ref = str(active_agent.get("avatar_ref") or active_agent.get("avatar") or "").strip()
+                    if avatar_ref:
+                        msg["active_agent_avatar_ref"] = avatar_ref
             actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
             if actions:
                 msg["actions"] = [dict(item) for item in actions if isinstance(item, dict)]
@@ -4162,7 +4202,14 @@ class RouterService:
                 item["voice"] = voice
             if gender:
                 item["voice_gender"] = gender
-            for key in ("active_agent_id", "active_agent_label", "active_agent_gender", "active_agent_voice", "active_agent_icon"):
+            for key in (
+                "active_agent_id",
+                "active_agent_label",
+                "active_agent_gender",
+                "active_agent_voice",
+                "active_agent_icon",
+                "active_agent_avatar_ref",
+            ):
                 value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(value, str) and value.strip():
                     item[key] = value.strip()
@@ -4810,6 +4857,8 @@ class RouterService:
                 actor_id=agent_id,
                 actor_label=str(action_meta.get("active_agent_label") or "").strip() or None,
                 actor_icon=str(action_meta.get("active_agent_icon") or action_meta.get("agent_icon") or "").strip() or None,
+                actor_avatar_ref=str(action_meta.get("active_agent_avatar_ref") or action_meta.get("agent_avatar_ref") or "").strip()
+                or None,
                 request_id=str(request_id or action_meta.get("request_id") or "").strip() or None,
                 turn_trace_id=str(action_meta.get("turn_trace_id") or "").strip() or None,
                 thread_id=str(action_meta.get("thread_id") or action_payload.get("thread_id") or "").strip() or None,
@@ -4883,6 +4932,10 @@ class RouterService:
                     "active_agent_id": agent_id,
                     "active_agent_label": str(action_meta.get("active_agent_label") or "").strip() or None,
                     "active_agent_icon": str(action_meta.get("active_agent_icon") or action_meta.get("agent_icon") or "").strip() or None,
+                    "active_agent_avatar_ref": str(
+                        action_meta.get("active_agent_avatar_ref") or action_meta.get("agent_avatar_ref") or ""
+                    ).strip()
+                    or None,
                     "_meta": {**action_meta, "materialization_fallback": "surface_missing_visible_output"},
                 }
                 try:
@@ -5053,6 +5106,16 @@ class RouterService:
                         default_tool=default_tool,
                         conversation_id=conversation_id,
                         active_agent_id=str(channel.get("active_agent_id") or "").strip() or None,
+                        active_agent_label=str(channel.get("active_agent_label") or "").strip() or None,
+                        active_agent_owner=str(channel.get("active_agent_owner") or channel.get("owner") or "").strip() or None,
+                        active_agent_kind=str(channel.get("active_agent_kind") or "").strip() or None,
+                        active_agent_gender=str(channel.get("active_agent_gender") or "").strip() or None,
+                        active_agent_voice=str(channel.get("active_agent_voice") or "").strip() or None,
+                        active_agent_icon=str(channel.get("active_agent_icon") or channel.get("agent_icon") or "").strip() or None,
+                        active_agent_avatar_ref=str(
+                            channel.get("active_agent_avatar_ref") or channel.get("agent_avatar_ref") or ""
+                        ).strip()
+                        or None,
                         route_id=str(channel.get("route_id") or "voice_chat"),
                         source_request_id=str(route_meta.get("request_id") or "").strip() or None,
                         bus=self.bus,
@@ -5137,6 +5200,8 @@ class RouterService:
                     active_agent_gender=str(meta.get("active_agent_gender") or meta.get("voice_gender") or "").strip() or None,
                     active_agent_voice=str(meta.get("active_agent_voice") or meta.get("voice") or "").strip() or None,
                     active_agent_icon=str(meta.get("active_agent_icon") or meta.get("agent_icon") or "").strip() or None,
+                    active_agent_avatar_ref=str(meta.get("active_agent_avatar_ref") or meta.get("agent_avatar_ref") or "").strip()
+                    or None,
                     route_id=str(channel.get("route_id") or meta.get("route_id") or "voice_chat").strip() or "voice_chat",
                     bus=self.bus,
                     source="router.voice.requested_channel",
@@ -5235,6 +5300,7 @@ class RouterService:
                     meta["active_agent_gender"] = str(pre_agent.get("gender") or "").strip()
                     meta["active_agent_voice"] = str(pre_agent.get("voice") or "").strip()
                     meta["active_agent_icon"] = str(pre_agent.get("icon") or "").strip()
+                    meta["active_agent_avatar_ref"] = str(pre_agent.get("avatar_ref") or "").strip()
                     meta["voice_gender"] = str(pre_agent.get("gender") or "").strip()
                     meta["voice"] = str(pre_agent.get("voice") or "").strip()
                     meta["voice_profile"] = _agent_voice_profile(pre_agent)
@@ -5459,6 +5525,7 @@ class RouterService:
                         "active_agent_gender": str(agent.get("gender") or "").strip(),
                         "active_agent_voice": str(agent.get("voice") or "").strip(),
                         "active_agent_icon": str(agent.get("icon") or "").strip(),
+                        "active_agent_avatar_ref": str(agent.get("avatar_ref") or "").strip(),
                         "voice_gender": str(agent.get("gender") or "").strip(),
                         "voice": str(agent.get("voice") or "").strip(),
                         "voice_profile": _agent_voice_profile(agent),
@@ -5480,6 +5547,7 @@ class RouterService:
                             active_agent_gender=str(agent.get("gender") or "").strip(),
                             active_agent_voice=str(agent.get("voice") or "").strip(),
                             active_agent_icon=str(agent.get("icon") or "").strip(),
+                            active_agent_avatar_ref=str(agent.get("avatar_ref") or "").strip() or None,
                             route_id="voice_chat",
                             bus=self.bus,
                             source="router.voice.addressed_agent",

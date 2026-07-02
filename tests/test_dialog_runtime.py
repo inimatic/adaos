@@ -28,6 +28,7 @@ def test_apply_tool_result_activates_companion_channel() -> None:
                     "label": "Арсений",
                     "gender": "male",
                     "icon": "male-outline",
+                    "avatar_ref": "resource:assistant.arseni.avatar",
                     "voice_profile": {"voice": "ru-male"},
                 },
             },
@@ -46,6 +47,7 @@ def test_apply_tool_result_activates_companion_channel() -> None:
     assert state.active_agent_gender == "male"
     assert state.active_agent_voice == "ru-male"
     assert state.active_agent_icon == "male-outline"
+    assert state.active_agent_avatar_ref == "resource:assistant.arseni.avatar"
     assert dialog_runtime.get_active_channel("desktop") == state
 
 
@@ -62,6 +64,7 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
         active_agent_gender="female",
         active_agent_voice="ru-female",
         active_agent_icon="female-outline",
+        active_agent_avatar_ref="resource:assistant.nika.avatar",
         route_id="voice_chat",
     )
 
@@ -83,6 +86,7 @@ def test_resolve_followup_routes_to_owner_default_tool() -> None:
     assert action["payload"]["_meta"]["active_agent_gender"] == "female"
     assert action["payload"]["_meta"]["active_agent_voice"] == "ru-female"
     assert action["payload"]["_meta"]["active_agent_icon"] == "female-outline"
+    assert action["payload"]["_meta"]["active_agent_avatar_ref"] == "resource:assistant.nika.avatar"
 
 
 def test_resolve_followup_exit_deactivates_channel() -> None:
