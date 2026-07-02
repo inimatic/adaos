@@ -1127,6 +1127,11 @@ When coding:
 - keep raw diagnostic evidence separate from smoothed operator state
 - accept routing metadata and unknown keyword args
 - preserve owner attribution where helper APIs require it
+- for Builder-like long LLM work, submit a Root async job with
+  `adaos.sdk.llm.llm_client.submit_response_job()`, store the `job_id` with the
+  current artifact/session, poll with `wait_response_job()`, and apply the
+  result only after deterministic schema validation; reserve synchronous
+  `send_response()` for small calls where an HTTP read timeout is acceptable
 - avoid import-time side effects
 - give every thread, task, executor, timer, subprocess, model, and external
   callback an explicit stop/dispose path

@@ -55,7 +55,7 @@ gate easy to read by priority.
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: addressed Builder entrypoint, dedicated Builder conversation, paired Prompt IDE dev webspace, first phrase-level build flow, thread-aware embedded chat, and non-specialist draft summary exist; Prompt IDE as full Builder Workbench remains open. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
-| 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, and Prompt IDE widget binding; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
+| 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, and forge task-branch policy exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
 
 ## Phase 0. Terminology And Ownership
@@ -463,6 +463,12 @@ Open work:
   `builder_skill` returns canonical dialog/topic refs, emits chat with the same
   thread metadata, owns draft/patch Pending Actions, and `attach_dialog_widget`
   exposes the current workbench binding instead of a separate UI transcript.
+- [x] `[must]` Move long Builder LLM transformations from synchronous
+  `/v1/llm/response` calls to Root-managed async jobs. `builder_skill` now
+  submits `/v1/llm/jobs`, stores pending job refs in the Builder session,
+  polls the same root base URL, validates the returned JSON, and only then
+  writes `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
+  dev-webspace refresh events.
 - [x] `[must]` Add thread-aware context packet plumbing for Builder:
   `conversation_links.builder_context_packet`, router dialog context payloads,
   and `adaos.sdk.conversation.context` can now select the active Builder

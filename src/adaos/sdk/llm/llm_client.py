@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 import logging
 import os
+import time
 
 import requests
 from adaos.services.agent_context import get_ctx
@@ -132,6 +133,22 @@ def _llm_models_endpoint() -> str:
     else:
         base = base_response.rstrip("/")
     return f"{base}/models"
+
+
+def _llm_jobs_endpoint() -> str:
+    override = os.getenv("ADAOS_LLM_JOBS_ENDPOINT")
+    if override:
+        return override.rstrip("/")
+    base_response = _llm_endpoint()
+    if base_response.endswith("/response"):
+        base = base_response.rsplit("/", 1)[0]
+    else:
+        base = base_response.rstrip("/")
+    return f"{base}/jobs"
+
+
+def _llm_job_endpoint(job_id: str) -> str:
+    return f"{_llm_jobs_endpoint().rstrip('/')}/{job_id.strip()}"
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -298,6 +315,16 @@ def _extract_output_text(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_job_output_text(payload: Mapping[str, Any]) -> Optional[str]:
+    direct = _extract_output_text(payload)
+    if direct:
+        return direct
+    response = payload.get("response")
+    if isinstance(response, Mapping):
+        return _extract_output_text(response)
+    return None
+
+
 def _message_list(messages: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
     return [{"role": str(msg.get("role", "user") or "user"), "content": str(msg.get("content", "") or "")} for msg in messages]
 
@@ -334,6 +361,52 @@ def _responses_payload(base_payload: Mapping[str, Any], messages: list[Mapping[s
     return payload
 
 
+def _llm_root_payload(
+    messages: Iterable[Mapping[str, str]],
+    *,
+    model: Optional[str] = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
+    request_id: str | None = None,
+) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
+    normalized_messages = _message_list(messages)
+    payload: Dict[str, Any] = {
+        "model": model or os.getenv("ADAOS_LLM_MODEL") or "gpt-4o-mini",
+        "messages": normalized_messages,
+    }
+    if temperature is not None:
+        payload["temperature"] = float(temperature)
+    if max_tokens is not None:
+        payload["max_tokens"] = int(max_tokens)
+    if top_p is not None:
+        payload["top_p"] = float(top_p)
+    req_id = str(request_id or "").strip()
+    if req_id:
+        payload["request_id"] = req_id
+    return _responses_payload(payload, normalized_messages), normalized_messages
+
+
+def _root_http_for_base(primary: RootHttpClient, primary_base_url: str, base_url: str, index: int) -> RootHttpClient:
+    if (primary_base_url and primary_base_url == base_url) or (not primary_base_url and index == 0):
+        return primary
+    return RootHttpClient(
+        base_url=base_url,
+        verify=getattr(primary, "verify", True),
+        cert=getattr(primary, "cert", None),
+    )
+
+
+def _llm_proxy_protocol(data: Dict[str, Any], *, base_url: str, fallback: bool, attempts: list[dict[str, Any]]) -> None:
+    protocol = data.setdefault("_protocol", {})
+    if isinstance(protocol, dict):
+        protocol["llm_proxy"] = {
+            "base_url": base_url,
+            "fallback": fallback,
+            "attempts": list(attempts),
+        }
+
+
 def send_response(
     messages: Iterable[Mapping[str, str]],
     *,
@@ -349,23 +422,17 @@ def send_response(
 
     Returns dict with raw response plus convenience "output_text" field.
     """
-    normalized_messages = _message_list(messages)
-    payload: Dict[str, Any] = {
-        "model": model or os.getenv("ADAOS_LLM_MODEL") or "gpt-4o-mini",
-        "messages": normalized_messages,
-    }
-    if temperature is not None:
-        payload["temperature"] = float(temperature)
-    if max_tokens is not None:
-        payload["max_tokens"] = int(max_tokens)
-    if top_p is not None:
-        payload["top_p"] = float(top_p)
-    req_id = str(request_id or "").strip()
-    if req_id:
-        payload["request_id"] = req_id
+    root_payload, normalized_messages = _llm_root_payload(
+        messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        request_id=request_id,
+    )
 
     if _legacy_http_enabled():
-        resp = requests.post(_llm_endpoint(), json=payload, headers=_auth_headers(), timeout=timeout or 45)
+        resp = requests.post(_llm_endpoint(), json=root_payload, headers=_auth_headers(), timeout=timeout or 45)
         resp.raise_for_status()
         data: Dict[str, Any] = resp.json() if resp.text else {}
         data["output_text"] = _extract_output_text(data)
@@ -375,20 +442,11 @@ def send_response(
     primary, cfg = _root_http_client(ctx)
     headers = _identity_headers(ctx, cfg)
     base_urls = _root_llm_base_urls(primary)
-    root_payload = _responses_payload(payload, normalized_messages)
     last_exc: Exception | None = None
     primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     attempts: list[dict[str, Any]] = []
     for index, base_url in enumerate(base_urls):
-        http = (
-            primary
-            if (primary_base_url and primary_base_url == base_url) or (not primary_base_url and index == 0)
-            else RootHttpClient(
-                base_url=base_url,
-                verify=getattr(primary, "verify", True),
-                cert=getattr(primary, "cert", None),
-            )
-        )
+        http = _root_http_for_base(primary, primary_base_url, base_url, index)
         try:
             raw = http.request(
                 "POST",
@@ -398,13 +456,7 @@ def send_response(
                 timeout=timeout or 45,
             )
             data = dict(raw) if isinstance(raw, Mapping) else {"result": raw}
-            protocol = data.setdefault("_protocol", {})
-            if isinstance(protocol, dict):
-                protocol["llm_proxy"] = {
-                    "base_url": base_url,
-                    "fallback": index > 0,
-                    "attempts": list(attempts),
-                }
+            _llm_proxy_protocol(data, base_url=base_url, fallback=index > 0, attempts=attempts)
             data["output_text"] = _extract_output_text(data)
             return data
         except Exception as exc:
@@ -426,6 +478,156 @@ def send_response(
     data: Dict[str, Any] = {}
     data["output_text"] = _extract_output_text(data)
     return data
+
+
+def submit_response_job(
+    messages: Iterable[Mapping[str, str]],
+    *,
+    model: Optional[str] = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
+    request_id: str | None = None,
+    timeout: float | None = None,
+) -> Dict[str, Any]:
+    """
+    Submit a Responses API request as an asynchronous Root LLM job.
+
+    Returns the job envelope. If Root already has a cached response for
+    request_id, the returned job can be immediately "succeeded".
+    """
+    root_payload, _ = _llm_root_payload(
+        messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        request_id=request_id,
+    )
+    if _legacy_http_enabled():
+        resp = requests.post(_llm_jobs_endpoint(), json=root_payload, headers=_auth_headers(), timeout=timeout or 15)
+        resp.raise_for_status()
+        data: Dict[str, Any] = resp.json() if resp.text else {}
+        data["output_text"] = _extract_job_output_text(data)
+        data.setdefault("_client", {})["base_url"] = _llm_jobs_endpoint().rsplit("/v1/llm/jobs", 1)[0]
+        return data
+
+    ctx = _current_ctx()
+    primary, cfg = _root_http_client(ctx)
+    headers = _identity_headers(ctx, cfg)
+    base_urls = _root_llm_base_urls(primary)
+    last_exc: Exception | None = None
+    primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
+    attempts: list[dict[str, Any]] = []
+    for index, base_url in enumerate(base_urls):
+        http = _root_http_for_base(primary, primary_base_url, base_url, index)
+        try:
+            raw = http.request(
+                "POST",
+                "/v1/llm/jobs",
+                json=root_payload,
+                headers=headers or None,
+                timeout=timeout or 15,
+            )
+            data = dict(raw) if isinstance(raw, Mapping) else {"result": raw}
+            _llm_proxy_protocol(data, base_url=base_url, fallback=index > 0, attempts=attempts)
+            data.setdefault("_client", {})["base_url"] = base_url
+            data["output_text"] = _extract_job_output_text(data)
+            return data
+        except Exception as exc:
+            last_exc = exc
+            if isinstance(exc, RootHttpError):
+                status_code = int(getattr(exc, "status_code", 0) or 0)
+                error_label = _root_http_error_code(exc) or (
+                    f"http_{status_code}" if status_code else type(exc).__name__
+                )
+            else:
+                error_label = type(exc).__name__
+            attempts.append({"base_url": base_url, "error": error_label})
+            if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
+                _LOG.warning("root LLM job submit failed; trying fallback base_url=%s error=%s", base_url, exc)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    return {}
+
+
+def get_response_job(job_id: str, *, base_url: str | None = None, timeout: float | None = None) -> Dict[str, Any]:
+    """
+    Read a Root LLM job status. Use base_url from submit_response_job["_client"]
+    when available so polling stays on the root that owns the job.
+    """
+    job_id = str(job_id or "").strip()
+    if not job_id:
+        raise ValueError("job_id is required")
+    if _legacy_http_enabled() and not base_url:
+        resp = requests.get(_llm_job_endpoint(job_id), headers=_auth_headers(), timeout=timeout or 15)
+        resp.raise_for_status()
+        data: Dict[str, Any] = resp.json() if resp.text else {}
+        data["output_text"] = _extract_job_output_text(data)
+        return data
+
+    ctx = _current_ctx()
+    primary, cfg = _root_http_client(ctx)
+    headers = _identity_headers(ctx, cfg)
+    primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
+    base_urls = [_normalize_root_base_url(base_url)] if base_url else _root_llm_base_urls(primary)
+    base_urls = [item for item in base_urls if item]
+    last_exc: Exception | None = None
+    attempts: list[dict[str, Any]] = []
+    for index, candidate_base_url in enumerate(base_urls):
+        http = _root_http_for_base(primary, primary_base_url, candidate_base_url, index)
+        try:
+            raw = http.request(
+                "GET",
+                f"/v1/llm/jobs/{job_id}",
+                headers=headers or None,
+                timeout=timeout or 15,
+            )
+            data = dict(raw) if isinstance(raw, Mapping) else {"result": raw}
+            _llm_proxy_protocol(data, base_url=candidate_base_url, fallback=index > 0, attempts=attempts)
+            data.setdefault("_client", {})["base_url"] = candidate_base_url
+            data["output_text"] = _extract_job_output_text(data)
+            return data
+        except Exception as exc:
+            last_exc = exc
+            if isinstance(exc, RootHttpError):
+                status_code = int(getattr(exc, "status_code", 0) or 0)
+                error_label = _root_http_error_code(exc) or (
+                    f"http_{status_code}" if status_code else type(exc).__name__
+                )
+            else:
+                error_label = type(exc).__name__
+            attempts.append({"base_url": candidate_base_url, "error": error_label})
+            if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
+                _LOG.warning("root LLM job poll failed; trying fallback base_url=%s error=%s", candidate_base_url, exc)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    return {}
+
+
+def wait_response_job(
+    job_id: str,
+    *,
+    base_url: str | None = None,
+    timeout_s: float = 240,
+    poll_interval_s: float = 2,
+    request_timeout: float | None = None,
+) -> Dict[str, Any]:
+    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    interval = max(0.25, float(poll_interval_s))
+    last: Dict[str, Any] = {}
+    while True:
+        last = get_response_job(job_id, base_url=base_url, timeout=request_timeout or min(15, interval + 5))
+        status = str(last.get("status") or "").lower()
+        if status in {"succeeded", "failed"}:
+            return last
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Root LLM job timed out: {job_id} status={status or 'unknown'}")
+        time.sleep(interval)
 
 
 def _load_prompt(template_path: Path, substitutions: Mapping[str, str]) -> str:

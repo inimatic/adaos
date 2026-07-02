@@ -179,6 +179,33 @@ Root MCP should expose enough context for Builder to reason without scraping
 the repository blindly. Writes through Root MCP must remain governed,
 capability-scoped, audited, and previewable.
 
+## Relationship To Root LLM Jobs
+
+Builder must not depend on a single long synchronous HTTP request when asking
+an LLM to transform UI or generate implementation artifacts. The current
+runtime uses Root-managed asynchronous LLM jobs:
+
+1. Builder submits a bounded Responses API payload to `POST /v1/llm/jobs`.
+2. Root records the job in Redis with `request_id` idempotency, caller identity,
+   model, status, attempts, and a TTL.
+3. Root executes the upstream model request in the background and stores either
+   the raw response or a structured error.
+4. Builder polls `GET /v1/llm/jobs/{job_id}` on the same root base URL that
+   accepted the job.
+5. Builder validates the returned JSON against the Builder/webui contracts
+   before writing `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
+   dev-webspace refresh events.
+
+This makes OpenAI/read-timeout failures visible as job state instead of
+breaking the Voice or Prompt IDE request path. The synchronous
+`/v1/llm/response` endpoint remains a compatibility path for smaller calls,
+but Builder-like long transformations should use jobs by default.
+
+The same submit/poll contract is the preferred bridge for future remote skill
+programming in isolated dev nodes: Root can later move the worker from the
+backend process to NATS/dev-node execution without changing the Builder-facing
+API.
+
 ## Relationship To Skill Factory
 
 The [Skill Factory](skill-factory.md) is the target remote realization layer

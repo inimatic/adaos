@@ -541,6 +541,124 @@ def test_llm_webui_transform_uses_stable_request_id_and_compact_prompt(monkeypat
     assert result["attempts"][0]["request_id"] == kwargs["request_id"]
 
 
+def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    import adaos.sdk.llm.llm_client as llm_client
+
+    artifact_root = tmp_path / "async_llm"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"async_llm","version":"0.1.0","name":"async_llm","steps":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_ASYNC_IN_TESTS", "1")
+    emitted: list[str] = []
+    finished = threading.Event()
+    refresh_calls: list[dict] = []
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {
+                "source_webspace_id": kwargs.get("source_webspace_id"),
+                "dev_webspace_id": "builder-async-dev",
+                "active_draft_id": kwargs.get("active_draft_id"),
+                "runtime_scenario_id": kwargs.get("runtime_scenario_id"),
+            }
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(skill, "_publish_prompt_project_changed", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(skill, "_publish_prompt_project_selection", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(skill, "_publish_review_pending_action", lambda **kwargs: {"id": "pa.async"})
+    monkeypatch.setattr(
+        skill,
+        "_schedule_dev_runtime_reload_after_revision",
+        lambda webspace_id, **kwargs: refresh_calls.append({"webspace_id": webspace_id, **kwargs})
+        or {"ok": True, "scheduled": True, "webspace_id": "builder-async-dev"},
+    )
+
+    def _safe_emit_chat(text, **_kwargs):
+        emitted.append(str(text))
+        if "Ревизия UI" in str(text):
+            finished.set()
+
+    monkeypatch.setattr(skill, "_safe_emit_chat", _safe_emit_chat)
+
+    session = {
+        "id": "builder_session_async",
+        "webspace_id": "builder-async",
+        "status": "drafting",
+        "title": "Todo List",
+        "scenario_id": "async_llm",
+        "draft_id": "draft.async",
+        "artifact_root": str(artifact_root),
+        "datasource_id": "prototype_items",
+        "fields": [
+            {"id": "title", "type": "string", "label": "Title", "required": True},
+            {"id": "notes", "type": "string", "label": "Notes", "required": False},
+        ],
+        "patches": [],
+        "version": "001",
+    }
+    preview = skill._preview_state(session=session)
+    preview["mock_data"] = {
+        "prototype_items": [
+            {"title": "Book venue", "notes": "Conference room"},
+            {"title": "Invite speakers", "notes": "Send CFP reminders"},
+        ]
+    }
+    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    skill._save_session("builder-async", session)
+
+    submit_calls: list[dict] = []
+
+    def _submit_response_job(messages, **kwargs):
+        submit_calls.append({"messages": list(messages), "kwargs": dict(kwargs)})
+        return {
+            "ok": True,
+            "schema": "adaos.root.llm.job.v1",
+            "job_id": "llm_job_async_test",
+            "request_id": kwargs.get("request_id"),
+            "status": "queued",
+            "_client": {"base_url": "https://ru.api.inimatic.com"},
+        }
+
+    def _wait_response_job(job_id, **kwargs):
+        assert job_id == "llm_job_async_test"
+        assert kwargs["base_url"] == "https://ru.api.inimatic.com"
+        return {
+            "ok": True,
+            "schema": "adaos.root.llm.job.v1",
+            "job_id": job_id,
+            "status": "succeeded",
+            "output_text": json.dumps({**payload, "comment": "Adapted conference sample data."}, ensure_ascii=False),
+        }
+
+    monkeypatch.setattr(llm_client, "submit_response_job", _submit_response_job)
+    monkeypatch.setattr(llm_client, "wait_response_job", _wait_response_job)
+
+    result = skill.update_current_scenario(
+        "Адаптируй пример данных для списка задач по подготовке к конференции",
+        webspace_id="builder-async",
+    )
+
+    assert result["status"] == "llm_pending"
+    assert result["llm_job"]["job_id"] == "llm_job_async_test"
+    assert submit_calls
+    assert finished.wait(3), emitted
+    webui = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8-sig"))
+    rows = webui["preview_state"]["mock_data"]["prototype_items"]
+    assert rows[0]["title"] == "Book venue"
+    assert rows[1]["title"] == "Invite speakers"
+    revision_files = sorted((artifact_root / "ui_revisions").glob("*.json"))
+    assert revision_files
+    assert refresh_calls and refresh_calls[0]["revision"] == "001"
+
+
 def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_files(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "llm_sample_data"

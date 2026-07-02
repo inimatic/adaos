@@ -224,3 +224,58 @@ def test_send_response_does_not_fallback_on_root_policy_denial(monkeypatch: pyte
         llm.send_response([{"role": "user", "content": "Return ok."}])
 
     assert calls == ["https://api.inimatic.com"]
+
+
+def test_response_jobs_submit_and_poll_same_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if method == "POST" and path == "/v1/llm/jobs":
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_test",
+                    "request_id": "req.async",
+                    "status": "queued",
+                }
+            if method == "GET" and path == "/v1/llm/jobs/llm_job_test":
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_test",
+                    "request_id": "req.async",
+                    "status": "succeeded",
+                    "response": {"output": [{"content": [{"type": "output_text", "text": "async ok"}]}]},
+                }
+            raise AssertionError(f"unexpected request {method} {path}")
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    submitted = llm.submit_response_job(
+        [{"role": "user", "content": "Return ok."}],
+        request_id="req.async",
+        timeout=3,
+    )
+    assert submitted["job_id"] == "llm_job_test"
+    assert submitted["_client"]["base_url"] == "https://ru.api.inimatic.com"
+    assert submitted["_protocol"]["llm_proxy"]["base_url"] == "https://ru.api.inimatic.com"
+
+    polled = llm.get_response_job("llm_job_test", base_url=submitted["_client"]["base_url"])
+    assert polled["status"] == "succeeded"
+    assert polled["output_text"] == "async ok"
+    assert [call["path"] for call in calls] == ["/v1/llm/jobs", "/v1/llm/jobs/llm_job_test"]
