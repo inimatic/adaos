@@ -1155,6 +1155,12 @@ Before publishing:
   Enter/default submit actions, pending action feedback, element loading
   states, and skill UI resources instead of hiding these rules in widget
   special cases
+- verify browser-facing icons, avatars, preview images, templates, and i18n
+  dictionaries are declared in top-level `resources` and referenced as
+  `resource:<id>`; core-delivered files must live under the skill `assets/`
+  tree, localized dictionaries should use `kind: "data"`, `role: "i18n"`, and
+  an explicit `locale`, and large public assets should use `delivery:
+  "external"` with an authored URL rather than a skill-specific static endpoint
 - verify no handler rewrites broad Yjs roots
 - verify collection routes keep Yjs summaries constant-size under synthetic
   large-row tests

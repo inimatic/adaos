@@ -114,22 +114,24 @@ browser_resources:
       kind: svg
       scope: skill
       url: /assets/blobs/sha256/2a/7f/2a7f.../current.svg
-      cache_key: sha256:...
+      cacheKey: sha256:...
       fallback: sparkles-outline
     assistant.default.avatar:
       kind: image
       scope: system
       url: /assets/blobs/sha256/51/d0/51d0.../assistant-default.webp
-      cache_key: sha256:...
+      cacheKey: sha256:...
     weather.i18n.ru:
       kind: data
       role: i18n
       locale: ru
       url: /assets/blobs/sha256/c8/11/c811.../ru.json
-      cache_key: sha256:...
+      cacheKey: sha256:...
 ```
 
-The client should cache by `cache_key` and invalidate when the manifest version or hash changes.
+The client caches URL-backed resources by `cacheKey`; a new content hash creates
+a new cache entry and leaves stale entries available for later garbage
+collection.
 
 ## Delivery Model
 
@@ -181,8 +183,9 @@ For member-local browsers:
 For Root-routed or remote browsers:
 
 1. The Root resource cache reads the same materialized manifest.
-2. A planned Root endpoint accepts or pulls blobs by `cacheKey` from the owning
-   member/hub.
+2. `/v1/root/browser-assets/cache/ensure` accepts a `cacheKey` and can pull a
+   public blob from an explicit `sourceUrl`, verifying SHA-256 and size before
+   publishing it into the Root store.
 3. Root stores the blob under its own `.adaos/assets/public` and exposes a
    Root-local `/assets/blobs/sha256/...` URL to the browser.
 4. Cache invalidation is content-addressed: a new `cacheKey` creates a new cache
@@ -205,7 +208,8 @@ and declarative data resources:
 2. Resolve `resource:<id>` into a descriptor.
 3. Prefer materialized `url`/`src`; keep relative authored `path` as diagnostic
    input, not as a final browser URL.
-4. Cache successful responses by `cacheKey` with Cache API or IndexedDB.
+4. Cache successful URL-backed responses by `cacheKey` with the browser Cache
+   API and short-lived object URLs.
 5. Return a browser-usable URL or JSON payload and expose degraded status.
 6. Apply `fallback` when the resource is missing, blocked, or has an unsupported
    MIME/kind.

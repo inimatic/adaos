@@ -1004,7 +1004,9 @@ asset URLs over the active browser/core channel; skill code should not expose
 ad-hoc static-file servers for UI icons, assistant avatars, preview images,
 templates, or localized dictionaries. Remote browsers should receive the same
 resource contract through a Root-side cache or relay instead of direct workspace
-file paths.
+file paths. Large public assets can use `delivery: "external"` with an authored
+URL; AdaOS keeps that descriptor in the owner manifest but does not copy the
+bytes into `.adaos/assets/public`.
 
 ```json
 {
@@ -1024,6 +1026,13 @@ file paths.
       "mime": "application/json",
       "delivery": "core",
       "cacheKey": "sha256:..."
+    },
+    "media.preview": {
+      "kind": "image",
+      "delivery": "external",
+      "url": "https://cdn.example/media/preview.webp",
+      "mime": "image/webp",
+      "fallback": "image-outline"
     }
   },
   "apps": [

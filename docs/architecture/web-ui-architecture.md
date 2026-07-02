@@ -214,6 +214,20 @@ Example:
       "path": "assets/avatars/assistant-default.webp",
       "delivery": "core",
       "cacheKey": "sha256:..."
+    },
+    "weather.i18n.ru": {
+      "kind": "data",
+      "role": "i18n",
+      "locale": "ru",
+      "path": "assets/i18n/ru.json",
+      "delivery": "core",
+      "cacheKey": "sha256:..."
+    },
+    "weather.preview": {
+      "kind": "image",
+      "delivery": "external",
+      "url": "https://cdn.example/weather/preview.webp",
+      "mime": "image/webp"
     }
   },
   "apps": [

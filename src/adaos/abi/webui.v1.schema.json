@@ -263,7 +263,7 @@
         },
         "url": {
           "type": "string",
-          "description": "Optional already-resolved URL, usually produced by runtime materialization rather than authored by a skill."
+          "description": "Optional browser URL. Core-delivered resources usually receive this during runtime materialization; delivery='external' resources must author a URL that remains in the manifest."
         },
         "mime": { "type": "string" },
         "title": { "type": "string" },
@@ -277,7 +277,7 @@
           "type": "string",
           "enum": ["core", "external"],
           "default": "core",
-          "description": "core means the asset is delivered by AdaOS over the active browser/core channel."
+          "description": "core means AdaOS publishes the asset into the browser resource store; external keeps the authored URL in the manifest and does not copy bytes into the local blob store."
         },
         "scope": {
           "type": "string",
