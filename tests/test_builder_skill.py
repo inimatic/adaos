@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib.util
 import json
 import threading
@@ -657,6 +658,126 @@ def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> No
     revision_files = sorted((artifact_root / "ui_revisions").glob("*.json"))
     assert revision_files
     assert refresh_calls and refresh_calls[0]["revision"] == "001"
+
+
+def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "llm_context"
+    artifact_root.mkdir(parents=True)
+    page_schema = {
+        "id": "llm_context",
+        "title": "Todo List",
+        "layout": {"type": "split", "areas": [{"id": "main"}, {"id": "right"}]},
+        "widgets": [
+            {
+                "id": "prototype-cards",
+                "type": "ui.list",
+                "area": "main",
+                "inputs": {"variant": "cards", "titleKey": "title", "subtitleKey": "notes", "previewKey": "status"},
+            }
+        ],
+    }
+    (artifact_root / "scenario.json").write_text(
+        json.dumps({"id": "llm_context", "name": "llm_context", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}),
+        encoding="utf-8",
+    )
+    (artifact_root / "builder_system_prompt.md").write_text("Always prefer conference vocabulary.\n", encoding="utf-8")
+    session = {
+        "id": "builder_session_context",
+        "scenario_id": "llm_context",
+        "artifact_root": str(artifact_root),
+        "datasource_id": "prototype_items",
+        "fields": [{"id": "title", "type": "string", "label": "Title"}],
+    }
+    preview = skill._preview_state(session=session)
+
+    request = skill._builder_llm_webui_transform_request(
+        session=session,
+        instruction="Add date to cards",
+        preview_state=preview,
+    )
+
+    user_payload = json.loads(request["user_prompt"])
+    current = user_payload["current_webui_json"]
+    assert current["preview_state"]["page_schema"]["widgets"][0]["id"] == "prototype-cards"
+    assert current["runtime_context"]["current_page_schema"]["widgets"][0]["inputs"]["previewKey"] == "status"
+    assert user_payload["runtime_component_contracts"]["ui.list"]["inputs"]["previewKey"].startswith("Single object path")
+    assert "Always prefer conference vocabulary" in request["system_prompt"]
+    assert (artifact_root / "builder_memory.md").exists()
+    assert (artifact_root / "tz" / "base_tz.md").exists()
+
+
+def test_normalise_llm_payload_drops_stale_page_schema_when_compact_changed() -> None:
+    skill = _load_module()
+    previous_page_schema = {
+        "id": "todo",
+        "widgets": [
+            {"id": "prototype-form", "type": "ui.form", "area": "main", "inputs": {"fields": []}},
+            {
+                "id": "prototype-cards",
+                "type": "ui.list",
+                "area": "right",
+                "inputs": {"variant": "cards", "titleKey": "title", "subtitleKey": "notes", "previewKey": "status"},
+            },
+        ],
+    }
+    previous_preview = {
+        "title": "Todo",
+        "page_schema": previous_page_schema,
+        "current_ui": {
+            "id": "todo",
+            "type": "page",
+            "children": [
+                {"id": "editor", "type": "section", "children": []},
+                {"id": "items_cards", "type": "card_list", "title": "{{title}}", "subtitle": "{{notes}}", "preview": "{{date}}"},
+            ],
+        },
+        "datasources": [
+            {
+                "id": "prototype_items",
+                "fields": [
+                    {"id": "title", "type": "string", "label": "Title"},
+                    {"id": "notes", "type": "string", "label": "Notes"},
+                    {"id": "date", "type": "date", "label": "Date"},
+                ],
+            }
+        ],
+        "mock_data": {"prototype_items": [{"title": "Talk", "notes": "CFP", "date": "2026-07-02"}]},
+        "layout_order": "input_first",
+    }
+    parsed = {
+        "schema": "adaos.webui.prototype.v1",
+        "generated_by": "builder_skill",
+        "preview_state": {
+            **previous_preview,
+            "page_schema": copy.deepcopy(previous_page_schema),
+            "layout_order": "cards_first",
+        },
+    }
+
+    _payload, preview = skill._normalise_llm_webui_payload(parsed, previous_preview=previous_preview)
+    assert "page_schema" not in preview
+    derived = skill._page_schema_from_preview(preview)
+    form = next(item for item in derived["widgets"] if item["id"] == "prototype-form")
+    cards = next(item for item in derived["widgets"] if item["id"] == "prototype-cards")
+    assert form["area"] == "right"
+    assert cards["area"] == "main"
+    assert cards["inputs"]["previewKey"] == "date"
+
+
+def test_repair_mojibake_text_handles_common_cyrillic_and_keeps_other_languages() -> None:
+    skill = _load_module()
+
+    assert (
+        skill._repair_mojibake_text("Р”РѕР±Р°РІСЊ РІ РєР°СЂС‚РѕС‡РєРё РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ РґР°С‚Рµ")
+        == "Добавь в карточки информацию о дате"
+    )
+    assert (
+        skill._repair_mojibake_text("РїРѕРјРµРЅСЏР№ РјРµСЃС‚Р°РјРё СЃРµРєС†РёСЋ Input Рё Cards")
+        == "поменяй местами секцию Input и Cards"
+    )
+    assert skill._repair_mojibake_text("Переведи данные на китайский язык") == "Переведи данные на китайский язык"
+    assert skill._repair_mojibake_text("翻译成中文") == "翻译成中文"
 
 
 def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_files(monkeypatch, tmp_path) -> None:
