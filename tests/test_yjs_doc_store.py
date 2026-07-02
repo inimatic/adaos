@@ -346,6 +346,12 @@ async def test_ystore_backup_to_disk_skips_when_persisted_generation_is_current(
         assert snapshot["backup_skipped_total"] >= 1
         assert snapshot["persisted_up_to_date"] is True
         assert snapshot["last_backup_mode"] == "runtime_base_snapshot:skipped"
+        assert snapshot["last_backup_kind"] == "manual"
+        assert snapshot["last_backup_skip_reason"] == "persisted_generation_current"
+        assert snapshot["last_backup_written_bytes"] == 0
+        assert snapshot["backup_by_kind"]["manual"] >= 2
+        assert snapshot["backup_skipped_by_kind"]["manual"] >= 1
+        assert snapshot["backup_written_by_kind"]["manual"] >= 1
     finally:
         reset_ystore_for_webspace(webspace_id)
 

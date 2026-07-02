@@ -375,6 +375,9 @@ class AdaosMemoryYStore(BaseYStore):
         self._backup_skipped_total = 0
         self._backup_gc_total = 0
         self._backup_malloc_trim_total = 0
+        self._backup_by_kind: dict[str, int] = {}
+        self._backup_written_by_kind: dict[str, int] = {}
+        self._backup_skipped_by_kind: dict[str, int] = {}
         self._auto_backup_total = 0
         self._diff_write_total = 0
         self._snapshot_write_total = 0
@@ -388,7 +391,10 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_backup_at = 0.0
         self._last_auto_backup_at = 0.0
         self._last_auto_backup_reason = ""
+        self._last_backup_kind = ""
         self._last_backup_mode = ""
+        self._last_backup_skip_reason = ""
+        self._last_backup_written_bytes = 0
         self._last_backup_gc_collected = 0
         self._last_backup_malloc_trimmed = False
         self._last_apply_at = 0.0
@@ -882,6 +888,7 @@ class AdaosMemoryYStore(BaseYStore):
         """
         Persist the current YDoc state as a single update snapshot.
         """
+        backup_kind_token = str(backup_kind or "").strip() or "manual"
         with self._lock:
             updates = list(self._updates)
             generation = int(self._generation)
@@ -906,6 +913,7 @@ class AdaosMemoryYStore(BaseYStore):
                 backup_mode = "encoded_runtime_log"
 
         skip_write = bool(not snapshot and not snapshot_exists)
+        skip_reason = "empty_no_snapshot" if skip_write else ""
         written_bytes = 0
         if not skip_write:
             with self._lock:
@@ -920,23 +928,35 @@ class AdaosMemoryYStore(BaseYStore):
             )
             if up_to_date:
                 skip_write = True
+                skip_reason = "persisted_generation_current"
             else:
                 written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
         now = time.time()
         with self._lock:
             self._backup_total += 1
+            self._backup_by_kind[backup_kind_token] = int(self._backup_by_kind.get(backup_kind_token) or 0) + 1
             if used_fast_path:
                 self._backup_fast_path_total += 1
             if skip_write:
                 self._backup_skipped_total += 1
+                self._backup_skipped_by_kind[backup_kind_token] = (
+                    int(self._backup_skipped_by_kind.get(backup_kind_token) or 0) + 1
+                )
+            elif written_bytes:
+                self._backup_written_by_kind[backup_kind_token] = (
+                    int(self._backup_written_by_kind.get(backup_kind_token) or 0) + 1
+                )
+            self._last_backup_kind = backup_kind_token
             self._last_backup_mode = f"{backup_mode}:skipped" if skip_write else backup_mode
+            self._last_backup_skip_reason = skip_reason
+            self._last_backup_written_bytes = int(written_bytes)
             self._last_backup_at = now
             if written_bytes:
                 self._last_snapshot_bytes = int(written_bytes)
-            if backup_kind.startswith("auto_after_compact:"):
+            if backup_kind_token.startswith("auto_after_compact:"):
                 self._auto_backup_total += 1
                 self._last_auto_backup_at = now
-                self._last_auto_backup_reason = str(backup_kind.partition(":")[2] or "").strip()
+                self._last_auto_backup_reason = str(backup_kind_token.partition(":")[2] or "").strip()
             compacted_runtime = False
             if (
                 compact_runtime
@@ -975,7 +995,7 @@ class AdaosMemoryYStore(BaseYStore):
                 and bytes(self._updates[0][0] or b"") == bytes(snapshot)
             ):
                 self._base_state_vector = bytes(snapshot_state_vector)
-            if backup_kind.startswith("auto_after_compact:") and not compacted_runtime and self._last_auto_backup_reason:
+            if backup_kind_token.startswith("auto_after_compact:") and not compacted_runtime and self._last_auto_backup_reason:
                 # Keep the last auto-backup reason observable even when concurrent
                 # writes made runtime-side collapse unsafe for this round.
                 self._last_auto_backup_reason = self._last_auto_backup_reason
@@ -1017,6 +1037,17 @@ class AdaosMemoryYStore(BaseYStore):
             log_mode = "snapshot_plus_diff"
         else:
             log_mode = "append_only"
+
+        def _top_counts(data: dict[str, int]) -> dict[str, int]:
+            return {
+                str(key): int(value)
+                for key, value in sorted(
+                    data.items(),
+                    key=lambda item: (-int(item[1] or 0), str(item[0])),
+                )[:12]
+                if int(value or 0) > 0
+            }
+
         return {
             "webspace_id": self.path,
             "log_mode": log_mode,
@@ -1039,6 +1070,9 @@ class AdaosMemoryYStore(BaseYStore):
             "backup_skipped_total": int(self._backup_skipped_total),
             "backup_gc_total": int(self._backup_gc_total),
             "backup_malloc_trim_total": int(self._backup_malloc_trim_total),
+            "backup_by_kind": _top_counts(dict(self._backup_by_kind)),
+            "backup_written_by_kind": _top_counts(dict(self._backup_written_by_kind)),
+            "backup_skipped_by_kind": _top_counts(dict(self._backup_skipped_by_kind)),
             "auto_backup_total": int(self._auto_backup_total),
             "diff_write_total": int(self._diff_write_total),
             "snapshot_write_total": int(self._snapshot_write_total),
@@ -1068,7 +1102,10 @@ class AdaosMemoryYStore(BaseYStore):
             "last_disk_snapshot_bytes": int(self._last_disk_snapshot_bytes),
             "last_update_bytes": int(self._last_update_bytes),
             "last_snapshot_bytes": int(self._last_snapshot_bytes),
+            "last_backup_kind": self._last_backup_kind or None,
             "last_backup_mode": self._last_backup_mode or None,
+            "last_backup_skip_reason": self._last_backup_skip_reason or None,
+            "last_backup_written_bytes": int(self._last_backup_written_bytes),
             "last_backup_gc_collected": int(self._last_backup_gc_collected),
             "last_backup_malloc_trimmed": bool(self._last_backup_malloc_trimmed),
             "last_apply_update_total": int(self._last_apply_update_total),
