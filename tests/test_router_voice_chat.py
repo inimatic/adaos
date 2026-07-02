@@ -981,7 +981,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback(monkeypatch) -> None:
+async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_when_source_exists(monkeypatch, tmp_path) -> None:
     from adaos.services import dialog_runtime
 
     bus = LocalEventBus()
@@ -989,6 +989,8 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback(mo
     calls: list[tuple[str, str, dict, str]] = []
     seen_nlu: list[Event] = []
     webspace_id = "builder-dev-runtime-ws"
+    dev_skills_root = tmp_path / "dev" / "skills"
+    (dev_skills_root / "builder_skill").mkdir(parents=True)
 
     monkeypatch.setattr(
         router_service_module,
@@ -998,7 +1000,7 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback(mo
                 node_id="hub-node",
                 root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
             ),
-            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path("."), dev_skills_dir=lambda: dev_skills_root),
             skill_ctx=_SkillCtx(),
             skills_repo=None,
             sql=None,

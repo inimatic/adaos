@@ -4434,9 +4434,14 @@ class RouterService:
                 with io_meta(route_meta):
                     try:
                         return mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
-                    except Exception:
+                    except Exception as workspace_exc:
                         if skill != BUILDER_SKILL_ID or not hasattr(mgr, "run_dev_tool"):
                             raise
+                        dev_root_attr = getattr(ctx.paths, "dev_skills_dir", None)
+                        dev_root = dev_root_attr() if callable(dev_root_attr) else dev_root_attr
+                        dev_skill_dir = (Path(dev_root) / skill) if dev_root else None
+                        if dev_skill_dir is None or not dev_skill_dir.exists():
+                            raise workspace_exc
                         logging.getLogger("adaos.router.voice_chat").info(
                             "workspace builder skill unavailable; trying dev runtime tool=%s",
                             tool,
