@@ -526,6 +526,13 @@ def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_file
     monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
     monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.llm.sample"})
+    refresh_calls: list[dict] = []
+    monkeypatch.setattr(
+        skill,
+        "_schedule_dev_runtime_reload_after_revision",
+        lambda webspace_id, **kwargs: refresh_calls.append({"webspace_id": webspace_id, **kwargs})
+        or {"ok": True, "scheduled": True, "webspace_id": "builder-llm-sample-dev"},
+    )
     monkeypatch.setattr(events, "publish", lambda topic, payload, source=None: published.append((topic, dict(payload))))
 
     def _llm_transform(**kwargs):
@@ -576,6 +583,10 @@ def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_file
     rows = result["preview_state"]["mock_data"]["prototype_items"]
     assert rows[0]["title"] == "Book venue"
     assert rows[1]["title"] == "Confirm speakers"
+    assert result["dev_runtime_refresh"]["scheduled"] is True
+    assert refresh_calls[0]["webspace_id"] == "builder-llm-sample"
+    assert refresh_calls[0]["revision"] == "001"
+    assert refresh_calls[0]["session"]["scenario_id"] == "llm_sample_data"
     assert result["project_files_refresh"]["ok"] is True
     assert any(
         topic == "prompt.project.changed"
