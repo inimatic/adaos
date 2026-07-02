@@ -2311,6 +2311,68 @@ def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
     assert gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"] == []
 
 
+def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_WEBSPACE", 4)
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_CLIENT", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 8)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 5)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 3)
+    monkeypatch.setattr(gateway_module, "_y_server_runtime_snapshot", lambda: {"ready": True, "room_total": 1})
+
+    ws = SimpleNamespace(query_params={"dev": "dev-2", "browser_session_id": "tab-a"})
+    gateway_module._track_yws_connection("ops", ws, device_id="dev-2")
+    gateway_module._record_yws_guard_attempt("ops", "dev-2", browser_session_id="tab-a")
+    gateway_module._record_yws_guard_attempt("ops", "dev-2", browser_session_id="tab-a")
+
+    snapshot = gateway_module.yjs_balancer_snapshot(webspace_id="ops")
+
+    assert snapshot["schema"] == "adaos.yjs_balancer.v1"
+    assert snapshot["state"] == "nominal"
+    assert snapshot["reason"] == "within_limits"
+    assert snapshot["usage"]["active_connections"] == 1
+    assert snapshot["usage"]["active_connection_limit"] == 4
+    assert snapshot["usage"]["active_clients"] == 1
+    assert snapshot["limits"]["max_active_per_webspace"] == 4
+    assert snapshot["limits"]["max_active_per_client"] == 2
+    assert snapshot["guard"]["recent_attempts_10s"] == 2
+    assert snapshot["guard"]["distinct_clients_10s"] == 1
+    assert snapshot["guard"]["webspace_storm_threshold_reached"] is False
+    assert snapshot["observed"]["hot_clients"][0]["device_id"] == "dev-2"
+    assert snapshot["observed"]["hot_clients"][0]["client_limit_id"] == "tab-a"
+
+    gateway_module._untrack_yws_connection("ops", ws)
+    _clear_yws_guard_state()
+
+
+def test_yjs_balancer_snapshot_marks_webspace_reconnect_storm(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_WEBSPACE", 6)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 10)
+    monkeypatch.setattr(gateway_module, "_y_server_runtime_snapshot", lambda: {"ready": True, "room_total": 1})
+
+    gateway_module._record_yws_guard_attempt("desktop", "dev-a")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-b")
+
+    snapshot = gateway_module.yjs_balancer_snapshot(webspace_id="desktop")
+
+    assert snapshot["state"] == "critical"
+    assert snapshot["reason"] == "webspace_reconnect_storm_threshold"
+    assert snapshot["guard"]["recent_attempts_10s"] == 2
+    assert snapshot["guard"]["distinct_clients_10s"] == 2
+    assert snapshot["guard"]["webspace_storm_threshold_reached"] is True
+
+    _clear_yws_guard_state()
+
+
 def test_yws_close_preserves_online_state_when_device_has_replacement_session() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()

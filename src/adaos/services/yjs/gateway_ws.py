@@ -4001,6 +4001,283 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
     }
 
 
+def _remaining_quarantine_s(until: float, now: float) -> float:
+    return round(max(0.0, float(until or 0.0) - now), 3)
+
+
+def _yjs_balancer_state(
+    *,
+    server_ready: bool,
+    direct_transport_enabled: bool,
+    active_connections: int,
+    active_connection_limit: int,
+    webspace_quarantined: bool,
+    client_quarantined: bool,
+    webspace_storm_threshold_reached: bool,
+    client_storm_threshold_reached: bool,
+    short_session_threshold_reached: bool,
+    active_fill_ratio: float,
+) -> tuple[str, str]:
+    if not direct_transport_enabled:
+        return "disabled", "direct_transport_disabled"
+    if not server_ready:
+        return "critical", "y_server_not_ready"
+    if webspace_quarantined:
+        return "critical", "webspace_quarantine"
+    if active_connections >= active_connection_limit:
+        return "critical", "active_connection_limit"
+    if webspace_storm_threshold_reached:
+        return "critical", "webspace_reconnect_storm_threshold"
+    if client_quarantined:
+        return "watch", "client_quarantine"
+    if client_storm_threshold_reached:
+        return "watch", "client_reconnect_storm_threshold"
+    if short_session_threshold_reached:
+        return "watch", "short_session_storm_threshold"
+    if active_fill_ratio >= 0.8:
+        return "watch", "active_connection_limit_near"
+    return "nominal", "within_limits"
+
+
+def yjs_balancer_snapshot(webspace_id: str | None = None, *, now_ts: float | None = None) -> dict[str, Any]:
+    """Return bounded YWS health/usage/guard telemetry for operational policy work."""
+
+    now = time.time() if now_ts is None else float(now_ts)
+    selected_webspace_id = _coerce_gateway_webspace_id(webspace_id)
+    with _ACTIVE_YWS_LOCK:
+        active_by_webspace = {
+            str(key or "").strip() or "default": len(list(sockets or []))
+            for key, sockets in _ACTIVE_YWS_CONNECTIONS.items()
+        }
+        active_clients_by_webspace = {
+            str(key or "").strip() or "default": dict(value)
+            for key, value in _ACTIVE_YWS_CLIENTS.items()
+            if isinstance(value, dict)
+        }
+
+    active_connections = int(active_by_webspace.get(selected_webspace_id) or 0)
+    active_client_counts = active_clients_by_webspace.get(selected_webspace_id) or {}
+    active_client_rows = [
+        row
+        for row in _active_yws_client_rows()
+        if str(row.get("webspace_id") or "").strip() == selected_webspace_id
+    ]
+    active_client_rows = active_client_rows[:16]
+
+    hot_clients: list[dict[str, Any]] = []
+    quarantined_clients: list[dict[str, Any]] = []
+    recent_attempts_10s = 0
+    recent_attempts_60s = 0
+    distinct_clients_10s = 0
+    max_client_attempts_15s = 0
+    short_sessions_window_total = 0
+    max_client_short_sessions = 0
+    webspace_quarantine_until = 0.0
+    webspace_incident = {}
+    selected_incident_total = 0
+    guard_diag: dict[str, Any] = {}
+    global_recent_open_10s = 0
+    global_recent_open_60s = 0
+    global_recent_attempts_10s = 0
+    global_recent_attempts_60s = 0
+    with _YWS_STORM_LOCK:
+        global_recent_open_10s = sum(1 for ts in _YWS_OPEN_HISTORY if ts >= now - 10.0)
+        global_recent_open_60s = sum(1 for ts in _YWS_OPEN_HISTORY if ts >= now - 60.0)
+        global_recent_attempts_10s = sum(1 for ts in _YWS_ATTEMPT_HISTORY if ts >= now - 10.0)
+        global_recent_attempts_60s = sum(1 for ts in _YWS_ATTEMPT_HISTORY if ts >= now - 60.0)
+        for raw_key, queue in _YWS_CLIENT_ATTEMPT_HISTORY.items():
+            key = str(raw_key or "")
+            client_webspace_id, _, client_token = key.partition("::")
+            client_webspace_id = client_webspace_id or "default"
+            if client_webspace_id != selected_webspace_id:
+                continue
+            client_attempts_10s = sum(1 for ts in queue if ts >= now - 10.0)
+            client_attempts_15s = sum(1 for ts in queue if ts >= now - 15.0)
+            client_attempts_60s = sum(1 for ts in queue if ts >= now - 60.0)
+            recent_attempts_10s += client_attempts_10s
+            recent_attempts_60s += client_attempts_60s
+            if client_attempts_10s > 0:
+                distinct_clients_10s += 1
+            max_client_attempts_15s = max(max_client_attempts_15s, client_attempts_15s)
+            short_queue = _YWS_CLIENT_SHORT_SESSION_HISTORY.get(key) or deque()
+            short_sessions = sum(
+                1
+                for ts in short_queue
+                if ts >= now - max(1.0, float(_YWS_GUARD_SHORT_SESSION_WINDOW_S))
+            )
+            short_sessions_window_total += short_sessions
+            max_client_short_sessions = max(max_client_short_sessions, short_sessions)
+            if client_attempts_15s <= 0 and short_sessions <= 0:
+                continue
+            device_id, scoped_client_id = _split_yws_client_limit_key(client_token)
+            row: dict[str, Any] = {
+                "device_id": device_id,
+                "attempt_10s": client_attempts_10s,
+                "attempt_15s": client_attempts_15s,
+                "attempt_60s": client_attempts_60s,
+                "short_sessions": short_sessions,
+            }
+            if scoped_client_id:
+                row["client_limit_id"] = scoped_client_id
+            hot_clients.append(row)
+        webspace_quarantine_key = _yws_guard_quarantine_key(selected_webspace_id)
+        webspace_quarantine_until = float(_YWS_GUARD_QUARANTINE_UNTIL.get(webspace_quarantine_key) or 0.0)
+        webspace_incident = dict(_YWS_GUARD_INCIDENTS.get(webspace_quarantine_key) or {})
+        selected_prefix = f"{selected_webspace_id}::"
+        for raw_key, raw_until in _YWS_GUARD_QUARANTINE_UNTIL.items():
+            key = str(raw_key or "")
+            until = float(raw_until or 0.0)
+            if not key.startswith(selected_prefix) or until <= now:
+                continue
+            selected_incident_total += 1
+            _webspace, _, client_token = key.partition("::")
+            if client_token == "*":
+                continue
+            device_id, scoped_client_id = _split_yws_client_limit_key(client_token)
+            row = {
+                "device_id": device_id,
+                "until": until,
+                "remaining_s": _remaining_quarantine_s(until, now),
+            }
+            if scoped_client_id:
+                row["client_limit_id"] = scoped_client_id
+            quarantined_clients.append(row)
+        guard_diag = dict(_YWS_GUARD_DIAG)
+
+    with _YWS_ATTEMPT_LOCK:
+        attempt_diag = dict(_YWS_ATTEMPT_DIAG)
+
+    active_connection_limit = max(1, int(_YWS_MAX_ACTIVE_PER_WEBSPACE))
+    active_fill_ratio = round(active_connections / float(active_connection_limit), 3)
+    webspace_storm_threshold_reached = (
+        recent_attempts_10s >= int(_YWS_GUARD_RECENT_OPEN_10S)
+        and distinct_clients_10s >= int(_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S)
+    )
+    client_storm_threshold_reached = max_client_attempts_15s >= int(_YWS_GUARD_CLIENT_OPEN_15S)
+    short_session_threshold_reached = max_client_short_sessions >= int(_YWS_GUARD_SHORT_SESSION_LIMIT)
+    webspace_quarantined = webspace_quarantine_until > now
+    client_quarantined = bool(quarantined_clients)
+    server_snapshot = _y_server_runtime_snapshot()
+    direct_transport_enabled = _yws_direct_transport_enabled()
+    state, reason = _yjs_balancer_state(
+        server_ready=bool(server_snapshot.get("ready")),
+        direct_transport_enabled=direct_transport_enabled,
+        active_connections=active_connections,
+        active_connection_limit=active_connection_limit,
+        webspace_quarantined=webspace_quarantined,
+        client_quarantined=client_quarantined,
+        webspace_storm_threshold_reached=webspace_storm_threshold_reached,
+        client_storm_threshold_reached=client_storm_threshold_reached,
+        short_session_threshold_reached=short_session_threshold_reached,
+        active_fill_ratio=active_fill_ratio,
+    )
+    hot_clients.sort(
+        key=lambda item: (
+            -int(item.get("attempt_15s") or 0),
+            -int(item.get("short_sessions") or 0),
+            str(item.get("device_id") or ""),
+        )
+    )
+    quarantined_clients.sort(key=lambda item: (-float(item.get("remaining_s") or 0.0), str(item.get("device_id") or "")))
+    active_by_webspace_rows = [
+        {"webspace_id": key, "active_connections": int(count or 0)}
+        for key, count in sorted(active_by_webspace.items(), key=lambda item: (-int(item[1] or 0), str(item[0])))
+    ]
+    return {
+        "schema": "adaos.yjs_balancer.v1",
+        "webspace_id": selected_webspace_id,
+        "updated_at": now,
+        "state": state,
+        "reason": reason,
+        "health": {
+            "available": bool(direct_transport_enabled and server_snapshot.get("ready")),
+            "state": state,
+            "reason": reason,
+            "server_ready": bool(server_snapshot.get("ready")),
+            "direct_transport_enabled": direct_transport_enabled,
+            "capacity_ok": active_connections < active_connection_limit,
+            "guard_ok": not bool(
+                webspace_quarantined
+                or webspace_storm_threshold_reached
+                or client_storm_threshold_reached
+                or short_session_threshold_reached
+            ),
+            "quarantined": bool(webspace_quarantined or client_quarantined),
+        },
+        "usage": {
+            "active_connections": active_connections,
+            "active_connection_limit": active_connection_limit,
+            "active_connection_fill_ratio": active_fill_ratio,
+            "active_clients": len(active_client_counts),
+            "active_client_session_max": max([int(count or 0) for count in active_client_counts.values()] or [0]),
+            "active_client_sessions": active_client_rows,
+            "active_webspaces": len(active_by_webspace),
+            "active_connections_all_webspaces": sum(int(count or 0) for count in active_by_webspace.values()),
+        },
+        "limits": {
+            "max_active_per_webspace": active_connection_limit,
+            "max_active_per_client": int(_YWS_MAX_ACTIVE_PER_CLIENT),
+            "replace_scoped_client_connections": bool(_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS),
+            "recent_open_10s_limit": int(_YWS_GUARD_RECENT_OPEN_10S),
+            "webspace_min_clients_10s": int(_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S),
+            "client_open_15s_limit": int(_YWS_GUARD_CLIENT_OPEN_15S),
+            "single_client_reconnect_escalate_at": _yws_single_client_reconnect_escalation_limit(),
+            "short_session_limit": int(_YWS_GUARD_SHORT_SESSION_LIMIT),
+            "single_client_short_session_escalate_at": _yws_single_client_short_session_escalation_limit(),
+            "short_session_window_s": float(_YWS_GUARD_SHORT_SESSION_WINDOW_S),
+            "min_stable_session_s": float(_YWS_GUARD_MIN_STABLE_SESSION_S),
+            "cooldown_s": float(_YWS_GUARD_COOLDOWN_S),
+            "max_cooldown_s": float(_YWS_GUARD_MAX_COOLDOWN_S),
+            "escalation_window_s": float(_YWS_GUARD_ESCALATION_WINDOW_S),
+            "notify_interval_s": float(_YWS_GUARD_NOTIFY_INTERVAL_S),
+        },
+        "guard": {
+            "recent_attempts_10s": recent_attempts_10s,
+            "recent_attempts_60s": recent_attempts_60s,
+            "distinct_clients_10s": distinct_clients_10s,
+            "client_attempts_15s_max": max_client_attempts_15s,
+            "short_sessions_window_total": short_sessions_window_total,
+            "client_short_sessions_max": max_client_short_sessions,
+            "webspace_storm_threshold_reached": webspace_storm_threshold_reached,
+            "client_storm_threshold_reached": client_storm_threshold_reached,
+            "short_session_threshold_reached": short_session_threshold_reached,
+            "webspace_quarantined": webspace_quarantined,
+            "webspace_quarantine_until": webspace_quarantine_until if webspace_quarantined else None,
+            "webspace_quarantine_remaining_s": _remaining_quarantine_s(webspace_quarantine_until, now)
+            if webspace_quarantined
+            else 0.0,
+            "client_quarantined": client_quarantined,
+            "quarantined_clients": quarantined_clients[:8],
+            "quarantine_incident_count": int(float(webspace_incident.get("count") or 0.0)),
+            "selected_quarantine_total": selected_incident_total,
+            "reject_total": int(guard_diag.get("reject_total") or 0),
+            "last_reject_at": guard_diag.get("last_reject_at") or None,
+            "last_reject_reason": str(guard_diag.get("last_reject_reason") or ""),
+            "last_reject_webspace_id": str(guard_diag.get("last_reject_webspace_id") or ""),
+            "last_reject_dev_id": str(guard_diag.get("last_reject_dev_id") or ""),
+        },
+        "observed": {
+            "hot_clients": hot_clients[:8],
+            "active_by_webspace": active_by_webspace_rows[:16],
+            "global_recent_open_10s": global_recent_open_10s,
+            "global_recent_open_60s": global_recent_open_60s,
+            "global_recent_attempts_10s": global_recent_attempts_10s,
+            "global_recent_attempts_60s": global_recent_attempts_60s,
+            "attempts": attempt_diag,
+            "server": {
+                "requested": bool(server_snapshot.get("requested")),
+                "started_event": bool(server_snapshot.get("started_event")),
+                "task_running": bool(server_snapshot.get("task_running")),
+                "task_done": bool(server_snapshot.get("task_done")),
+                "task_cancelled": bool(server_snapshot.get("task_cancelled")),
+                "room_total": int(server_snapshot.get("room_total") or 0),
+                "ready": bool(server_snapshot.get("ready")),
+                "error": server_snapshot.get("error"),
+            },
+        },
+    }
+
+
 def _untrack_yws_connection(webspace_id: str, websocket: WebSocket) -> None:
     key = str(webspace_id or "").strip() or "default"
     remaining_connections = 0

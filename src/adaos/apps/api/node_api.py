@@ -3970,6 +3970,23 @@ async def node_infrastate_snapshot(webspace_id: str | None = None) -> dict[str, 
         role=str(getattr(conf, "role", "") or ""),
         webspace_id=target_webspace_id,
     )
+    try:
+        from adaos.services.yjs.gateway import yjs_balancer_snapshot
+
+        yjs_balancer = yjs_balancer_snapshot(webspace_id=target_webspace_id)
+    except Exception as exc:
+        yjs_balancer = {
+            "schema": "adaos.yjs_balancer.v1",
+            "webspace_id": target_webspace_id,
+            "updated_at": time.time(),
+            "state": "unavailable",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "health": {"available": False},
+            "limits": {},
+            "usage": {},
+            "guard": {},
+            "observed": {},
+        }
     snapshot = {
         "summary": {
             "label": "Infra State",
@@ -3980,6 +3997,7 @@ async def node_infrastate_snapshot(webspace_id: str | None = None) -> dict[str, 
         },
         "lifecycle": lifecycle,
         "yjs_runtime": yjs_runtime,
+        "yjs_balancer": yjs_balancer,
         "last_refresh_ts": time.time(),
         "full_snapshot_removed": True,
         "projection": "lightweight_control",
