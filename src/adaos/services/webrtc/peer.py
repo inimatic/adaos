@@ -41,6 +41,7 @@ from adaos.services.media_library import (
 )
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.webio_snapshot_demand import request_snapshot_event
 
 _log = logging.getLogger("adaos.webrtc.peer")
 _media_relay = MediaRelay()
@@ -191,6 +192,16 @@ def _ensure_event_channel_forwarder() -> None:
             return
         get_ctx().bus.subscribe("*", _forward_event_channel_bus_event)
         _EVENT_CHANNEL_FORWARDER_INSTALLED = True
+
+
+def _publish_webio_snapshot_request(event_type: str, payload: dict[str, Any], source: str) -> None:
+    ctx = get_ctx()
+    bus_emit(
+        ctx.bus,
+        event_type,
+        dict(payload or {}),
+        str(source or "webrtc.peer"),
+    )
 
 
 def _register_event_channel_subscriptions(
@@ -367,7 +378,6 @@ def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None
         if not webspace_id or not receiver:
             continue
         try:
-            ctx = get_ctx()
             payload = {
                 "topic": token,
                 "webspace_id": webspace_id,
@@ -376,13 +386,11 @@ def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None
             }
             if node_id:
                 payload["node_id"] = node_id
-            if _should_drop_duplicate_webio_control_event("webio.stream.snapshot.requested", payload):
-                continue
-            bus_emit(
-                ctx.bus,
+            request_snapshot_event(
                 "webio.stream.snapshot.requested",
                 payload,
                 "webrtc.peer",
+                _publish_webio_snapshot_request,
             )
         except Exception:
             _log.debug("failed to request webio stream snapshot topic=%s", token, exc_info=True)
@@ -501,16 +509,13 @@ def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str)
         if not parsed:
             continue
         try:
-            ctx = get_ctx()
             payload = dict(parsed)
             payload["transport"] = str(transport or "webrtc_data:events")
-            if _should_drop_duplicate_webio_control_event("webio.yjs.snapshot.requested", payload):
-                continue
-            bus_emit(
-                ctx.bus,
+            request_snapshot_event(
                 "webio.yjs.snapshot.requested",
                 payload,
                 "webrtc.peer",
+                _publish_webio_snapshot_request,
             )
         except Exception:
             _log.debug("failed to request webio yjs projection snapshot topic=%s", topic, exc_info=True)

@@ -40,6 +40,7 @@ from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.update_origin import consume_backend_room_update
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.scheduler import get_scheduler
+from adaos.services.webio_snapshot_demand import request_snapshot_event, snapshot_demand_snapshot
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx as get_agent_ctx
 
@@ -2490,6 +2491,18 @@ def _log_deduped_webio_control_event(event_type: str, key: str, now: float) -> N
     _WEBIO_CONTROL_DEDUPE_LOG_RECENT[key] = (last_log_at, suppressed + 1)
 
 
+def _publish_webio_snapshot_request(event_type: str, payload: dict[str, Any], source: str) -> None:
+    ctx = get_agent_ctx()
+    ctx.bus.publish(
+        DomainEvent(
+            type=event_type,
+            payload=dict(payload or {}),
+            source=str(source or "events_ws"),
+            ts=time.time(),
+        )
+    )
+
+
 def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None:
     for topic in topics:
         token = str(topic or "").strip()
@@ -2517,7 +2530,6 @@ def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None
         if not webspace_id or not receiver:
             continue
         try:
-            ctx = get_agent_ctx()
             payload = {
                 "topic": token,
                 "webspace_id": webspace_id,
@@ -2528,15 +2540,11 @@ def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None
                 payload["node_id"] = node_id
                 payload["target_node_id"] = node_id
                 payload["_meta"] = {"webspace_id": webspace_id, "target_node_id": node_id}
-            if _should_drop_duplicate_webio_control_event("webio.stream.snapshot.requested", payload):
-                continue
-            ctx.bus.publish(
-                DomainEvent(
-                    type="webio.stream.snapshot.requested",
-                    payload=payload,
-                    source="events_ws",
-                    ts=time.time(),
-                )
+            request_snapshot_event(
+                "webio.stream.snapshot.requested",
+                payload,
+                "events_ws",
+                _publish_webio_snapshot_request,
             )
         except Exception:
             _ylog.debug("failed to request webio stream snapshot topic=%s", token, exc_info=True)
@@ -2648,18 +2656,13 @@ def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str)
         if not parsed:
             continue
         try:
-            ctx = get_agent_ctx()
             payload = dict(parsed)
             payload["transport"] = str(transport or "ws")
-            if _should_drop_duplicate_webio_control_event("webio.yjs.snapshot.requested", payload):
-                continue
-            ctx.bus.publish(
-                DomainEvent(
-                    type="webio.yjs.snapshot.requested",
-                    payload=payload,
-                    source="events_ws",
-                    ts=time.time(),
-                )
+            request_snapshot_event(
+                "webio.yjs.snapshot.requested",
+                payload,
+                "events_ws",
+                _publish_webio_snapshot_request,
             )
         except Exception:
             _ylog.debug("failed to request webio yjs projection snapshot topic=%s", topic, exc_info=True)
@@ -4769,6 +4772,7 @@ def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]
         "rooms": room_details,
         "commands": _command_trace_snapshot(now),
         "ownership": _gateway_transport_ownership_snapshot(),
+        "webio_snapshot_demand": snapshot_demand_snapshot(),
         "updated_at": now,
     }
 

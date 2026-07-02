@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+from adaos.services.webio_snapshot_demand import clear_snapshot_demand_for_tests
+
 
 def _load_peer_module(monkeypatch):
     fake_aiortc = ModuleType("aiortc")
@@ -385,6 +387,7 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
 
 
 def test_request_webio_stream_snapshots_extracts_node_qualified_receiver(monkeypatch) -> None:
+    clear_snapshot_demand_for_tests()
     peer_mod = _load_peer_module(monkeypatch)
     published: list[tuple[str, dict[str, object], str]] = []
 
@@ -412,6 +415,7 @@ def test_request_webio_stream_snapshots_extracts_node_qualified_receiver(monkeyp
 
 
 def test_request_webio_stream_snapshots_extracts_global_node_receiver(monkeypatch) -> None:
+    clear_snapshot_demand_for_tests()
     peer_mod = _load_peer_module(monkeypatch)
     published: list[tuple[str, dict[str, object], str]] = []
 
@@ -439,6 +443,7 @@ def test_request_webio_stream_snapshots_extracts_global_node_receiver(monkeypatc
 
 
 def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(monkeypatch) -> None:
+    clear_snapshot_demand_for_tests()
     peer_mod = _load_peer_module(monkeypatch)
     published: list[tuple[str, dict[str, object], str]] = []
 
@@ -467,6 +472,7 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(mon
 
 
 def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events(monkeypatch) -> None:
+    clear_snapshot_demand_for_tests()
     peer_mod = _load_peer_module(monkeypatch)
     published: list[tuple[str, dict[str, object], str]] = []
 
@@ -483,6 +489,7 @@ def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events(
     assert len(published) == 1
     assert published[0][0] == "webio.yjs.snapshot.requested"
     peer_mod._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+    clear_snapshot_demand_for_tests()
 
 
 def test_webio_yjs_projection_subscription_tracks_active_demand(monkeypatch) -> None:

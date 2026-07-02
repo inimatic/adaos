@@ -8,6 +8,8 @@ import time
 import types
 from types import SimpleNamespace
 
+from adaos.services.webio_snapshot_demand import clear_snapshot_demand_for_tests
+
 try:
     import y_py  # noqa: F401
 except ImportError:
@@ -913,6 +915,7 @@ def test_diagnostic_room_throttles_large_gateway_persist_compaction(monkeypatch)
 
 
 def test_request_webio_stream_snapshots_extracts_node_qualified_receiver() -> None:
+    clear_snapshot_demand_for_tests()
     published: list[object] = []
 
     class _Bus:
@@ -936,6 +939,7 @@ def test_request_webio_stream_snapshots_extracts_node_qualified_receiver() -> No
 
 
 def test_request_webio_stream_snapshots_extracts_global_node_receiver() -> None:
+    clear_snapshot_demand_for_tests()
     published: list[object] = []
 
     class _Bus:
@@ -1024,6 +1028,7 @@ def test_webio_yjs_projection_subscription_dedupes_repeated_control_events() -> 
 
 
 def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -> None:
+    clear_snapshot_demand_for_tests()
     published: list[object] = []
 
     class _Bus:
@@ -1047,6 +1052,7 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -
 
 
 def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events() -> None:
+    clear_snapshot_demand_for_tests()
     published: list[object] = []
 
     class _Bus:
@@ -1065,6 +1071,7 @@ def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events(
     assert len(published) == 1
     assert getattr(published[0], "type", "") == "webio.yjs.snapshot.requested"
     gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+    clear_snapshot_demand_for_tests()
 
 
 def test_diagnostic_room_skips_empty_y_update() -> None:
