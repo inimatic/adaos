@@ -98,6 +98,7 @@
           "type": "string",
           "enum": [
             "collection_grid",
+            "collection_tree",
             "metric_chart",
             "form_matrix",
             "event_log",

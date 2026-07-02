@@ -530,6 +530,7 @@
         "collection.tree",
         "visual.taigaCollectionGrid",
         "visual.taigaMetricChart",
+        "visual.taigaTree",
         "visual.frameViewer",
         "visual.image",
         "visual.metricTile",
