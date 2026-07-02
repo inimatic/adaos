@@ -111,6 +111,19 @@ def _is_public_mime(mime: str) -> bool:
     return any(token.startswith(prefix) for prefix in _PUBLIC_MIME_PREFIXES)
 
 
+def _descriptor_browser_url(descriptor: Mapping[str, Any]) -> str:
+    for key in ("url", "src", "href"):
+        value = str(descriptor.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _descriptor_skips_package_file(descriptor: Mapping[str, Any]) -> bool:
+    delivery = str(descriptor.get("delivery") or "core").strip().lower()
+    return delivery == "external" or bool(_descriptor_browser_url(descriptor))
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -294,7 +307,10 @@ def publish_skill_resource_descriptor(
     ctx: AgentContext | None = None,
     base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    resolved_skill_dir = _resolve_skill_dir(skill_name, skill_dir=skill_dir)
+    if skill_dir is None and _descriptor_skips_package_file(descriptor):
+        resolved_skill_dir = Path.cwd()
+    else:
+        resolved_skill_dir = _resolve_skill_dir(skill_name, skill_dir=skill_dir)
     return publish_owner_resource_descriptor(
         resource_id,
         descriptor,
@@ -312,16 +328,22 @@ def publish_scenario_resource_descriptor(
     descriptor: Mapping[str, Any],
     *,
     scenario_id: str,
-    scenario_dir: str | Path,
+    scenario_dir: str | Path | None = None,
     ctx: AgentContext | None = None,
     base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
+    if scenario_dir is None and _descriptor_skips_package_file(descriptor):
+        resolved_scenario_dir = Path.cwd()
+    elif scenario_dir is not None:
+        resolved_scenario_dir = scenario_dir
+    else:
+        raise BrowserAssetPublishError("asset_package_dir_required")
     return publish_owner_resource_descriptor(
         resource_id,
         descriptor,
         owner_kind="scenario",
         owner_id=scenario_id,
-        package_dir=scenario_dir,
+        package_dir=resolved_scenario_dir,
         default_scope="scenario",
         ctx=ctx,
         base_dir=base_dir,
@@ -362,7 +384,31 @@ def publish_owner_resource_descriptor(
 ) -> dict[str, Any]:
     out = dict(descriptor)
     delivery = str(out.get("delivery") or "core").strip().lower()
-    if delivery == "external" or out.get("url") or out.get("src") or out.get("href"):
+    browser_url = _descriptor_browser_url(out)
+    if delivery == "external" or browser_url:
+        if delivery == "external" and not browser_url:
+            raise BrowserAssetPublishError("asset_external_url_required")
+        explicit_mime = str(out.get("mime") or "").strip()
+        if explicit_mime and not _is_public_mime(explicit_mime):
+            raise BrowserAssetPublishError("asset_mime_not_public")
+        owner_token = f"{owner_kind}:{owner_id}"
+        out.update(
+            {
+                "scope": out.get("scope") or default_scope,
+                "owner": out.get("owner") or owner_token,
+                "delivery": delivery if delivery == "external" else out.get("delivery", "core"),
+            }
+        )
+        if browser_url and not out.get("url"):
+            out["url"] = browser_url
+        _write_owner_manifest(
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            resource_id=resource_id,
+            descriptor=out,
+            ctx=ctx,
+            base_dir=base_dir,
+        )
         return out
     relative = _resolve_relative_asset_path(str(out.get("path") or ""))
     resolved_package_dir = Path(package_dir).expanduser().resolve()

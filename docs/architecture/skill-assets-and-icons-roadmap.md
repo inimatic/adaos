@@ -241,6 +241,10 @@ Status as of 2026-07-02:
   URL-backed resources. Current renderer coverage includes the existing
   resource data source, assistant avatar surfaces, and `ion-icon[name]` through
   the shared resource-icon directive.
+- Runtime i18n dictionaries can be published as `kind: "data"`,
+  `role: "i18n"` resources with an explicit `locale`. The Angular
+  `I18nService` loads those dictionaries through the same resource resolver and
+  merges them over bundled `assets/i18n/*.json` translations.
 - Root exposes a partial cache control plane:
   `/v1/root/browser-assets/cache-contract`,
   `/v1/root/browser-assets/cache/ensure`,
@@ -253,6 +257,10 @@ Status as of 2026-07-02:
   `/v1/root/browser-assets/diagnostics` and `/v1/root/browser-assets/gc`.
   Diagnostics report missing referenced blobs and publish errors; GC removes
   unreferenced content-addressed blobs after a dry run or explicit mutation.
+- External URL resources are stored in owner manifests with `delivery:
+  "external"`, `scope`, `owner`, MIME/cache metadata when provided, and no local
+  blob copy. The manifest remains the authoritative descriptor while byte
+  serving stays with the external store.
 - Private resources remain deferred.
 
 ## Phases
@@ -270,10 +278,10 @@ Status as of 2026-07-02:
 5. [x] Mount or sidecar a static `/assets` serving layer for public immutable blobs.
 6. [x] Add client-side resource resolution and local browser caching for all
    `resource:<id>` references.
-7. [ ] Wire i18n dictionaries through `resources` so skills can publish localized UI
+7. [x] Wire i18n dictionaries through `resources` so skills can publish localized UI
    text without rebuilding the Angular bundle.
 8. [x] Add Root cache/relay support for remote browsers and subnet-hosted resources.
-9. [ ] Allow external storage URLs for large assets while keeping the subnet-hosted
+9. [x] Allow external storage URLs for large assets while keeping the subnet-hosted
    manifest as the source of truth.
 10. [x] Add diagnostics for missing assets so compact phone layouts still provide
    usable controls, avatar fallbacks, and modal close actions.

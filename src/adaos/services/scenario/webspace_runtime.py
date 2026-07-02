@@ -1832,9 +1832,20 @@ def _materialize_skill_resource_descriptor(
     descriptor.setdefault("scope", "skill")
     descriptor.setdefault("owner", f"skill:{skill_token}")
     delivery = str(descriptor.get("delivery") or "core").strip().lower()
-    if delivery == "external":
-        return descriptor
-    if descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
+    if delivery == "external" or descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
+        try:
+            return publish_skill_resource_descriptor(
+                str(resource_id or ""),
+                descriptor,
+                skill_name=skill_token,
+                skill_dir=skill_dir,
+            )
+        except BrowserAssetPublishError as exc:
+            descriptor["published"] = False
+            descriptor["publishError"] = str(exc)
+        except Exception:
+            descriptor["published"] = False
+            descriptor["publishError"] = "publish_failed"
         return descriptor
     try:
         return publish_skill_resource_descriptor(
@@ -1868,10 +1879,6 @@ def _materialize_scenario_resource_descriptor(
     descriptor.setdefault("scope", "scenario")
     descriptor.setdefault("owner", f"scenario:{scenario_token}")
     delivery = str(descriptor.get("delivery") or "core").strip().lower()
-    if delivery == "external":
-        return descriptor
-    if descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
-        return descriptor
     resolved_dir: Path | None = None
     if scenario_dir is not None:
         resolved_dir = Path(scenario_dir)
@@ -1880,6 +1887,21 @@ def _materialize_scenario_resource_descriptor(
             resolved_dir = scenarios_loader.scenario_root_for_space(scenario_token, "workspace")
         except Exception:
             resolved_dir = None
+    if delivery == "external" or descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
+        try:
+            return publish_scenario_resource_descriptor(
+                str(resource_id or ""),
+                descriptor,
+                scenario_id=scenario_token,
+                scenario_dir=resolved_dir,
+            )
+        except BrowserAssetPublishError as exc:
+            descriptor["published"] = False
+            descriptor["publishError"] = str(exc)
+        except Exception:
+            descriptor["published"] = False
+            descriptor["publishError"] = "publish_failed"
+        return descriptor
     if resolved_dir is None:
         return descriptor
     try:

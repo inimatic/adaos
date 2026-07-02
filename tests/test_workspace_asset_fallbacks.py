@@ -59,7 +59,13 @@ def test_skill_resource_descriptor_materializes_asset_delivery_url(tmp_path: Pat
     assert published[0].read_text(encoding="utf-8") == "<svg></svg>"
 
 
-def test_external_resource_descriptor_keeps_authored_url() -> None:
+def test_external_resource_descriptor_keeps_authored_url_and_manifest(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services import browser_assets
+
+    runtime_base = tmp_path / "runtime"
+    fake_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: runtime_base))
+    monkeypatch.setattr(browser_assets, "get_ctx", lambda: fake_ctx)
+
     descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
         "voice.avatar",
         {
@@ -72,6 +78,35 @@ def test_external_resource_descriptor_keeps_authored_url() -> None:
     )
 
     assert descriptor["url"] == "https://cdn.example/avatar.webp"
+    assert descriptor["delivery"] == "external"
+    assert descriptor["owner"] == "skill:voice_chat_skill"
+    assert "published" not in descriptor
+    manifest = runtime_base / "assets" / "manifests" / "skills" / "voice_chat_skill.json"
+    assert manifest.exists()
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_payload["resources"]["voice.avatar"]["url"] == "https://cdn.example/avatar.webp"
+    assert not (runtime_base / "assets" / "public" / "blobs").exists()
+
+
+def test_external_resource_descriptor_requires_url(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services import browser_assets
+
+    runtime_base = tmp_path / "runtime"
+    fake_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: runtime_base))
+    monkeypatch.setattr(browser_assets, "get_ctx", lambda: fake_ctx)
+
+    descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
+        "voice.preview",
+        {
+            "kind": "image",
+            "delivery": "external",
+            "mime": "image/webp",
+        },
+        skill_name="voice_chat_skill",
+    )
+
+    assert descriptor["published"] is False
+    assert descriptor["publishError"] == "asset_external_url_required"
 
 
 def test_scenario_resource_descriptor_materializes_asset_delivery_url(tmp_path: Path, monkeypatch) -> None:
