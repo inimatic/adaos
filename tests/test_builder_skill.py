@@ -497,6 +497,140 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
     assert saved["preview_state"]["title"] == "English Todo"
 
 
+def test_update_current_scenario_sample_data_uses_requested_domain_and_refreshes_files(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "conference_todo"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"conference_todo","version":"0.1.0","name":"conference_todo","steps":[]}',
+        encoding="utf-8",
+    )
+    published: list[tuple[str, dict]] = []
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {
+                "source_webspace_id": kwargs.get("source_webspace_id"),
+                "dev_webspace_id": "builder-conference-dev",
+                "active_draft_id": kwargs.get("active_draft_id"),
+                "runtime_scenario_id": kwargs.get("runtime_scenario_id"),
+            }
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.sdk.data.events as events
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.conference"})
+    monkeypatch.setattr(events, "publish", lambda topic, payload, source=None: published.append((topic, dict(payload))))
+    skill._save_session(
+        "builder-conference",
+        {
+            "id": "builder_session_conference",
+            "webspace_id": "builder-conference",
+            "status": "drafting",
+            "title": "Todo List",
+            "scenario_id": "conference_todo",
+            "draft_id": "draft.conference",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "prototype_items",
+            "fields": [
+                {"id": "title", "type": "string", "label": "Title", "required": True},
+                {"id": "notes", "type": "string", "label": "Notes", "required": False},
+                {"id": "status", "type": "string", "label": "Status", "required": False},
+                {"id": "date", "type": "date", "label": "Date", "required": False},
+            ],
+            "patches": [],
+            "version": "001",
+        },
+    )
+
+    result = skill.update_current_scenario(
+        "\u0414\u0430\u043d\u043d\u044b\u0435 \u0441\u0434\u0435\u043b\u0430\u0439 \u043d\u0430 \u043f\u0440\u0438\u043c\u0435\u0440\u0435 \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0438 \u043a \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438. \u041d\u0430\u043f\u0438\u0448\u0438 \u0438\u0445 \u043d\u0430 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u043e\u043c \u044f\u0437\u044b\u043a\u0435",
+        webspace_id="builder-conference",
+    )
+
+    assert result["patch"]["operation"] == "update_mock_data"
+    rows = result["preview_state"]["mock_data"]["prototype_items"]
+    assert rows[0]["title"] == "Book venue"
+    assert rows[1]["title"] == "Confirm speakers"
+    assert rows[2]["notes"] == "Export attendee list and prepare registration desk"
+    assert all(row["title"] not in {"Milk", "\u041c\u043e\u043b\u043e\u043a\u043e"} for row in rows)
+    assert result["project_files_refresh"]["ok"] is True
+    assert any(
+        topic == "prompt.project.changed"
+        and payload.get("object_type") == "scenario"
+        and payload.get("object_id") == "conference_todo"
+        and payload.get("reason") == "builder_ui_revision_written"
+        for topic, payload in published
+    )
+    revision = json.loads((artifact_root / "ui_revisions" / "001.json").read_text(encoding="utf-8"))
+    assert revision["preview_state"]["mock_data"]["prototype_items"][0]["title"] == "Book venue"
+
+
+def test_update_current_scenario_translates_existing_mock_data_to_english(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "translate_rows"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"translate_rows","version":"0.1.0","name":"translate_rows","steps":[]}',
+        encoding="utf-8",
+    )
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-translate-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    import adaos.sdk.data.events as events
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(events, "publish", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pending_actions, "publish_pending_action", lambda **kwargs: {"id": "pa.builder.translate"})
+    skill._save_session(
+        "builder-translate",
+        {
+            "id": "builder_session_translate",
+            "webspace_id": "builder-translate",
+            "status": "drafting",
+            "title": "Todo List",
+            "scenario_id": "translate_rows",
+            "draft_id": "draft.translate",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "prototype_items",
+            "fields": [
+                {"id": "title", "type": "string", "label": "Title", "required": True},
+                {"id": "notes", "type": "string", "label": "Notes", "required": False},
+                {"id": "date", "type": "date", "label": "Date", "required": False},
+            ],
+            "mock_rows": [
+                {"title": "\u041c\u043e\u043b\u043e\u043a\u043e", "notes": "\u041c\u043e\u043b\u043e\u0447\u043d\u044b\u0435", "date": "2026-07-01"},
+                {"title": "\u0425\u043b\u0435\u0431", "notes": "\u0411\u0430\u043a\u0430\u043b\u0435\u044f", "date": "2026-07-02"},
+            ],
+            "patches": [],
+            "version": "001",
+        },
+    )
+
+    result = skill.update_current_scenario(
+        "\u041f\u0435\u0440\u0435\u0432\u0435\u0434\u0438 \u0434\u0430\u043d\u043d\u044b\u0435 \u043d\u0430 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u0438\u0439 \u044f\u0437\u044b\u043a",
+        webspace_id="builder-translate",
+    )
+
+    rows = result["preview_state"]["mock_data"]["prototype_items"]
+    assert rows[0]["title"] == "Milk"
+    assert rows[0]["notes"] == "Dairy"
+    assert rows[1]["title"] == "Bread"
+    assert rows[1]["notes"] == "Bakery"
+
+
 def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "revision_restore"
