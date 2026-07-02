@@ -35,6 +35,11 @@ Phase 5 делает Phase 3 join/invite semantics доступными из bro
 `?adaos_invite=<id>`, получает preview со scope, role, expiry, profile hint при
 наличии и explicit acceptance action.
 
+Invite URLs генерируются от configured public app base, обычно
+`https://inimatic.com`, и несут target subnet вместе с root hub endpoint
+parameters. Joining browser использует эти параметры для preview/claim requests
+к целевому hub, а не предполагает локальный `127.0.0.1` API.
+
 ## Access boundary
 
 Guest joins остаются session-bound и profile-unbound. API отклоняет claim guest

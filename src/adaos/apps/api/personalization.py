@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -35,6 +37,26 @@ _PREFERENCE_FIELDS = frozenset(
     )
 )
 _ID_RE = re.compile(r"[^A-Za-z0-9_.:@/-]+")
+_DEFAULT_LANGUAGE_OPTIONS = (
+    {"value": "en", "label": "English", "locale": "en-US"},
+    {"value": "ru", "label": "Russian", "locale": "ru-RU"},
+    {"value": "fr", "label": "French", "locale": "fr-FR"},
+    {"value": "ch", "label": "Chinese", "locale": "zh-CN"},
+    {"value": "ar", "label": "Arabic", "locale": "ar"},
+)
+_LANGUAGE_LABELS = {str(item["value"]): str(item["label"]) for item in _DEFAULT_LANGUAGE_OPTIONS}
+_LANGUAGE_LOCALES = {str(item["value"]): str(item["locale"]) for item in _DEFAULT_LANGUAGE_OPTIONS}
+_COMMON_TIMEZONES = (
+    "UTC",
+    "Europe/Moscow",
+    "Europe/London",
+    "Europe/Paris",
+    "America/New_York",
+    "America/Los_Angeles",
+    "Asia/Dubai",
+    "Asia/Shanghai",
+    "Asia/Tokyo",
+)
 
 
 class ScopePayload(BaseModel):
@@ -94,15 +116,40 @@ def _safe_id(value: str, *, fallback: str) -> str:
     return token or fallback
 
 
-def _base_join_url(request: Request, invite_id: str) -> str:
-    base = str(request.base_url).rstrip("/")
-    return f"{base}/?adaos_invite={invite_id}"
+def _setting_text(ctx: AgentContext, name: str, fallback: str = "") -> str:
+    token = str(getattr(ctx.settings, name, "") or "").strip()
+    return token or fallback
 
 
-def _public_invite_view(invite: Mapping[str, Any], request: Request) -> dict[str, Any]:
+def _root_hub_base(ctx: AgentContext) -> str:
+    api_base = _setting_text(ctx, "api_base", "https://api.inimatic.com").rstrip("/")
+    subnet_id = personalization_runtime.current_subnet_id(ctx)
+    if subnet_id:
+        return f"{api_base}/hubs/{subnet_id}"
+    return api_base
+
+
+def _base_join_url(request: Request, ctx: AgentContext, invite_id: str) -> str:
+    app_base = _setting_text(ctx, "app_base", str(request.base_url)).rstrip("/") or str(request.base_url).rstrip("/")
+    subnet_id = personalization_runtime.current_subnet_id(ctx)
+    params: dict[str, str] = {
+        "adaos_invite": invite_id,
+        "try_local_hub": "0",
+    }
+    if subnet_id:
+        params["mode"] = "login"
+        params["target_subnet"] = subnet_id
+        params["adaos_subnet"] = subnet_id
+    hub_base = _root_hub_base(ctx)
+    if hub_base:
+        params["adaos_hub_base"] = hub_base
+    return f"{app_base}/?{urlencode(params)}"
+
+
+def _public_invite_view(invite: Mapping[str, Any], request: Request, ctx: AgentContext) -> dict[str, Any]:
     invite_id = str(invite.get("invite_id") or "").strip()
     result = dict(invite)
-    result["claim_url"] = _base_join_url(request, invite_id)
+    result["claim_url"] = _base_join_url(request, ctx, invite_id)
     return result
 
 
@@ -164,6 +211,167 @@ def _profile_view(profile: Any) -> dict[str, Any]:
     }
 
 
+def _path_from_accessor(accessor: Any) -> Any:
+    try:
+        value = accessor() if callable(accessor) else accessor
+    except Exception:
+        return None
+    return value
+
+
+def _normalize_language_code(raw: str) -> str:
+    token = str(raw or "").strip().lower().replace("_", "-")
+    if not token:
+        return ""
+    if token.startswith("zh") or token.startswith("ch"):
+        return "ch"
+    return token.split("-", 1)[0]
+
+
+def _discover_language_codes(ctx: AgentContext) -> list[str]:
+    codes: set[str] = set()
+    for accessor_name in ("locales_dir", "locales_base_dir", "skills_locales_dir", "scenarios_locales_dir"):
+        accessor = getattr(ctx.paths, accessor_name, None)
+        path_value = _path_from_accessor(accessor)
+        if not path_value:
+            continue
+        path = path_value if hasattr(path_value, "glob") else Path(path_value)
+        try:
+            if not path.exists():
+                continue
+            for item in path.glob("*.json"):
+                code = _normalize_language_code(item.stem)
+                if code:
+                    codes.add(code)
+        except Exception:
+            continue
+    return sorted(codes)
+
+
+def _language_options(ctx: AgentContext) -> list[dict[str, str]]:
+    codes = [str(item["value"]) for item in _DEFAULT_LANGUAGE_OPTIONS]
+    for code in _discover_language_codes(ctx):
+        if code not in codes:
+            codes.append(code)
+    return [
+        {
+            "value": code,
+            "label": _LANGUAGE_LABELS.get(code, code),
+            "locale": _LANGUAGE_LOCALES.get(code, code),
+        }
+        for code in codes
+    ]
+
+
+def _timezone_options() -> list[dict[str, str]]:
+    zones = set(_COMMON_TIMEZONES)
+    try:
+        from zoneinfo import available_timezones
+
+        zones.update(str(item) for item in available_timezones())
+    except Exception:
+        pass
+    ordered = list(_COMMON_TIMEZONES) + sorted(zone for zone in zones if zone not in _COMMON_TIMEZONES)
+    return [{"value": zone, "label": zone} for zone in ordered]
+
+
+def _workspace_scope_options(ctx: AgentContext) -> list[dict[str, str]]:
+    scopes: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: str, scope_id: str, label: str | None = None) -> None:
+        token = str(scope_id or "").strip()
+        normalized_kind = str(kind or "workspace").strip() or "workspace"
+        if not token:
+            return
+        key = (normalized_kind, token)
+        if key in seen:
+            return
+        seen.add(key)
+        scopes.append(
+            {
+                "kind": normalized_kind,
+                "id": token,
+                "value": f"{normalized_kind}:{token}",
+                "label": str(label or token).strip() or token,
+            }
+        )
+
+    try:
+        from adaos.services.scenario.webspace_runtime import WebspaceService
+
+        for item in WebspaceService().list(mode="mixed"):
+            add("workspace", getattr(item, "id", ""), getattr(item, "title", None))
+    except Exception:
+        pass
+
+    try:
+        prefs = _profile(ctx).get_preferences()
+        add("workspace", str(prefs.get("current_workspace") or "").strip())
+    except Exception:
+        pass
+    add("workspace", "default", "Default workspace")
+    add("subnet", personalization_runtime.current_subnet_id(ctx), "Current subnet")
+    return scopes
+
+
+def _device_name(entry: Mapping[str, Any] | None) -> str:
+    if not isinstance(entry, Mapping):
+        return ""
+    for key in ("display_name", "hostname", "browser_family", "os_name"):
+        token = str(entry.get(key) or "").strip()
+        if token:
+            return token
+    for key in ("aliases", "node_names"):
+        raw = entry.get(key)
+        if isinstance(raw, (list, tuple)):
+            for item in raw:
+                token = str(item or "").strip()
+                if token:
+                    return token
+    return ""
+
+
+def _device_option(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    device_id = str(entry.get("id") or "").strip()
+    if not device_id:
+        return None
+    name = _device_name(entry)
+    label = f"{name} | {device_id}" if name else device_id
+    return {
+        "id": device_id,
+        "value": device_id,
+        "name": name,
+        "label": label,
+        "trust": str(entry.get("admission_policy") or "").strip() or "allow",
+    }
+
+
+def _device_options() -> list[dict[str, Any]]:
+    try:
+        from adaos.services import access_links
+
+        return [item for entry in access_links.list_links("browser") if (item := _device_option(entry))]
+    except Exception:
+        return []
+
+
+def _current_device_status(request: Request) -> dict[str, Any]:
+    device_id = str(request.headers.get("X-AdaOS-Device-Id") or request.headers.get("x-adaos-device-id") or "").strip()
+    if not device_id:
+        return {"id": "", "name": "", "label": "current", "trust": "unknown"}
+    entry: dict[str, Any] | None = None
+    try:
+        from adaos.services import access_links
+
+        entry = access_links.get_link("browser", device_id)
+    except Exception:
+        entry = None
+    option = _device_option(entry or {"id": device_id}) or {"id": device_id, "name": "", "label": device_id}
+    option.setdefault("trust", "unknown")
+    return option
+
+
 def _listed_invites(service: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for status in ("pending", "accepted", "expired", "revoked"):
@@ -187,9 +395,33 @@ def _listed_invites(service: Any) -> list[dict[str, Any]]:
 
 
 @router.get("/current-user/header-settings", dependencies=[Depends(require_token)])
-async def get_current_user_header(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+async def get_current_user_header(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     service = _profile(ctx)
-    return {"ok": True, "settings": service.header_settings()}
+    settings = service.header_settings()
+    device_status = _current_device_status(request)
+    settings["device_status"] = device_status
+    settings["device_trust_status"] = str(device_status.get("label") or settings.get("device_trust_status") or "current")
+    settings["identity_source"] = "owner_settings_fallback"
+    return {"ok": True, "settings": settings}
+
+
+@router.get("/options", dependencies=[Depends(require_token)])
+async def get_personalization_options(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+    languages = _language_options(ctx)
+    return {
+        "ok": True,
+        "options": {
+            "languages": languages,
+            "locales": [
+                {"value": str(item.get("locale") or item.get("value") or ""), "label": str(item.get("locale") or item.get("value") or "")}
+                for item in languages
+                if str(item.get("locale") or item.get("value") or "").strip()
+            ],
+            "timezones": _timezone_options(),
+            "scopes": _workspace_scope_options(ctx),
+            "devices": _device_options(),
+        },
+    }
 
 
 @router.get("/current-user/profile", dependencies=[Depends(require_token)])
@@ -259,7 +491,7 @@ async def create_guest_invite(
             expires_at=_expires_in(body.expires_in_minutes),
             max_sessions=body.max_sessions,
         )
-        return {"ok": True, "invite": _public_invite_view(invite, request)}
+        return {"ok": True, "invite": _public_invite_view(invite, request, ctx)}
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -287,7 +519,7 @@ async def create_targeted_invite(
         )
         if body.subject_id:
             invite["subject_id"] = _safe_id(body.subject_id, fallback=hint)
-        return {"ok": True, "invite": _public_invite_view(invite, request)}
+        return {"ok": True, "invite": _public_invite_view(invite, request, ctx)}
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -297,7 +529,7 @@ async def list_invites(request: Request, ctx: AgentContext = Depends(get_ctx)) -
     service = _access(ctx)
     return {
         "ok": True,
-        "invites": [_public_invite_view(item, request) for item in _listed_invites(service)],
+        "invites": [_public_invite_view(item, request, ctx) for item in _listed_invites(service)],
     }
 
 

@@ -26,11 +26,15 @@ routes and a browser header panel:
 - `PATCH /api/personalization/current-user/profile`
 - `GET /api/personalization/current-user/preferences`
 - `PATCH /api/personalization/current-user/preferences`
+- `GET /api/personalization/options`
 - `GET /api/personalization/policy/explain`
 
 The browser header now has a current-user control. The panel loads the
 authoritative header settings from the API, lets the signed-in user edit
 allowed profile/preference fields, and refreshes the header after saving.
+Language, locale, timezone, device, and scope controls are backed by API
+options instead of free-form text where the runtime can provide a concrete
+enumeration.
 
 ## Access Boundary
 
@@ -42,6 +46,11 @@ read-only metadata.
 The browser does not become a source of truth for preferences. It calls the
 runtime API, which routes writes through `UserProfileService` and the
 personalization access/audit service.
+
+Current identity resolution is explicitly marked as `owner_settings_fallback`.
+It is valid for the local owner session only. Invited/guest users still require
+the Phase 6+ session-to-profile binding before `current_user` stops being an
+owner fallback.
 
 ## Current Limits
 

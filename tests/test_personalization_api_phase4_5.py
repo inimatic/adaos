@@ -49,6 +49,7 @@ def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
     assert payload["display_name"] == "Masha"
     assert payload["theme"] == "dark"
     assert payload["role_status"] == {"value": "owner", "editable": False}
+    assert payload["identity_source"] == "owner_settings_fallback"
 
     decision = client.get(
         "/api/personalization/policy/explain?action=profile.write.self",
@@ -56,6 +57,28 @@ def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
     )
     assert decision.status_code == 200
     assert decision.json()["decision"]["decision"] == "allow"
+
+
+def test_phase4_personalization_options_and_current_device_status() -> None:
+    client = _client()
+    access_links.upsert_link("browser", "device-phase45", {"display_name": "Masha phone"})
+
+    options = client.get("/api/personalization/options", headers=TOKEN_HEADERS)
+    assert options.status_code == 200
+    payload = options.json()["options"]
+    assert any(item["value"] == "ru" for item in payload["languages"])
+    assert any(item["value"] == "UTC" for item in payload["timezones"])
+    assert any(item["kind"] == "workspace" for item in payload["scopes"])
+
+    header = client.get(
+        "/api/personalization/current-user/header-settings",
+        headers={**TOKEN_HEADERS, "X-AdaOS-Device-Id": "device-phase45"},
+    )
+    assert header.status_code == 200
+    settings = header.json()["settings"]
+    assert settings["device_status"]["id"] == "device-phase45"
+    assert settings["device_status"]["label"] == "Masha phone | device-phase45"
+    assert settings["device_trust_status"] == "Masha phone | device-phase45"
 
 
 def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission() -> None:
@@ -71,6 +94,10 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission() -
     invite_id = invite["invite_id"]
     assert invite["kind"] == "guest_join_link"
     assert "adaos_invite=" in invite["claim_url"]
+    assert invite["claim_url"].startswith("https://inimatic.com/?")
+    assert "target_subnet=" in invite["claim_url"]
+    assert "adaos_hub_base=" in invite["claim_url"]
+    assert "127.0.0.1" not in invite["claim_url"]
 
     preview = client.get(f"/api/personalization/invites/{invite_id}/preview")
     assert preview.status_code == 200

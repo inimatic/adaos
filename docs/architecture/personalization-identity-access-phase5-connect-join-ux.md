@@ -35,6 +35,11 @@ users such as Masha. A joining browser that opens `?adaos_invite=<id>` gets a
 preview with scope, role, expiry, profile hint when present, and an explicit
 acceptance action.
 
+Invite URLs are generated from the configured public app base, normally
+`https://inimatic.com`, and carry the target subnet plus root hub endpoint
+parameters. A joining browser uses those parameters to route preview/claim
+requests to the target hub instead of assuming the local `127.0.0.1` API.
+
 ## Access Boundary
 
 Guest joins are session-bound and profile-unbound. The API rejects attempts to

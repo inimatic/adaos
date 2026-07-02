@@ -26,11 +26,14 @@ header panel:
 - `PATCH /api/personalization/current-user/profile`
 - `GET /api/personalization/current-user/preferences`
 - `PATCH /api/personalization/current-user/preferences`
+- `GET /api/personalization/options`
 - `GET /api/personalization/policy/explain`
 
 В шапке браузера появился current-user control. Panel загружает authoritative
 header settings из API, позволяет signed-in user редактировать разрешенные
 profile/preference fields и обновляет шапку после save.
+Language, locale, timezone, device и scope controls берут варианты из API
+options вместо free-form text там, где runtime может дать конкретный список.
 
 ## Access boundary
 
@@ -41,6 +44,11 @@ structured denial. UI показывает role/access status только read-
 Browser не становится source of truth для preferences. Он вызывает runtime API,
 а API проводит write через `UserProfileService` и personalization access/audit
 service.
+
+Текущее разрешение identity явно помечено как `owner_settings_fallback`. Оно
+валидно только для локальной owner session. Invited/guest users требуют
+session-to-profile binding из Phase 6+ до того, как `current_user` перестанет
+быть owner fallback.
 
 ## Текущие границы
 

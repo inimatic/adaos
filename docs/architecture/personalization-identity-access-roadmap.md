@@ -274,10 +274,16 @@ Checklist:
   header settings, and policy explanations.
 - [x] Load header settings in the browser shell and show display name,
   role/access status, active subnet/workspace, and device trust status.
+- [x] Mark current-user identity resolution as owner fallback until session
+  identity binding exists for invited/guest users.
 - [ ] Add avatar/initial rendering polish for the current-user header chip.
 - [x] Add a current-user settings panel for display name, preferred name,
   language/locale/timezone, theme, UI density, memory/privacy preferences, and
   accessibility preferences.
+- [x] Back language, locale, timezone, device, and invite-scope controls with
+  runtime/API options instead of free-form text where concrete options exist.
+- [x] Apply saved theme preferences in the browser shell immediately instead
+  of only persisting them server-side.
 - [x] Keep role and membership read-only in current-user settings; route any
   access change to owner/admin flows.
 - [x] Treat browser localStorage as migration/fallback only. The service store
@@ -319,6 +325,8 @@ Checklist:
   preview, invite claim, invite revoke, and guest-session bulk revoke.
 - [x] Parameterize link generation by flow kind, scope, role preset, expiry,
   max sessions, and optional profile hint.
+- [x] Generate invite URLs from the public app base with target subnet and
+  root/hub endpoint parameters instead of local loopback API origins.
 - [ ] Add actual QR rendering for created invite links.
 - [x] Let owner/co-owner create a public guest link for classrooms, museums,
   events, demos, and temporary visitors.

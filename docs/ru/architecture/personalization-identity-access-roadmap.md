@@ -274,10 +274,16 @@ Checklist:
   preferences, header settings и policy explanations.
 - [x] Загружать header settings в browser shell и показывать display name,
   role/access status, active subnet/workspace и device trust status.
+- [x] Помечать current-user identity resolution как owner fallback до появления
+  session identity binding для invited/guest users.
 - [ ] Добавить avatar/initial rendering polish для current-user header chip.
 - [x] Добавить current-user settings panel для display name, preferred name,
   language/locale/timezone, theme, UI density, memory/privacy preferences и
   accessibility preferences.
+- [x] Подкрепить language, locale, timezone, device и invite-scope controls
+  runtime/API options вместо free-form text там, где есть конкретные варианты.
+- [x] Применять saved theme preferences в browser shell сразу, а не только
+  сохранять их server-side.
 - [x] Держать role и membership read-only в current-user settings; любые access
   changes отправлять в owner/admin flows.
 - [x] Считать browser localStorage только migration/fallback слоем. Service
@@ -318,6 +324,8 @@ Checklist:
   invite preview, invite claim, invite revoke и guest-session bulk revoke.
 - [x] Параметризовать link generation по flow kind, scope, role preset,
   expiry, max sessions и optional profile hint.
+- [x] Генерировать invite URLs от public app base с target subnet и root/hub
+  endpoint parameters вместо local loopback API origins.
 - [ ] Добавить actual QR rendering для созданных invite links.
 - [x] Дать owner/co-owner возможность создать public guest link для
   classrooms, museums, events, demos и temporary visitors.
