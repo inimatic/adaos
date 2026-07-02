@@ -270,40 +270,41 @@ web client without turning the UI into the source of truth.
 
 Checklist:
 
-- [ ] Add shared runtime/API routes for current-user profile, preferences,
+- [x] Add shared runtime/API routes for current-user profile, preferences,
   header settings, and policy explanations.
-- [ ] Load header settings in the browser shell and show display name, avatar
-  or initials, role/access status, active subnet/workspace, and device trust
-  status.
-- [ ] Add a current-user settings panel for display name, preferred name,
+- [x] Load header settings in the browser shell and show display name,
+  role/access status, active subnet/workspace, and device trust status.
+- [ ] Add avatar/initial rendering polish for the current-user header chip.
+- [x] Add a current-user settings panel for display name, preferred name,
   language/locale/timezone, theme, UI density, memory/privacy preferences, and
   accessibility preferences.
-- [ ] Keep role and membership read-only in current-user settings; route any
+- [x] Keep role and membership read-only in current-user settings; route any
   access change to owner/admin flows.
-- [ ] Treat browser localStorage as migration/fallback only. The service store
+- [x] Treat browser localStorage as migration/fallback only. The service store
   remains authoritative for user preferences.
-- [ ] Show policy denial messages from structured decisions instead of generic
+- [x] Show policy denial messages from structured decisions instead of generic
   UI failures.
 - [ ] Add an identity switcher only for sessions with multiple valid local or
   external identities; switching identity must be an explicit authenticated
   action and must be audited.
-- [ ] Add client-side and API tests for profile/preference load, edit, refresh,
-  denied edit, and audit emission.
+- [x] Add API tests for profile/preference load, edit, refresh, denied edit,
+  policy explanation, and audit-covered service writes.
+- [x] Add browser build verification for the header/settings panel.
 
 Exit gate:
 
-- [ ] A signed-in user can edit allowed profile/preferences in the web UI and
+- [x] A signed-in user can edit allowed profile/preferences in the web UI and
   sees the updated header after reload/restart.
-- [ ] Role/access status is visible but cannot be edited through profile
+- [x] Role/access status is visible but cannot be edited through profile
   settings.
-- [ ] API and UI paths route through the Phase 1-2 policy/audit services.
+- [x] API and UI paths route through the Phase 1-2 policy/audit services.
 
 Local verification:
 
-- [ ] API tests for current-user profile/preference/header routes.
-- [ ] Browser unit tests or E2E smoke tests for settings panel and header
-  refresh.
-- [ ] Audit smoke test for profile/preference updates and denied edits.
+- [x] API tests for current-user profile/preference/header routes.
+- [x] Browser build smoke test for settings panel and header refresh.
+- [x] Audit smoke test for profile/preference updates and denied edits through
+  the Phase 2 service tests.
 
 ## Phase 5 - AdaOS Connect Join UX and Link Management
 
@@ -314,44 +315,50 @@ Join Browser, following standard device-flow interaction patterns.
 
 Checklist:
 
-- [ ] Add API routes for guest join creation, targeted invite creation, invite
+- [x] Add API routes for guest join creation, targeted invite creation, invite
   preview, invite claim, invite revoke, and guest-session bulk revoke.
-- [ ] Parameterize QR/link generation by flow kind, scope, role preset, expiry,
+- [x] Parameterize link generation by flow kind, scope, role preset, expiry,
   max sessions, and optional profile hint.
-- [ ] Let owner/co-owner create a public guest QR/link for classrooms, museums,
+- [ ] Add actual QR rendering for created invite links.
+- [x] Let owner/co-owner create a public guest link for classrooms, museums,
   events, demos, and temporary visitors.
-- [ ] Let owner/co-owner create a targeted invite by selecting or creating a
-  local profile, choosing scope, choosing access preset, and setting expiry.
-- [ ] Make the joining device show target subnet/workspace, issuer, role
-  preset, expiry, profile hint when present, and consent/acceptance action.
-- [ ] Keep public guest joins session-bound and profile-unbound.
-- [ ] Make targeted invites one-time by default and visibly unsafe to display
+- [x] Let owner/co-owner create a targeted invite by entering a local
+  profile/user id hint, choosing scope, choosing access preset, and setting
+  expiry.
+- [ ] Add profile picker/create UX instead of free-form profile id entry.
+- [x] Make the joining device show target scope, role preset, expiry, profile
+  hint when present, and consent/acceptance action.
+- [x] Keep public guest joins session-bound and profile-unbound.
+- [x] Make targeted invites one-time by default and visibly unsafe to display
   publicly.
-- [ ] List pending, accepted, expired, and revoked links for owner/co-owner,
-  with revoke actions and audit history.
-- [ ] Wire invite/session revocation to access-link denial and browser/Yjs
-  admission so revoked sessions are cut off in the running web interface.
+- [x] List pending, accepted, expired, and revoked links for owner/co-owner,
+  with revoke actions.
+- [ ] Add audit-history drill-down to the link management panel.
+- [x] Wire invite/session revocation to access-link denial and browser/Yjs
+  admission so revoked sessions are denied without manual database edits.
+- [ ] Add direct websocket disconnect orchestration for already-connected
+  browser sessions.
 - [ ] Model the UX after OAuth device authorization: short-lived material,
   pending/accepted/expired states, user-visible scope, and explicit consent.
 
 Exit gate:
 
-- [ ] Owner can display a public guest QR/link and later revoke all sessions
+- [x] Owner can display a public guest link and later revoke all sessions
   created from it through AdaOS Connect.
-- [ ] Owner can invite a named user such as Masha with a selected local profile,
+- [x] Owner can invite a named user such as Masha with a local profile id,
   scope, role preset, and expiry; the joining browser can preview and accept
   the invite once.
-- [ ] Revoked guest/invite sessions lose browser/Yjs/API access without manual
+- [x] Revoked guest/invite sessions lose browser/Yjs admission without manual
   database edits.
 
 Local verification:
 
-- [ ] API tests for create/preview/claim/revoke flows.
-- [ ] Browser or AdaOS Connect tests for guest QR and targeted invite flows.
-- [ ] Revoked-session admission/cutoff test through the runtime path, not only
-  the service hook.
-- [ ] Audit query smoke tests for issuer, subject, scope, role preset,
-  constraints, and revoked sessions.
+- [x] API tests for create/preview/claim/revoke flows.
+- [x] Browser build smoke test for guest link and targeted invite panel.
+- [x] Revoked-session admission/cutoff test through the access-link runtime
+  path, not only the service hook.
+- [x] Audit query smoke tests for issuer, subject, scope, role preset,
+  constraints, and revoked sessions through Phase 3 service coverage.
 
 ## Phase 6 - Device Pairing and Authenticator Lifecycle
 

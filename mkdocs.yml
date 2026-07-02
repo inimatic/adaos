@@ -180,6 +180,8 @@ nav:
       - Personalization Phase 1 Access Kernel: architecture/personalization-identity-access-phase1-kernel.md
       - Personalization Phase 2 Profile Preferences: architecture/personalization-identity-access-phase2-profile-preferences.md
       - Personalization Phase 3 Join Invites: architecture/personalization-identity-access-phase3-join-invites.md
+      - Personalization Phase 4 Current User UI: architecture/personalization-identity-access-phase4-current-user-ui.md
+      - Personalization Phase 5 Connect Join UX: architecture/personalization-identity-access-phase5-connect-join-ux.md
       - Post-Deploy E2E Testing: architecture/post-deploy-e2e-testing.md
       - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
   - CLI:

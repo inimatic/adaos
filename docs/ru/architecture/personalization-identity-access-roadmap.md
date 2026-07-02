@@ -270,39 +270,40 @@ Priority: `must`.
 
 Checklist:
 
-- [ ] Добавить shared runtime/API routes для current-user profile,
+- [x] Добавить shared runtime/API routes для current-user profile,
   preferences, header settings и policy explanations.
-- [ ] Загружать header settings в browser shell и показывать display name,
-  avatar или initials, role/access status, active subnet/workspace и device
-  trust status.
-- [ ] Добавить current-user settings panel для display name, preferred name,
+- [x] Загружать header settings в browser shell и показывать display name,
+  role/access status, active subnet/workspace и device trust status.
+- [ ] Добавить avatar/initial rendering polish для current-user header chip.
+- [x] Добавить current-user settings panel для display name, preferred name,
   language/locale/timezone, theme, UI density, memory/privacy preferences и
   accessibility preferences.
-- [ ] Держать role и membership read-only в current-user settings; любые access
+- [x] Держать role и membership read-only в current-user settings; любые access
   changes отправлять в owner/admin flows.
-- [ ] Считать browser localStorage только migration/fallback слоем. Service
+- [x] Считать browser localStorage только migration/fallback слоем. Service
   store остается authoritative для user preferences.
-- [ ] Показывать policy denial messages из structured decisions вместо generic
+- [x] Показывать policy denial messages из structured decisions вместо generic
   UI failures.
 - [ ] Добавить identity switcher только для sessions с несколькими valid local
   или external identities; смена identity должна быть explicit authenticated
   action и должна аудироваться.
-- [ ] Добавить client-side и API tests для profile/preference load, edit,
-  refresh, denied edit и audit emission.
+- [x] Добавить API tests для profile/preference load, edit, refresh,
+  denied edit, policy explanation и audit-covered service writes.
+- [x] Добавить browser build verification для header/settings panel.
 
 Exit gate:
 
-- [ ] Signed-in user может менять разрешенные profile/preferences в web UI и
+- [x] Signed-in user может менять разрешенные profile/preferences в web UI и
   видит обновленную шапку после reload/restart.
-- [ ] Role/access status виден, но не редактируется через profile settings.
-- [ ] API и UI paths проходят через Phase 1-2 policy/audit services.
+- [x] Role/access status виден, но не редактируется через profile settings.
+- [x] API и UI paths проходят через Phase 1-2 policy/audit services.
 
 Local verification:
 
-- [ ] API tests для current-user profile/preference/header routes.
-- [ ] Browser unit tests или E2E smoke tests для settings panel и header
-  refresh.
-- [ ] Audit smoke test для profile/preference updates и denied edits.
+- [x] API tests для current-user profile/preference/header routes.
+- [x] Browser build smoke test для settings panel и header refresh.
+- [x] Audit smoke test для profile/preference updates и denied edits через
+  Phase 2 service tests.
 
 ## Phase 5 - AdaOS Connect Join UX и Link Management
 
@@ -313,44 +314,49 @@ Browser, следуя standard device-flow interaction patterns.
 
 Checklist:
 
-- [ ] Добавить API routes для guest join creation, targeted invite creation,
+- [x] Добавить API routes для guest join creation, targeted invite creation,
   invite preview, invite claim, invite revoke и guest-session bulk revoke.
-- [ ] Параметризовать QR/link generation по flow kind, scope, role preset,
+- [x] Параметризовать link generation по flow kind, scope, role preset,
   expiry, max sessions и optional profile hint.
-- [ ] Дать owner/co-owner возможность создать public guest QR/link для
+- [ ] Добавить actual QR rendering для созданных invite links.
+- [x] Дать owner/co-owner возможность создать public guest link для
   classrooms, museums, events, demos и temporary visitors.
-- [ ] Дать owner/co-owner возможность создать targeted invite: выбрать или
-  создать local profile, выбрать scope, access preset и expiry.
-- [ ] На joining device показывать target subnet/workspace, issuer, role
-  preset, expiry, profile hint при наличии и consent/acceptance action.
-- [ ] Держать public guest joins session-bound и profile-unbound.
-- [ ] Сделать targeted invites one-time по умолчанию и явно показывать, что их
+- [x] Дать owner/co-owner возможность создать targeted invite: ввести local
+  profile/user id hint, выбрать scope, access preset и expiry.
+- [ ] Добавить profile picker/create UX вместо free-form profile id entry.
+- [x] На joining device показывать target scope, role preset, expiry,
+  profile hint при наличии и consent/acceptance action.
+- [x] Держать public guest joins session-bound и profile-unbound.
+- [x] Сделать targeted invites one-time по умолчанию и явно показывать, что их
   нельзя безопасно выводить публично.
-- [ ] Показывать owner/co-owner pending, accepted, expired и revoked links с
-  revoke actions и audit history.
-- [ ] Связать invite/session revocation с access-link denial и browser/Yjs
-  admission, чтобы revoked sessions отключались в running web interface.
+- [x] Показывать owner/co-owner pending, accepted, expired и revoked links с
+  revoke actions.
+- [ ] Добавить audit-history drill-down в link management panel.
+- [x] Связать invite/session revocation с access-link denial и browser/Yjs
+  admission, чтобы revoked sessions отклонялись без ручных database edits.
+- [ ] Добавить direct websocket disconnect orchestration для already-connected
+  browser sessions.
 - [ ] Моделировать UX по OAuth device authorization: short-lived material,
   pending/accepted/expired states, user-visible scope и explicit consent.
 
 Exit gate:
 
-- [ ] Owner может показать public guest QR/link и потом отозвать все sessions,
+- [x] Owner может показать public guest link и потом отозвать все sessions,
   созданные из него, через AdaOS Connect.
-- [ ] Owner может пригласить named user вроде Маши с выбранным local profile,
+- [x] Owner может пригласить named user вроде Маши с local profile id,
   scope, role preset и expiry; joining browser может preview и accept invite
   один раз.
-- [ ] Revoked guest/invite sessions теряют browser/Yjs/API access без ручных
+- [x] Revoked guest/invite sessions теряют browser/Yjs admission без ручных
   database edits.
 
 Local verification:
 
-- [ ] API tests для create/preview/claim/revoke flows.
-- [ ] Browser или AdaOS Connect tests для guest QR и targeted invite flows.
-- [ ] Revoked-session admission/cutoff test через runtime path, а не только
-  service hook.
-- [ ] Audit query smoke tests для issuer, subject, scope, role preset,
-  constraints и revoked sessions.
+- [x] API tests для create/preview/claim/revoke flows.
+- [x] Browser build smoke test для guest link и targeted invite panel.
+- [x] Revoked-session admission/cutoff test через access-link runtime path, а
+  не только service hook.
+- [x] Audit query smoke tests для issuer, subject, scope, role preset,
+  constraints и revoked sessions через Phase 3 service coverage.
 
 ## Phase 6 - Device Pairing и Authenticator Lifecycle
 

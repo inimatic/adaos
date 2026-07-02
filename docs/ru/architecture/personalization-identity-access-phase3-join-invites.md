@@ -1,7 +1,8 @@
 # Персонализация Phase 3 Guest Join and Targeted Invites
 
-Статус: реализованный backend join/invite slice; AdaOS Connect и Join Browser
-UI не реализованы в этой фазе.
+Статус: реализованный backend join/invite slice. AdaOS Connect и Join Browser
+UI реализованы в
+[Phase 5](personalization-identity-access-phase5-connect-join-ux.md).
 
 Дорожная карта:
 [Персонализация, identity и доступ: дорожная карта](personalization-identity-access-roadmap.md).
@@ -18,8 +19,8 @@ pairing и recovery UX. Slice покрывает public guest joins и targeted 
 при этом identity proof остается отдельно от profile hints.
 
 Эта фаза дает service contracts, policy checks, preview data и cutoff hooks.
-Видимый owner/joiner experience отслеживается отдельно как AdaOS Connect join UX
-и link-management phase.
+Видимый owner/joiner experience - отдельный Phase 5 AdaOS Connect join UX и
+link-management slice.
 
 ## Guest Join
 
@@ -118,9 +119,10 @@ grant id и affected sessions.
 
 Не реализовано в Phase 3:
 
-- actual Join Browser UI wiring;
-- API routes, consumed by AdaOS Connect;
-- QR/link transport parameterization в AdaOS Connect;
+- visible Join Browser UI wiring, реализовано в Phase 5;
+- API routes, consumed by AdaOS Connect, реализовано в Phase 5;
+- link transport parameterization в AdaOS Connect, реализовано в Phase 5;
+- QR image rendering для invite links;
 - direct websocket disconnect orchestration;
 - device pairing и admin recovery flows.
 

@@ -298,6 +298,8 @@ Authoritative docs:
 - [Personalization Phase 1 Access Kernel](personalization-identity-access-phase1-kernel.md)
 - [Personalization Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md)
 - [Personalization Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md)
+- [Personalization Phase 4 Current-User Settings API and Browser UI](personalization-identity-access-phase4-current-user-ui.md)
+- [Personalization Phase 5 AdaOS Connect Join UX and Link Management](personalization-identity-access-phase5-connect-join-ux.md)
 - [User and Scenario Personalization](../concepts/personalization.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
 - [Pending Actions](pending-actions.md)
@@ -308,6 +310,8 @@ Code anchors:
 - `src/adaos/services/user/profile.py`
 - `src/adaos/domain/personalization_access.py`
 - `src/adaos/services/personalization_access.py`
+- `src/adaos/services/personalization_runtime.py`
+- `src/adaos/apps/api/personalization.py`
 - `src/adaos/sdk/data/profile.py`
 - `src/adaos/sdk/data/ctx.py`
 - `src/adaos/services/scenario/projection_registry.py`
@@ -353,12 +357,13 @@ Current status:
   joins and wrong-scope/reused/expired material, issues backing
   grants/memberships, and bulk-revokes guest sessions through
   session/access-link cutoff hooks.
-- [ ] Current-user settings API routes and browser header/settings UI still
-  need to adopt the Phase 1-2 services; current browser UI does not yet expose
-  profile/preference editing through the new kernel.
-- [ ] AdaOS Connect and Join Browser still need to adopt the Phase 3 services
-  for guest QR/link, targeted invite, preview/consent, link listing, and
-  revocation UX.
+- [x] Phase 4 current-user settings API routes and browser header/settings UI
+  adopt the Phase 1-2 services for profile/preference editing.
+- [x] Phase 5 AdaOS Connect/browser shell UI adopts the Phase 3 services for
+  guest links, targeted invite, preview/consent, link listing, and revocation
+  UX.
+- [ ] QR image rendering, profile picker/create UX, audit-history drill-down,
+  and direct websocket disconnect orchestration remain open after Phase 5.
 - [ ] Runtime API/UI paths do not yet enforce the personalization access kernel
   globally.
 - [ ] Direct websocket disconnect orchestration for revoked guest/browser

@@ -59,11 +59,17 @@ runtime.
 - [Персонализация Phase 2 Profile and Preferences](personalization-identity-access-phase2-profile-preferences.md):
   реализованный service/SDK slice для profile/preferences, SDK compatibility,
   header-settings model, projection и redacted audit; browser settings UI
-  остается отдельной roadmap-фазой
+  реализован в Phase 4
 - [Персонализация Phase 3 Guest Join and Targeted Invites](personalization-identity-access-phase3-join-invites.md):
   реализованные backend public guest join, targeted invite, consent preview,
-  binding, revoke и cutoff hooks; AdaOS Connect/Join Browser UI остается
-  отдельной roadmap-фазой
+  binding, revoke и cutoff hooks; AdaOS Connect/Join Browser UI реализован
+  в Phase 5
+- [Персонализация Phase 4 Current-User Settings API and Browser UI](personalization-identity-access-phase4-current-user-ui.md):
+  реализованные runtime API и browser header/settings panel для current-user
+  profile/preferences с read-only role/membership
+- [Персонализация Phase 5 AdaOS Connect Join UX and Link Management](personalization-identity-access-phase5-connect-join-ux.md):
+  реализованный browser/API vertical slice для guest links, targeted invites,
+  public preview/claim, link listing и access-link revocation
 - [Pointer/Projection roadmap для переключения сценариев webspace](webspace-scenario-pointer-projection-roadmap.md):
   целевая архитектура и чеклист миграции от materialize-and-copy к
   pointer-first semantic rebuild

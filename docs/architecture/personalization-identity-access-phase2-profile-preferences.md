@@ -1,7 +1,8 @@
 # Personalization Phase 2 Profile and Preferences
 
-Status: implemented service/SDK slice for profile/preferences; browser settings
-UI is not implemented in this phase.
+Status: implemented service/SDK slice for profile/preferences. Browser
+settings UI is implemented by
+[Phase 4](personalization-identity-access-phase4-current-user-ui.md).
 
 Roadmap:
 [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md).
@@ -21,8 +22,7 @@ runtime contract toward explicit profile and preference records. Role and
 membership stay out of profile data.
 
 This phase is intentionally backend-facing. The visible web header and settings
-panel are tracked in the roadmap as the current-user settings API/browser UI
-phase.
+panel are the separate Phase 4 current-user settings API/browser UI slice.
 
 ## Implemented Surface
 
