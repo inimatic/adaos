@@ -7,7 +7,7 @@ import logging
 import time
 from starlette.staticfiles import StaticFiles
 
-from adaos.services.browser_assets import static_assets_directory
+from adaos.services.browser_assets import publish_system_resource_descriptors, static_assets_directory
 
 
 class BrowserAssetStaticFiles(StaticFiles):
@@ -706,6 +706,7 @@ def _consume_restart_marker(base_url: str | None) -> dict[str, Any] | None:
 
 def _mount_browser_assets_static(app: FastAPI) -> None:
     try:
+        publish_system_resource_descriptors(ctx=_get_ctx())
         if any(str(getattr(route, "path", "") or "") == "/assets" for route in getattr(app, "routes", ())):
             return
         app.mount(

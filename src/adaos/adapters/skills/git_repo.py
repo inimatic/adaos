@@ -18,6 +18,7 @@ from adaos.services.workspace_registry import (
 )
 from adaos.services.git.availability import get_git_availability
 from adaos.services.git.archive import materialize_subpath_from_github_zip
+from adaos.services.browser_assets import publish_skill_assets_from_webui
 from adaos.domain import SkillId, SkillMeta
 from adaos.ports.git import GitClient
 from adaos.ports.paths import PathProvider
@@ -254,7 +255,16 @@ class GitSkillRepository(SkillRepository):
                 except Exception:
                     pass
             raise FileNotFoundError(f"skill '{name}' not present after sync") from exc
-        return _read_manifest(skill_dir)
+        meta = _read_manifest(skill_dir)
+        try:
+            publish_skill_assets_from_webui(
+                meta.id.value,
+                skill_dir=skill_dir,
+                base_dir=self.paths.base_dir(),
+            )
+        except Exception:
+            _log.debug("failed to publish browser assets for skill %s", meta.id.value, exc_info=True)
+        return meta
 
     def uninstall(self, skill_id: str) -> None:
         self.ensure()

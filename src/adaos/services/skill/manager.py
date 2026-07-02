@@ -29,6 +29,7 @@ from adaos.domain import SkillMeta, SkillRecord
 from adaos.ports import EventBus, GitClient, SkillRepository, SkillRegistry
 from adaos.ports.paths import PathProvider
 from adaos.services.eventbus import emit
+from adaos.services.browser_assets import publish_skill_assets_from_webui
 from adaos.ports import Capabilities
 from adaos.services.fs.safe_io import remove_tree
 from adaos.services.git.safe_commit import sanitize_message, check_no_denied
@@ -524,6 +525,14 @@ class SkillManager:
         if prefixed:
             self.ctx.git.sparse_set(str(root), prefixed, no_cone=True)
         self.ctx.git.pull(str(root))
+        for name in names:
+            skill_dir = self.ctx.paths.skills_dir() / name
+            if not skill_dir.exists():
+                continue
+            try:
+                publish_skill_assets_from_webui(name, skill_dir=skill_dir, ctx=self.ctx)
+            except Exception:
+                _log.debug("failed to publish browser assets after skill sync skill=%s", name, exc_info=True)
         emit(self.bus, "skill.sync", {"count": len(names)}, "skill.mgr")
 
     def install(

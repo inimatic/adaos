@@ -18,6 +18,7 @@ from adaos.services.workspace_registry import (
 )
 from adaos.services.git.availability import get_git_availability
 from adaos.services.git.archive import materialize_subpath_from_github_zip
+from adaos.services.browser_assets import publish_scenario_assets_from_content
 from adaos.domain import SkillId, SkillMeta  # если есть ScenarioId/ScenarioMeta — замени здесь
 from adaos.ports.git import GitClient
 from adaos.ports.paths import PathProvider
@@ -280,7 +281,16 @@ class GitScenarioRepository(ScenarioRepository):
                 except Exception:
                     pass
             raise FileNotFoundError(f"scenario '{name}' not present after sync") from exc
-        return _read_manifest(scenario_dir)
+        meta = _read_manifest(scenario_dir)
+        try:
+            publish_scenario_assets_from_content(
+                meta.id.value,
+                scenario_dir=scenario_dir,
+                base_dir=self.paths.base_dir(),
+            )
+        except Exception:
+            _log.debug("failed to publish browser assets for scenario %s", meta.id.value, exc_info=True)
+        return meta
 
     # --- uninstall ---
 

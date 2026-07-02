@@ -74,6 +74,69 @@ def test_external_resource_descriptor_keeps_authored_url() -> None:
     assert descriptor["url"] == "https://cdn.example/avatar.webp"
 
 
+def test_scenario_resource_descriptor_materializes_asset_delivery_url(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services import browser_assets
+
+    runtime_base = tmp_path / "runtime"
+    scenario_dir = tmp_path / "scenarios" / "morning_scene"
+    asset = scenario_dir / "assets" / "preview.svg"
+    asset.parent.mkdir(parents=True)
+    asset.write_text("<svg><title>Preview</title></svg>", encoding="utf-8")
+    fake_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: runtime_base))
+    monkeypatch.setattr(browser_assets, "get_ctx", lambda: fake_ctx)
+
+    descriptor = webspace_runtime_module._materialize_scenario_resource_descriptor(
+        "morning.preview",
+        {
+            "kind": "svg",
+            "path": "assets/preview.svg",
+            "mime": "image/svg+xml",
+        },
+        scenario_id="morning_scene",
+        scenario_dir=scenario_dir,
+    )
+
+    assert descriptor["scope"] == "scenario"
+    assert descriptor["owner"] == "scenario:morning_scene"
+    assert descriptor["url"].startswith("/assets/blobs/sha256/")
+    assert descriptor["cacheKey"].startswith("sha256:")
+    assert descriptor["published"] is True
+    published = list((runtime_base / "assets" / "public" / "blobs" / "sha256").rglob("preview.svg"))
+    assert len(published) == 1
+
+
+def test_system_resource_descriptors_publish_core_avatars(tmp_path: Path) -> None:
+    from adaos.services.browser_assets import publish_system_resource_descriptors
+
+    runtime_base = tmp_path / "runtime"
+    result = publish_system_resource_descriptors(base_dir=runtime_base)
+
+    assert result["ok"] is True
+    assert result["counts"]["published"] >= 3
+    assert "assistant.default.avatar" in result["published"]
+    descriptor = result["published"]["assistant.default.avatar"]
+    assert descriptor["scope"] == "system"
+    assert descriptor["owner"] == "system:adaos-core"
+    assert descriptor["url"].startswith("/assets/blobs/sha256/")
+    manifest = runtime_base / "assets" / "manifests" / "systems" / "adaos-core.json"
+    assert manifest.exists()
+
+
+def test_webspace_system_resource_descriptors_are_materialized(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services import browser_assets
+
+    runtime_base = tmp_path / "runtime"
+    fake_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: runtime_base))
+    monkeypatch.setattr(browser_assets, "get_ctx", lambda: fake_ctx)
+
+    resources = webspace_runtime_module._materialized_system_resource_descriptors()
+
+    assert "assistant.default.avatar" in resources
+    descriptor = resources["assistant.default.avatar"]
+    assert descriptor["published"] is True
+    assert descriptor["url"].startswith("/assets/blobs/sha256/")
+
+
 class _PathsStub:
     def __init__(self, *, base_dir: Path, repo_root: Path) -> None:
         self._base_dir = base_dir

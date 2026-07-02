@@ -62,6 +62,22 @@ def _init_monorepo(tmp_path: Path) -> Path:
         "id: weather_skill\nname: Weather\nversion: '1.0.0'\n",
         encoding="utf-8",
     )
+    (weather / "assets" / "icons").mkdir(parents=True, exist_ok=True)
+    (weather / "assets" / "icons" / "current.svg").write_text("<svg></svg>", encoding="utf-8")
+    (weather / "webui.json").write_text(
+        (
+            "{\n"
+            '  "resources": {\n'
+            '    "weather.current": {\n'
+            '      "kind": "svg",\n'
+            '      "path": "assets/icons/current.svg",\n'
+            '      "mime": "image/svg+xml"\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
     (news / "skill.yaml").write_text(
         "id: news_skill\nname: News\nversion: '2.0.0'\n",
         encoding="utf-8",
@@ -72,6 +88,25 @@ def _init_monorepo(tmp_path: Path) -> Path:
     )
     (greet / "scenario.yaml").write_text(
         "id: greet_on_boot\nname: Greet on boot\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    (greet / "assets").mkdir(parents=True, exist_ok=True)
+    (greet / "assets" / "preview.svg").write_text("<svg><title>Greet</title></svg>", encoding="utf-8")
+    (greet / "scenario.json").write_text(
+        (
+            "{\n"
+            '  "id": "greet_on_boot",\n'
+            '  "catalog": {\n'
+            '    "resources": {\n'
+            '      "greet.preview": {\n'
+            '        "kind": "svg",\n'
+            '        "path": "assets/preview.svg",\n'
+            '        "mime": "image/svg+xml"\n'
+            "      }\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+        ),
         encoding="utf-8",
     )
     (vision / "scenario.yaml").write_text(
@@ -143,6 +178,8 @@ def test_skill_reinstall_happy_path(monkeypatch, monorepo, paths):
 
     meta1 = repo.install("weather_skill")
     assert meta1.id.value == "weather_skill"
+    assert (paths.base_dir() / "assets" / "manifests" / "skills" / "weather_skill.json").exists()
+    assert list((paths.base_dir() / "assets" / "public" / "blobs" / "sha256").rglob("current.svg"))
     repo.uninstall("weather_skill")
     assert not (paths.skills_dir() / "weather_skill").exists()
 
@@ -159,6 +196,8 @@ def test_scenario_reinstall_happy_path(monkeypatch, monorepo, paths):
 
     meta1 = repo.install("greet_on_boot")
     assert meta1.id.value == "greet_on_boot"
+    assert (paths.base_dir() / "assets" / "manifests" / "scenarios" / "greet_on_boot.json").exists()
+    assert list((paths.base_dir() / "assets" / "public" / "blobs" / "sha256").rglob("preview.svg"))
     repo.uninstall("greet_on_boot")
     assert not (paths.scenarios_dir() / "greet_on_boot").exists()
 

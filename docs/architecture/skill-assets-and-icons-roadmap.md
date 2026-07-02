@@ -152,6 +152,7 @@ store:
     blobs/
       sha256/<aa>/<bb>/<digest>/<filename>
   manifests/
+    systems/<system>.json
     skills/<skill>.json
     scenarios/<scenario>.json
 ```
@@ -213,25 +214,52 @@ The renderer should never treat every visual identity token as an Ionicon name.
 Assistant avatars render as images first and fall back to icons only when the
 image resource is unavailable.
 
+## Implementation Status
+
+Status as of 2026-07-02:
+
+- Public skill resources are materialized into `.adaos/assets/public` with
+  SHA-256 blob paths, MIME validation, size limits, `cacheKey`, and owner
+  manifests under `.adaos/assets/manifests/skills/`.
+- Public scenario resources use the same store and owner manifests under
+  `.adaos/assets/manifests/scenarios/`.
+- Core-owned system resources use the same store and owner manifests under
+  `.adaos/assets/manifests/systems/`.
+- System assistant avatars are bundled with the core package as:
+  `assistant.default.avatar`, `assistant.voice.avatar`, and
+  `assistant.helper.avatar`.
+- Skill install, skill sync, explicit skill update, scenario install, and
+  scenario sync publish public resources best-effort after the package is
+  materialized or pulled.
+- API startup publishes core/system resources before mounting `/assets`.
+- Webspace materialization includes system resources and resolves skill/scenario
+  authored `path` descriptors to `/assets/blobs/sha256/...`.
+- `/assets` is mounted as a static immutable blob layer; app logic publishes and
+  validates resources ahead of byte serving.
+- Root exposes the planned cache contract at
+  `/v1/root/browser-assets/cache-contract`; blob relay/fetch endpoints are not
+  implemented yet.
+- Private resources remain deferred.
+
 ## Phases
 
-1. Register missing built-in Ionicons and validate legacy icon names during
+1. [x] Register missing built-in Ionicons and validate legacy icon names during
    projection materialization.
-2. Split assistant visual identity into icon fallback and avatar resource fields.
+2. [x] Split assistant visual identity into icon fallback and avatar resource fields.
    Add system default assistant avatar descriptors and render avatar images in
    Voice/Chat where space allows.
-3. Add a browser resource manifest/materialization endpoint served by the
+3. [x] Add a browser resource manifest/materialization endpoint served by the
    hub/member runtime for skill, scenario, and system resources.
-4. Publish public skill resources into `.adaos/assets/public` with
+4. [x] Publish public skill resources into `.adaos/assets/public` with
    content-addressed blob paths, MIME metadata, size limits, and `cacheKey`
    generation.
-5. Mount or sidecar a static `/assets` serving layer for public immutable blobs.
-6. Add client-side resource resolution and local browser caching for all
+5. [x] Mount or sidecar a static `/assets` serving layer for public immutable blobs.
+6. [ ] Add client-side resource resolution and local browser caching for all
    `resource:<id>` references.
-7. Wire i18n dictionaries through `resources` so skills can publish localized UI
+7. [ ] Wire i18n dictionaries through `resources` so skills can publish localized UI
    text without rebuilding the Angular bundle.
-8. Add Root cache/relay support for remote browsers and subnet-hosted resources.
-9. Allow external storage URLs for large assets while keeping the subnet-hosted
+8. [ ] Add Root cache/relay support for remote browsers and subnet-hosted resources.
+9. [ ] Allow external storage URLs for large assets while keeping the subnet-hosted
    manifest as the source of truth.
-10. Add diagnostics for missing assets so compact phone layouts still provide
+10. [ ] Add diagnostics for missing assets so compact phone layouts still provide
    usable controls, avatar fallbacks, and modal close actions.

@@ -11,6 +11,7 @@ import tempfile
 from typing import Optional
 
 from adaos.services.agent_context import AgentContext
+from adaos.services.browser_assets import publish_skill_assets_from_webui
 from adaos.services.workspace_registry import rebuild_workspace_registry, write_workspace_registry
 
 _log = logging.getLogger("adaos.skill.update")
@@ -240,4 +241,13 @@ class SkillUpdateService:
                 git.pull(str(skill_path))
 
         refreshed = repo.get(skill_id) or meta
+        refreshed_path = Path(getattr(refreshed, "path", skill_path) or skill_path)
+        try:
+            publish_skill_assets_from_webui(
+                skill_id,
+                skill_dir=refreshed_path,
+                ctx=self.ctx,
+            )
+        except Exception:
+            _log.debug("failed to publish browser assets after skill update skill=%s", skill_id, exc_info=True)
         return SkillUpdateResult(updated=True, version=getattr(refreshed, "version", version))

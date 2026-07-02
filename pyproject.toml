@@ -78,6 +78,7 @@ adaos = [
   "scenario_templates/**/*.md",
   "abi/*.json",
   "services/skill/*.json",
+  "system_assets/**/*",
   "locales/*.json",
   "interpreter_data/**/*",
 ]

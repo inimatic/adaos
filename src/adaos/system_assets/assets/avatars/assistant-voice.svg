@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Voice assistant avatar">
+  <rect width="128" height="128" rx="32" fill="#193b68"/>
+  <circle cx="64" cy="48" r="22" fill="#f7fbff"/>
+  <path d="M29 111c7-23 20-34 35-34s28 11 35 34" fill="#f7fbff"/>
+  <rect x="56" y="36" width="16" height="28" rx="8" fill="#1a496f"/>
+  <path d="M47 55c2 10 8 16 17 16s15-6 17-16M64 72v10M54 82h20" fill="none" stroke="#8bd3ff" stroke-width="6" stroke-linecap="round"/>
+  <path d="M28 58c4-11 12-20 23-25M100 58c-4-11-12-20-23-25" fill="none" stroke="#8bd3ff" stroke-width="6" stroke-linecap="round"/>
+</svg>

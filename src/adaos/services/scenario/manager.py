@@ -20,6 +20,7 @@ from adaos.services.fs.safe_io import remove_tree
 from adaos.services.git.safe_commit import sanitize_message, check_no_denied
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.services.capacity import install_scenario_in_capacity, uninstall_scenario_from_capacity
+from adaos.services.browser_assets import publish_scenario_assets_from_content
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.capacity import get_local_capacity
 from adaos.domain.workspace_manifest import parse_scenario_skill_bindings
@@ -223,6 +224,14 @@ class ScenarioManager:
         if prefixed:
             self.git.sparse_set(str(root), prefixed, no_cone=True)
         self.git.pull(str(root))
+        for name in names:
+            scenario_dir = self.ctx.paths.scenarios_dir() / name
+            if not scenario_dir.exists():
+                continue
+            try:
+                publish_scenario_assets_from_content(name, scenario_dir=scenario_dir, ctx=self.ctx)
+            except Exception:
+                _log.debug("failed to publish browser assets after scenario sync scenario=%s", name, exc_info=True)
         emit(self.bus, "scenario.sync", {"count": len(names)}, "scenario.mgr")
 
     def install(self, name: str, *, pin: Optional[str] = None) -> SkillMeta:

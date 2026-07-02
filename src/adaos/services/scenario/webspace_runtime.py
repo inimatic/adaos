@@ -33,7 +33,12 @@ from adaos.services.yjs.doc import (
 )
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.runtime_environment import runtime_environment_payload
-from adaos.services.browser_assets import BrowserAssetPublishError, publish_skill_resource_descriptor
+from adaos.services.browser_assets import (
+    BrowserAssetPublishError,
+    publish_scenario_resource_descriptor,
+    publish_skill_resource_descriptor,
+    publish_system_resource_descriptors,
+)
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.workspaces import index as workspace_index
 from adaos.services.yjs.store import get_ystore_for_webspace, ystore_write_metadata, ystore_write_metadata_sync
@@ -1167,7 +1172,7 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
     widgets: List[Dict[str, Any]] = []
     registry_modals: Dict[str, Any] = {}
     registry_widgets: Dict[str, Any] = {}
-    resources: Dict[str, Any] = {}
+    resources: Dict[str, Any] = _materialized_system_resource_descriptors()
     interfaces: Dict[str, Any] = {}
     webio_receivers: Dict[str, Any] = {}
     ydoc_defaults: Dict[str, Any] = {}
@@ -1845,6 +1850,69 @@ def _materialize_skill_resource_descriptor(
         descriptor["published"] = False
         descriptor["publishError"] = "publish_failed"
     return descriptor
+
+
+def _materialize_scenario_resource_descriptor(
+    resource_id: str,
+    value: Any,
+    *,
+    scenario_id: str | None = None,
+    scenario_dir: str | Path | None = None,
+) -> Any:
+    descriptor = _clone_json_like(value)
+    if not isinstance(descriptor, dict):
+        return descriptor
+    scenario_token = str(scenario_id or "").strip()
+    if not scenario_token:
+        return descriptor
+    descriptor.setdefault("scope", "scenario")
+    descriptor.setdefault("owner", f"scenario:{scenario_token}")
+    delivery = str(descriptor.get("delivery") or "core").strip().lower()
+    if delivery == "external":
+        return descriptor
+    if descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
+        return descriptor
+    resolved_dir: Path | None = None
+    if scenario_dir is not None:
+        resolved_dir = Path(scenario_dir)
+    else:
+        try:
+            resolved_dir = scenarios_loader.scenario_root_for_space(scenario_token, "workspace")
+        except Exception:
+            resolved_dir = None
+    if resolved_dir is None:
+        return descriptor
+    try:
+        return publish_scenario_resource_descriptor(
+            str(resource_id or ""),
+            descriptor,
+            scenario_id=scenario_token,
+            scenario_dir=resolved_dir,
+        )
+    except BrowserAssetPublishError as exc:
+        descriptor["published"] = False
+        descriptor["publishError"] = str(exc)
+    except Exception:
+        descriptor["published"] = False
+        descriptor["publishError"] = "publish_failed"
+    return descriptor
+
+
+def _materialized_system_resource_descriptors() -> Dict[str, Any]:
+    try:
+        result = publish_system_resource_descriptors()
+    except Exception:
+        return {}
+    resources: Dict[str, Any] = {}
+    for bucket in ("published", "skipped"):
+        items = result.get(bucket) if isinstance(result, Mapping) else {}
+        if not isinstance(items, Mapping):
+            continue
+        for key, value in items.items():
+            token = str(key or "").strip()
+            if token and isinstance(value, Mapping):
+                resources[token] = _clone_json_like(value)
+    return resources
 
 
 def _json_like_equal(current: Any, next_value: Any) -> bool:
@@ -4007,9 +4075,24 @@ class WebspaceScenarioRuntime:
         scenario_registry = _coerce_dict(inputs.scenario_registry or {})
         scenario_apps = [it for it in (scenario_catalog.get("apps") or []) if isinstance(it, Mapping)]
         scenario_widgets = [it for it in (scenario_catalog.get("widgets") or []) if isinstance(it, Mapping)]
-        scenario_resources = _coerce_dict(
+        raw_scenario_resources = _coerce_dict(
             scenario_application.get("resources") or scenario_catalog.get("resources") or {}
         )
+        scenario_resources: Dict[str, Any] = {}
+        scenario_space = _scenario_loader_space(source_mode)
+        try:
+            scenario_dir = scenarios_loader.scenario_root_for_space(scenario_id, scenario_space)
+        except Exception:
+            scenario_dir = None
+        for key, value in raw_scenario_resources.items():
+            token = str(key or "").strip()
+            if token:
+                scenario_resources[token] = _materialize_scenario_resource_descriptor(
+                    token,
+                    value,
+                    scenario_id=scenario_id,
+                    scenario_dir=scenario_dir,
+                )
         base_registry_modals = [str(x) for x in (scenario_registry.get("modals") or [])]
         base_registry_widgets = [str(x) for x in (scenario_registry.get("widgets") or [])]
 
@@ -4154,7 +4237,11 @@ class WebspaceScenarioRuntime:
 
         merged_apps = _merge_by_id(merged_apps + extra_apps + skill_apps)
         merged_widgets = _merge_by_id(merged_widgets + skill_widgets)
-        merged_resources = {**scenario_resources, **skill_resources}
+        merged_resources = {
+            **_materialized_system_resource_descriptors(),
+            **scenario_resources,
+            **skill_resources,
+        }
         live_catalog = _coerce_dict((inputs.live_state or {}).get("catalog") or {})
         merged_apps = _preserve_live_remote_catalog_entries(
             merged_apps,
