@@ -603,6 +603,46 @@ def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_file
     assert revision["preview_state"]["mock_data"]["prototype_items"][0]["title"] == "Book venue"
 
 
+def test_schedule_dev_runtime_reload_prefers_event_bus(monkeypatch) -> None:
+    skill = _load_module()
+    monkeypatch.setenv("ADAOS_BUILDER_DEV_RUNTIME_REFRESH_IN_TESTS", "1")
+    published: list[dict] = []
+
+    import adaos.sdk.data.events as events
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    monkeypatch.setattr(
+        events,
+        "publish",
+        lambda topic, payload, source=None: published.append(
+            {"topic": topic, "payload": dict(payload), "source": source}
+        ),
+    )
+
+    async def _unexpected_reload(*_args, **_kwargs):
+        raise AssertionError("direct reload should not be used when event bus publish succeeds")
+
+    monkeypatch.setattr(webspace_runtime, "reload_webspace_from_scenario", _unexpected_reload)
+
+    result = skill._schedule_dev_runtime_reload_after_revision(
+        "desktop",
+        session={"scenario_id": "todo_list", "draft_id": "draft.todo", "ui_revision": "016"},
+        binding={"dev_webspace_id": "desktop-dev"},
+        revision="016",
+    )
+
+    assert result["ok"] is True
+    assert result["scheduled"] is True
+    assert result["mode"] == "event_bus"
+    assert result["webspace_id"] == "desktop-dev"
+    assert published[-1]["topic"] == "desktop.webspace.reload"
+    assert published[-1]["source"] == "builder_skill"
+    assert published[-1]["payload"]["webspace_id"] == "desktop-dev"
+    assert published[-1]["payload"]["scenario_id"] == "todo_list"
+    assert published[-1]["payload"]["_event_type"] == "desktop.webspace.reload"
+    assert published[-1]["payload"]["_meta"]["cmd_id"] == "builder.ui.todo_list.016"
+
+
 def test_update_current_scenario_does_not_generate_domain_mock_data_without_llm(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "sample_without_llm"
