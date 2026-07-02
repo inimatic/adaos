@@ -287,6 +287,32 @@ def test_webspace_reload_defaults_to_manifest_home_scenario(monkeypatch) -> None
     assert emitted[-1][1]["scenario_id"] == "prompt_engineer_scenario"
 
 
+def test_webspace_reload_sets_authoritative_selector_lease(monkeypatch) -> None:
+    webspace_id = "ws-home-authoritative"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Home Space",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="prompt_engineer_scenario",
+    )
+    captured: list[tuple[str, str, bool | None]] = []
+    emitted: list[tuple[str, dict[str, object], str]] = []
+    authoritative: list[tuple[str, str, str]] = []
+    _patch_reload_dependencies(monkeypatch, captured, emitted)
+    sys.modules["adaos.services.yjs.gateway"].note_authoritative_current_scenario = (  # type: ignore[attr-defined]
+        lambda webspace_id, scenario_id, *, reason="scenario_switch": authoritative.append(
+            (webspace_id, scenario_id, reason)
+        )
+    )
+
+    result = asyncio.run(webspace_runtime_module.reload_webspace_from_scenario(webspace_id))
+
+    assert result["scenario_id"] == "prompt_engineer_scenario"
+    assert authoritative == [(webspace_id, "prompt_engineer_scenario", "reload:reseed")]
+
+
 def test_webspace_reload_falls_back_to_current_scenario_for_legacy_manifest(monkeypatch) -> None:
     webspace_id = "ws-legacy"
     ensure_workspace(webspace_id)

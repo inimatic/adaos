@@ -160,6 +160,56 @@ def _fake_log() -> SimpleNamespace:
     )
 
 
+def test_repair_room_effective_branches_runs_directly_on_owner_thread(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def _repair(webspace_id, _ystore, _room, *, reason):
+        calls.append((webspace_id, reason))
+        return b"repair"
+
+    monkeypatch.setattr(gateway_module, "_repair_room_effective_branches", _repair)
+    monkeypatch.setattr(gateway_module.threading, "get_ident", lambda: 100)
+    room = SimpleNamespace(_thread_id=100, _loop=None)
+
+    update, mode = asyncio.run(
+        gateway_module._repair_room_effective_branches_on_owner_loop(
+            "desktop-dev",
+            None,
+            room,
+            reason="unit",
+        )
+    )
+
+    assert update == b"repair"
+    assert mode == "direct_owner_context"
+    assert calls == [("desktop-dev", "unit")]
+
+
+def test_repair_room_effective_branches_skips_wrong_thread_without_owner_loop(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def _repair(webspace_id, _ystore, _room, *, reason):
+        calls.append((webspace_id, reason))
+        return b"repair"
+
+    monkeypatch.setattr(gateway_module, "_repair_room_effective_branches", _repair)
+    monkeypatch.setattr(gateway_module.threading, "get_ident", lambda: 200)
+    room = SimpleNamespace(_thread_id=100, _loop=None)
+
+    update, mode = asyncio.run(
+        gateway_module._repair_room_effective_branches_on_owner_loop(
+            "desktop-dev",
+            None,
+            room,
+            reason="unit",
+        )
+    )
+
+    assert update == b""
+    assert mode == "skipped_no_owner_loop"
+    assert calls == []
+
+
 def test_pending_effective_repair_replay_flushes_to_yws_adapter(monkeypatch) -> None:
     room = gateway_module.DiagnosticYRoom(log=_fake_log())
     room._webspace_id = "desktop"
@@ -185,7 +235,8 @@ def test_pending_effective_repair_replay_flushes_to_yws_adapter(monkeypatch) -> 
     )
 
     entries = room._effective_repair_replay_entries()
-    assert sent == [b"update:repair-update"]
+    assert len(sent) == 1
+    assert b"repair-update" in sent[0]
     assert entries[0]["sent_total"] == 1
 
 
@@ -315,6 +366,62 @@ def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
     assert snapshot["ready"] is False
     assert snapshot["has_installed_apps"] is False
     assert snapshot["has_installed_widgets"] is False
+
+
+def test_gateway_effective_guard_rejects_materialization_scenario_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
+
+    class _Doc:
+        def __init__(self, state: dict[str, dict[str, object]]) -> None:
+            self._state = state
+
+        def get_map(self, name: str) -> dict[str, object]:
+            return self._state.setdefault(name, {})
+
+    doc = _Doc(
+        {
+            "ui": {
+                "current_scenario": "web_desktop",
+                "application": {
+                    "desktop": {"pageSchema": {"widgets": []}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                },
+            },
+            "data": {
+                "catalog": {"apps": [], "widgets": []},
+                "installed": {"apps": [], "widgets": []},
+                "desktop": {},
+                "webio": {},
+                "routing": {},
+            },
+            "registry": {"merged": {}},
+            "runtime": {
+                "environment": {
+                    "materialization": {
+                        "scenario_id": "prompt_engineer_scenario",
+                        "required_branches": [
+                            "ui.application",
+                            "data.catalog",
+                            "data.installed",
+                            "data.desktop",
+                        ],
+                    }
+                }
+            },
+        }
+    )
+
+    assert gateway_module._room_effective_branches_ready(doc) is False
+    assert gateway_module._room_effective_top_level_ready(doc) is False
+    snapshot = gateway_module._room_effective_branch_snapshot(doc)
+    assert snapshot["ready"] is False
+    assert snapshot["current_scenario"] == "web_desktop"
+    assert snapshot["materialized_scenario"] == "prompt_engineer_scenario"
+    assert snapshot["materialization_mismatch"] is True
+
+    doc.get_map("runtime")["environment"]["materialization"]["scenario_id"] = "web_desktop"
+    assert gateway_module._room_effective_branches_ready(doc) is True
+    assert gateway_module._room_effective_top_level_ready(doc) is True
 
 
 def test_gateway_effective_guard_uses_declarative_runtime_required_branches(monkeypatch) -> None:
@@ -1025,6 +1132,46 @@ def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
     assert fake_store.stop_calls == 1
 
 
+def test_ensure_webspace_ready_canonicalizes_legacy_default(monkeypatch) -> None:
+    captured_store_ids: list[str] = []
+    captured_seed: list[dict[str, object]] = []
+    fake_store = _FakeYStore()
+
+    async def _fake_seed(
+        ystore,
+        *,
+        webspace_id: str,
+        default_scenario_id: str,
+        space: str,
+        ydoc=None,
+        prefer_default_scenario: bool = False,
+    ) -> None:  # noqa: ANN001
+        captured_seed.append(
+            {
+                "ystore": ystore,
+                "webspace_id": webspace_id,
+                "default_scenario_id": default_scenario_id,
+                "space": space,
+                "ydoc": ydoc,
+                "prefer_default_scenario": prefer_default_scenario,
+            }
+        )
+
+    def _fake_get_store(webspace_id: str) -> _FakeYStore:
+        captured_store_ids.append(webspace_id)
+        return fake_store
+
+    monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", _fake_get_store)
+    monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+
+    asyncio.run(gateway_module.ensure_webspace_ready("default"))
+
+    assert captured_store_ids == ["desktop"]
+    assert captured_seed[0]["webspace_id"] == "desktop"
+    assert captured_seed[0]["default_scenario_id"] == "web_desktop"
+    assert fake_store.stop_calls == 1
+
+
 def test_ensure_webspace_ready_explicit_scenario_overrides_manifest_home(monkeypatch) -> None:
     webspace_id = "gateway-explicit"
     ensure_workspace(webspace_id)
@@ -1220,7 +1367,7 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
     monkeypatch.setattr(gateway_module.gc, "collect", lambda: 7)
     monkeypatch.setattr(gateway_module, "_trim_allocator_after_yjs_room_reset", lambda: True)
 
-    result = asyncio.run(gateway_module.reset_live_webspace_room("gateway-room-reset"))
+    result = asyncio.run(gateway_module.reset_live_webspace_room("gateway-room-reset", prewarm_after_reset=False))
 
     assert gateway_module.y_server.rooms.get("gateway-room-reset") is None
     assert gateway_module._room_locks.get("gateway-room-reset") is None
@@ -1239,7 +1386,7 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
     assert result["room_refs_released"] is True
     assert result["gc_collected"] == 7
     assert result["malloc_trimmed"] is True
-    assert result["prewarm_after_reset"] is True
+    assert result["prewarm_after_reset"] is False
     assert backup_jobs_deleted == ["ystores.backup.gateway-room-reset"]
 
 
@@ -1452,11 +1599,26 @@ def test_room_bootstrap_stuck_incident_is_sticky_until_ready() -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
-def test_process_events_command_publishes_go_home(monkeypatch) -> None:
+def test_process_events_command_runs_go_home_before_ack(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []
+    captured: list[tuple[str, bool]] = []
 
     monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))))
+
+    async def _fake_go_home(webspace_id: str, *, wait_for_rebuild: bool = True) -> dict[str, object]:
+        captured.append((webspace_id, wait_for_rebuild))
+        return {
+            "ok": True,
+            "accepted": True,
+            "action": "go_home",
+            "webspace_id": webspace_id,
+            "scenario_id": "web_desktop",
+        }
+
+    monkeypatch.setattr(webspace_runtime_module, "go_home_webspace", _fake_go_home)
 
     async def _send_response(msg: dict[str, object]) -> None:
         responses.append(msg)
@@ -1465,15 +1627,17 @@ def test_process_events_command_publishes_go_home(monkeypatch) -> None:
         gateway_module.process_events_command(
             kind="desktop.webspace.go_home",
             cmd_id="cmd-1",
-            payload={"webspace_id": "default"},
+            payload={"webspace_id": "default", "wait_for_rebuild": True},
             device_id="dev-1",
             webspace_id="default",
             send_response=_send_response,
         )
     )
 
-    assert published == [("desktop.webspace.go_home", {"webspace_id": "default"})]
+    assert captured == [("desktop", True)]
+    assert published == []
     assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["scenario_id"] == "web_desktop"
 
 
 def test_process_events_command_preserves_weather_node_target(monkeypatch) -> None:

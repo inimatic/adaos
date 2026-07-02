@@ -16,7 +16,6 @@ import subprocess
 import sys
 import time
 import traceback
-from urllib.parse import quote
 
 import y_py as Y
 import yaml
@@ -34,6 +33,7 @@ from adaos.services.yjs.doc import (
 )
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.runtime_environment import runtime_environment_payload
+from adaos.services.browser_assets import BrowserAssetPublishError, publish_skill_resource_descriptor
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.workspaces import index as workspace_index
 from adaos.services.yjs.store import get_ystore_for_webspace, ystore_write_metadata, ystore_write_metadata_sync
@@ -1224,10 +1224,16 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
                     else _clone_json_like(value)
                 )
         raw_resources = decl.get("resources") if isinstance(decl.get("resources"), Mapping) else {}
+        skill_source_path = str(decl.get("source_path") or "").strip() or None
         for key, value in raw_resources.items():
             token = str(key or "").strip()
             if token and token not in resources:
-                resources[token] = _materialize_skill_resource_descriptor(value, skill_name=skill_name)
+                resources[token] = _materialize_skill_resource_descriptor(
+                    token,
+                    value,
+                    skill_name=skill_name,
+                    skill_dir=skill_source_path,
+                )
         raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
         if raw_interface and skill_name and skill_name not in interfaces:
             interfaces[skill_name] = _clone_skill_ui_interface(raw_interface, skill=skill_name, source=source)
@@ -1805,23 +1811,13 @@ def _clone_json_like(value: Any) -> Any:
         return value
 
 
-def _skill_asset_delivery_url(skill_name: str, path: str) -> str | None:
-    skill_token = str(skill_name or "").strip()
-    raw_path = str(path or "").strip().replace("\\", "/")
-    if not skill_token or not raw_path.startswith("assets/"):
-        return None
-    relative = raw_path[len("assets/") :].strip("/")
-    if not relative:
-        return None
-    parts = [part for part in relative.split("/") if part]
-    if not parts or any(part in (".", "..") for part in parts):
-        return None
-    encoded_skill = quote(skill_token, safe="")
-    encoded_path = "/".join(quote(part, safe="") for part in parts)
-    return f"/api/node/skills/{encoded_skill}/assets/{encoded_path}"
-
-
-def _materialize_skill_resource_descriptor(value: Any, *, skill_name: str | None = None) -> Any:
+def _materialize_skill_resource_descriptor(
+    resource_id: str,
+    value: Any,
+    *,
+    skill_name: str | None = None,
+    skill_dir: str | Path | None = None,
+) -> Any:
     descriptor = _clone_json_like(value)
     if not isinstance(descriptor, dict):
         return descriptor
@@ -1835,9 +1831,19 @@ def _materialize_skill_resource_descriptor(value: Any, *, skill_name: str | None
         return descriptor
     if descriptor.get("url") or descriptor.get("src") or descriptor.get("href"):
         return descriptor
-    url = _skill_asset_delivery_url(skill_token, str(descriptor.get("path") or ""))
-    if url:
-        descriptor["url"] = url
+    try:
+        return publish_skill_resource_descriptor(
+            str(resource_id or ""),
+            descriptor,
+            skill_name=skill_token,
+            skill_dir=skill_dir,
+        )
+    except BrowserAssetPublishError as exc:
+        descriptor["published"] = False
+        descriptor["publishError"] = str(exc)
+    except Exception:
+        descriptor["published"] = False
+        descriptor["publishError"] = "publish_failed"
     return descriptor
 
 
@@ -3472,6 +3478,7 @@ class WebspaceScenarioRuntime:
         payload = {
             "skill": skill_name,
             "space": space,
+            "source_path": str(path.parent.resolve()),
             "node_id": _local_node_id(),
             "ui_owner": ui_owner,
             "apps": [_apply_webui_load_hint(it) for it in apps if isinstance(it, dict)],
@@ -4051,10 +4058,16 @@ class WebspaceScenarioRuntime:
                         entry = _apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
                     skill_widgets.append(_apply_node_display_to_entry(entry, decl_display, node_id=node_id))
             raw_resources = decl.get("resources") if isinstance(decl.get("resources"), Mapping) else {}
+            skill_source_path = str(decl.get("source_path") or "").strip() or None
             for key, value in raw_resources.items():
                 token = str(key or "").strip()
                 if token and token not in skill_resources:
-                    skill_resources[token] = _materialize_skill_resource_descriptor(value, skill_name=skill_name)
+                    skill_resources[token] = _materialize_skill_resource_descriptor(
+                        token,
+                        value,
+                        skill_name=skill_name,
+                        skill_dir=skill_source_path,
+                    )
             raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
             if raw_interface and skill_name:
                 interface_copy = _clone_skill_ui_interface(raw_interface, skill=str(skill_name), source=source)
@@ -5285,6 +5298,12 @@ def _try_read_live_current_scenario(webspace_id: str) -> str | None:
     return _normalize_optional_token(raw_current)
 
 
+def _materialization_scenario_from_environment(environment: Any) -> str | None:
+    raw_environment = _coerce_dict(environment)
+    raw_materialization = _coerce_dict(raw_environment.get("materialization"))
+    return _normalize_optional_token(raw_materialization.get("scenario_id"))
+
+
 def _open_readonly_operational_ydoc(webspace_id: str):
     """
     Open a read-only YDoc session for operational/status reads.
@@ -5304,6 +5323,22 @@ def _open_readonly_operational_ydoc(webspace_id: str):
             return async_get_ydoc(webspace_id)
         except TypeError:
             return async_read_ydoc(webspace_id)
+
+
+async def _read_effective_materialization_scenario(webspace_id: str) -> str | None:
+    try:
+        live_hit, raw_environment = try_read_live_map_value(webspace_id, "runtime", "environment")
+        if live_hit:
+            return _materialization_scenario_from_environment(raw_environment)
+    except Exception:
+        pass
+
+    try:
+        async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
+            runtime_map = ydoc.get_map("runtime")
+            return _materialization_scenario_from_environment(runtime_map.get("environment"))
+    except Exception:
+        return None
 
 
 def _open_rebuild_ydoc_session(
@@ -6327,6 +6362,25 @@ async def rebuild_webspace_from_sources(
                 exc_info=True,
             )
 
+    def _note_authoritative_selector(reason: str) -> None:
+        if not target_scenario:
+            return
+        try:
+            from adaos.services.yjs.gateway import note_authoritative_current_scenario  # pylint: disable=import-outside-toplevel
+
+            note_authoritative_current_scenario(
+                webspace_id,
+                target_scenario,
+                reason=reason,
+            )
+        except Exception:
+            _log.debug(
+                "failed to publish authoritative current_scenario lease webspace=%s scenario=%s",
+                webspace_id,
+                target_scenario,
+                exc_info=True,
+            )
+
     if requested_action == "scenario_switch_rebuild" and _fresh_doc_on_scenario_switch_enabled():
         if not target_scenario:
             raise ValueError("scenario_id is required for scenario switch rebuild")
@@ -6368,6 +6422,7 @@ async def rebuild_webspace_from_sources(
     if reseed_from_scenario:
         if not target_scenario:
             raise ValueError("scenario_id is required when reseed_from_scenario is enabled")
+        _note_authoritative_selector(f"{requested_action}:reseed")
         if requested_action != "reset":
             stage_started = time.perf_counter()
             await _write_reseed_pointer()
@@ -7481,6 +7536,21 @@ async def switch_webspace_scenario(
     stage_started = time.perf_counter()
     rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
     _record_timing(timings_ms, "describe_rebuild_before", stage_started)
+    stage_started = time.perf_counter()
+    materialized_scenario_before = await _read_effective_materialization_scenario(webspace_id)
+    _record_timing(timings_ms, "read_materialization_scenario_before", stage_started)
+    materialization_matches_target = (
+        materialized_scenario_before is None
+        or str(materialized_scenario_before or "").strip() == scenario_id
+    )
+    if materialized_scenario_before and not materialization_matches_target:
+        _log.warning(
+            "desktop.scenario.set forcing rebuild for materialization mismatch webspace=%s current_scenario=%s materialized_scenario=%s target_scenario=%s",
+            webspace_id,
+            state_before.current_scenario,
+            materialized_scenario_before,
+            scenario_id,
+        )
 
     _log.info(
         "desktop.scenario.set webspace=%s scenario=%s requested_set_home=%s resolved_set_home=%s",
@@ -7539,6 +7609,7 @@ async def switch_webspace_scenario(
         and not bool(rebuild_state_before.get("pending"))
         and str(rebuild_state_before.get("status") or "").strip().lower() == "ready"
         and str(rebuild_state_before.get("scenario_id") or "").strip() == scenario_id
+        and materialization_matches_target
     ):
         if resolved_set_home and row.effective_home_scenario != scenario_id:
             stage_started = time.perf_counter()

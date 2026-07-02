@@ -25,23 +25,43 @@ from adaos.services.scenario import webspace_runtime as webspace_runtime_module
 from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime
 
 
-def test_skill_resource_descriptor_materializes_asset_delivery_url() -> None:
+def test_skill_resource_descriptor_materializes_asset_delivery_url(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services import browser_assets
+
+    runtime_base = tmp_path / "runtime"
+    skill_dir = tmp_path / "skills" / "voice_chat_skill"
+    asset = skill_dir / "assets" / "icons" / "voice mic.svg"
+    asset.parent.mkdir(parents=True)
+    asset.write_text("<svg></svg>", encoding="utf-8")
+    fake_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: runtime_base))
+    monkeypatch.setattr(browser_assets, "get_ctx", lambda: fake_ctx)
+
     descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
+        "voice.icon",
         {
             "kind": "svg",
             "path": "assets/icons/voice mic.svg",
             "mime": "image/svg+xml",
         },
         skill_name="voice_chat_skill",
+        skill_dir=skill_dir,
     )
 
     assert descriptor["scope"] == "skill"
     assert descriptor["owner"] == "skill:voice_chat_skill"
-    assert descriptor["url"] == "/api/node/skills/voice_chat_skill/assets/icons/voice%20mic.svg"
+    assert descriptor["url"].startswith("/assets/blobs/sha256/")
+    assert descriptor["url"].endswith("/voice%20mic.svg")
+    assert descriptor["cacheKey"].startswith("sha256:")
+    assert descriptor["sizeBytes"] == len("<svg></svg>".encode("utf-8"))
+    assert descriptor["published"] is True
+    published = list((runtime_base / "assets" / "public" / "blobs" / "sha256").rglob("voice mic.svg"))
+    assert len(published) == 1
+    assert published[0].read_text(encoding="utf-8") == "<svg></svg>"
 
 
 def test_external_resource_descriptor_keeps_authored_url() -> None:
     descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
+        "voice.avatar",
         {
             "kind": "image",
             "delivery": "external",

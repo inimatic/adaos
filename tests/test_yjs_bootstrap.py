@@ -126,6 +126,56 @@ def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
     assert store.encode_calls == 0
 
 
+def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
+    class _PanicAfterPartialApplyStore(_FakeStore):
+        async def apply_updates(self, ydoc: Y.YDoc) -> None:
+            self.apply_updates_calls += 1
+            with ydoc.begin_transaction() as txn:
+                ui_map = ydoc.get_map("ui")
+                data_map = ydoc.get_map("data")
+                ui_map.set(txn, "current_scenario", "todo_list")
+                ui_map.set(txn, "application", {"modals": {"apps_catalog": {}, "widgets_catalog": {}}})
+                data_map.set(txn, "catalog", {"apps": [], "widgets": []})
+            raise RuntimeError("Couldn't get item's parent")
+
+    class _ProjectingManager:
+        def project_scenario_to_doc(self, ydoc: Y.YDoc, scenario_id: str, *, space: str = "workspace") -> None:
+            with ydoc.begin_transaction() as txn:
+                ui_map = ydoc.get_map("ui")
+                data_map = ydoc.get_map("data")
+                ui_map.set(txn, "current_scenario", scenario_id)
+                ui_map.set(
+                    txn,
+                    "application",
+                    {"desktop": {"pageSchema": {"id": "fresh-todo"}}, "modals": {"apps_catalog": {}, "widgets_catalog": {}}},
+                )
+                data_map.set(txn, "catalog", {"apps": [{"id": "fresh-app"}], "widgets": []})
+
+    store = _PanicAfterPartialApplyStore()
+    provided_doc = Y.YDoc()
+    monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _ProjectingManager())
+    monkeypatch.setattr(bootstrap_module, "get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(bootstrap_module, "emit", lambda *args, **kwargs: None)
+
+    result = asyncio.run(
+        bootstrap_module.ensure_webspace_seeded_from_scenario(
+            store,
+            webspace_id="desktop-dev",
+            default_scenario_id="todo_list",
+            space="dev",
+            ydoc=provided_doc,
+            prefer_default_scenario=True,
+        )
+    )
+
+    assert result["mode"] == "scenario_projection"
+    assert result["apply_updates_error"].startswith("RuntimeError:")
+    assert result["apply_updates_discarded_partial_state"] is True
+    assert store.write_calls == 1
+    assert dict(provided_doc.get_map("ui").get("application") or {})["desktop"]["pageSchema"]["id"] == "fresh-todo"
+    assert dict(provided_doc.get_map("data").get("catalog") or {})["apps"] == [{"id": "fresh-app"}]
+
+
 def test_bootstrap_seed_fallback_projects_compat_seed_without_effective_writes(monkeypatch) -> None:
     class _FailingManager:
         async def sync_to_yjs_async(self, *args, **kwargs) -> None:  # noqa: ARG002

@@ -5088,9 +5088,52 @@ def _recreate_y_server_after_failure(reason: str) -> None:
     _ylog.warning("Yjs websocket server runtime recreated after failure reason=%s", reason)
 
 
+def _room_branch_get(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(key)
+    getter = getattr(value, "get", None)
+    if callable(getter):
+        try:
+            return getter(key)
+        except Exception:
+            return None
+    return None
+
+
+def _room_optional_token(value: Any) -> str | None:
+    if value is None:
+        return None
+    token = str(value).strip()
+    return token or None
+
+
+def _room_current_scenario(ydoc: Any) -> str | None:
+    try:
+        ui_map = ydoc.get_map("ui")
+        return _room_optional_token(ui_map.get("current_scenario"))
+    except Exception:
+        return None
+
+
+def _room_materialized_scenario(ydoc: Any) -> str | None:
+    try:
+        runtime_map = ydoc.get_map("runtime")
+        environment = runtime_map.get("environment")
+        materialization = _room_branch_get(environment, "materialization")
+        return _room_optional_token(_room_branch_get(materialization, "scenario_id"))
+    except Exception:
+        return None
+
+
+def _room_materialization_mismatch(ydoc: Any) -> bool:
+    current = _room_current_scenario(ydoc)
+    materialized = _room_materialized_scenario(ydoc)
+    return bool(current and materialized and current != materialized)
+
+
 def _room_effective_branches_ready(ydoc: Any) -> bool:
     try:
-        return not _room_effective_missing_required_branches(ydoc)
+        return not _room_materialization_mismatch(ydoc) and not _room_effective_missing_required_branches(ydoc)
     except Exception:
         return False
 
@@ -5213,7 +5256,7 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
     if not _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS:
         return True
     try:
-        return not _room_effective_missing_required_branches(ydoc)
+        return _room_effective_branches_ready(ydoc)
     except Exception:
         return False
 
@@ -5264,12 +5307,22 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         except Exception:
             required_branches = []
             missing_required_branches = []
+        current_scenario = _room_current_scenario(ydoc)
+        materialized_scenario = _room_materialized_scenario(ydoc)
+        materialization_mismatch = bool(
+            current_scenario
+            and materialized_scenario
+            and current_scenario != materialized_scenario
+        )
         return {
             "ready": _room_effective_top_level_ready(ydoc),
             "mode": "top_level_snapshot",
             "details": "disabled",
             "required_branches": required_branches,
             "missing_required_branches": missing_required_branches,
+            "current_scenario": current_scenario,
+            "materialized_scenario": materialized_scenario,
+            "materialization_mismatch": materialization_mismatch,
         }
     try:
         ui_map = ydoc.get_map("ui")
@@ -5286,6 +5339,13 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         desktop = data_map.get("desktop")
         required_branches = list(_room_effective_required_branches(ydoc))
         missing_required_branches = _room_effective_missing_required_branches(ydoc)
+        current_scenario = _room_current_scenario(ydoc)
+        materialized_scenario = _room_materialized_scenario(ydoc)
+        materialization_mismatch = bool(
+            current_scenario
+            and materialized_scenario
+            and current_scenario != materialized_scenario
+        )
         snapshot = {
             "ready": _room_effective_branches_ready(ydoc),
             "ui_keys": ui_keys,
@@ -5293,6 +5353,9 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
             "registry_keys": registry_keys,
             "required_branches": required_branches,
             "missing_required_branches": missing_required_branches,
+            "current_scenario": current_scenario,
+            "materialized_scenario": materialized_scenario,
+            "materialization_mismatch": materialization_mismatch,
             "has_application": isinstance(application, dict) and bool(application),
             "has_application_desktop": isinstance(application_desktop, dict) and bool(application_desktop),
             "has_application_page_schema": isinstance(application_desktop, dict)
@@ -5369,7 +5432,7 @@ async def refresh_live_webspace_effective_branches(
                 "reset_route_runtime": False,
             }
 
-    update = await _repair_room_effective_branches(
+    update, handoff = await _repair_room_effective_branches_on_owner_loop(
         key,
         getattr(room, "ystore", None),
         room,
@@ -5377,11 +5440,12 @@ async def refresh_live_webspace_effective_branches(
     )
     update_size = len(update or b"")
     _ylog.info(
-        "refreshed live Yjs room effective branches webspace=%s reason=%s room_created=%s update_bytes=%s",
+        "refreshed live Yjs room effective branches webspace=%s reason=%s room_created=%s update_bytes=%s thread_handoff=%s",
         key,
         reason,
         room_created,
         update_size,
+        handoff,
     )
     return {
         "ok": True,
@@ -5392,10 +5456,62 @@ async def refresh_live_webspace_effective_branches(
         "room_dropped": False,
         "room_repaired": update_size > 0,
         "repair_bytes": update_size,
+        "thread_handoff": handoff,
         "closed_connections": 0,
         "closed_webrtc_peers": 0,
         "reset_route_runtime": False,
     }
+
+
+async def _repair_room_effective_branches_on_owner_loop(
+    webspace_id: str,
+    ystore: Any,
+    room: Any,
+    *,
+    reason: str,
+) -> tuple[bytes, str]:
+    owner_thread = getattr(room, "_thread_id", None)
+    owner_loop = getattr(room, "_loop", None)
+    current_thread = threading.get_ident()
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if (
+        owner_thread is not None
+        and owner_thread != current_thread
+    ):
+        if owner_loop is None or not owner_loop.is_running():
+            _ylog.warning(
+                "skipped live YRoom repair from non-owner thread without running owner loop webspace=%s reason=%s owner_thread=%s current_thread=%s",
+                webspace_id,
+                reason,
+                owner_thread,
+                current_thread,
+            )
+            return b"", "skipped_no_owner_loop"
+        future = asyncio.run_coroutine_threadsafe(
+            _repair_room_effective_branches(webspace_id, ystore, room, reason=reason),
+            owner_loop,
+        )
+        wrapped = asyncio.wrap_future(future)
+        return await wrapped, "threadsafe_owner_loop"
+
+    if (
+        owner_loop is not None
+        and current_loop is not None
+        and owner_loop is not current_loop
+        and owner_loop.is_running()
+    ):
+        future = asyncio.run_coroutine_threadsafe(
+            _repair_room_effective_branches(webspace_id, ystore, room, reason=reason),
+            owner_loop,
+        )
+        wrapped = asyncio.wrap_future(future)
+        return await wrapped, "loop_owner_loop"
+
+    return await _repair_room_effective_branches(webspace_id, ystore, room, reason=reason), "direct_owner_context"
 
 
 async def _repair_room_effective_branches(
@@ -5415,7 +5531,7 @@ async def _repair_room_effective_branches(
         before = Y.encode_state_vector(ydoc)
         runtime = WebspaceScenarioRuntime()
         with ystore_write_metadata_sync(
-            root_names=["ui", "data", "registry"],
+            root_names=["ui", "data", "registry", "runtime"],
             source=f"yjs.gateway_ws.{reason}",
             owner="core:yjs_gateway",
             channel="core.yjs.gateway.repair",
@@ -5438,7 +5554,7 @@ async def _repair_room_effective_branches(
         update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
         if update and ystore is not None:
             async with ystore_write_metadata(
-                root_names=["ui", "data", "registry"],
+                root_names=["ui", "data", "registry", "runtime"],
                 source=f"yjs.gateway_ws.{reason}",
                 owner="core:yjs_gateway",
                 channel="core.yjs.gateway.repair",
@@ -5673,6 +5789,7 @@ async def stop_y_server() -> None:
 
 
 async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None) -> None:
+    webspace_id = _coerce_gateway_webspace_id(webspace_id)
     ensure_workspace(webspace_id)
     ystore = get_ystore_for_webspace(webspace_id)
     row = get_workspace(webspace_id)
@@ -6655,8 +6772,23 @@ async def process_events_command(
         return None
 
     if kind == "desktop.webspace.go_home":
-        _publish_bus("desktop.webspace.go_home", payload)
-        await _ack()
+        payload = dict(payload or {})
+        target_webspace = _coerce_gateway_webspace_id(
+            payload.get("webspace_id") or payload.get("workspace_id") or webspace_id
+        )
+        wait_for_rebuild = (
+            bool(payload.get("wait_for_rebuild"))
+            if "wait_for_rebuild" in payload
+            else False
+        )
+        try:
+            from adaos.services.scenario.webspace_runtime import go_home_webspace
+
+            result = await go_home_webspace(target_webspace, wait_for_rebuild=wait_for_rebuild)
+            await _ack(bool(result.get("accepted", result.get("ok", True))), data=result)
+        except Exception as exc:
+            _log.warning("desktop.webspace.go_home direct switch failed webspace=%s", target_webspace, exc_info=True)
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
         return None
 
     if kind == "desktop.webspace.set_home":
@@ -6700,7 +6832,7 @@ async def process_events_command(
         if not target:
             await _ack(False, error="webspace_id required")
             return None
-        new_webspace = str(target)
+        new_webspace = _coerce_gateway_webspace_id(target)
         try:
             await ensure_webspace_ready(new_webspace, scenario_id=payload.get("scenario_id"))
             await _update_device_presence(new_webspace, device_id or "dev-unknown")

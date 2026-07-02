@@ -603,10 +603,12 @@ def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_file
     assert revision["preview_state"]["mock_data"]["prototype_items"][0]["title"] == "Book venue"
 
 
-def test_schedule_dev_runtime_reload_prefers_event_bus(monkeypatch) -> None:
+def test_schedule_dev_runtime_reload_prefers_direct_runtime_reload(monkeypatch) -> None:
     skill = _load_module()
     monkeypatch.setenv("ADAOS_BUILDER_DEV_RUNTIME_REFRESH_IN_TESTS", "1")
     published: list[dict] = []
+    reload_calls: list[dict] = []
+    reload_done = threading.Event()
 
     import adaos.sdk.data.events as events
     import adaos.services.scenario.webspace_runtime as webspace_runtime
@@ -619,10 +621,19 @@ def test_schedule_dev_runtime_reload_prefers_event_bus(monkeypatch) -> None:
         ),
     )
 
-    async def _unexpected_reload(*_args, **_kwargs):
-        raise AssertionError("direct reload should not be used when event bus publish succeeds")
+    async def _reload(webspace_id, *, scenario_id=None, action="reload", event_payload=None):
+        reload_calls.append(
+            {
+                "webspace_id": webspace_id,
+                "scenario_id": scenario_id,
+                "action": action,
+                "event_payload": dict(event_payload or {}),
+            }
+        )
+        reload_done.set()
+        return {"ok": True}
 
-    monkeypatch.setattr(webspace_runtime, "reload_webspace_from_scenario", _unexpected_reload)
+    monkeypatch.setattr(webspace_runtime, "reload_webspace_from_scenario", _reload)
 
     result = skill._schedule_dev_runtime_reload_after_revision(
         "desktop",
@@ -633,14 +644,16 @@ def test_schedule_dev_runtime_reload_prefers_event_bus(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["scheduled"] is True
-    assert result["mode"] == "event_bus"
+    assert result["mode"] == "thread"
     assert result["webspace_id"] == "desktop-dev"
-    assert published[-1]["topic"] == "desktop.webspace.reload"
-    assert published[-1]["source"] == "builder_skill"
-    assert published[-1]["payload"]["webspace_id"] == "desktop-dev"
-    assert published[-1]["payload"]["scenario_id"] == "todo_list"
-    assert published[-1]["payload"]["_event_type"] == "desktop.webspace.reload"
-    assert published[-1]["payload"]["_meta"]["cmd_id"] == "builder.ui.todo_list.016"
+    assert reload_done.wait(1.0)
+    assert reload_calls[-1]["webspace_id"] == "desktop-dev"
+    assert reload_calls[-1]["scenario_id"] == "todo_list"
+    assert reload_calls[-1]["action"] == "reload"
+    assert reload_calls[-1]["event_payload"]["webspace_id"] == "desktop-dev"
+    assert reload_calls[-1]["event_payload"]["scenario_id"] == "todo_list"
+    assert reload_calls[-1]["event_payload"]["_meta"]["cmd_id"] == "builder.ui.todo_list.016"
+    assert published == []
 
 
 def test_update_current_scenario_does_not_generate_domain_mock_data_without_llm(monkeypatch, tmp_path) -> None:

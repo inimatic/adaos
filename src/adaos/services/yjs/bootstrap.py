@@ -403,6 +403,7 @@ async def ensure_webspace_seeded_from_scenario(
     apply_started = time.perf_counter()
     try:
         await ystore.apply_updates(target_doc)
+        apply_updates_failed = False
     except BaseException as exc:  # catch PanicException and similar
         if isinstance(exc, asyncio.CancelledError):
             _log.warning(
@@ -419,10 +420,14 @@ async def ensure_webspace_seeded_from_scenario(
             exc_info=True,
         )
         result["apply_updates_error"] = f"{type(exc).__name__}: {exc}"
+        apply_updates_failed = True
+        result["apply_updates_discarded_partial_state"] = True
+        if ydoc is None:
+            target_doc = Y.YDoc()
     finally:
         result["apply_updates_ms"] = round((time.perf_counter() - apply_started) * 1000.0, 3)
     try:
-        before_state_vector = Y.encode_state_vector(target_doc)
+        before_state_vector = None if apply_updates_failed else Y.encode_state_vector(target_doc)
     except Exception:
         before_state_vector = None
 
@@ -478,7 +483,7 @@ async def ensure_webspace_seeded_from_scenario(
             "prefer_default_scenario": bool(prefer_default_scenario),
         },
     )
-    if not current_scenario_overridden and _is_seeded_state(application, data_map.get("catalog")):
+    if not apply_updates_failed and not current_scenario_overridden and _is_seeded_state(application, data_map.get("catalog")):
         bootstrap_marker_changed = write_runtime_bootstrap_state(
             target_doc,
             webspace_id=webspace_id,
@@ -503,7 +508,7 @@ async def ensure_webspace_seeded_from_scenario(
         )
         return _finish("already_seeded_runtime_refreshed" if runtime_environment_changed else "already_seeded")
 
-    if _has_projected_scenario_seed(ui_map, data_map, requested_scenario_id):
+    if not apply_updates_failed and _has_projected_scenario_seed(ui_map, data_map, requested_scenario_id):
         bootstrap_marker_changed = write_runtime_bootstrap_state(
             target_doc,
             webspace_id=webspace_id,

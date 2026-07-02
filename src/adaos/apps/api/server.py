@@ -5,6 +5,17 @@ import os
 from pathlib import Path
 import logging
 import time
+from starlette.staticfiles import StaticFiles
+
+from adaos.services.browser_assets import static_assets_directory
+
+
+class BrowserAssetStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        if str(path or "").replace("\\", "/").startswith("blobs/sha256/"):
+            response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        return response
 
 
 def _parse_dotenv(path: Path) -> dict[str, str]:
@@ -693,6 +704,19 @@ def _consume_restart_marker(base_url: str | None) -> dict[str, Any] | None:
     return data
 
 
+def _mount_browser_assets_static(app: FastAPI) -> None:
+    try:
+        if any(str(getattr(route, "path", "") or "") == "/assets" for route in getattr(app, "routes", ())):
+            return
+        app.mount(
+            "/assets",
+            BrowserAssetStaticFiles(directory=str(static_assets_directory(_get_ctx())), check_dir=False),
+            name="adaos-browser-assets",
+        )
+    except Exception:
+        logging.getLogger("adaos.api.server").debug("failed to mount browser assets static directory", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1) инициализируем AgentContext (публикуется через set_ctx внутри bootstrap_app)
@@ -741,6 +765,8 @@ async def lifespan(app: FastAPI):
         pass
 
     # 3.6) стартуем RouterService с локальной шиной
+    _mount_browser_assets_static(app)
+
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
     # Periodic liveness staler (hub only)
