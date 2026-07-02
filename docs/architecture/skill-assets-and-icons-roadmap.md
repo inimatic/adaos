@@ -113,19 +113,19 @@ browser_resources:
     weather.current:
       kind: svg
       scope: skill
-      url: /api/node/skills/weather/assets/icons/current.svg
+      url: /assets/blobs/sha256/2a/7f/2a7f.../current.svg
       cache_key: sha256:...
       fallback: sparkles-outline
     assistant.default.avatar:
       kind: image
       scope: system
-      url: /api/node/resources/system/assistant.default.avatar
+      url: /assets/blobs/sha256/51/d0/51d0.../assistant-default.webp
       cache_key: sha256:...
     weather.i18n.ru:
       kind: data
       role: i18n
       locale: ru
-      url: /api/node/skills/weather/assets/i18n/ru.json
+      url: /assets/blobs/sha256/c8/11/c811.../ru.json
       cache_key: sha256:...
 ```
 
@@ -137,24 +137,58 @@ The authored descriptor is not a browser URL. During materialization AdaOS shoul
 resolve every core-delivered `path` into a stable delivery URL and keep the
 original descriptor for diagnostics.
 
+### Public Asset Store
+
+Public browser resources are published into `.adaos/assets` before the browser
+loads them. Skills and scenarios author files under their own `assets/`
+directories, but the browser never reads those package paths directly.
+
+The runtime publishes allowed public resources into a content-addressed static
+store:
+
+```text
+.adaos/assets/
+  public/
+    blobs/
+      sha256/<aa>/<bb>/<digest>/<filename>
+  manifests/
+    skills/<skill>.json
+    scenarios/<scenario>.json
+```
+
+The materialized descriptor points at `/assets/blobs/sha256/...`, not at the
+skill package. The static layer can be a mounted static-file app, sidecar, or
+reverse-proxy `sendfile` target; it must not inspect skill manifests, resolve
+workspace paths, or compute hashes on request. App/runtime code owns publishing,
+validation, hashing, manifest generation, and garbage collection.
+
+Private resources are deferred. The initial store accepts only public,
+publishable browser resources such as icons, assistant avatars, preview images,
+and localized JSON dictionaries. Later private delivery should use short-lived
+signed URLs or fetch-to-blob flows without changing `resource:<id>` references.
+
 For member-local browsers:
 
 1. The hub/member runtime validates the resource descriptor.
 2. The runtime resolves owner, relative path, MIME type, size, and content hash.
-3. The node API serves the resource with `ETag`, `Cache-Control`, content type,
-   byte-size limits, and path traversal protection.
-4. The browser resource resolver maps `resource:<id>` to the delivered URL and
+3. The runtime publishes the content into `.adaos/assets/public` by `cacheKey`.
+4. A static serving layer returns immutable blobs with `ETag`, `Cache-Control`,
+   and content type, without skill/app request logic.
+5. The browser resource resolver maps `resource:<id>` to the delivered URL and
    caches by `cacheKey`.
 
 For Root-routed or remote browsers:
 
 1. The Root resource cache reads the same materialized manifest.
-2. The first request pulls the content from the owning member/hub using the
-   materialized URL or content hash.
-3. Root stores the blob by `cacheKey` and exposes a Root-local URL to the
-   browser.
+2. A planned Root endpoint accepts or pulls blobs by `cacheKey` from the owning
+   member/hub.
+3. Root stores the blob under its own `.adaos/assets/public` and exposes a
+   Root-local `/assets/blobs/sha256/...` URL to the browser.
 4. Cache invalidation is content-addressed: a new `cacheKey` creates a new cache
    entry, and stale entries can be garbage-collected independently.
+
+The legacy `/api/node/skills/{skill}/assets/...` endpoint is a development and
+compatibility fallback. It is not the production byte-serving target.
 
 External resources keep the subnet-hosted manifest as the source of truth. They
 may be used for large or public assets, but descriptors must still provide kind,
@@ -188,14 +222,16 @@ image resource is unavailable.
    Voice/Chat where space allows.
 3. Add a browser resource manifest/materialization endpoint served by the
    hub/member runtime for skill, scenario, and system resources.
-4. Add node API delivery for core-owned resources with path validation, MIME
-   metadata, ETag/cache headers, and `cacheKey` generation.
-5. Add client-side resource resolution and local browser caching for all
+4. Publish public skill resources into `.adaos/assets/public` with
+   content-addressed blob paths, MIME metadata, size limits, and `cacheKey`
+   generation.
+5. Mount or sidecar a static `/assets` serving layer for public immutable blobs.
+6. Add client-side resource resolution and local browser caching for all
    `resource:<id>` references.
-6. Wire i18n dictionaries through `resources` so skills can publish localized UI
+7. Wire i18n dictionaries through `resources` so skills can publish localized UI
    text without rebuilding the Angular bundle.
-7. Add Root cache/relay support for remote browsers and subnet-hosted resources.
-8. Allow external storage URLs for large assets while keeping the subnet-hosted
+8. Add Root cache/relay support for remote browsers and subnet-hosted resources.
+9. Allow external storage URLs for large assets while keeping the subnet-hosted
    manifest as the source of truth.
-9. Add diagnostics for missing assets so compact phone layouts still provide
+10. Add diagnostics for missing assets so compact phone layouts still provide
    usable controls, avatar fallbacks, and modal close actions.
