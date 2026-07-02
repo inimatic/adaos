@@ -373,10 +373,25 @@
         "defaultRoute": { "$ref": "#/$defs/id" },
         "domain": { "$ref": "#/$defs/modalDomainContract" },
         "ownership": { "$ref": "#/$defs/uiOwnershipContract" },
+        "history": { "$ref": "#/$defs/modalHistoryContract" },
         "routes": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/modalRoute" }
         }
+      }
+    },
+    "modalHistoryContract": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional browser URL/history binding for addressed modal routes.",
+      "properties": {
+        "url": { "type": "boolean" },
+        "deepLink": { "type": "boolean" },
+        "mode": {
+          "type": "string",
+          "enum": ["push", "replace"]
+        },
+        "queryPrefix": { "type": "string", "minLength": 1 }
       }
     },
     "modalDomainContract": {

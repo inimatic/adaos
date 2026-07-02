@@ -122,6 +122,9 @@ Addressed modals also expose a small domain state contract. The modal
 interface declares domain states such as `notes.list` or `note.edit`, maps them
 to concrete routes, and declares ownership for skill domain state, browser
 route state, browser-local view state, and durable persistence acknowledgments.
+Modals can opt in to URL/history binding with `schema.interface.history`, which
+lets the browser expose the current modal route/view/params as a copyable
+deeplink contract.
 
 ### 4. Renderer layer
 
@@ -805,11 +808,15 @@ Recommended demo data shape:
 - [x] `[must]` add Python SDK/Builder-safe helpers and contract fixtures for
   skill interfaces, modal routes, domain states, ownership, and navigation
   actions
-- [ ] `[should]` add a compact UI-contract diagnostics panel for operators and
-  Builder reviews
+- [x] `[should]` add a compact UI-contract diagnostics endpoint and payload for
+  operators and Builder reviews
 - [ ] `[should]` add a real browser/CDP e2e smoke for Notebook addressed-modal
   recovery after the current contract tests
-- [ ] `[could]` connect modal addresses to URL/deeplink history after the
+- [x] `[should]` generate TypeScript declaration helpers from the WebUI ABI for
+  skill and scenario authoring
+- [x] `[could]` connect modal addresses to URL/deeplink history after the
   runtime contract is stable
+- [ ] `[could]` add a browser diagnostics panel consuming the contract
+  diagnostics endpoint
 - [ ] `[deferred]` remove legacy `openModal` compatibility once migrated
   skills and scenarios have enough coverage

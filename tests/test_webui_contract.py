@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from adaos.sdk.web import (
     diagnostic_catalog,
     modal_domain_contract,
@@ -14,6 +16,9 @@ from adaos.sdk.web import (
     validate_webui,
 )
 from adaos.services.webui_contract import validate_webui_contract
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_sdk_helpers_build_valid_addressed_modal_contract() -> None:
@@ -103,6 +108,15 @@ def test_webui_diagnostic_catalog_exposes_modal_domain_codes() -> None:
 
     assert catalog["webui.modal.domain.state_route_unknown"]["severity"] == "error"
     assert catalog["webui.modal.ownership_owner_missing"]["owner"] == "skill"
+
+
+def test_webui_typescript_contract_artifact_covers_modal_domain_and_diagnostics() -> None:
+    text = (REPO_ROOT / "src" / "adaos" / "abi" / "webui.v1.types.d.ts").read_text(encoding="utf-8")
+
+    assert "interface WebUiModalDomainContract" in text
+    assert "interface WebUiOwnershipContract" in text
+    assert "interface WebUiModalHistoryContract" in text
+    assert "interface WebUiContractDiagnosticsPayload" in text
 
 
 def test_validator_rejects_broken_modal_domain_contract() -> None:

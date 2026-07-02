@@ -220,6 +220,11 @@ view, and identifies entity params such as `note_id`. The companion
 domain truth, browser-owned route/view state, and the skill action that
 confirms durable persistence.
 
+Modals may opt in to browser URL/history binding through
+`schema.interface.history`. When enabled, the browser writes the current modal
+id, route, view, and params into query parameters so addressed modal states can
+be copied, reviewed, and restored by later deeplink handling.
+
 ### Domain refs
 
 Domain refs identify reusable domain entities rather than UI state.
@@ -578,9 +583,12 @@ Status note:
   actions as one checked unit
 - [ ] `[should]` add a real browser/CDP e2e smoke for widget click -> addressed
   modal -> edit -> Yjs soft reload -> same entity/view restored
-- [ ] `[should]` generate TypeScript helper types from the WebUI ABI so skills
+- [x] `[should]` expose a compact WebUI contract diagnostics endpoint with the
+  materialized issue list and stable diagnostic catalog for operators and
+  Builder reviews
+- [x] `[should]` generate TypeScript helper types from the WebUI ABI so skills
   do not hand-author route and param contracts from scratch
-- [ ] `[could]` add URL/deeplink and browser back-stack integration for modal
+- [x] `[could]` add URL/deeplink and browser back-stack integration for modal
   addresses once the in-Yjs route contract is stable
 - [ ] `[could]` support non-modal surfaces for the same public view refs
   without changing skill action declarations

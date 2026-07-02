@@ -224,6 +224,7 @@ def test_webui_schema_accepts_modal_domain_and_ownership_contract() -> None:
                         "interface": {
                             "schema": "adaos.ui.modal.interface.v1",
                             "defaultRoute": "notes.list",
+                            "history": {"url": True, "mode": "push"},
                             "domain": {
                                 "schema": "adaos.ui.modal_domain.v1",
                                 "defaultState": "notes.list",

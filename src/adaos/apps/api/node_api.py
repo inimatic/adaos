@@ -80,6 +80,7 @@ from adaos.services.realtime_sidecar import (
 )
 from adaos.services.root_mcp.logs import list_local_logs, normalize_log_category
 from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
+from adaos.services.webui_contract import webui_contract_diagnostic_catalog
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
 from adaos.services.system_model.service import (
     current_inventory_projection,
@@ -4039,6 +4040,63 @@ async def node_logs(
         )
 
     return {"ok": True, "logs": await anyio.to_thread.run_sync(_load_logs)}
+
+
+async def _read_webui_contract_diagnostics(webspace_id: str) -> dict[str, Any]:
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    try:
+        async with async_read_ydoc(target_webspace_id, prefer_live_room=True) as ydoc:
+            ui_map = ydoc.get_map("ui")
+            application = _coerce_dict(_clone_json_like(ui_map.get("application")))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "schema": "adaos.webui.contract_diagnostics.v1",
+            "webspace_id": target_webspace_id,
+            "status": "unavailable",
+            "source": "ui.application.diagnostics.webui_contract",
+            "materialized": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "issues": [],
+            "error_count": 0,
+            "warning_count": 0,
+        }
+    diagnostics = _coerce_dict(_coerce_dict(application.get("diagnostics")).get("webui_contract"))
+    raw_issues = _coerce_list(diagnostics.get("issues"))
+    issues = [_coerce_dict(item) for item in raw_issues if isinstance(item, dict)]
+    error_count = int(diagnostics.get("error_count") or sum(1 for item in issues if item.get("level") == "error"))
+    warning_count = int(diagnostics.get("warning_count") or sum(1 for item in issues if item.get("level") == "warning"))
+    status = str(diagnostics.get("status") or ("valid" if diagnostics else "missing")).strip() or "missing"
+    return {
+        "ok": True,
+        "schema": "adaos.webui.contract_diagnostics.v1",
+        "webspace_id": target_webspace_id,
+        "status": status,
+        "source": "ui.application.diagnostics.webui_contract",
+        "materialized": bool(diagnostics),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "issue_count": len(issues),
+        "issues": issues,
+        "summary": {
+            "status": status,
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "issue_count": len(issues),
+        },
+    }
+
+
+@router.get("/ui/contract-diagnostics", dependencies=[Depends(require_token)])
+async def node_ui_contract_diagnostics(
+    webspace_id: str | None = None,
+    include_catalog: bool = True,
+) -> dict[str, Any]:
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    payload = await _read_webui_contract_diagnostics(target_webspace_id)
+    if include_catalog:
+        payload["catalog"] = webui_contract_diagnostic_catalog()
+    return payload
 
 
 @router.post("/ui/diagnostics", dependencies=[Depends(require_token)])

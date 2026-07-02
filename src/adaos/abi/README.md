@@ -22,6 +22,9 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, skill-owned UI view interfaces, modal address contracts, and
   browser media surface contracts such as `visual.frameViewer`
+- `webui.v1.types.d.ts` - TypeScript declaration helpers for authoring and
+  reviewing WebUI view, modal route, modal domain, ownership, and diagnostics
+  contracts against `webui.v1`
 - `webui.semantic.v0.schema.json` - draft semantic browser UI ABI for future semantic views, typed bindings, view state, and typed actions layered above `webui.v1`
 
 ## Current Manifest Runtime Extensions
@@ -86,6 +89,12 @@ Modal descriptors can declare:
 - `implements`: the public view ids implemented by the modal.
 - `schema.interface.routes`: concrete modal routes, optional typed params, and
   the private state patch produced by a validated address.
+- `schema.interface.domain`: declarative modal domain states such as list,
+  entity edit, or draft states. Each state maps to a modal route and may name
+  the entity id param used by that route.
+- `schema.interface.ownership`: the ownership split for skill domain truth,
+  modal route state, browser-local view state, and durable persistence
+  acknowledgments.
 
 `navigate` opens a domain view on a supported surface. `navigateModal` changes
 the route of an already opened modal. Runtime validation failures are reported
