@@ -649,6 +649,74 @@ def test_update_current_scenario_does_not_generate_domain_mock_data_without_llm(
     assert not (artifact_root / "ui_revisions").exists()
 
 
+def test_update_current_scenario_translate_data_timeout_does_not_apply_ui_only_fallback(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "translate_data_timeout"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        '{"id":"translate_data_timeout","version":"0.1.0","name":"translate_data_timeout","steps":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_IN_TESTS", "1")
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            return {"dev_webspace_id": "builder-translate-timeout-dev", "active_draft_id": kwargs.get("active_draft_id")}
+
+        def snapshot(self, *args, **kwargs):
+            return {"preview_state": kwargs.get("preview_state") or {}}
+
+    calls: list[str] = []
+
+    def _llm_timeout(**kwargs):
+        calls.append(str(kwargs.get("instruction") or ""))
+        return {
+            "ok": False,
+            "error": "llm_webui_transform_failed",
+            "detail": "RootHttpError: POST /v1/llm/response failed: The read operation timed out",
+        }
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(skill, "_apply_llm_webui_transform", _llm_timeout)
+    skill._save_session(
+        "builder-translate-timeout",
+        {
+            "id": "builder_session_translate_timeout",
+            "webspace_id": "builder-translate-timeout",
+            "status": "drafting",
+            "title": "Todo List",
+            "scenario_id": "translate_data_timeout",
+            "draft_id": "draft.translate.timeout",
+            "artifact_root": str(artifact_root),
+            "datasource_id": "prototype_items",
+            "fields": [
+                {"id": "title", "type": "string", "label": "Title", "required": True},
+                {"id": "notes", "type": "string", "label": "Notes", "required": False},
+            ],
+            "mock_rows": [
+                {"title": "\u041a\u0443\u043f\u0438\u0442\u044c \u0431\u0438\u043b\u0435\u0442\u044b", "notes": "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u0430\u0442\u044b"},
+            ],
+            "patches": [],
+            "version": "001",
+        },
+    )
+
+    result = skill.update_current_scenario(
+        "\u041f\u0435\u0440\u0435\u0432\u0435\u0434\u0438 \u0434\u0430\u043d\u043d\u044b\u0435 \u043d\u0430 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u0438\u0439 \u044f\u0437\u044b\u043a",
+        webspace_id="builder-translate-timeout",
+    )
+
+    assert calls
+    assert result["status"] == "noop"
+    assert result["patch"]["operation"] == "noop"
+    assert result["patch"]["diff"]["llm_required"] is True
+    assert "timed out" in result["message"]
+    rows = result["preview_state"]["mock_data"]["prototype_items"]
+    assert rows == [{"title": "\u041a\u0443\u043f\u0438\u0442\u044c \u0431\u0438\u043b\u0435\u0442\u044b", "notes": "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u0430\u0442\u044b"}]
+    assert not (artifact_root / "ui_revisions").exists()
+
+
 def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "revision_restore"
