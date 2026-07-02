@@ -118,6 +118,11 @@ This keeps the source of truth declarative: the skill owns the public view
 contract, the modal owns its route-to-state mapping, and browser actions only
 carry addresses plus params.
 
+Addressed modals also expose a small domain state contract. The modal
+interface declares domain states such as `notes.list` or `note.edit`, maps them
+to concrete routes, and declares ownership for skill domain state, browser
+route state, browser-local view state, and durable persistence acknowledgments.
+
 ### 4. Renderer layer
 
 Renderers translate semantic views into concrete UI.
@@ -780,6 +785,8 @@ Recommended demo data shape:
 
 ### 8a. Contract Hardening
 
+- [x] `[must]` keep the relevant baseline green while hardening contracts:
+  Webspace phase2, WebUI ABI/schema, skill validation, and Notebook skill tests
 - [x] `[must]` reject broken WebUI view/modal/action cross-links during
   `skill push` before version bump or publication
 - [x] `[must]` validate materialized `ui.application.interfaces` and
@@ -787,14 +794,21 @@ Recommended demo data shape:
   silently in the browser
 - [x] `[must]` preserve validation evidence in `ui.application.diagnostics`
   and skill UI diagnostics logs
-- [ ] `[must]` add Notebook as the reference e2e for addressed modal
+- [x] `[must]` add Notebook as the reference contract test for addressed modal
   navigation, editor persistence, and Yjs soft reload recovery
-- [ ] `[must]` formalize modal domain states as declarative route/state
+- [x] `[must]` formalize modal domain states as declarative route/view/entity
   contracts rather than incidental page-state keys
+- [x] `[must]` define explicit ownership for modal domain state, route state,
+  browser-local view state, and persistence acknowledgments
+- [x] `[must]` publish a stable diagnostic code catalog with severity, owner,
+  and remediation for UI contract failures
+- [x] `[must]` add Python SDK/Builder-safe helpers and contract fixtures for
+  skill interfaces, modal routes, domain states, ownership, and navigation
+  actions
 - [ ] `[should]` add a compact UI-contract diagnostics panel for operators and
   Builder reviews
-- [ ] `[should]` generate authoring helpers and contract fixtures from the ABI
-  for skills and scenario templates
+- [ ] `[should]` add a real browser/CDP e2e smoke for Notebook addressed-modal
+  recovery after the current contract tests
 - [ ] `[could]` connect modal addresses to URL/deeplink history after the
   runtime contract is stable
 - [ ] `[deferred]` remove legacy `openModal` compatibility once migrated

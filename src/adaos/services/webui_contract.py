@@ -16,6 +16,139 @@ _DYNAMIC_TOKEN_RE = re.compile(r"^\$")
 _SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _LOG_DEDUP_TTL_S = 300.0
 _LOG_DEDUP: dict[str, float] = {}
+_DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
+    "webui.interface.default_view_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare defaultView in interface.views or change defaultView.",
+    },
+    "webui.interface.transition_from_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point transition.from to a declared interface view.",
+    },
+    "webui.interface.transition_to_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point transition.to to a declared interface view.",
+    },
+    "webui.interface.view_ambiguous": {
+        "severity": "error",
+        "owner": "runtime",
+        "remediation": "Namespace public view ids so each view belongs to one skill.",
+    },
+    "webui.modal.interface_missing": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Add schema.interface.routes for every implemented view.",
+    },
+    "webui.modal.default_route_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare defaultRoute in schema.interface.routes.",
+    },
+    "webui.modal.implements_unknown_view": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Remove the view from implements or declare it in webui.interface.views.",
+    },
+    "webui.modal.implemented_view_without_route": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Add a modal route whose view matches the implemented view.",
+    },
+    "webui.modal.route_unknown_view": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point route.view to a declared public view.",
+    },
+    "webui.modal.route_not_implemented": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Add the route view to modal implements or remove the route.",
+    },
+    "webui.modal.route_missing_view_param": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare required view params on the matching modal route.",
+    },
+    "webui.modal.state_unknown_param": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare the route param or stop referencing it from route state.",
+    },
+    "webui.modal.domain.default_state_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare domain.defaultState in domain.states.",
+    },
+    "webui.modal.domain.state_route_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point each domain state to an existing modal route.",
+    },
+    "webui.modal.domain.state_view_mismatch": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Keep domain state view equal to the target route view.",
+    },
+    "webui.modal.domain.entity_param_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare entity.idParam in the target modal route params.",
+    },
+    "webui.modal.domain.ownership_missing": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Add modal interface ownership for domainState, routeState, viewState, and persistence.",
+    },
+    "webui.modal.ownership_section_missing": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Fill the missing ownership section.",
+    },
+    "webui.modal.ownership_owner_missing": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Set an explicit owner in each ownership section.",
+    },
+    "webui.action.navigate_unknown_view": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point navigate.to to a declared public view.",
+    },
+    "webui.action.navigate_missing_param": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Pass all required view params in navigate.params.params.",
+    },
+    "webui.action.navigate_surface_mismatch": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Use a surface declared by the target public view.",
+    },
+    "webui.action.navigate_modal_outside_modal": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Use navigateModal only inside a modal schema.",
+    },
+    "webui.action.navigate_modal_unknown_route": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point navigateModal.params.route to a route declared by this modal.",
+    },
+    "webui.action.navigate_modal_missing_param": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Pass all required route params in navigateModal.params.params.",
+    },
+}
+
+
+def webui_contract_diagnostic_catalog() -> dict[str, dict[str, str]]:
+    """Return the stable WebUI contract diagnostics catalog."""
+
+    return {code: dict(meta) for code, meta in sorted(_DIAGNOSTIC_CATALOG.items())}
 
 
 @dataclass(frozen=True)
@@ -280,6 +413,19 @@ def _validate_contract(
                     source=source,
                 )
             )
+        domain = _mapping(modal_interface.get("domain"))
+        ownership = _mapping(modal_interface.get("ownership"))
+        issues.extend(
+            _validate_modal_domain(
+                domain,
+                ownership=ownership,
+                routes=routes,
+                source=source,
+                where=f"{source}:modals.{modal_id}.interface.domain",
+                skill_id=modal_skill,
+                modal_id=modal_id,
+            )
+        )
         for view_id in implements:
             if view_id not in view_index:
                 issues.append(
@@ -366,6 +512,16 @@ def _validate_contract(
                 )
             )
         issues.extend(
+            _validate_modal_ownership(
+                ownership,
+                domain_present=bool(domain),
+                source=source,
+                where=f"{source}:modals.{modal_id}.interface.ownership",
+                skill_id=modal_skill,
+                modal_id=modal_id,
+            )
+        )
+        issues.extend(
             _validate_action_tree(
                 modal.get("schema") or modal,
                 view_index=view_index,
@@ -378,6 +534,144 @@ def _validate_contract(
             )
         )
 
+    return issues
+
+
+def _validate_modal_domain(
+    domain: Mapping[str, Any],
+    *,
+    ownership: Mapping[str, Any],
+    routes: Mapping[str, Any],
+    source: str,
+    where: str,
+    skill_id: str | None,
+    modal_id: str,
+) -> list[WebUiContractIssue]:
+    issues: list[WebUiContractIssue] = []
+    if not domain:
+        return issues
+    states = _mapping(domain.get("states"))
+    default_state = _clean_token(domain.get("defaultState") or domain.get("default_state"))
+    if default_state and default_state not in states:
+        issues.append(
+            _issue(
+                "error",
+                "webui.modal.domain.default_state_unknown",
+                f"Modal '{modal_id}' domain defaultState '{default_state}' is not declared in states.",
+                f"{where}.defaultState",
+                skill_id=skill_id,
+                modal_id=modal_id,
+                source=source,
+            )
+        )
+    if not ownership:
+        issues.append(
+            _issue(
+                "error",
+                "webui.modal.domain.ownership_missing",
+                f"Modal '{modal_id}' declares domain state without ownership.",
+                where,
+                skill_id=skill_id,
+                modal_id=modal_id,
+                source=source,
+            )
+        )
+    for state_id_raw, state_raw in states.items():
+        state_id = _clean_token(state_id_raw)
+        state = _mapping(state_raw)
+        if not state_id or not state:
+            continue
+        route_id = _clean_token(state.get("route"))
+        route = _mapping(routes.get(route_id)) if route_id else {}
+        if not route:
+            issues.append(
+                _issue(
+                    "error",
+                    "webui.modal.domain.state_route_unknown",
+                    f"Modal '{modal_id}' domain state '{state_id}' references unknown route '{route_id}'.",
+                    f"{where}.states.{state_id}.route",
+                    skill_id=skill_id,
+                    modal_id=modal_id,
+                    route_id=route_id,
+                    source=source,
+                )
+            )
+            continue
+        state_view = _clean_token(state.get("view"))
+        route_view = _clean_token(route.get("view"))
+        if state_view and route_view and state_view != route_view:
+            issues.append(
+                _issue(
+                    "error",
+                    "webui.modal.domain.state_view_mismatch",
+                    f"Modal '{modal_id}' domain state '{state_id}' view '{state_view}' does not match route '{route_id}' view '{route_view}'.",
+                    f"{where}.states.{state_id}.view",
+                    skill_id=skill_id,
+                    modal_id=modal_id,
+                    view_id=state_view,
+                    route_id=route_id,
+                    source=source,
+                )
+            )
+        entity = _mapping(state.get("entity"))
+        id_param = _clean_token(entity.get("idParam") or entity.get("id_param"))
+        if id_param and id_param not in _mapping(route.get("params")):
+            issues.append(
+                _issue(
+                    "error",
+                    "webui.modal.domain.entity_param_unknown",
+                    f"Modal '{modal_id}' domain state '{state_id}' entity idParam '{id_param}' is not declared by route '{route_id}'.",
+                    f"{where}.states.{state_id}.entity.idParam",
+                    skill_id=skill_id,
+                    modal_id=modal_id,
+                    route_id=route_id,
+                    source=source,
+                )
+            )
+    return issues
+
+
+def _validate_modal_ownership(
+    ownership: Mapping[str, Any],
+    *,
+    domain_present: bool,
+    source: str,
+    where: str,
+    skill_id: str | None,
+    modal_id: str,
+) -> list[WebUiContractIssue]:
+    issues: list[WebUiContractIssue] = []
+    if not ownership:
+        return issues
+    required_sections = ("domainState", "routeState", "viewState", "persistence")
+    for section in required_sections:
+        spec = _mapping(ownership.get(section))
+        if not spec:
+            if domain_present:
+                issues.append(
+                    _issue(
+                        "error",
+                        "webui.modal.ownership_section_missing",
+                        f"Modal '{modal_id}' ownership is missing '{section}'.",
+                        f"{where}.{section}",
+                        skill_id=skill_id,
+                        modal_id=modal_id,
+                        source=source,
+                    )
+                )
+            continue
+        if not _clean_token(spec.get("owner")):
+            issues.append(
+                _issue(
+                    "error",
+                    "webui.modal.ownership_owner_missing",
+                    f"Modal '{modal_id}' ownership section '{section}' has no owner.",
+                    f"{where}.{section}.owner",
+                    skill_id=skill_id,
+                    modal_id=modal_id,
+                    source=source,
+                )
+            )
     return issues
 
 

@@ -5967,6 +5967,11 @@ async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
     await _schedule_member_snapshot_rebuild_from_event(evt)
 
 
+@subscribe("subnet.member.snapshot.refreshed")
+async def _on_subnet_member_snapshot_refreshed(evt: Any) -> None:
+    await _schedule_member_snapshot_rebuild_from_event(evt, only_when_catalog_missing=True)
+
+
 def _schedule_member_snapshot_rebuild(
     *,
     webspace_id: str,

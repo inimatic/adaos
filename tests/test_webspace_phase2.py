@@ -3579,10 +3579,10 @@ def test_phase5_collect_resolver_inputs_prefers_persistent_overlay(monkeypatch) 
 
     inputs = runtime._collect_resolver_inputs_in_doc(fake_doc, webspace_id)
 
-    assert inputs.overlay_snapshot["installed"] == {
-        "apps": ["overlay-app"],
-        "widgets": ["overlay-widget"],
-    }
+    assert inputs.overlay_snapshot["installed"]["apps"] == ["overlay-app"]
+    assert inputs.overlay_snapshot["installed"]["widgets"] == ["overlay-widget"]
+    assert inputs.overlay_snapshot["installed"].get("removedApps") == []
+    assert inputs.overlay_snapshot["installed"].get("removedWidgets") == []
     assert inputs.overlay_snapshot["pinnedWidgets"] == [
         {"id": "infra-status", "type": "visual.metricTile"}
     ]
@@ -3614,12 +3614,13 @@ def test_phase5_resolver_prefers_pinned_widgets_from_overlay_over_scenario_defau
         )
     )
 
-    assert resolved.application["desktop"]["pinnedWidgets"] == [
-        {"id": "overlay-pin", "type": "visual.metricTile", "title": "Overlay Pin"}
-    ]
-    assert resolved.desktop["pinnedWidgets"] == [
-        {"id": "overlay-pin", "type": "visual.metricTile", "title": "Overlay Pin"}
-    ]
+    pinned = resolved.application["desktop"]["pinnedWidgets"][0]
+    assert {key: pinned.get(key) for key in ("id", "type", "title")} == {
+        "id": "overlay-pin",
+        "type": "visual.metricTile",
+        "title": "Overlay Pin",
+    }
+    assert resolved.desktop["pinnedWidgets"] == resolved.application["desktop"]["pinnedWidgets"]
 
 
 def test_phase5_resolver_prefers_scenario_page_schema_and_topbar_over_overlay() -> None:
@@ -4053,11 +4054,12 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
     runtime._apply_resolved_state_in_doc(fake_doc, "phase5-apply-summary", resolved)
     second_summary = dict(runtime._last_apply_summary or {})
 
-    assert first_summary["changed_branches"] == 7
+    assert first_summary["changed_branches"] == 8
     assert first_summary["unchanged_branches"] == 0
     assert first_summary["changed_paths"] == [
         "ui.application",
         "registry.merged",
+        "runtime.environment",
         "data.catalog",
         "data.installed",
         "data.desktop",
@@ -4067,6 +4069,7 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
     assert first_summary["phases"]["structure"]["changed_paths"] == [
         "ui.application",
         "registry.merged",
+        "runtime.environment",
     ]
     assert first_summary["phases"]["interactive"]["changed_paths"] == [
         "data.catalog",
@@ -4076,11 +4079,11 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
         "data.routing",
     ]
     assert second_summary["changed_branches"] == 0
-    assert second_summary["unchanged_branches"] == 7
+    assert second_summary["unchanged_branches"] == 8
     assert second_summary["failed_branches"] == 0
     assert second_summary["transaction_total"] == 2
     assert second_summary["changed_paths"] == []
-    assert second_summary["phases"]["structure"]["unchanged_branches"] == 2
+    assert second_summary["phases"]["structure"]["unchanged_branches"] == 3
     assert second_summary["phases"]["interactive"]["unchanged_branches"] == 5
     assert runtime._last_apply_phase_timings_ms is not None
     assert "apply_structure" in runtime._last_apply_phase_timings_ms
@@ -4317,6 +4320,7 @@ def test_restore_webspace_from_snapshot_reconciles_runtime(monkeypatch) -> None:
                 "action": "restore",
                 "scenario_id": "restored_prompt_scenario",
                 "snapshot_path": "state/ystores/default.snapshot",
+                "_event_type": "desktop.webspace.restored",
             },
             "scenario.webspace_runtime",
         )

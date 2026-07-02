@@ -47,6 +47,20 @@ from .webspace import (
     webspace_ensure_dev,
 )
 from .yjs import webspace_ydoc, webspace_read_ydoc, webspace_ydoc_sync
+from .ui_contract import (
+    diagnostic_catalog,
+    modal_domain_contract,
+    modal_domain_state,
+    modal_interface,
+    modal_ownership_contract,
+    modal_route,
+    navigate_action,
+    navigate_modal_action,
+    param_schema,
+    skill_interface,
+    skill_view,
+    validate_webui,
+)
 
 __all__ = [
     "desktop_toggle_install",
@@ -83,4 +97,16 @@ __all__ = [
     "webspace_ydoc",
     "webspace_read_ydoc",
     "webspace_ydoc_sync",
+    "diagnostic_catalog",
+    "modal_domain_contract",
+    "modal_domain_state",
+    "modal_interface",
+    "modal_ownership_contract",
+    "modal_route",
+    "navigate_action",
+    "navigate_modal_action",
+    "param_schema",
+    "skill_interface",
+    "skill_view",
+    "validate_webui",
 ]

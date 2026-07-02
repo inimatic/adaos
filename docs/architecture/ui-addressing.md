@@ -213,6 +213,13 @@ The route belongs to the concrete modal. The view belongs to the skill domain
 contract. Route params are validated against the modal interface, then mapped
 into private modal/page state through the route `state` patch.
 
+Concrete modal variants are declared through `schema.interface.domain`.
+The domain contract names stable modal states, maps each state to a route and
+view, and identifies entity params such as `note_id`. The companion
+`schema.interface.ownership` block declares the split between skill-owned
+domain truth, browser-owned route/view state, and the skill action that
+confirms durable persistence.
+
 ### Domain refs
 
 Domain refs identify reusable domain entities rather than UI state.
@@ -547,6 +554,8 @@ Status note:
 
 ### 4b. UI Contract Hardening
 
+- [x] `[must]` keep the relevant baseline green while hardening contracts:
+  Webspace phase2, WebUI ABI/schema, skill validation, and Notebook skill tests
 - [x] `[must]` validate `webui.interface.defaultView`, transitions, modal
   `implements`, `schema.interface.defaultRoute`, route views, route params,
   state `$params.*` tokens, and `navigate`/`navigateModal` action targets
@@ -555,16 +564,22 @@ Status note:
   materialization and log mismatches into skill UI diagnostics
 - [x] `[must]` expose materialization-time WebUI contract diagnostics under
   `ui.application.diagnostics.webui_contract`
-- [ ] `[must]` add a browser e2e contract test for widget click -> addressed
-  modal -> edit -> Yjs soft reload -> same entity/view restored
-- [ ] `[must]` define the ownership split between skill domain state, modal
+- [x] `[must]` add Notebook reference contract tests for widget navigation to
+  an addressed modal route, editor persistence, and Yjs soft reload
+  re-projection to the same entity/view
+- [x] `[must]` formalize modal domain states as declarative route/view/entity
+  contracts in the WebUI ABI and validator
+- [x] `[must]` define the ownership split between skill domain state, modal
   route state, browser-local view state, and durable persistence confirmation
-- [ ] `[should]` publish a stable diagnostic code catalog with severity,
+- [x] `[must]` publish a stable diagnostic code catalog with severity,
   owner, and recommended remediation for UI contract failures
-- [ ] `[should]` generate TypeScript/Python helper types from the WebUI ABI so
-  skills do not hand-author route and param contracts from scratch
-- [ ] `[should]` add Builder/LLM authoring helpers that emit `interface.views`,
-  modal routes, and matching actions as one checked unit
+- [x] `[must]` add Python SDK/Builder-safe authoring helpers that emit
+  `interface.views`, modal routes, modal domain states, ownership, and matching
+  actions as one checked unit
+- [ ] `[should]` add a real browser/CDP e2e smoke for widget click -> addressed
+  modal -> edit -> Yjs soft reload -> same entity/view restored
+- [ ] `[should]` generate TypeScript helper types from the WebUI ABI so skills
+  do not hand-author route and param contracts from scratch
 - [ ] `[could]` add URL/deeplink and browser back-stack integration for modal
   addresses once the in-Yjs route contract is stable
 - [ ] `[could]` support non-modal surfaces for the same public view refs

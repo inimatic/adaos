@@ -371,9 +371,101 @@
       "properties": {
         "schema": { "type": "string" },
         "defaultRoute": { "$ref": "#/$defs/id" },
+        "domain": { "$ref": "#/$defs/modalDomainContract" },
+        "ownership": { "$ref": "#/$defs/uiOwnershipContract" },
         "routes": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/modalRoute" }
+        }
+      }
+    },
+    "modalDomainContract": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Declarative modal domain state machine. States are domain/use-case states, routes are concrete modal addresses.",
+      "properties": {
+        "schema": { "type": "string" },
+        "defaultState": { "$ref": "#/$defs/id" },
+        "stateKey": { "type": "string", "minLength": 1 },
+        "states": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/modalDomainState" }
+        }
+      }
+    },
+    "modalDomainState": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["collection", "entity", "draft", "custom"]
+        },
+        "route": { "$ref": "#/$defs/id" },
+        "view": { "$ref": "#/$defs/id" },
+        "entity": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "type": { "type": "string", "minLength": 1 },
+            "idParam": { "type": "string", "minLength": 1 },
+            "idStateKey": { "type": "string", "minLength": 1 },
+            "draft": { "type": "boolean" }
+          }
+        },
+        "state": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "uiOwnershipContract": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Ownership split for domain truth, route state, view state, and durable persistence confirmation.",
+      "properties": {
+        "schema": { "type": "string" },
+        "domainState": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "owner": { "type": "string", "minLength": 1 },
+            "store": { "type": "string", "minLength": 1 },
+            "projection": { "type": "string", "minLength": 1 }
+          }
+        },
+        "routeState": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "owner": { "type": "string", "minLength": 1 },
+            "scope": { "type": "string", "minLength": 1 },
+            "keys": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "viewState": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "owner": { "type": "string", "minLength": 1 },
+            "scope": { "type": "string", "minLength": 1 }
+          }
+        },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "owner": { "type": "string", "minLength": 1 },
+            "ack": { "type": "string", "minLength": 1 },
+            "durability": { "type": "string", "minLength": 1 }
+          }
         }
       }
     },

@@ -200,6 +200,73 @@ def test_webui_schema_accepts_runtime_data_sources_and_auto_actions() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_modal_domain_and_ownership_contract() -> None:
+    schema = _load_schema()
+    payload = {
+        "interface": {
+            "schema": "adaos.ui.skill_interface.v1",
+            "defaultView": "demo.notes.list",
+            "views": {
+                "demo.notes.list": {"surfaces": ["modal"], "params": {}},
+                "demo.note.edit": {
+                    "surfaces": ["modal"],
+                    "params": {"note_id": {"type": "string", "required": True}},
+                },
+            },
+        },
+        "registry": {
+            "modals": {
+                "demo_modal": {
+                    "implements": ["demo.notes.list", "demo.note.edit"],
+                    "schema": {
+                        "id": "demo_modal",
+                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "interface": {
+                            "schema": "adaos.ui.modal.interface.v1",
+                            "defaultRoute": "notes.list",
+                            "domain": {
+                                "schema": "adaos.ui.modal_domain.v1",
+                                "defaultState": "notes.list",
+                                "stateKey": "demoRoute",
+                                "states": {
+                                    "notes.list": {
+                                        "kind": "collection",
+                                        "route": "notes.list",
+                                        "view": "demo.notes.list",
+                                    },
+                                    "note.edit": {
+                                        "kind": "entity",
+                                        "route": "note.edit",
+                                        "view": "demo.note.edit",
+                                        "entity": {"type": "note", "idParam": "note_id"},
+                                    },
+                                },
+                            },
+                            "ownership": {
+                                "schema": "adaos.ui.state_ownership.v1",
+                                "domainState": {"owner": "skill:demo_skill", "store": "skill_memory"},
+                                "routeState": {"owner": "browser", "scope": "modal", "keys": ["selectedId"]},
+                                "viewState": {"owner": "browser", "scope": "modal"},
+                                "persistence": {"owner": "skill:demo_skill", "ack": "tool:demo_skill.save_note"},
+                            },
+                            "routes": {
+                                "notes.list": {"view": "demo.notes.list", "params": {}},
+                                "note.edit": {
+                                    "view": "demo.note.edit",
+                                    "params": {"note_id": {"type": "string", "required": True}},
+                                },
+                            },
+                        },
+                        "widgets": [],
+                    },
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> None:
     schema = _load_schema()
     payload = {
