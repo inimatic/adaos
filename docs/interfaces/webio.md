@@ -998,10 +998,13 @@ separate from `load`, which describes coarse staged materialization intent:
 }
 ```
 
-Static UI resources should be declared under top-level `resources` and
+Static browser resources should be declared under top-level `resources` and
 referenced as `resource:<id>`. The runtime resolves and delivers core-owned
 asset URLs over the active browser/core channel; skill code should not expose
-ad-hoc static-file servers for UI icons and preview images.
+ad-hoc static-file servers for UI icons, assistant avatars, preview images,
+templates, or localized dictionaries. Remote browsers should receive the same
+resource contract through a Root-side cache or relay instead of direct workspace
+file paths.
 
 ```json
 {
@@ -1010,6 +1013,15 @@ ad-hoc static-file servers for UI icons and preview images.
       "kind": "svg",
       "path": "assets/icons/search.svg",
       "mime": "image/svg+xml",
+      "delivery": "core",
+      "cacheKey": "sha256:..."
+    },
+    "media.i18n.ru": {
+      "kind": "data",
+      "role": "i18n",
+      "locale": "ru",
+      "path": "assets/i18n/ru.json",
+      "mime": "application/json",
       "delivery": "core",
       "cacheKey": "sha256:..."
     }

@@ -248,6 +248,14 @@
           "enum": ["icon", "image", "svg", "font", "stylesheet", "template", "data"],
           "description": "Semantic resource role. The browser decides the concrete renderer/cache behavior."
         },
+        "role": {
+          "type": "string",
+          "description": "Optional use-specific role layered on top of kind, e.g. i18n for localized dictionaries."
+        },
+        "locale": {
+          "type": "string",
+          "description": "Optional BCP-47 locale tag for localized data resources."
+        },
         "path": {
           "type": "string",
           "minLength": 1,

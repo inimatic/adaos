@@ -184,9 +184,11 @@ The first system-level behavior contracts belong in `webui.json`:
 - `interaction.submit.defaultAction`: the action that runs when Enter submits
   the current form context. Enter must not implicitly activate the first
   visible button.
-- `resources`: stable skill/scenario UI resources such as icons, SVGs, and
-  preview images. Authored manifests reference them as `resource:<id>`, while
-  AdaOS resolves and delivers them through the core/browser channel.
+- `resources`: stable system, skill, or scenario browser resources such as
+  icons, assistant avatars, SVGs, preview images, templates, and i18n data.
+  Authored manifests reference them as `resource:<id>`, while AdaOS resolves and
+  delivers them through the core/browser channel and, for remote browsers,
+  through a Root-side cache or relay.
 - `action.feedback`: pending, success, error, and timeout behavior for an
   action that expects an asynchronous Yjs or stream state change. The current
   `params._observe` shape is a legacy compatibility pattern and should
@@ -203,6 +205,13 @@ Example:
     "weather.current": {
       "kind": "svg",
       "path": "assets/icons/current.svg",
+      "delivery": "core",
+      "cacheKey": "sha256:..."
+    },
+    "assistant.default.avatar": {
+      "kind": "image",
+      "scope": "system",
+      "path": "assets/avatars/assistant-default.webp",
       "delivery": "core",
       "cacheKey": "sha256:..."
     }
