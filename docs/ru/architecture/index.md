@@ -43,6 +43,12 @@ runtime.
   canonical system model
 - [Root MCP Foundation](root-mcp-foundation.md): root-hosted agent-facing
   foundation для будущих MCP development и operations surfaces
+- [Персонализация, identity и доступ](personalization-identity-access.md):
+  целевая local-first модель профилей, user keys, устройств, memberships,
+  ролей, capabilities, QR/link join flows, privacy zones и audit
+- [Персонализация, identity и доступ: дорожная карта](personalization-identity-access-roadmap.md):
+  MoSCoW-чеклист для profile/preferences, user management, grants, recovery и
+  optional external identity
 - [Pointer/Projection roadmap для переключения сценариев webspace](webspace-scenario-pointer-projection-roadmap.md):
   целевая архитектура и чеклист миграции от materialize-and-copy к
   pointer-first semantic rebuild

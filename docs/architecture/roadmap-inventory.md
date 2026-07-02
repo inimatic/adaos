@@ -288,6 +288,64 @@ Developer-doc gap:
   lifecycle, dialog acts, task frames/forms, repair states, response envelopes,
   and how NLU evidence differs from a final dialog decision.
 
+### Personalization, Identity, Access, and Privacy
+
+Authoritative docs:
+
+- [Personalization, Identity, and Access](personalization-identity-access.md)
+- [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md)
+- [User and Scenario Personalization](../concepts/personalization.md)
+- [Device Access and Browsers](device-access-and-browsers.md)
+- [Pending Actions](pending-actions.md)
+- [SDK IO](../sdk/io.md)
+
+Code anchors:
+
+- `src/adaos/services/user/profile.py`
+- `src/adaos/sdk/data/profile.py`
+- `src/adaos/sdk/data/ctx.py`
+- `src/adaos/services/scenario/projection_registry.py`
+- `src/adaos/services/scenario/projection_service.py`
+- `src/adaos/services/conversation_store.py`
+- `src/adaos/services/conversation_context.py`
+- `src/adaos/services/access_links.py`
+- `src/adaos/services/named_entities.py`
+- `src/adaos/integrations/adaos-client/src/app/runtime/scoped-storage.service.ts`
+
+Current status:
+
+- [x] MVP profile settings exist through `UserProfileService`, SDK helpers, KV
+  storage, profile-changed events, and scenario projection rules.
+- [x] Current-user profile settings can be projected through KV/Yjs targets for
+  the `web_desktop` scenario.
+- [x] Scoped conversation memory records include consent, retention, redaction,
+  source metadata, and policy fields.
+- [x] Memory write proposal flow exists through Pending Actions for generated
+  skills that use the default template.
+- [x] Browser/member access-link work covers device identity, lifetime,
+  revocation, and first observability surfaces.
+- [x] Named entities and aliases provide localized names for device/browser
+  resolution and can be extended to profile-owned aliases.
+- [ ] Profile, identity, device, membership, grant, capability, and preference
+  schemas are not frozen.
+- [ ] Owner/co-owner/admin/member/child/guest role presets are not implemented
+  as shared policy objects.
+- [ ] `actor`, `current_user`, and `subject_user` are not consistently modeled
+  across SDK, policy checks, and audit.
+- [ ] Join flows are not yet separated into public guest join, targeted invite,
+  device pairing, and admin recovery.
+- [ ] User-private data zones are not enforced by product UI.
+- [ ] User management is not yet a shared owner/admin control-plane surface.
+
+Developer-doc gap:
+
+- The new architecture page should become the vocabulary anchor for generated
+  skills, user management, profile-aware UI work, and future auth-provider work.
+- Skill-development docs need examples for declaring personalization usage,
+  role-aware behavior, and required/optional capabilities in manifests.
+- Product docs need to explain that root-server identity can verify a global
+  key, but subnet membership and grants are local owner/admin decisions.
+
 ### Root MCP, Planes, and Agent-Facing Governance
 
 Authoritative docs:

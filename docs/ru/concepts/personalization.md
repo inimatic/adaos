@@ -2,6 +2,13 @@
 
 Этот документ описывает подход к персонализации в AdaOS: профиль пользователя, состояние сценариев и взаимодействие с ними через ноды подсети, hub и Yjs.
 
+Статус: эта страница остается историческим и концептуальным контекстом.
+Текущая целевая модель identity, memberships, ролей, capabilities, QR/link join
+flows, privacy zones и audit зафиксирована в
+[Персонализация, identity и доступ](../architecture/personalization-identity-access.md).
+Чеклист реализации ведется в
+[Персонализация, identity и доступ: дорожная карта](../architecture/personalization-identity-access-roadmap.md).
+
 Цели:
 
 * разделить ответственность между root, hub и нодами подсети;
