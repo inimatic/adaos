@@ -102,6 +102,22 @@ Representative kinds:
 This layer is the primary contract between skill/scenario authoring, runtime,
 LLM tooling, and browser renderers.
 
+The current `webui.v1` compatibility slice exposes a smaller domain interface
+for this layer:
+
+- `webui.interface.views` declares skill-owned UI tasks such as
+  `notebook.notes.list` or `notebook.note.edit`.
+- A modal can declare `implements` and `schema.interface.routes` to map those
+  views to concrete modal routes.
+- `navigate` opens a domain view on a supported surface; today the implemented
+  surface is `modal`.
+- `navigateModal` changes the route of the current modal by validating route
+  params and applying the declared private state patch.
+
+This keeps the source of truth declarative: the skill owns the public view
+contract, the modal owns its route-to-state mapping, and browser actions only
+carry addresses plus params.
+
 ### 4. Renderer layer
 
 Renderers translate semantic views into concrete UI.

@@ -36,6 +36,10 @@
       "items": { "$ref": "#/$defs/voiceAffordance" },
       "description": "Voice-addressable UI targets such as modal tabs, sections, filters, buttons, and reachable panels."
     },
+    "interface": {
+      "$ref": "#/$defs/skillInterface",
+      "description": "Skill-owned declarative UI view contract. Views are public domain UI addresses; widgets and modals are renderer surfaces that implement them."
+    },
     "webio": { "$ref": "#/$defs/webio" },
     "ydoc_defaults": {
       "description": "Default Yjs values applied once per webspace. Keys are 'root/key' paths (e.g. 'data/voice_chat').",
@@ -273,6 +277,125 @@
           "default": "skill"
         },
         "fallback": {}
+      }
+    },
+    "paramSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "integer", "boolean", "object", "array", "any"]
+        },
+        "required": { "type": "boolean", "default": false },
+        "default": {},
+        "enum": {
+          "type": "array",
+          "items": {}
+        }
+      }
+    },
+    "skillInterface": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Public domain UI contract for a skill. A view is a stable addressable use-case such as notebook.notes.list or notebook.note.edit.",
+      "properties": {
+        "schema": { "type": "string" },
+        "defaultView": { "$ref": "#/$defs/id" },
+        "views": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/skillInterfaceView" }
+        },
+        "transitions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/skillInterfaceTransition" }
+        }
+      }
+    },
+    "skillInterfaceView": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "title": { "type": "string" },
+        "surface": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          ]
+        },
+        "surfaces": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/paramSchema" }
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "skillInterfaceTransition": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["to"],
+      "properties": {
+        "from": { "$ref": "#/$defs/id" },
+        "on": { "type": "string", "minLength": 1 },
+        "to": { "$ref": "#/$defs/id" },
+        "surface": { "type": "string", "minLength": 1 },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "modalAddress": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "route": { "$ref": "#/$defs/id" },
+        "view": { "$ref": "#/$defs/id" },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "modalInterface": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Public address contract for a concrete modal. Routes map address params into private modal/page state.",
+      "properties": {
+        "schema": { "type": "string" },
+        "defaultRoute": { "$ref": "#/$defs/id" },
+        "routes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/modalRoute" }
+        }
+      }
+    },
+    "modalRoute": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "view": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
+        "params": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/paramSchema" }
+        },
+        "state": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Private modal/page state patch computed after address validation."
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true
+        }
       }
     },
     "loadPhase": {
@@ -535,6 +658,14 @@
       "additionalProperties": true,
       "properties": {
         "title": { "type": "string" },
+        "implements": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "array", "items": { "$ref": "#/$defs/id" } }
+          ],
+          "description": "Domain UI view ids implemented by this modal."
+        },
+        "interface": { "$ref": "#/$defs/modalInterface" },
         "schema": { "$ref": "#/$defs/pageSchema" },
         "load": { "$ref": "#/$defs/loadHint" },
         "loading": { "$ref": "#/$defs/loadingBehavior" },
@@ -604,6 +735,7 @@
         "load": { "$ref": "#/$defs/loadHint" },
         "loading": { "$ref": "#/$defs/loadingBehavior" },
         "interaction": { "$ref": "#/$defs/interactionBehavior" },
+        "interface": { "$ref": "#/$defs/modalInterface" },
         "initialState": {
           "type": "object",
           "additionalProperties": true,
@@ -1218,6 +1350,22 @@
               "params": { "$ref": "#/$defs/openOverlayActionParams" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "navigate" } } },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/navigateActionParams" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "navigateModal" } } },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/navigateModalActionParams" }
+            }
+          }
         }
       ]
     },
@@ -1228,11 +1376,48 @@
       "properties": {
         "modalId": { "$ref": "#/$defs/id" },
         "id": { "$ref": "#/$defs/id" },
+        "address": { "$ref": "#/$defs/modalAddress" },
         "presentation": { "$ref": "#/$defs/overlayPresentation" },
         "focus": { "$ref": "#/$defs/overlayFocusPolicy" },
         "restoreFocus": {
           "type": "boolean",
           "description": "Per-open shortcut for presentation.focus.restoreOrigin."
+        }
+      }
+    },
+
+    "navigateActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "to": { "$ref": "#/$defs/id" },
+        "view": { "$ref": "#/$defs/id" },
+        "surface": {
+          "type": "string",
+          "enum": ["modal", "workspace", "page", "widget", "currentModal"]
+        },
+        "modalId": { "$ref": "#/$defs/id" },
+        "route": { "$ref": "#/$defs/id" },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+
+    "navigateModalActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "modalId": { "$ref": "#/$defs/id" },
+        "id": { "$ref": "#/$defs/id" },
+        "route": { "$ref": "#/$defs/id" },
+        "view": { "$ref": "#/$defs/id" },
+        "to": { "$ref": "#/$defs/id" },
+        "address": { "$ref": "#/$defs/modalAddress" },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
         }
       }
     },

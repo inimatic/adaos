@@ -59,6 +59,10 @@ def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypat
                 "space": "default",
                 "apps": [{"id": "member_app", "title": "Member App"}],
                 "widgets": [{"id": "member_widget", "title": "Member Widget"}],
+                "interface": {
+                    "schema": "adaos.ui.skill_interface.v1",
+                    "views": {"member.view": {"surface": "modal"}},
+                },
             }
         ]
 
@@ -71,6 +75,8 @@ def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypat
     assert snapshot["apps"][0]["node_id"] == "node-1"
     assert snapshot["apps"][0]["node_label"] == "Node 1"
     assert snapshot["widgets"][0]["id"] == "member_widget"
+    assert snapshot["interfaces"]["member_skill"]["views"]["member.view"]["surface"] == "modal"
+    assert snapshot["interfaces"]["member_skill"]["_adaos"]["originSkill"] == "member_skill"
 
 
 def test_node_owned_shared_stream_widget_stays_shared(monkeypatch) -> None:

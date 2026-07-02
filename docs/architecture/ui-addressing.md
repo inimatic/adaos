@@ -180,6 +180,39 @@ existing `callSkill`, `callHost`, or modal-opening behavior.
 The important boundary is to keep the browser-facing action identity stable
 even while the underlying compatibility bridge evolves.
 
+### UI view refs
+
+UI view refs identify a skill-owned user task, not the renderer surface that
+happens to show it.
+
+Examples:
+
+- `view:notebook.latest`
+- `view:notebook.notes.list`
+- `view:notebook.note.edit`
+
+In `webui.v1`, skills declare these without the `view:` prefix in
+`webui.interface.views`. Concrete widgets and modals implement those views.
+The browser may then navigate to `notebook.note.edit` without knowing whether
+the target is currently rendered by a widget, a modal, or a later workspace
+surface.
+
+Modal navigation uses an address object:
+
+```json
+{
+  "view": "notebook.note.edit",
+  "route": "note.edit",
+  "params": {
+    "note_id": "note-42"
+  }
+}
+```
+
+The route belongs to the concrete modal. The view belongs to the skill domain
+contract. Route params are validated against the modal interface, then mapped
+into private modal/page state through the route `state` patch.
+
 ### Domain refs
 
 Domain refs identify reusable domain entities rather than UI state.

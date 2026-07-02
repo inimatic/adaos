@@ -20,8 +20,8 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   capability profile contracts
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
-  data sources, and browser media surface contracts such as
-  `visual.frameViewer`
+  data sources, skill-owned UI view interfaces, modal address contracts, and
+  browser media surface contracts such as `visual.frameViewer`
 - `webui.semantic.v0.schema.json` - draft semantic browser UI ABI for future semantic views, typed bindings, view state, and typed actions layered above `webui.v1`
 
 ## Current Manifest Runtime Extensions
@@ -74,3 +74,20 @@ review and later runtime diagnostics.
 It renders stream-provided media through browser-routed descriptors such as
 `hub_browser_media`, keeps large media payloads out of Yjs, and declares
 fullscreen, keyboard, swipe, and action-button behavior as UI-as-data.
+
+### Skill UI interfaces and modal addressing
+
+`webui.interface.views` declares stable skill-domain UI views. Concrete
+widgets and modals implement those views without making callers depend on
+renderer-private ids.
+
+Modal descriptors can declare:
+
+- `implements`: the public view ids implemented by the modal.
+- `schema.interface.routes`: concrete modal routes, optional typed params, and
+  the private state patch produced by a validated address.
+
+`navigate` opens a domain view on a supported surface. `navigateModal` changes
+the route of an already opened modal. Runtime validation failures are reported
+through UI diagnostics so mismatches between skill descriptors and client
+behavior can be repaired from logs.

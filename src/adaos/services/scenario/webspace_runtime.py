@@ -1163,6 +1163,7 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
     registry_modals: Dict[str, Any] = {}
     registry_widgets: Dict[str, Any] = {}
     resources: Dict[str, Any] = {}
+    interfaces: Dict[str, Any] = {}
     webio_receivers: Dict[str, Any] = {}
     ydoc_defaults: Dict[str, Any] = {}
     for decl in decls:
@@ -1222,6 +1223,9 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
             token = str(key or "").strip()
             if token and token not in resources:
                 resources[token] = _clone_json_like(value)
+        raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
+        if raw_interface and skill_name and skill_name not in interfaces:
+            interfaces[skill_name] = _clone_skill_ui_interface(raw_interface, skill=skill_name, source=source)
         webio = decl.get("webio") if isinstance(decl.get("webio"), Mapping) else {}
         receivers = webio.get("receivers") if isinstance(webio.get("receivers"), Mapping) else {}
         for key, value in receivers.items():
@@ -1244,6 +1248,7 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
             "widgets": registry_widgets,
         },
         "resources": resources,
+        "interfaces": interfaces,
         "webio": {"receivers": webio_receivers},
         "ydoc_defaults": ydoc_defaults,
     }
@@ -1651,6 +1656,34 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _looks_like_skill_ui_interface(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if isinstance(value.get("views"), Mapping):
+        return True
+    if isinstance(value.get("transitions"), list):
+        return True
+    if str(value.get("defaultView") or "").strip():
+        return True
+    schema = str(value.get("schema") or "").strip()
+    return schema.startswith("adaos.ui.skill_interface")
+
+
+def _clone_skill_ui_interface(raw: Any, *, skill: str, source: str) -> Dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        return {}
+    interface_copy = _clone_json_like(raw)
+    if not isinstance(interface_copy, dict):
+        return {}
+    meta = dict(interface_copy.get("_adaos") or {}) if isinstance(interface_copy.get("_adaos"), Mapping) else {}
+    if skill:
+        meta.setdefault("originSkill", skill)
+    if source:
+        meta.setdefault("origin", source)
+    interface_copy["_adaos"] = meta
+    return interface_copy
 
 
 def _mapping_get(value: Any, key: str, default: Any = None) -> Any:
@@ -3375,6 +3408,7 @@ class WebspaceScenarioRuntime:
         apps = raw.get("apps") or catalog.get("apps") or []
         widgets = raw.get("widgets") or catalog.get("widgets") or []
         resources = raw.get("resources") or catalog.get("resources") or {}
+        ui_interface = raw.get("interface") or raw.get("uiInterface") or {}
         registry = raw.get("registry") or {}
         reg_modals_raw = registry.get("modals") or {}
         reg_widgets_raw = registry.get("widgets") or {}
@@ -3402,6 +3436,7 @@ class WebspaceScenarioRuntime:
             "apps": [_apply_webui_load_hint(it) for it in apps if isinstance(it, dict)],
             "widgets": [_apply_webui_load_hint(it) for it in widgets if isinstance(it, dict)],
             "resources": _coerce_dict(resources),
+            "interface": _coerce_dict(ui_interface),
             "registry": {
                 "modals": (
                     {str(k): _normalize_webui_modal_def(v) for k, v in reg_modals_raw.items()}
@@ -3531,15 +3566,22 @@ class WebspaceScenarioRuntime:
             widgets = catalog.get("widgets") if isinstance(catalog.get("widgets"), list) else []
             registry = catalog.get("registry") if isinstance(catalog.get("registry"), Mapping) else {}
             resources = catalog.get("resources") if isinstance(catalog.get("resources"), Mapping) else {}
+            raw_catalog_interface = catalog.get("interface") if isinstance(catalog.get("interface"), Mapping) else {}
+            ui_interface = raw_catalog_interface if _looks_like_skill_ui_interface(raw_catalog_interface) else {}
+            ui_interfaces = catalog.get("interfaces") if isinstance(catalog.get("interfaces"), Mapping) else {}
+            if not ui_interfaces and raw_catalog_interface and not ui_interface:
+                ui_interfaces = raw_catalog_interface
             webio = catalog.get("webio") if isinstance(catalog.get("webio"), Mapping) else {}
             ydoc_defaults = catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), Mapping) else {}
-            if not apps and not widgets and not registry and not resources and not webio and not ydoc_defaults:
+            if not apps and not widgets and not registry and not resources and not ui_interface and not ui_interfaces and not webio and not ydoc_defaults:
                 capacity = node.get("capacity") if isinstance(node.get("capacity"), Mapping) else {}
                 skills = capacity.get("skills") if isinstance(capacity.get("skills"), list) else []
                 fallback_apps: list[dict[str, Any]] = []
                 fallback_widgets: list[dict[str, Any]] = []
                 fallback_registry: Dict[str, Any] = {"modals": {}, "widgets": {}}
                 fallback_resources: Dict[str, Any] = {}
+                fallback_interface: Dict[str, Any] = {}
+                fallback_interfaces: Dict[str, Any] = {}
                 fallback_webio: Dict[str, Any] = {"receivers": {}}
                 fallback_ydoc_defaults: Dict[str, Any] = {}
                 seen_skills: set[str] = set()
@@ -3570,6 +3612,11 @@ class WebspaceScenarioRuntime:
                     local_resources = local_decl.get("resources") if isinstance(local_decl.get("resources"), Mapping) else {}
                     for key, value in local_resources.items():
                         fallback_resources.setdefault(str(key), value)
+                    local_interface = local_decl.get("interface") if isinstance(local_decl.get("interface"), Mapping) else {}
+                    if local_interface and not fallback_interface:
+                        fallback_interface = _clone_json_like(local_interface)
+                    if local_interface and skill_name:
+                        fallback_interfaces.setdefault(skill_name, _clone_json_like(local_interface))
                     local_webio = local_decl.get("webio") if isinstance(local_decl.get("webio"), Mapping) else {}
                     local_receivers = local_webio.get("receivers") if isinstance(local_webio.get("receivers"), Mapping) else {}
                     receivers_dst = fallback_webio.setdefault("receivers", {})
@@ -3583,9 +3630,11 @@ class WebspaceScenarioRuntime:
                 widgets = fallback_widgets
                 registry = fallback_registry
                 resources = fallback_resources
+                ui_interface = fallback_interface
+                ui_interfaces = fallback_interfaces
                 webio = fallback_webio
                 ydoc_defaults = fallback_ydoc_defaults
-            if not apps and not widgets and not registry and not resources and not webio and not ydoc_defaults:
+            if not apps and not widgets and not registry and not resources and not ui_interface and not ui_interfaces and not webio and not ydoc_defaults:
                 continue
             display = node_display_from_directory_node(node)
             modal_id_map = _node_scoped_modal_ids(registry, node_id=node_id)
@@ -3596,6 +3645,8 @@ class WebspaceScenarioRuntime:
                 "apps": [],
                 "widgets": [],
                 "resources": {},
+                "interface": _coerce_dict(ui_interface),
+                "interfaces": {},
                 "registry": {"modals": {}, "widgets": {}},
                 "webio": {"receivers": {}},
                 "ydoc_defaults": {},
@@ -3637,6 +3688,11 @@ class WebspaceScenarioRuntime:
                     token = str(key or "").strip()
                     if token:
                         decl["resources"][token] = _clone_json_like(value)
+            if isinstance(ui_interfaces, Mapping):
+                for key, value in ui_interfaces.items():
+                    token = str(key or "").strip()
+                    if token and isinstance(value, Mapping):
+                        decl["interfaces"][token] = _clone_json_like(value)
             webio_receivers = webio.get("receivers") if isinstance(webio.get("receivers"), Mapping) else {}
             if isinstance(webio_receivers, Mapping):
                 for key, value in webio_receivers.items():
@@ -3697,6 +3753,8 @@ class WebspaceScenarioRuntime:
                 decl["apps"]
                 or decl["widgets"]
                 or decl["resources"]
+                or decl["interface"]
+                or decl["interfaces"]
                 or decl["registry"]["modals"]
                 or decl["registry"]["widgets"]
                 or decl["webio"]["receivers"]
@@ -3825,7 +3883,7 @@ class WebspaceScenarioRuntime:
         if preserve_live_state:
             live_application = _coerce_live_branch_subset(
                 _mapping_get(ui_map, "application") or {},
-                ("modals",),
+                ("modals", "interfaces"),
             )
             live_catalog = _coerce_live_branch_subset(
                 _mapping_get(data_map, "catalog") or {},
@@ -3911,6 +3969,7 @@ class WebspaceScenarioRuntime:
         skill_apps: List[Dict[str, Any]] = []
         skill_widgets: List[Dict[str, Any]] = []
         skill_resources: Dict[str, Any] = {}
+        skill_interfaces: Dict[str, Any] = {}
         skill_registry_modals: List[List[str]] = []
         skill_registry_widgets: List[List[str]] = []
         auto_widget_ids: set[str] = set()
@@ -3955,6 +4014,23 @@ class WebspaceScenarioRuntime:
                 token = str(key or "").strip()
                 if token and token not in skill_resources:
                     skill_resources[token] = _clone_json_like(value)
+            raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
+            if raw_interface and skill_name:
+                interface_copy = _clone_skill_ui_interface(raw_interface, skill=str(skill_name), source=source)
+                if interface_copy:
+                    skill_interfaces.setdefault(str(skill_name), interface_copy)
+            raw_interfaces = decl.get("interfaces") if isinstance(decl.get("interfaces"), Mapping) else {}
+            for interface_skill, raw_skill_interface in raw_interfaces.items():
+                interface_skill_name = str(interface_skill or "").strip()
+                if not interface_skill_name or not isinstance(raw_skill_interface, Mapping):
+                    continue
+                interface_copy = _clone_skill_ui_interface(
+                    raw_skill_interface,
+                    skill=interface_skill_name,
+                    source=f"skill:{interface_skill_name}",
+                )
+                if interface_copy:
+                    skill_interfaces.setdefault(interface_skill_name, interface_copy)
             mod_spec = reg.get("modals") or {}
             if isinstance(mod_spec, dict):
                 skill_registry_modals.append([modal_id_map.get(str(k), str(k)) for k in mod_spec.keys()])
@@ -4207,6 +4283,11 @@ class WebspaceScenarioRuntime:
             app_with_modals["modals"] = merged_modals_map
         if merged_resources:
             app_with_modals["resources"] = merged_resources
+        if skill_interfaces:
+            merged_interfaces = _coerce_dict(app_with_modals.get("interfaces") or {})
+            for key, value in skill_interfaces.items():
+                merged_interfaces.setdefault(str(key), _clone_json_like(value))
+            app_with_modals["interfaces"] = merged_interfaces
         desktop_config = _coerce_dict(app_with_modals.get("desktop") or {})
         desktop_config["topbar"] = scenario_topbar
         desktop_config["pageSchema"] = scenario_page_schema
