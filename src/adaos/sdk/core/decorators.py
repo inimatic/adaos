@@ -14,7 +14,11 @@ from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 from adaos.sdk.io.context import io_meta
 from adaos.services.node_config import load_config
 from adaos.services.status.hot_events import HotEventBudget
-from adaos.services.skill.activation import load_skill_activation_policy, subscription_strategy_for_policy
+from adaos.services.skill.activation import (
+    load_skill_activation_policy,
+    subscription_event_admission,
+    subscription_strategy_for_policy,
+)
 
 # публичные реестры (стабильные имена)
 subscriptions: List[Tuple[str, Callable]] = []
@@ -341,6 +345,45 @@ def _log_subscription_denied(skill_name: str, topic: str, admission: dict[str, A
     )
 
 
+def _log_subscription_activation_denied(skill_name: str, topic: str, admission: dict[str, Any]) -> None:
+    key = f"{admission.get('webspace_id') or '-'}:{skill_name}:{topic}:activation"
+    now = time.monotonic()
+    last = float(_SUBSCRIPTION_DENY_LOG_AT.get(key) or 0.0)
+    if now - last < _SUBSCRIPTION_DENY_LOG_INTERVAL_S:
+        return
+    _SUBSCRIPTION_DENY_LOG_AT[key] = now
+    _LOG.info(
+        "skill subscription skipped by activation policy skill=%s topic=%s mode=%s reason=%s webspace=%s active_scenario=%s required_scenarios=%s",
+        skill_name,
+        topic,
+        admission.get("mode") or "-",
+        admission.get("reason") or "activation_policy_denied",
+        admission.get("webspace_id") or "-",
+        admission.get("active_scenario") or "-",
+        admission.get("required_scenarios") or [],
+    )
+
+
+def _load_subscription_activation_policy(skill_name: str | None):
+    token = str(skill_name or "").strip()
+    if not token or token == "<unknown>":
+        return None
+    try:
+        ctx = require_ctx("sdk.core.decorators.activation_policy")
+        return load_skill_activation_policy(ctx.paths.workspace_dir(), token, fallback_to_scan=True)
+    except Exception:
+        _LOG.debug("failed to load activation policy for skill=%s", token, exc_info=True)
+        return None
+
+
+def _admit_skill_activation_policy(policy: Any, skill_name: str | None, topic: str, evt: object) -> dict[str, Any]:
+    if not skill_name:
+        return {"allowed": True, "governed": False, "reason": "not_a_skill_subscription"}
+    admission = subscription_event_admission(policy, evt, topic)
+    admission.setdefault("skill", skill_name)
+    return admission
+
+
 def subscribe(topic: str):
     """Регистрирует обработчик; фактическая подписка делает register_subscriptions()."""
 
@@ -507,12 +550,17 @@ async def register_subscriptions(
             )
     skill_topic_handlers: Dict[str, Dict[str, str]] = {}
     skill_summaries: Dict[str, list[tuple[str, str]]] = {}
+    activation_policy_by_skill: Dict[str, Any] = {}
 
     for topic, fn in _target_subscription_entries(target_skills):
         skill_name = _infer_skill_name(fn)
         generation: int | None = None
+        activation_policy: Any = None
         if skill_name:
             generation = int(_SKILL_SUBSCRIPTION_GENERATIONS.setdefault(skill_name, 1))
+            if skill_name not in activation_policy_by_skill:
+                activation_policy_by_skill[skill_name] = _load_subscription_activation_policy(skill_name)
+            activation_policy = activation_policy_by_skill.get(skill_name)
 
         if skill_name:
             handlers_for_skill = skill_topic_handlers.setdefault(skill_name, {})
@@ -529,10 +577,22 @@ async def register_subscriptions(
 
         if inspect.iscoroutinefunction(fn):
 
-            async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic, _generation=generation):
+            async def _wrap(
+                evt,
+                _fn=fn,
+                _skill=skill_name,
+                _topic=topic,
+                _generation=generation,
+                _activation_policy=activation_policy,
+            ):
                 if not _subscription_is_current(_skill, _generation):
                     return None
                 if _skill and not _skill_event_targets_this_node(evt):
+                    return None
+                activation_admission = _admit_skill_activation_policy(_activation_policy, _skill, _topic, evt)
+                if not activation_admission.get("allowed", True):
+                    if _skill:
+                        _log_subscription_activation_denied(_skill, _topic, activation_admission)
                     return None
                 admission = _admit_skill_subscription_yjs_work(_skill, _topic, evt)
                 if not admission.get("allowed", True):
@@ -555,10 +615,22 @@ async def register_subscriptions(
 
         else:
 
-            async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic, _generation=generation):
+            async def _wrap(
+                evt,
+                _fn=fn,
+                _skill=skill_name,
+                _topic=topic,
+                _generation=generation,
+                _activation_policy=activation_policy,
+            ):
                 if not _subscription_is_current(_skill, _generation):
                     return None
                 if _skill and not _skill_event_targets_this_node(evt):
+                    return None
+                activation_admission = _admit_skill_activation_policy(_activation_policy, _skill, _topic, evt)
+                if not activation_admission.get("allowed", True):
+                    if _skill:
+                        _log_subscription_activation_denied(_skill, _topic, activation_admission)
                     return None
                 admission = _admit_skill_subscription_yjs_work(_skill, _topic, evt)
                 if not admission.get("allowed", True):

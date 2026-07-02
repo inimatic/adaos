@@ -154,6 +154,121 @@ def test_stream_control_subscriptions_bypass_yjs_owner_guard(monkeypatch) -> Non
         }
 
 
+def test_lazy_subscription_skips_stream_snapshot_until_scenario_active(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "new_face_vision_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: new_face_vision_skill",
+                "version: '0.2.22'",
+                "runtime:",
+                "  activation:",
+                "    mode: lazy",
+                "    background_refresh: false",
+                "    when:",
+                "      scenarios_active:",
+                "        - new_face_vision_scenario",
+                "      client_presence: true",
+                "      webspace_scope: active",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    write_workspace_registry(
+        workspace,
+        {
+            "version": 1,
+            "updated_at": "2026-07-03T00:00:00+00:00",
+            "skills": [
+                {
+                    "kind": "skill",
+                    "id": "new_face_vision_skill",
+                    "name": "new_face_vision_skill",
+                    "path": "skills/new_face_vision_skill",
+                    "source": {
+                        "path": "skills/new_face_vision_skill",
+                        "manifest": "skills/new_face_vision_skill/skill.yaml",
+                    },
+                    "activation": {
+                        "mode": "lazy",
+                        "background_refresh": False,
+                        "when": {
+                            "scenarios_active": ["new_face_vision_scenario"],
+                            "client_presence": True,
+                            "webspace_scope": "active",
+                        },
+                    },
+                }
+            ],
+            "scenarios": [],
+        },
+    )
+
+    class FakeBus:
+        def __init__(self) -> None:
+            self.handlers: list[tuple[str, object]] = []
+
+        def subscribe(self, topic: str, handler):
+            self.handlers.append((topic, handler))
+            return handler
+
+    bus = FakeBus()
+    calls: list[str] = []
+
+    def handler(_evt):
+        calls.append("called")
+
+    monkeypatch.setattr(decorators, "subscriptions", [("webio.stream.snapshot.requested", handler)])
+    monkeypatch.setattr(decorators, "_registered", False)
+    monkeypatch.setattr(decorators, "_SKILL_SUBSCRIPTION_GENERATIONS", {})
+    monkeypatch.setattr(decorators, "_REGISTERED_SKILL_SUBSCRIPTIONS", {})
+    monkeypatch.setattr(decorators, "_infer_skill_name", lambda _fn: "new_face_vision_skill")
+    monkeypatch.setattr(decorators, "_skill_event_targets_this_node", lambda _evt: True)
+    monkeypatch.setattr(decorators, "_admit_skill_subscription_yjs_work", lambda *_args: {"allowed": True})
+    monkeypatch.setattr(decorators, "_maybe_push_skill", lambda *_args: False)
+    monkeypatch.setattr(decorators, "_subscription_log_suffix", lambda _skill: "")
+    monkeypatch.setattr(
+        decorators,
+        "require_ctx",
+        lambda _reason: SimpleNamespace(bus=bus, paths=SimpleNamespace(workspace_dir=lambda: workspace)),
+    )
+    monkeypatch.setattr(data_bus, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+
+    async def fake_emit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(decorators, "emit", fake_emit)
+
+    asyncio.run(decorators.register_subscriptions(force=True))
+    assert len(bus.handlers) == 1
+    wrapped = bus.handlers[0][1]
+
+    inactive_evt = SimpleNamespace(
+        type="webio.stream.snapshot.requested",
+        payload={
+            "webspace_id": "desktop",
+            "receiver": "new_face_vision.progress",
+            "scenario_id": "web_desktop",
+        },
+    )
+    active_evt = SimpleNamespace(
+        type="webio.stream.snapshot.requested",
+        payload={
+            "webspace_id": "desktop",
+            "receiver": "new_face_vision.progress",
+            "scenario_id": "new_face_vision_scenario",
+        },
+    )
+
+    asyncio.run(wrapped(inactive_evt))  # type: ignore[misc]
+    asyncio.run(wrapped(active_evt))  # type: ignore[misc]
+
+    assert calls == ["called"]
+
+
 def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None:
     calls: list[dict] = []
     fake_guard = ModuleType("adaos.services.yjs.owner_guard")
