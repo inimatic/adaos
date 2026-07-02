@@ -109,6 +109,64 @@ def ping():
     assert conversation_codes == set()
 
 
+def test_skill_validation_allows_declared_stream_receiver_and_bounded_state(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+_STATE_BY_KEY = {}
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True, "receiver": "voice_chat.messages"}
+""",
+        extra_files={
+            "webui.json": """
+{
+  "webio": {
+    "receivers": {
+      "voice_chat.messages": {
+        "mode": "replace",
+        "transport": "hub",
+        "snapshotPolicy": "on_subscribe",
+        "budget": {
+          "maxPayloadBytes": 16384,
+          "maxFanout": 3,
+          "maxItems": 6
+        },
+        "initialState": { "messages": [] }
+      }
+    }
+  }
+}
+"""
+        },
+        manifest_extra=[
+            "data_routes:",
+            "  - surface: demo chat",
+            "    route: stream",
+            "    receiver: voice_chat.messages",
+            "    budget:",
+            "      max_payload_bytes: 16384",
+            "      max_fanout: 3",
+            "      max_items: 6",
+            "memory_budget:",
+            "  caches:",
+            "    - name: demo.state_by_key",
+            "      max_items: 32",
+            "      ttl_seconds: 3600",
+            "      cleanup_hook: dispose",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, install_mode=True)
+
+    conversation_codes = {issue.code for issue in report.issues if issue.code.startswith("conversation.")}
+    assert report.ok is True
+    assert conversation_codes == set()
+
+
 def test_skill_validation_warns_when_conversation_sdk_lacks_manifest_policy(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

@@ -15,7 +15,7 @@ from adaos.services.webui_contract import validate_webui_contract
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
 WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
-_SKIP_DIRS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", ".runtime"}
+_SKIP_DIRS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", ".runtime", "tests"}
 _YJS_PATTERNS = (
     "y_py",
     "ypy_websocket",
@@ -185,6 +185,9 @@ def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, A
     issues: List[Issue] = []
     uses_conversation_sdk = False
     uses_memory_sdk = False
+    declared_transport_tokens = _declared_transport_tokens(skill_dir, manifest)
+    skill_name = str(manifest.get("name") or "").strip()
+    bounded_memory_names = _bounded_process_memory_names(manifest)
     for path in sorted(skill_dir.rglob("*.py")):
         if any(part in _SKIP_DIRS for part in path.parts):
             continue
@@ -208,6 +211,8 @@ def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, A
                 break
         for pattern in _TRANSPORT_MEMORY_PATTERNS:
             if pattern in text:
+                if _transport_memory_pattern_allowed(pattern, declared_transport_tokens, skill_name):
+                    continue
                 issues.append(
                     Issue(
                         "error" if install_mode else "warning",
@@ -216,7 +221,15 @@ def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, A
                         rel,
                     )
                 )
-        issues.extend(_conversation_memory_ast_issues(path, rel, text, install_mode=install_mode))
+        issues.extend(
+            _conversation_memory_ast_issues(
+                path,
+                rel,
+                text,
+                install_mode=install_mode,
+                bounded_memory_names=bounded_memory_names,
+            )
+        )
     for path in sorted(skill_dir.rglob("*")):
         if not path.is_file() or any(part in _SKIP_DIRS for part in path.parts):
             continue
@@ -232,6 +245,59 @@ def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, A
             )
     issues.extend(_conversation_manifest_policy_issues(manifest, uses_conversation_sdk=uses_conversation_sdk, uses_memory_sdk=uses_memory_sdk))
     return issues
+
+
+def _declared_transport_tokens(skill_dir: Path, manifest: Dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    for route in manifest.get("data_routes") or []:
+        if not isinstance(route, dict):
+            continue
+        for key in ("receiver", "projection_slot", "tool", "owner"):
+            value = str(route.get(key) or "").strip()
+            if value:
+                tokens.add(value)
+    webui_path = skill_dir / "webui.json"
+    if webui_path.exists():
+        try:
+            webui = json.loads(webui_path.read_text(encoding="utf-8-sig") or "{}")
+        except Exception:
+            webui = {}
+        receivers = ((webui.get("webio") or {}).get("receivers") or {}) if isinstance(webui, dict) else {}
+        if isinstance(receivers, dict):
+            tokens.update(str(key) for key in receivers.keys() if str(key).strip())
+    return tokens
+
+
+def _transport_memory_pattern_allowed(pattern: str, declared_tokens: set[str], skill_name: str) -> bool:
+    if pattern == skill_name:
+        return True
+    return pattern in declared_tokens
+
+
+def _memory_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _bounded_process_memory_names(manifest: Dict[str, Any]) -> set[str]:
+    budget = manifest.get("memory_budget") if isinstance(manifest.get("memory_budget"), dict) else {}
+    names: set[str] = set()
+    for cache in budget.get("caches") or []:
+        if not isinstance(cache, dict):
+            continue
+        name = str(cache.get("name") or "").strip()
+        if not name:
+            continue
+        has_bound = any(cache.get(key) is not None for key in ("max_items", "max_bytes", "ttl_seconds"))
+        if has_bound and str(cache.get("cleanup_hook") or "").strip():
+            names.add(_memory_token(name))
+    return names
+
+
+def _module_memory_name_is_bounded(name: str, bounded_memory_names: set[str]) -> bool:
+    token = _memory_token(name.strip("_"))
+    if not token:
+        return False
+    return any(token in declared or declared in token for declared in bounded_memory_names)
 
 
 def _conversation_manifest_policy_issues(
@@ -276,7 +342,14 @@ def _manifest_has_memory_route_or_policy(manifest: Dict[str, Any], conversation:
     return False
 
 
-def _conversation_memory_ast_issues(path: Path, rel: str, text: str, *, install_mode: bool) -> List[Issue]:
+def _conversation_memory_ast_issues(
+    path: Path,
+    rel: str,
+    text: str,
+    *,
+    install_mode: bool,
+    bounded_memory_names: set[str],
+) -> List[Issue]:
     try:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
@@ -289,13 +362,16 @@ def _conversation_memory_ast_issues(path: Path, rel: str, text: str, *, install_
         names = [target.id for target in targets if isinstance(target, ast.Name)]
         if not any(_UNBOUNDED_NAME_RE.search(name) for name in names):
             continue
+        unbounded_names = [name for name in names if not _module_memory_name_is_bounded(name, bounded_memory_names)]
+        if not unbounded_names:
+            continue
         value = node.value
         if isinstance(value, (ast.List, ast.Dict, ast.Set)):
             issues.append(
                 Issue(
                     "error" if install_mode else "warning",
                     "conversation.unbounded_process_memory",
-                    f"module-level mutable state may become unbounded: {', '.join(names)}",
+                    f"module-level mutable state may become unbounded: {', '.join(unbounded_names)}",
                     rel,
                 )
             )
@@ -306,7 +382,7 @@ def _conversation_memory_ast_issues(path: Path, rel: str, text: str, *, install_
                     Issue(
                         "error" if install_mode else "warning",
                         "conversation.unbounded_process_memory",
-                        f"module-level mutable state may become unbounded: {', '.join(names)}",
+                        f"module-level mutable state may become unbounded: {', '.join(unbounded_names)}",
                         rel,
                     )
                 )
@@ -315,7 +391,7 @@ def _conversation_memory_ast_issues(path: Path, rel: str, text: str, *, install_
                     Issue(
                         "error" if install_mode else "warning",
                         "conversation.unbounded_process_memory",
-                        f"deque without maxlen may become unbounded: {', '.join(names)}",
+                        f"deque without maxlen may become unbounded: {', '.join(unbounded_names)}",
                         rel,
                     )
                 )

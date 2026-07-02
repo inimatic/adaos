@@ -107,11 +107,22 @@ For every `data_routes` entry:
 - `budget.max_items` is required for any route that can return a collection.
 - `budget.max_publish_hz` or an equivalent debounce/coalescing statement is
   required for event-driven routes.
+- Stream budgets must state the fanout assumption. Use
+  `budget.max_fanout` when the surface can be open in more than one browser,
+  member, or mirrored desktop, and review the effective budget as
+  `max_payload_bytes * max_fanout`. If no better bound is known, assume
+  `max_fanout: 3`. The effective bytes must stay below the current owner-guard
+  cap with margin; a payload that is safe for one subscriber can still
+  quarantine the skill when replicated to several clients.
 - `guard_visibility` must name the degraded state or repair evidence that the
   Builder can inspect when the route is guarded, throttled, blocked, or
   quarantined.
 - `projection_slot`, `receiver`, or `tool` must point to the actual
   `data_projections`, `webui.receivers`, or `tools` entry used by the route.
+- A tool that refreshes a stream or projection must declare and return a
+  compact acknowledgement shape. It must not return the same message list,
+  table, snapshot, or diagnostic body that it just published through the
+  declared route.
 
 For every `data_projections` entry:
 
@@ -234,6 +245,11 @@ Every stream receiver should have bounded delivery semantics and an initial or
 snapshot-on-subscribe story. Every declared worker, cache, and heavy resource
 should have an owner, budget, and cleanup path.
 
+Quarantine hooks are discovered as ordinary tools named exactly
+`onQuarantine` or `on_quarantine`. Listing a cleanup function only under
+`lifecycle` is not enough for owner-guard quarantine; declare the quarantine
+tool in `tools` as well when the skill can record compact repair evidence.
+
 Example:
 
 ```yaml
@@ -344,6 +360,12 @@ return {
     },
 }
 ```
+
+Use `chat.send(...)` instead of a bare response envelope when the caller is a
+direct fallback path that does not run `materialize_tool_result` after the tool
+returns. Voice `nlp.intent.not_obtained` fallback is one such path: the skill
+must materialize its visible reply during the tool call, while still letting the
+router project the compact `voice_chat.messages` tail from the ledger.
 
 Use scoped memory helpers instead of arbitrary transcript files:
 
@@ -545,6 +567,14 @@ Compatibility Voice surfaces may still declare a bounded receiver such as:
   }
 }
 ```
+
+For Voice compatibility receivers, the node conversation ledger remains the
+source of truth. The skill may keep a bounded local cache only as a degraded
+snapshot fallback; normal `get_snapshot`/stream snapshot code should read a
+bounded ledger projection first. Keep `skill.yaml`, `webui.json`, handler
+constants, and router-visible tail size aligned (`max_items` must match the
+largest normal publish window), and verify the payload stays below the declared
+fanout-adjusted budget.
 
 Publish volatile state from the skill:
 
@@ -1111,6 +1141,9 @@ Before publishing:
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
 - verify stream payloads stay within budget after multiplying by expected
   browser/node fanout
+- verify receiver budgets and handler constants agree: `webui.json`,
+  `skill.yaml`, and the actual stream builder must use the same item/text/byte
+  caps, including `max_fanout`
 - verify stream receivers have `initialState`, freshness metadata, and a
   recovery path after resubscribe
 - verify `webui.json` declares shared interaction behavior for first focus,
@@ -1133,6 +1166,9 @@ Before publishing:
   real data path
 - verify actions that publish streams return only compact acks and do not
   include `state`, `items`, `sections`, logs, diagnostics, or full snapshots
+- verify snapshot/request tools publish the bounded stream/projection payload
+  and return only `ok`, `status`, `receiver` or `projection_slot`, counts,
+  freshness, and a trace id
 - verify Yjs and stream guard errors are visible to the UI
 - verify any `runtime.yjs_projection_guard.builder_repair_packets` entry is
   either absent after the fix or explains the remaining bounded-route/compaction
@@ -1191,9 +1227,10 @@ The current workspace audit suggests this priority order:
 3. make `browsers_skill` and `infra_access_skill` projection refreshes
    idempotent, avoid all-webspace fanout for routine events, and add cleanup
    for owned executors, threads, and caches
-4. migrate remaining `voice_chat_skill` direct Yjs reads/writes behind the
-   conversation ledger projection bridge; keep bounded compatibility history
-   only for existing Voice surfaces
+4. keep the `voice_chat_skill` conversation-ledger bridge as the Voice
+   compatibility template: compact Yjs status, bounded ledger-backed stream
+   history for existing Voice surfaces, and no skill-local transcript as the
+   primary store
 5. add explicit cache/model/playback lifecycle budgets to
    `new_face_vision_skill`
 6. decide whether `mediaserver` and `prompt_engineer_skill` should remain
