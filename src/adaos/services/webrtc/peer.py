@@ -765,6 +765,48 @@ class HubPeer:
         except Exception:
             _log.debug("datachannel close failed", exc_info=True)
 
+    def _close_yjs_binding(self, *, reason: str) -> None:
+        channel = self._yjs_channel
+        adapter = self._yjs_adapter
+        task = self._yjs_task
+        self._yjs_channel = None
+        self._yjs_adapter = None
+        self._yjs_task = None
+        if adapter is not None:
+            try:
+                adapter.close()
+            except Exception:
+                _log.debug("yjs adapter close failed device=%s reason=%s", self.device_id, reason, exc_info=True)
+        if task is not None:
+            self._cancel_task(task, label=f"webrtc-yjs-{reason}:{self.device_id}")
+        self._close_data_channel(channel)
+        self._emit_state_event(reason=reason)
+
+    def _set_webspace_id(self, webspace_id: str, *, reason: str) -> bool:
+        new_webspace = _coerce_peer_webspace_id(webspace_id)
+        old_webspace = _coerce_peer_webspace_id(self.webspace_id)
+        if new_webspace == old_webspace:
+            self.webspace_id = new_webspace
+            return False
+        has_yjs_binding = (
+            self._yjs_channel is not None
+            or self._yjs_adapter is not None
+            or (self._yjs_task is not None and not self._yjs_task.done())
+        )
+        self.webspace_id = new_webspace
+        if not has_yjs_binding:
+            self._emit_state_event(reason=f"webspace:{reason}")
+            return True
+        _log.warning(
+            "closing yjs datachannel after webspace change device=%s old_webspace=%s new_webspace=%s reason=%s",
+            self.device_id,
+            old_webspace,
+            new_webspace,
+            reason,
+        )
+        self._close_yjs_binding(reason=f"webspace_change:{reason}")
+        return True
+
     @staticmethod
     def _cancel_task(task: asyncio.Task[None] | None, *, label: str) -> None:
         if task is None or task.done():
@@ -923,8 +965,7 @@ class HubPeer:
                 )
                 if new_ws:
                     state["webspace_id"] = new_ws
-                    if self._yjs_channel is None:
-                        self.webspace_id = new_ws
+                    self._set_webspace_id(new_ws, reason=str(kind or "events_command"))
 
             asyncio.ensure_future(_handle())
 
@@ -1461,9 +1502,10 @@ async def handle_rtc_offer(
         state = existing._connection_state() if hasattr(existing, "_connection_state") else str(getattr(existing.pc, "connectionState", "") or "").strip().lower()
         reusable = bool(getattr(existing, "is_reusable_for_offer", lambda: state in _REUSABLE_CONNECTION_STATES)())
         if reusable:
-            existing.webspace_id = webspace_id
+            state_emitted = existing._set_webspace_id(webspace_id, reason="offer.renegotiate")
             existing._send_ice = send_ice_cb
-            existing._emit_state_event(reason="offer.renegotiate")
+            if not state_emitted:
+                existing._emit_state_event(reason="offer.renegotiate")
             return await existing.handle_offer(offer_sdp, offer_type)
         _log.info(
             "replacing stale peer for device=%s on new offer state=%s",

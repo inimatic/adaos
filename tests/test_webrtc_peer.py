@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -77,9 +78,10 @@ def _load_peer_module(monkeypatch):
     fake_yjs_adapter = ModuleType("adaos.services.webrtc.yjs_adapter")
 
     class DummyDataChannelYjsAdapter:
-        def __init__(self, dc, webspace_id: str):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None):
             self.dc = dc
             self.webspace_id = webspace_id
+            self.device_id = device_id
 
         def close(self) -> None:
             return None
@@ -139,6 +141,11 @@ def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
         def _emit_state_event(self, *, reason: str) -> None:
             self.emitted_reasons.append(reason)
 
+        def _set_webspace_id(self, webspace_id: str, *, reason: str) -> bool:
+            self.webspace_id = webspace_id
+            self.emitted_reasons.append(f"webspace:{reason}")
+            return True
+
     existing = ExistingPeer()
     peer_mod._peers.clear()
     peer_mod._peers["browser-1"] = existing
@@ -162,7 +169,7 @@ def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
     assert existing.close_called is False
     assert existing.webspace_id == "desk-next"
     assert existing._send_ice is send_ice_cb
-    assert existing.emitted_reasons == ["offer.renegotiate"]
+    assert existing.emitted_reasons == ["webspace:offer.renegotiate"]
 
 
 def test_hub_peer_is_not_reusable_with_live_channels(monkeypatch) -> None:
@@ -259,6 +266,119 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
         assert peer._yjs_channel is second
         first.handlers["close"]()
         assert peer._yjs_channel is second
+        await peer.close()
+
+    asyncio.run(_run())
+
+
+def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+    seen_commands: list[dict[str, object]] = []
+
+    class TrackingAdapter:
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None):
+            self.dc = dc
+            self.webspace_id = webspace_id
+            self.device_id = device_id
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def serve(self) -> None:
+            await asyncio.sleep(3600)
+
+    class DummyChannel:
+        def __init__(self, label: str) -> None:
+            self.label = label
+            self.readyState = "open"
+            self.close_called = 0
+            self.handlers = {}
+            self.sent: list[str] = []
+
+        def on(self, event):
+            def decorator(fn):
+                self.handlers[event] = fn
+                return fn
+
+            return decorator
+
+        def send(self, payload: str) -> None:
+            self.sent.append(payload)
+
+        def close(self) -> None:
+            self.close_called += 1
+            handler = self.handlers.get("close")
+            if callable(handler):
+                handler()
+
+    fake_gateway = ModuleType("adaos.services.yjs.gateway_ws")
+
+    async def fake_process_events_command(
+        *,
+        kind: str,
+        cmd_id: str,
+        payload: dict[str, object],
+        device_id: str,
+        webspace_id: str,
+        send_response,
+        client_label: str | None = None,
+    ) -> str:
+        seen_commands.append(
+            {
+                "kind": kind,
+                "cmd_id": cmd_id,
+                "payload": payload,
+                "device_id": device_id,
+                "webspace_id": webspace_id,
+                "client_label": client_label,
+            }
+        )
+        await send_response({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": {"webspace_id": "desktop"}})
+        return "desktop"
+
+    fake_gateway.process_events_command = fake_process_events_command
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.gateway_ws", fake_gateway)
+    peer_mod.DataChannelYjsAdapter = TrackingAdapter
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    async def _run() -> None:
+        peer = peer_mod.HubPeer("browser-yjs", "desktop-dev", send_ice_cb)
+        yjs = DummyChannel("yjs")
+        events = DummyChannel("events")
+        peer._setup_yjs_channel(yjs)
+        old_adapter = peer._yjs_adapter
+        old_task = peer._yjs_task
+        assert old_adapter is not None
+        assert old_task is not None
+        assert old_adapter.webspace_id == "desktop-dev"
+
+        peer._setup_events_channel(events)
+        events.handlers["message"](
+            json.dumps(
+                {
+                    "ch": "events",
+                    "t": "cmd",
+                    "id": "cmd-1",
+                    "kind": "device.register",
+                    "payload": {"webspace_id": "desktop"},
+                }
+            )
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert seen_commands[-1]["webspace_id"] == "desktop-dev"
+        assert peer.webspace_id == "desktop"
+        assert peer._yjs_channel is None
+        assert peer._yjs_adapter is None
+        assert peer._yjs_task is None
+        assert old_adapter.closed is True
+        assert yjs.close_called == 1
+        assert old_task.cancelling() > 0 or old_task.cancelled() or old_task.done()
+        assert events.sent
         await peer.close()
 
     asyncio.run(_run())
