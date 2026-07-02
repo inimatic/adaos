@@ -936,7 +936,7 @@ def _static_webio_receiver_metadata(receiver: str) -> dict[str, Any]:
         "owner": "skill:voice_chat_skill",
         "mode": "stream",
         "snapshotPolicy": "compact_tail",
-        "budget": {"maxPayloadBytes": 65536},
+        "budget": {"maxPayloadBytes": 524288},
         "route": {
             "kind": "stream",
             "surface": "voice_chat",

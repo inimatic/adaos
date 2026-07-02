@@ -61,6 +61,13 @@ async def test_webio_receiver_metadata_prefers_live_room(monkeypatch) -> None:
     assert captured["kwargs"]["load_mark_roots"] == ["data"]
 
 
+async def test_static_voice_chat_receiver_budget_allows_builder_history_tail() -> None:
+    metadata = router_service_module._static_webio_receiver_metadata("voice_chat.messages")
+
+    assert metadata["budget"]["maxPayloadBytes"] >= 524288
+    assert metadata["snapshotPolicy"] == "compact_tail"
+
+
 async def test_ui_say_handler_is_async() -> None:
     """
     ui.say can be emitted during boot (e.g. greet_on_boot_skill). The router must not
