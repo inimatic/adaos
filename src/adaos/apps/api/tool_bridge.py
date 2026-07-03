@@ -42,6 +42,13 @@ _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
 )
 _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
+    "cv_descriptor:cv_descriptor_configure_model",
+    "cv_descriptor:cv_descriptor_save_descriptor",
+    "cv_descriptor:cv_descriptor_update_descriptor",
+    "cv_descriptor:cv_descriptor_delete_descriptor",
+    "cv_descriptor:cv_descriptor_clear",
+    "cv_descriptor:cv_descriptor_runtime_command",
+    "cv_descriptor:cv_descriptor_record_runtime_event",
     "prompt_engineer_skill:prompt_save_base_tz",
     "prompt_engineer_skill:prompt_append_tz_addendum",
     "prompt_engineer_skill:prompt_save_project_file",

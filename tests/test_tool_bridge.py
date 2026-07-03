@@ -192,6 +192,35 @@ def test_runtime_action_risk_allows_prompt_project_file_save_with_markdown_memor
     assert risk["approval_required"] is False
 
 
+def test_runtime_action_risk_allows_cv_descriptor_capture_payload() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="cv_descriptor:cv_descriptor_save_descriptor",
+        arguments={
+            "vector": [0.1, 0.2, 0.3],
+            "thumbnail": "data:image/jpeg;base64,/9j/test",
+            "title": "Object 1",
+            "description": "Captured from the phone camera",
+            "model_signature": "tfjs-mobilenet-v2",
+            "metadata": {
+                "session_id": "cv_descriptor.setup",
+                "mode": "setup",
+                "camera": "phone",
+            },
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="cv_descriptor",
+        public_tool="cv_descriptor_save_descriptor",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
 def test_runtime_action_risk_treats_prompt_read_tools_as_readonly() -> None:
     body = tool_bridge_module.ToolCall(
         tool="prompt_engineer_skill:prompt_read_project_file",
