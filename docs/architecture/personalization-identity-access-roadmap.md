@@ -48,6 +48,10 @@ checked.
   and Phase 3 are explicitly backend slices, and new must-have phases cover
   Web API/client settings and AdaOS Connect join UX before the roadmap can
   claim visible personalization.
+- [x] 2026-07-03: current-user language preference is wired to browser runtime
+  i18n, and the first localized web desktop slice uses skill/scenario
+  `resources` plus `*_i18n` schema keys for web_desktop chrome, ReDevice
+  slideshow, Notebook, and Prompt IDE live UI schemas.
 
 ## Execution rules
 
@@ -282,6 +286,13 @@ Checklist:
   accessibility preferences.
 - [x] Back language, locale, timezone, device, and invite-scope controls with
   runtime/API options instead of free-form text where concrete options exist.
+- [x] Wire the header language picker to the current-user profile preference
+  when a user session is authenticated; localStorage remains a fallback for
+  anonymous/login chrome.
+- [x] Use one browser i18n resolver pattern: bundled `assets/i18n/*.json` plus
+  runtime `resources` dictionaries, with `title_i18n`, `label_i18n`,
+  `placeholder_i18n`, and related `*_i18n` fields carrying fallback text in the
+  schema.
 - [x] Apply saved theme preferences in the browser shell immediately instead
   of only persisting them server-side.
 - [x] Keep role and membership read-only in current-user settings; route any
@@ -304,6 +315,9 @@ Exit gate:
 - [x] Role/access status is visible but cannot be edited through profile
   settings.
 - [x] API and UI paths route through the Phase 1-2 policy/audit services.
+- [x] Changing the current-user language updates browser UI text without an
+  Angular rebuild when the active scenario/skill publishes matching runtime
+  i18n resources.
 
 Local verification:
 

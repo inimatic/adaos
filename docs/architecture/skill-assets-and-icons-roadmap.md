@@ -249,6 +249,11 @@ Status as of 2026-07-02:
   `role: "i18n"` resources with an explicit `locale`. The Angular
   `I18nService` loads those dictionaries through the same resource resolver and
   merges them over bundled `assets/i18n/*.json` translations.
+- Declarative skill and scenario UI should keep visible fallback text in the
+  schema and add adjacent `*_i18n` fields. Runtime localization currently covers
+  modal titles and widget configs recursively, including common fields such as
+  `title`, `subtitle`, `label`, `placeholder`, `emptyText`, `loadingText`,
+  `helper`, and `hint`.
 - Root exposes a partial cache control plane:
   `/v1/root/browser-assets/cache-contract`,
   `/v1/root/browser-assets/cache/ensure`,
