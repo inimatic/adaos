@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -171,7 +172,72 @@ def test_prompt_lists_json_only_dev_scenario(monkeypatch, tmp_path: Path) -> Non
     project_objects = module.prompt_list_project_objects({"project_type": "scenario", "project_id": "demo_scenario"})
     assert project_objects[0]["object_id"] == "demo_scenario"
     files = module.prompt_list_project_files({"object_type": "scenario", "object_id": "demo_scenario"})
-    assert [item["path"] for item in files] == ["prompt_state.json", "scenario.json"]
+    assert [item["path"] for item in files] == ["prompt_state.json", "scenario.json", "tz/base_tz.md"]
+
+
+def test_prompt_file_tree_groups_ui_revisions(monkeypatch, tmp_path: Path) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    skills_root = tmp_path / "skills"
+    scenarios_root = tmp_path / "scenarios"
+    scenario_root = scenarios_root / "demo_scenario"
+    scenario_root.mkdir(parents=True)
+    skills_root.mkdir()
+    (scenario_root / "scenario.json").write_text('{"id":"demo_scenario"}', encoding="utf-8")
+    revisions = scenario_root / "ui_revisions"
+    revisions.mkdir()
+    (revisions / "001.json").write_text('{"revision":"001"}', encoding="utf-8")
+    (revisions / "current.txt").write_text("001\n", encoding="utf-8")
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return skills_root
+
+        def dev_scenarios_dir(self) -> Path:
+            return scenarios_root
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths()))
+
+    tree = module.prompt_list_project_file_tree({"object_type": "scenario", "object_id": "demo_scenario"})
+
+    root = tree["root"]
+    ui_revisions = next(item for item in root["children"] if item["title"] == "ui_revisions")
+    assert [item["title"] for item in ui_revisions["children"]] == ["001.json", "current.txt"]
+    assert ui_revisions["children"][0]["editable"] is False
+
+
+def test_prompt_save_project_file_updates_base_tz_state(monkeypatch, tmp_path: Path) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    skills_root = tmp_path / "skills"
+    scenarios_root = tmp_path / "scenarios"
+    scenario_root = scenarios_root / "demo_scenario"
+    scenario_root.mkdir(parents=True)
+    skills_root.mkdir()
+    emitted: list[tuple[str, dict, str]] = []
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return skills_root
+
+        def dev_scenarios_dir(self) -> Path:
+            return scenarios_root
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths(), bus=object()))
+    monkeypatch.setattr(module, "bus_emit", lambda bus, topic, payload, source: emitted.append((topic, payload, source)))
+
+    result = module.prompt_save_project_file(
+        {
+            "object_type": "scenario",
+            "object_id": "demo_scenario",
+            "path": "tz/base_tz.md",
+            "text": "current prototype specification",
+        }
+    )
+
+    assert result["ok"] is True
+    assert (scenario_root / "tz" / "base_tz.md").read_text(encoding="utf-8") == "current prototype specification"
+    state = json.loads((scenario_root / "prompt_state.json").read_text(encoding="utf-8"))
+    assert state["base_tz"] == "current prototype specification"
+    assert emitted[-1][0] == "prompt.project.changed"
 
 
 def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
@@ -183,7 +249,10 @@ def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
 
     result = module.prompt_select_project({"object_type": "scenario", "object_id": "demo_scenario"})
 
-    assert result == {"ok": True, "object_type": "scenario", "object_id": "demo_scenario"}
+    assert result["ok"] is True
+    assert result["object_type"] == "scenario"
+    assert result["object_id"] == "demo_scenario"
+    assert result["builder_topic_id"] == "prompt-project:scenario:demo_scenario"
     assert emitted[0][0] == "prompt.project.changed"
     assert emitted[1][0] == "builder.preview.selected"
     assert emitted[1][1]["scenario_id"] == "demo_scenario"

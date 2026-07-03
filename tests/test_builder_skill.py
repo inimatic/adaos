@@ -1108,11 +1108,19 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     created_revision = json.loads((artifact_root / "ui_revisions" / "001.json").read_text(encoding="utf-8"))
     assert created_revision["preview_state"]["version"] == "001"
     assert created_revision["after_webui"]["preview_state"]["version"] == "001"
+    assert created_revision["prompt_files"]["tz/base_tz.md"]["exists"] is True
+    first_tz = created_revision["prompt_files"]["tz/base_tz.md"]["content"]
+    (artifact_root / "tz" / "base_tz.md").write_text("spec revision 002", encoding="utf-8")
+    (artifact_root / "prompt_state.json").write_text(
+        json.dumps({"base_tz": "spec revision 002", "prepare": {}, "generate": {}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     updated = skill.update_current_scenario("show cards", webspace_id="builder-revision")
     assert updated["ui_revision"]["revision"] == "002"
     updated_revision = json.loads((artifact_root / "ui_revisions" / "002.json").read_text(encoding="utf-8"))
     assert updated_revision["preview_state"]["version"] == "002"
     assert updated_revision["after_webui"]["preview_state"]["version"] == "002"
+    assert updated_revision["prompt_files"]["tz/base_tz.md"]["content"] == "spec revision 002"
     assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
 
     restored = skill.set_ui_revision_current("001", webspace_id="builder-revision")
@@ -1125,6 +1133,9 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     assert not any(item["type"] == "card_list" for item in restored["preview_state"]["current_ui"]["children"])
     saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
     assert not any(item["type"] == "card_list" for item in saved["preview_state"]["current_ui"]["children"])
+    assert (artifact_root / "tz" / "base_tz.md").read_text(encoding="utf-8") == first_tz
+    state = json.loads((artifact_root / "prompt_state.json").read_text(encoding="utf-8"))
+    assert state["base_tz"] == first_tz
 
 
 def test_write_webui_keeps_builder_skill_out_of_runtime_dependencies(tmp_path) -> None:
