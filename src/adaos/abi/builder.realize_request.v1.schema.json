@@ -28,6 +28,41 @@
       }
     },
     "repo": { "$ref": "#/$defs/repoRef" },
+    "realization_policy": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "adaos.skill_factory.realization_policy.v1" },
+        "classification": { "type": "string", "enum": ["allowed", "manual_only", "disallowed"] },
+        "manual_approval_required": { "type": "boolean" },
+        "disallowed": { "type": "boolean" },
+        "risk_classes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "snapshot_context": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "adaos.skill_factory.task_context.v1" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "freshness": { "type": "object", "additionalProperties": true },
+        "redaction": { "type": "object", "additionalProperties": true },
+        "privacy": { "type": "object", "additionalProperties": true },
+        "provenance": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "mock_data": { "type": "object", "additionalProperties": true },
+        "byte_budget": { "type": "integer", "minimum": 1 }
+      }
+    },
     "constraints": {
       "type": "object",
       "additionalProperties": true,

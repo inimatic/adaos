@@ -4,7 +4,7 @@
   "title": "AdaOS Skill Factory Dev Result",
   "type": "object",
   "additionalProperties": true,
-  "required": ["schema", "task_id", "status", "commit_hash", "branch", "changed_paths"],
+  "required": ["schema", "task_id", "status", "commit_hash", "branch", "changed_paths", "provenance"],
   "properties": {
     "schema": { "const": "adaos.skill_factory.dev_result.v1" },
     "task_id": { "type": "string", "minLength": 1 },
@@ -18,6 +18,43 @@
     },
     "tests": { "type": "object", "additionalProperties": true },
     "validation": { "type": "object", "additionalProperties": true },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "adaos.skill_factory.task_provenance.v1" },
+        "task_id": { "type": "string", "minLength": 1 },
+        "dev_node_id": { "type": ["string", "null"] },
+        "runner_version": { "type": "string" },
+        "image_digest": { "type": ["string", "null"] },
+        "instruction_packet_hash": { "type": ["string", "null"] },
+        "dependency_changes": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "snapshot_refs": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "reported_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "dependency_delta": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "changed": { "type": "boolean" },
+        "files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "changes": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "review_required": { "type": "boolean" }
+      }
+    },
     "notes": {
       "type": "array",
       "items": { "type": "string" }

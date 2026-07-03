@@ -613,6 +613,85 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_cancel_task"},
         ),
         RootMcpToolContract(
+            id="skill_factory.set_queue_paused",
+            title="Pause or resume queue",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Pause or resume Skill Factory task assignment without deleting queued tasks.",
+            input_schema=schema_object(
+                properties={"paused": {"type": "boolean"}, "reason": {"type": "string"}},
+                required=["paused"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.operator.control",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_set_queue_paused"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.drain_dev_node",
+            title="Drain dev node",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Stop assigning new work to a registered dev node.",
+            input_schema=schema_object(
+                properties={"node_id": {"type": "string"}, "reason": {"type": "string"}},
+                required=["node_id"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.operator.control",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_drain_dev_node"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.quarantine_dev_node",
+            title="Quarantine dev node",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Quarantine a dev node so it cannot receive new Skill Factory assignments.",
+            input_schema=schema_object(
+                properties={"node_id": {"type": "string"}, "reason": {"type": "string"}},
+                required=["node_id"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.operator.control",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_quarantine_dev_node"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.revoke_dev_node_credentials",
+            title="Revoke dev node credentials",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Mark a dev node's task credentials as revoked and prevent further assignment polling.",
+            input_schema=schema_object(
+                properties={"node_id": {"type": "string"}, "reason": {"type": "string"}},
+                required=["node_id"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.operator.control",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_revoke_dev_node_credentials"},
+        ),
+        RootMcpToolContract(
+            id="skill_factory.retry_task",
+            title="Retry task",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Requeue a failed, expired, or cancelled Skill Factory task, optionally avoiding the previous node.",
+            input_schema=schema_object(
+                properties={
+                    "task_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "avoid_previous_node": {"type": "boolean"},
+                },
+                required=["task_id"],
+                additional_properties=True,
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="skill_factory.operator.control",
+            side_effects="write",
+            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_retry_task"},
+        ),
+        RootMcpToolContract(
             id="nlu_authoring.get_context",
             title="Get NLU authoring context",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1885,6 +1964,71 @@ def _handle_skill_factory_cancel_task(arguments: dict[str, Any], *, dry_run: boo
     )
 
 
+def _handle_skill_factory_set_queue_paused(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    paused = bool(arguments.get("paused"))
+    if dry_run:
+        return {"would_set_queue_paused": True, "paused": paused}
+    return _skill_factory_service().set_queue_paused(
+        paused=paused,
+        reason=_text_or_none(arguments.get("reason")),
+        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+    )
+
+
+def _handle_skill_factory_drain_dev_node(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    node_id = _text_or_none(arguments.get("node_id"))
+    if not node_id:
+        raise ValueError("node_id is required")
+    if dry_run:
+        return {"would_drain": True, "node_id": node_id}
+    return _skill_factory_service().drain_dev_node(
+        node_id,
+        reason=_text_or_none(arguments.get("reason")),
+        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+    )
+
+
+def _handle_skill_factory_quarantine_dev_node(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    node_id = _text_or_none(arguments.get("node_id"))
+    if not node_id:
+        raise ValueError("node_id is required")
+    if dry_run:
+        return {"would_quarantine": True, "node_id": node_id}
+    return _skill_factory_service().quarantine_dev_node(
+        node_id,
+        reason=_text_or_none(arguments.get("reason")),
+        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+    )
+
+
+def _handle_skill_factory_revoke_dev_node_credentials(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    node_id = _text_or_none(arguments.get("node_id"))
+    if not node_id:
+        raise ValueError("node_id is required")
+    if dry_run:
+        return {"would_revoke": True, "node_id": node_id}
+    return _skill_factory_service().revoke_dev_node_credentials(
+        node_id,
+        reason=_text_or_none(arguments.get("reason")),
+        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+    )
+
+
+def _handle_skill_factory_retry_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    task_id = _text_or_none(arguments.get("task_id"))
+    if not task_id:
+        raise ValueError("task_id is required")
+    avoid_previous_node = bool(arguments.get("avoid_previous_node", True))
+    if dry_run:
+        return {"would_retry": True, "task_id": task_id, "avoid_previous_node": avoid_previous_node}
+    return _skill_factory_service().retry_task(
+        task_id,
+        reason=_text_or_none(arguments.get("reason")),
+        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        avoid_previous_node=avoid_previous_node,
+    )
+
+
 def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     from adaos.services import named_entities
     from adaos.services.nlu.teacher_read_model import get_contextual_action_surface
@@ -3042,6 +3186,11 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "skill_factory.complete_task": lambda arguments, dry_run=False: _handle_skill_factory_complete_task(arguments, dry_run=dry_run),
     "skill_factory.fail_task": lambda arguments, dry_run=False: _handle_skill_factory_fail_task(arguments, dry_run=dry_run),
     "skill_factory.cancel_task": lambda arguments, dry_run=False: _handle_skill_factory_cancel_task(arguments, dry_run=dry_run),
+    "skill_factory.set_queue_paused": lambda arguments, dry_run=False: _handle_skill_factory_set_queue_paused(arguments, dry_run=dry_run),
+    "skill_factory.drain_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_drain_dev_node(arguments, dry_run=dry_run),
+    "skill_factory.quarantine_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_quarantine_dev_node(arguments, dry_run=dry_run),
+    "skill_factory.revoke_dev_node_credentials": lambda arguments, dry_run=False: _handle_skill_factory_revoke_dev_node_credentials(arguments, dry_run=dry_run),
+    "skill_factory.retry_task": lambda arguments, dry_run=False: _handle_skill_factory_retry_task(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
     "nlu_authoring.check_phrase": lambda arguments, dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
     "nlu_authoring.get_trace": lambda arguments, dry_run=False: _handle_nlu_authoring_trace(arguments, dry_run=dry_run),

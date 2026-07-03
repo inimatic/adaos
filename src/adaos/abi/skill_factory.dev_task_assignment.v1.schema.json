@@ -59,7 +59,59 @@
         "secrets_visible_to_llm": { "type": "boolean" },
         "require_tests": { "type": "boolean" },
         "require_commit": { "type": "boolean" },
-        "cleanup_after_completion": { "type": "boolean" }
+        "cleanup_after_completion": { "type": "boolean" },
+        "allowed_result_paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "realization": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "schema": { "const": "adaos.skill_factory.realization_policy.v1" },
+            "classification": { "type": "string", "enum": ["allowed", "manual_only", "disallowed"] },
+            "manual_approval_required": { "type": "boolean" },
+            "disallowed": { "type": "boolean" },
+            "risk_classes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "reasons": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "snapshot_context": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "adaos.skill_factory.task_context.v1" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "freshness": { "type": "object", "additionalProperties": true },
+        "redaction": { "type": "object", "additionalProperties": true },
+        "privacy": { "type": "object", "additionalProperties": true },
+        "provenance": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "mock_data": { "type": "object", "additionalProperties": true },
+        "byte_budget": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "adaos.skill_factory.task_evidence.v1" },
+        "expected_paths": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "provenance_required": { "type": "boolean" },
+        "dependency_delta_review": { "type": "boolean" }
       }
     }
   },
