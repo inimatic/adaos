@@ -48,6 +48,12 @@ def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, objec
         return {"by_id": {}, "active_items": [], "active": []}
 
     def _publish_pending_action(**kwargs) -> dict[str, object]:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:  # pragma: no cover - assertion path for sync-in-event-loop regressions
+            raise AssertionError("runtime pending action publish must be offloaded from the event loop")
         published.append(dict(kwargs))
         return {
             "id": kwargs.get("action_id") or "pa.runtime.test",
@@ -151,6 +157,33 @@ def test_runtime_action_risk_ignores_local_write_freeform_content() -> None:
         body=body,
         skill_name="notebook_skill",
         public_tool="save_note",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
+def test_runtime_action_risk_allows_prompt_project_file_save_with_markdown_memory() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="prompt_engineer_skill:prompt_save_project_file",
+        arguments={
+            "object_type": "scenario",
+            "object_id": "todo_list_5b9319fa",
+            "path": "tz/base_tz.md",
+            "text": (
+                "# To-Do List\n\n"
+                "No external network, device-control, or credential access is requested.\n"
+                "Validation and human review are still required before activation.\n"
+            ),
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="prompt_engineer_skill",
+        public_tool="prompt_save_project_file",
         payload=dict(body.arguments or {}),
         local_node_id="hub-1",
     )
@@ -285,7 +318,8 @@ def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> 
     result = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
 
     assert result["ok"] is True
-    assert calls == ["run_sync", "files_skill:write_file"]
+    assert calls[-1] == "files_skill:write_file"
+    assert calls.count("files_skill:write_file") == 1
 
 
 def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkeypatch) -> None:
@@ -340,6 +374,49 @@ def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkey
 
     assert result["ok"] is True
     assert calls == ["run_sync", "prompt_engineer_skill:prompt_select_project"]
+
+
+def test_call_tool_allows_prompt_project_file_save_without_approval(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("file save must not require approval")))
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="prompt_engineer_skill:prompt_save_project_file",
+                arguments={
+                    "object_type": "scenario",
+                    "object_id": "todo_list_5b9319fa",
+                    "path": "tz/base_tz.md",
+                    "text": "# To-Do List\nNo external network, device-control, or credential access is requested.",
+                },
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["run_sync", "prompt_engineer_skill:prompt_save_project_file"]
 
 
 def test_call_tool_blocks_cross_node_mutation_without_approval(monkeypatch) -> None:

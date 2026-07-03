@@ -41,6 +41,13 @@ _HUB_LOCAL_TOOL_NAMES: tuple[str, ...] = (
 _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
 )
+_LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
+    "prompt_engineer_skill:prompt_save_base_tz",
+    "prompt_engineer_skill:prompt_append_tz_addendum",
+    "prompt_engineer_skill:prompt_save_project_file",
+    "prompt_engineer_skill:prompt_set_workflow_state",
+    "prompt_engineer_skill:prompt_create_dev_project",
+)
 _RUNTIME_ACTION_APPROVAL_KIND = "runtime.action_approval"
 _RUNTIME_ACTION_APPROVAL_RESPONSE_TOPIC = "runtime.action_approval.response"
 _SNAPSHOT_UNAVAILABLE_TTL_S = max(0.0, float(os.getenv("ADAOS_TOOL_BRIDGE_SNAPSHOT_UNAVAILABLE_TTL_S") or "20"))
@@ -54,7 +61,7 @@ _WORKSPACE_RUNTIME_LOCKS_LOCK = threading.RLock()
 _WORKSPACE_RUNTIME_LOCKS: dict[str, threading.RLock] = {}
 _WORKSPACE_RUNTIME_LAST_SYNC_AT: dict[str, float] = {}
 _APPROVED_ACTION_STATES = {"approve", "approved", "allowed", "operator_apply_allowed", "responded"}
-_RISK_FREEFORM_ARGUMENT_KEYS = {"content"}
+_RISK_FREEFORM_ARGUMENT_KEYS = {"content", "text"}
 
 
 def _runtime_action_gate_enabled() -> bool:
@@ -119,6 +126,11 @@ def _looks_ui_navigation_tool(tool_name: str, public_tool: str) -> bool:
     return full in _UI_NAVIGATION_TOOL_NAMES
 
 
+def _looks_local_write_tool(tool_name: str, public_tool: str) -> bool:
+    full = str(tool_name or "").strip()
+    return full in _LOCAL_WRITE_TOOL_NAMES
+
+
 def _explicit_risk_class(payload: Dict[str, Any], context: Dict[str, Any] | None = None) -> str:
     meta = _mapping(payload.get("_meta"))
     ctx = _mapping(context)
@@ -153,12 +165,16 @@ def _runtime_action_risk(
     side_effect_class = forced_side_effect_class or explicit
     include_node_targets = True
     readonly_tool = _is_readonly_snapshot_tool(tool_name) or _looks_readonly_tool(public_tool)
+    local_write_tool = _looks_local_write_tool(tool_name, public_tool)
     if not side_effect_class:
         if readonly_tool:
             side_effect_class = "safe"
             include_node_targets = False
         elif _looks_ui_navigation_tool(tool_name, public_tool):
             side_effect_class = "ui_navigation"
+            include_node_targets = False
+        elif local_write_tool:
+            side_effect_class = "local_write"
             include_node_targets = False
         elif effective_target and effective_target != str(local_node_id or "").strip():
             if any(tool_name.startswith(prefix) for prefix in _HUB_LOCAL_TOOL_PREFIXES):
@@ -172,8 +188,12 @@ def _runtime_action_risk(
         include_node_targets = False
     normalized_side_effect = str(side_effect_class or "").strip().lower().replace("-", "_")
     ignore_freeform = normalized_side_effect in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}
-    if side_effect_class == "safe":
+    if normalized_side_effect in {"safe", "read_only", "readonly"}:
         action = {"side_effect_class": "safe"}
+    elif local_write_tool and normalized_side_effect == "local_write":
+        action = {"side_effect_class": "local_write"}
+    elif _looks_ui_navigation_tool(tool_name, public_tool) and normalized_side_effect == "ui_navigation":
+        action = {"side_effect_class": "ui_navigation"}
     else:
         action = _without_empty(
             {
@@ -435,7 +455,7 @@ def _ensure_runtime_action_pending_action(
         raise
 
 
-def _enforce_runtime_action_gate(
+async def _enforce_runtime_action_gate(
     *,
     body: "ToolCall",
     skill_name: str,
@@ -463,15 +483,17 @@ def _enforce_runtime_action_gate(
     pending_action: Dict[str, Any] = {}
     pending_action_error = ""
     try:
-        pending_action = _ensure_runtime_action_pending_action(
-            body=body,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            payload=payload,
-            action_risk=action_risk,
-            target_node_id=target_node_id,
-            local_node_id=local_node_id,
-            ctx=ctx,
+        pending_action = await anyio.to_thread.run_sync(
+            lambda: _ensure_runtime_action_pending_action(
+                body=body,
+                skill_name=skill_name,
+                public_tool=public_tool,
+                payload=payload,
+                action_risk=action_risk,
+                target_node_id=target_node_id,
+                local_node_id=local_node_id,
+                ctx=ctx,
+            )
         )
         approval = _pending_action_approval(pending_action, action_risk)
         if approval:
@@ -990,7 +1012,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)
     local_node_id = str(getattr(conf, "node_id", "") or "").strip()
-    _enforce_runtime_action_gate(
+    await _enforce_runtime_action_gate(
         body=body,
         skill_name=skill_name,
         public_tool=public_tool,
@@ -1063,7 +1085,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
             )
         target = candidates[0]
         target_node_id = target.get("node_id", "")
-        _enforce_runtime_action_gate(
+        await _enforce_runtime_action_gate(
             body=body,
             skill_name=skill_name,
             public_tool=public_tool,
