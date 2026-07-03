@@ -1,6 +1,7 @@
 name: rasa_nlu_service_skill
 version: 0.1.5
 description: Local Rasa NLU-only service for AdaOS intent detection
+supported_locales: ["en", "ru"]
 runtime:
   kind: service
   env:

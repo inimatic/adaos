@@ -1,6 +1,7 @@
 name: AlarmSkill
 version: 0.1.0
 description: Простой голосовой будильник
+supported_locales: ["en", "ru"]
 entrypoint: handlers/main.py
 intents:
   - set.intent

@@ -1261,6 +1261,12 @@ def _write_scenario_manifest(root: Path, scenario: Mapping[str, Any], preview_st
     ]
     runtime = scenario.get("runtime") if isinstance(scenario.get("runtime"), Mapping) else {}
     skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+    raw_supported_locales = scenario.get("supported_locales") if isinstance(scenario.get("supported_locales"), list) else []
+    supported_locales = [
+        str(item).strip().lower()
+        for item in raw_supported_locales
+        if isinstance(item, str) and str(item).strip()
+    ] or ["en", "ru"]
     required = [
         str(item).strip()
         for item in (skills.get("required") if isinstance(skills.get("required"), list) else [])
@@ -1274,6 +1280,8 @@ def _write_scenario_manifest(root: Path, scenario: Mapping[str, Any], preview_st
         f"description: {json.dumps(str(scenario.get('description') or 'Builder rapid prototype scenario.'), ensure_ascii=False)}",
         f"version: {json.dumps(str(scenario.get('version') or '0.1.0'), ensure_ascii=False)}",
     ]
+    lines.append("supported_locales:")
+    lines.extend(f"  - {json.dumps(item, ensure_ascii=False)}" for item in supported_locales)
     if depends:
         lines.append("depends:")
         lines.extend(f"  - {json.dumps(item, ensure_ascii=False)}" for item in depends)
@@ -1548,6 +1556,7 @@ def _write_scenario_page_schema(root: Path, preview_state: Mapping[str, Any]) ->
     scenario.setdefault("name", root.name)
     scenario.setdefault("type", "desktop")
     scenario.setdefault("title", preview_state.get("title") or scenario.get("name") or scenario.get("id") or "Prototype")
+    scenario.setdefault("supported_locales", ["en", "ru"])
     depends = scenario.get("depends")
     depends_list = [str(item) for item in depends if isinstance(item, str)] if isinstance(depends, list) else []
     depends_list = [item for item in depends_list if item != SKILL_ID]

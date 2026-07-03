@@ -66,7 +66,8 @@ def test_phase4_personalization_options_and_current_device_status() -> None:
     options = client.get("/api/personalization/options", headers=TOKEN_HEADERS)
     assert options.status_code == 200
     payload = options.json()["options"]
-    assert any(item["value"] == "ru" for item in payload["languages"])
+    assert [item["value"] for item in payload["languages"]] == ["en", "ru"]
+    assert [item["value"] for item in payload["locales"]] == ["en-US", "ru-RU"]
     assert any(item["value"] == "UTC" for item in payload["timezones"])
     assert any(item["kind"] == "workspace" for item in payload["scopes"])
 

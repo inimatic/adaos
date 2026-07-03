@@ -1,6 +1,7 @@
 name: conversation_companions
 version: "0.1.1"
 description: "Draft conversational character skill for onboarding, profile tuning, and controlled user trials."
+supported_locales: ["en", "ru"]
 entry: "handlers/main.py"
 runtime:
   python: "3.11"

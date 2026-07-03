@@ -1,6 +1,7 @@
 name: "new_skill"
 version: "0.1.0"
 description: ""
+supported_locales: ["en", "ru"]
 entry: "handlers/main.py"
 default_tool: "chat"
 

@@ -1,6 +1,7 @@
 name: builder_skill
 version: "0.2.4"
 description: "Rapid prototyping Builder skill for creating and editing scenario UI drafts from voice or text dialog."
+supported_locales: ["en", "ru"]
 entry: "handlers/main.py"
 runtime:
   python: "3.11"

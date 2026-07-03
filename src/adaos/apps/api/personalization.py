@@ -40,9 +40,6 @@ _ID_RE = re.compile(r"[^A-Za-z0-9_.:@/-]+")
 _DEFAULT_LANGUAGE_OPTIONS = (
     {"value": "en", "label": "English", "locale": "en-US"},
     {"value": "ru", "label": "Russian", "locale": "ru-RU"},
-    {"value": "fr", "label": "French", "locale": "fr-FR"},
-    {"value": "ch", "label": "Chinese", "locale": "zh-CN"},
-    {"value": "ar", "label": "Arabic", "locale": "ar"},
 )
 _LANGUAGE_LABELS = {str(item["value"]): str(item["label"]) for item in _DEFAULT_LANGUAGE_OPTIONS}
 _LANGUAGE_LOCALES = {str(item["value"]): str(item["locale"]) for item in _DEFAULT_LANGUAGE_OPTIONS}

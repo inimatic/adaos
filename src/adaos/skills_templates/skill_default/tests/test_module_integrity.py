@@ -39,6 +39,7 @@ def test_template_declares_conversation_contract() -> None:
     manifest = yaml.safe_load((skill_root / "skill.yaml").read_text(encoding="utf-8")) or {}
 
     assert manifest["default_tool"] == "chat"
+    assert manifest["supported_locales"] == ["en", "ru"]
     assert set(manifest["exports"]["tools"]) >= {"chat", "ask_for_details", "remember_preference"}
     conversation = manifest["conversation"]
     assert conversation["dialog_channel"]["owner"] == "skill:new_skill"
