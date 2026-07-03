@@ -834,10 +834,16 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "pyproject.toml" in critical
     assert "src/adaos/build_info.py" in critical
     assert "src/adaos/domain/__init__.py" in critical
+    assert "src/adaos/domain/conversation.py" in critical
     assert "src/adaos/domain/event_envelope.py" in critical
+    assert "src/adaos/domain/personalization_access.py" in critical
     assert "src/adaos/domain/projection_keys.py" in critical
     assert "src/adaos/domain/projection_record.py" in critical
     assert "src/adaos/domain/projection_subscription.py" in critical
+    assert "src/adaos/domain/skill.py" in critical
+    assert "src/adaos/domain/skill_registry.py" in critical
+    assert "src/adaos/domain/types.py" in critical
+    assert "src/adaos/domain/workspace_manifest.py" in critical
     assert "src/adaos/interpreter_data/rasa_nlu_service_skill/skill.yaml" in critical
     assert "src/adaos/services/core_update_policy.py" in critical
     assert "src/adaos/services/nlu/rasa_skill_installer.py" in critical
@@ -850,7 +856,17 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/subnet/link_client.py" in critical
     assert "src/adaos/services/subnet/link_manager.py" in critical
     assert "src/adaos/services/eventbus.py" in critical
+    assert "src/adaos/ports/skill_context.py" in critical
+    assert "src/adaos/sdk/core/_ctx.py" in critical
     assert "src/adaos/sdk/core/decorators.py" in critical
+    assert "src/adaos/sdk/core/errors.py" in critical
     assert "src/adaos/sdk/data/bus.py" in critical
+    assert "src/adaos/sdk/data/context.py" in critical
+    assert "src/adaos/sdk/io/context.py" in critical
     assert "src/adaos/services/skills_loader_importlib.py" in critical
+    assert "src/adaos/services/skill/activation.py" in critical
+    assert "src/adaos/services/skill/context.py" in critical
     assert "src/adaos/services/skill/manager.py" in critical
+    assert "src/adaos/services/skill/runtime_env.py" in critical
+    assert "src/adaos/services/status/hot_events.py" in critical
+    assert "src/adaos/services/workspace_registry.py" in critical

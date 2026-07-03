@@ -529,6 +529,7 @@ def test_skill_runtime_rebuild_webspace_endpoint_rebuilds_once(monkeypatch) -> N
     scenario_mgr = _FakeScenarioManager()
     client = _make_client(skill_mgr, scenario_mgr)
     rebuilds: list[tuple[str, str, str, str | None]] = []
+    invalidations: list[bool] = []
 
     async def _rebuild(*args, **kwargs):
         rebuilds.append((
@@ -539,6 +540,7 @@ def test_skill_runtime_rebuild_webspace_endpoint_rebuilds_once(monkeypatch) -> N
         ))
         return None
 
+    monkeypatch.setattr(skills, "invalidate_local_capacity_cache", lambda: invalidations.append(True))
     monkeypatch.setattr(skills, "rebuild_webspace_projection", _rebuild)
 
     resp = client.post(
@@ -548,7 +550,46 @@ def test_skill_runtime_rebuild_webspace_endpoint_rebuilds_once(monkeypatch) -> N
 
     assert resp.status_code == 200
     assert resp.json()["accepted"] is True
+    assert invalidations == [True]
     assert rebuilds == [("default", "skill_batch_runtime_sync", "skill_runtime", None)]
+
+
+def test_skill_runtime_notify_activated_invalidates_capacity_cache(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    client = _make_client(skill_mgr, scenario_mgr)
+    invalidations: list[bool] = []
+    emitted: list[tuple[str, dict[str, Any], str]] = []
+
+    async def _reload(_ctx, skill_name: str):
+        return {"ok": True, "skill": skill_name, "handlers": ["handlers/main.py"]}
+
+    monkeypatch.setattr(skills, "get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(skills, "invalidate_local_capacity_cache", lambda: invalidations.append(True))
+    monkeypatch.setattr(skills, "_reload_live_skill_handlers", _reload)
+    monkeypatch.setattr(skills, "invalidate_webspace_materialization_cache", lambda *args, **kwargs: {"status": "invalidated"})
+    monkeypatch.setattr(skills, "bus_emit", lambda bus, typ, payload, source: emitted.append((typ, payload, source)))
+
+    resp = client.post(
+        "/api/skills/runtime/notify-activated",
+        json={"name": "cv_descriptor", "webspace_id": "desktop"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert invalidations == [True]
+    assert emitted == [
+        (
+            "skills.activated",
+            {
+                "skill_name": "cv_descriptor",
+                "space": "default",
+                "webspace_id": "desktop",
+                "defer_webspace_rebuild": False,
+            },
+            "api.skills",
+        )
+    ]
 
 
 def test_skill_update_returns_not_found_when_source_skill_missing(monkeypatch) -> None:

@@ -135,6 +135,24 @@ class SubnetRepo:
         self._scenario_capacity_cache: dict[str, List[Dict[str, Any]]] = {}
         self._ensure_schema()
 
+    def invalidate_capacity_cache(self, node_id: str | None = None) -> None:
+        """
+        Drop cached per-node capacity rows.
+
+        Capacity may be updated by a separate CLI process that writes to the
+        shared SQLite database. Long-running API processes must be able to
+        refresh their in-process view before rebuilding webspace projections.
+        """
+        token = str(node_id or "").strip()
+        if token:
+            self._io_capacity_cache.pop(token, None)
+            self._skill_capacity_cache.pop(token, None)
+            self._scenario_capacity_cache.pop(token, None)
+            return
+        self._io_capacity_cache.clear()
+        self._skill_capacity_cache.clear()
+        self._scenario_capacity_cache.clear()
+
     # -------------------- schema --------------------
     def _ensure_schema(self) -> None:
         with self.sql.connect() as con:

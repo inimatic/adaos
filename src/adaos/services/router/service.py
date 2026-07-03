@@ -4754,21 +4754,13 @@ class RouterService:
             target_node_id = str(action_meta.get("target_node_id") or meta.get("target_node_id") or "").strip() or None
             materialized_chat_appends, materialization_probe = _subscribe_dialog_materialization_probe()
             try:
-                if skill == BUILDER_SKILL_ID:
-                    result = _call_runtime_skill_tool(
-                        skill,
-                        tool,
-                        dict(action_payload),
-                        dict(action_meta),
-                    )
-                else:
-                    result = await asyncio.to_thread(
-                        _call_runtime_skill_tool,
-                        skill,
-                        tool,
-                        dict(action_payload),
-                        dict(action_meta),
-                    )
+                result = await asyncio.to_thread(
+                    _call_runtime_skill_tool,
+                    skill,
+                    tool,
+                    dict(action_payload),
+                    dict(action_meta),
+                )
             except Exception:
                 logging.getLogger("adaos.router.voice_chat").warning(
                     "dialog follow-up tool failed skill=%s tool=%s",

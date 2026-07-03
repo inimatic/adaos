@@ -197,7 +197,7 @@ def test_node_current_falls_back_to_root_token_and_embeds_zone_bootstrap_args(mo
 
 
 @pytest.mark.asyncio
-async def test_on_prepare_writes_pending_before_background_result(monkeypatch):
+async def test_on_prepare_wait_path_writes_final_result_once(monkeypatch):
     mod = _load_adaos_connect_module()
     writes: list[tuple[str, dict[str, object]]] = []
 
@@ -230,6 +230,49 @@ async def test_on_prepare_writes_pending_before_background_result(monkeypatch):
 
     await mod.on_prepare({"mode": "node", "webspace_id": "ws-42"})
 
+    assert len(writes) == 1
+    last_ws, last_payload = writes[-1]
+    assert last_ws == "ws-42"
+    assert last_payload["status"] == "ready"
+    assert last_payload["busy"] is False
+    assert last_payload["code"] == "DONE"
+
+
+@pytest.mark.asyncio
+async def test_prepare_background_mode_writes_pending_before_result(monkeypatch):
+    mod = _load_adaos_connect_module()
+    writes: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        mod,
+        "_resolve_context",
+        lambda: {
+            "cfg": SimpleNamespace(),
+            "hub_id": "sn_test",
+            "zone_id": "ru",
+            "verify": True,
+            "cert_tuple": None,
+            "root_base_url": "https://ru.api.inimatic.com",
+            "app_base_url": "https://inimatic.web.app",
+        },
+    )
+
+    async def _write_current(webspace_id: str, current: dict[str, object]) -> None:
+        writes.append((webspace_id, copy.deepcopy(current)))
+
+    def _prepare_current(mode: str, context: dict[str, object], *, request_id: str) -> dict[str, object]:
+        time.sleep(0.05)
+        current = mod._decorate_current(mod._base_current(mode), context, request_id=request_id, status="ready", busy=False)
+        current["summary"] = "ready"
+        current["code"] = "DONE"
+        return current
+
+    monkeypatch.setattr(mod, "_write_current", _write_current)
+    monkeypatch.setattr(mod, "_prepare_current", _prepare_current)
+
+    result = await mod._prepare_from_payload({"mode": "node", "webspace_id": "ws-42"}, wait=False)
+
+    assert result["accepted"] is True
     assert writes
     first_ws, first_payload = writes[0]
     assert first_ws == "ws-42"
@@ -302,6 +345,24 @@ async def test_on_prepare_reuses_cached_result_while_code_is_alive(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generic_prepare_ignores_subtype_events(monkeypatch):
+    mod = _load_adaos_connect_module()
+    calls: list[tuple[dict[str, object], bool]] = []
+
+    async def _prepare_from_payload(payload: dict[str, object], *, wait: bool = False) -> dict[str, object]:
+        calls.append((copy.deepcopy(payload), wait))
+        return {"ok": True}
+
+    monkeypatch.setattr(mod, "_prepare_from_payload", _prepare_from_payload)
+
+    await mod.on_prepare(SimpleNamespace(type="adaos_connect.prepare.browser", payload={"webspace_id": "desktop"}))
+    assert calls == []
+
+    await mod.on_prepare(SimpleNamespace(type="adaos_connect.prepare", payload={"mode": "node", "webspace_id": "desktop"}))
+    assert calls == [({"mode": "node", "webspace_id": "desktop"}, True)]
+
+
+@pytest.mark.asyncio
 async def test_on_prepare_renews_code_after_cache_expires(monkeypatch):
     mod = _load_adaos_connect_module()
     writes: list[tuple[str, dict[str, object]]] = []
@@ -351,6 +412,6 @@ async def test_on_prepare_renews_code_after_cache_expires(monkeypatch):
     await asyncio.sleep(0.05)
 
     assert prepare_calls["count"] == 2
-    assert writes[0][1]["status"] == "pending"
-    assert writes[-1][1]["status"] == "ready"
-    assert writes[-1][1]["code"] == "CACHE-2"
+    assert len(writes) == 1
+    assert writes[0][1]["status"] == "ready"
+    assert writes[0][1]["code"] == "CACHE-2"

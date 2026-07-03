@@ -26,6 +26,7 @@ from adaos.services.skill.runtime_migration_worker import (
     read_status as read_skill_runtime_migration_status,
     start_background_migration,
 )
+from adaos.services.capacity import invalidate_local_capacity_cache
 from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 from adaos.services.workspace_registry import build_registry_entry, find_workspace_registry_entry, list_workspace_registry_entries
@@ -628,6 +629,7 @@ async def runtime_activate(
     ctx: AgentContext = Depends(get_ctx),
 ):
     webspace_id = body.webspace_id or "default"
+    invalidate_local_capacity_cache()
     try:
         slot = mgr.activate_for_space(body.name, version=body.version, slot=body.slot, space="default", webspace_id=webspace_id)
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
@@ -682,6 +684,7 @@ async def runtime_notify_activated(body: RuntimeNotifyActivatedReq):
         "webspace_id": webspace_id,
         "defer_webspace_rebuild": bool(body.defer_webspace_rebuild),
     }
+    invalidate_local_capacity_cache()
     reload_result = await _reload_live_skill_handlers(ctx, body.name)
     materialization_cache = invalidate_webspace_materialization_cache(
         webspace_id,
@@ -696,6 +699,7 @@ async def runtime_notify_activated(body: RuntimeNotifyActivatedReq):
 @router.post("/runtime/rebuild-webspace")
 async def runtime_rebuild_webspace(body: RuntimeRebuildWebspaceReq):
     webspace_id = body.webspace_id or default_webspace_id()
+    invalidate_local_capacity_cache()
     await rebuild_webspace_projection(
         webspace_id=webspace_id,
         action="skill_batch_runtime_sync",

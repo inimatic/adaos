@@ -204,6 +204,38 @@ def get_local_capacity() -> Dict[str, Any]:
     return _normalize_capacity_snapshot(load_capacity_from_node_yaml())
 
 
+def invalidate_local_capacity_cache(*, node_id: str | None = None) -> None:
+    """
+    Invalidate in-process capacity caches for the local node.
+
+    This is needed when another process, usually the CLI, updates the shared
+    registry-backed capacity in SQLite and then asks the long-running API
+    process to rebuild webspace projections.
+    """
+    _CAPACITY_CACHE.clear()
+    try:
+        from adaos.services.node_config import load_config
+        from adaos.services.registry.subnet_directory import get_directory
+
+        conf = load_config()
+        target_node_id = str(node_id or getattr(conf, "node_id", "") or "").strip()
+        repo = get_directory().repo
+        invalidate = getattr(repo, "invalidate_capacity_cache", None)
+        if callable(invalidate):
+            invalidate(target_node_id or None)
+            return
+        for attr in ("_io_capacity_cache", "_skill_capacity_cache", "_scenario_capacity_cache"):
+            cache = getattr(repo, attr, None)
+            if not isinstance(cache, dict):
+                continue
+            if target_node_id:
+                cache.pop(target_node_id, None)
+            else:
+                cache.clear()
+    except Exception:
+        return
+
+
 # ----- legacy node.yaml compatibility helpers -----
 
 def _resolve_base_dir(base_dir: Path | None = None) -> Path:

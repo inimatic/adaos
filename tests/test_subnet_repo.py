@@ -82,6 +82,44 @@ def test_touch_heartbeat_rewrites_capacity_when_materially_changed(tmp_path: Pat
     assert after[0]["version"] == "1.1.0"
 
 
+def test_capacity_cache_can_be_invalidated_after_external_write(tmp_path: Path) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+    api_repo = SubnetRepo(sql)
+    cli_repo = SubnetRepo(sql)
+    api_repo.upsert_node(
+        {
+            "node_id": "member-1",
+            "subnet_id": "alpha",
+            "roles": ["hub"],
+            "hostname": "member-1",
+            "base_url": "http://member-1.local",
+            "node_state": "ready",
+            "last_seen": 1.0,
+        }
+    )
+    api_repo.replace_skill_capacity(
+        "member-1",
+        [{"name": "voice_chat_skill", "version": "1.0.0", "active": True}],
+    )
+    assert [item["name"] for item in api_repo.skills_for_node("member-1")] == ["voice_chat_skill"]
+
+    cli_repo.replace_skill_capacity(
+        "member-1",
+        [
+            {"name": "voice_chat_skill", "version": "1.0.0", "active": True},
+            {"name": "cv_descriptor", "version": "0.1.1", "active": True},
+        ],
+    )
+    assert [item["name"] for item in api_repo.skills_for_node("member-1")] == ["voice_chat_skill"]
+
+    api_repo.invalidate_capacity_cache("member-1")
+
+    assert {item["name"] for item in api_repo.skills_for_node("member-1")} == {
+        "voice_chat_skill",
+        "cv_descriptor",
+    }
+
+
 def test_touch_heartbeat_updates_base_url_when_runtime_port_changes(tmp_path: Path) -> None:
     sql = SQLite(_FakePaths(tmp_path))
     repo = SubnetRepo(sql)

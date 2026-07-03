@@ -2477,6 +2477,72 @@ def test_switch_webspace_scenario_same_current_ready_skips_rebuild_and_only_pers
     assert "wait_rebuild" not in result["timings_ms"]
 
 
+def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materialization(monkeypatch) -> None:
+    webspace_id = "phase2-same-current-mismatch"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Phase 2 Same Current Mismatch",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+
+    fake_state = _patch_switch_dependencies(
+        monkeypatch,
+        state={
+            "ui": _FakeMap(
+                {
+                    "current_scenario": "web_desktop",
+                    "application": {"desktop": {"pageSchema": {"id": "prompt_ide"}}},
+                }
+            ),
+            "registry": _FakeMap(),
+            "data": _FakeMap(),
+            "runtime": _FakeMap(
+                {
+                    "environment": {
+                        "materialization": {
+                            "scenario_id": "prompt_engineer_scenario",
+                            "required_branches": ["ui.application", "data.catalog"],
+                        }
+                    }
+                }
+            ),
+        },
+    )
+    webspace_runtime_module._set_webspace_rebuild_status(
+        webspace_id,
+        status="ready",
+        pending=False,
+        scenario_id="web_desktop",
+        resolver={"source": "loader:workspace", "legacy_fallback": False, "cache_hit": True},
+        apply_summary={
+            "branch_count": 6,
+            "changed_branches": 0,
+            "unchanged_branches": 6,
+            "failed_branches": 0,
+            "changed_paths": [],
+            "defaults_failed": False,
+        },
+        timings_ms={"projection_refresh": 1.5, "semantic_rebuild": 2.5, "total": 4.0},
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.switch_webspace_scenario(
+            webspace_id,
+            "web_desktop",
+            wait_for_rebuild=True,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result.get("switch_skipped") is not True
+    assert result["background_rebuild"] is False
+    assert fake_state["_meta"]["rebuilds"] == [webspace_id]
+    assert "read_materialization_scenario_before" in result["timings_ms"]
+
+
 def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(monkeypatch) -> None:
     webspace_id = "phase2-same-current-pending"
     ensure_workspace(webspace_id)

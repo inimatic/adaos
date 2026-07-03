@@ -56,29 +56,45 @@ UPDATE_CONTROL_PATHS: tuple[str, ...] = (
 
 RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/domain/__init__.py",
+    "src/adaos/domain/conversation.py",
     "src/adaos/domain/event_envelope.py",
+    "src/adaos/domain/personalization_access.py",
     "src/adaos/domain/projection_keys.py",
     "src/adaos/domain/projection_record.py",
     "src/adaos/domain/projection_subscription.py",
+    "src/adaos/domain/skill.py",
+    "src/adaos/domain/skill_registry.py",
+    "src/adaos/domain/types.py",
+    "src/adaos/domain/workspace_manifest.py",
     "src/adaos/interpreter_data/rasa_nlu_service_skill/skill.yaml",
     "src/adaos/services/eventbus.py",
     "src/adaos/services/nlu/rasa_skill_installer.py",
     # Installed skill runtimes import SDK/service surfaces from the root
     # environment. If these paths drift from the active slot, skill tools can
     # pass core validation and still fail later with ImportError.
+    "src/adaos/ports/skill_context.py",
+    "src/adaos/sdk/core/_ctx.py",
     "src/adaos/sdk/core/decorators.py",
+    "src/adaos/sdk/core/errors.py",
     "src/adaos/sdk/data/bus.py",
+    "src/adaos/sdk/data/context.py",
     "src/adaos/sdk/data/device_access.py",
     "src/adaos/sdk/io/__init__.py",
+    "src/adaos/sdk/io/context.py",
     "src/adaos/sdk/io/endpoint_audio.py",
     "src/adaos/sdk/io/media.py",
     "src/adaos/sdk/redevice.py",
     "src/adaos/services/endpoint_audio.py",
     "src/adaos/services/endpoint_router.py",
     "src/adaos/services/skills_loader_importlib.py",
+    "src/adaos/services/skill/activation.py",
+    "src/adaos/services/skill/context.py",
     "src/adaos/services/skill/manager.py",
+    "src/adaos/services/skill/runtime_env.py",
     "src/adaos/services/models/__init__.py",
     "src/adaos/services/models/artifacts.py",
+    "src/adaos/services/status/hot_events.py",
+    "src/adaos/services/workspace_registry.py",
 )
 
 BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
