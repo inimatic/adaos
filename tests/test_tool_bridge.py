@@ -221,6 +221,24 @@ def test_runtime_action_risk_allows_cv_descriptor_capture_payload() -> None:
     assert risk["approval_required"] is False
 
 
+def test_runtime_action_risk_allows_slideshow_redevice_refresh_tick() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="slideshow_skill:refresh_redevice_slideshow_state",
+        arguments={"code": "", "webspace_id": "desktop"},
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="slideshow_skill",
+        public_tool="refresh_redevice_slideshow_state",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
 def test_runtime_action_risk_treats_prompt_read_tools_as_readonly() -> None:
     body = tool_bridge_module.ToolCall(
         tool="prompt_engineer_skill:prompt_read_project_file",

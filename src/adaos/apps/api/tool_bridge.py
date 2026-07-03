@@ -49,6 +49,7 @@ _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "cv_descriptor:cv_descriptor_clear",
     "cv_descriptor:cv_descriptor_runtime_command",
     "cv_descriptor:cv_descriptor_record_runtime_event",
+    "slideshow_skill:refresh_redevice_slideshow_state",
     "prompt_engineer_skill:prompt_save_base_tz",
     "prompt_engineer_skill:prompt_append_tz_addendum",
     "prompt_engineer_skill:prompt_save_project_file",
