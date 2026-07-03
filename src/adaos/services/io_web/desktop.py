@@ -1258,6 +1258,39 @@ class WebDesktopService:
                 name=f"web-desktop-set-widget-order-{webspace}",
             )
 
+    def set_hidden_sections_with_live_room(
+        self,
+        hidden_sections: List[str],
+        webspace_id: Optional[str] = None,
+    ) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        next_hidden_sections = _clone_text_list(hidden_sections)
+        self._persist_overlay_hidden_sections(webspace, next_hidden_sections)
+
+        def _mutator(doc: Any, txn: Any) -> None:
+            self._apply_hidden_sections_state(doc, txn, next_hidden_sections)
+
+        live_applied = mutate_live_room(
+            webspace,
+            _mutator,
+            root_names=["data", "ui"],
+            source="io_web.desktop",
+            owner="core:desktop",
+            channel="core.desktop.live_room",
+        )
+        if not live_applied:
+            _log.debug("mutate_live_room skipped for set_hidden_sections webspace=%s", webspace)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.set_hidden_sections_async(next_hidden_sections, webspace))
+        else:
+            loop.create_task(
+                self.set_hidden_sections_async(next_hidden_sections, webspace),
+                name=f"web-desktop-set-hidden-sections-{webspace}",
+            )
+
     def set_snapshot_with_live_room(
         self,
         snapshot: WebDesktopSnapshot,

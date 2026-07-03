@@ -4882,35 +4882,38 @@ async def node_yjs_update_desktop(
             "error": "hub_role_required",
         }
     svc = WebDesktopService()
-    current = await svc.get_snapshot_async(target_webspace_id)
-    next_snapshot = WebDesktopSnapshot(
-        installed=current.installed,
-        pinned_widgets=current.pinned_widgets,
-        topbar=current.topbar,
-        page_schema=current.page_schema,
-        icon_order=current.icon_order,
-        widget_order=current.widget_order,
-        hidden_sections=current.hidden_sections,
-    )
     if payload.installed is not None:
         installed = payload.installed if isinstance(payload.installed, dict) else {}
-        next_snapshot.installed = WebDesktopInstalled(
-            apps=list(installed.get("apps") or []),
-            widgets=list(installed.get("widgets") or []),
+        svc.set_installed_with_live_room(
+            WebDesktopInstalled(
+                apps=list(installed.get("apps") or []),
+                widgets=list(installed.get("widgets") or []),
+                removed_apps=list(installed.get("removedApps") or installed.get("removed_apps") or []),
+                removed_widgets=list(installed.get("removedWidgets") or installed.get("removed_widgets") or []),
+            ),
+            target_webspace_id,
         )
     if payload.pinnedWidgets is not None:
-        next_snapshot.pinned_widgets = list(payload.pinnedWidgets or [])
+        svc.set_pinned_widgets_with_live_room(list(payload.pinnedWidgets or []), target_webspace_id)
     if payload.topbar is not None:
-        next_snapshot.topbar = list(payload.topbar or [])
+        svc.set_topbar_with_live_room(list(payload.topbar or []), target_webspace_id)
     if payload.pageSchema is not None:
-        next_snapshot.page_schema = dict(payload.pageSchema or {})
+        svc.set_page_schema_with_live_room(dict(payload.pageSchema or {}), target_webspace_id)
     if payload.iconOrder is not None:
-        next_snapshot.icon_order = [str(item or "").strip() for item in payload.iconOrder if str(item or "").strip()]
+        svc.set_icon_order_with_live_room(
+            [str(item or "").strip() for item in payload.iconOrder if str(item or "").strip()],
+            target_webspace_id,
+        )
     if payload.widgetOrder is not None:
-        next_snapshot.widget_order = [str(item or "").strip() for item in payload.widgetOrder if str(item or "").strip()]
+        svc.set_widget_order_with_live_room(
+            [str(item or "").strip() for item in payload.widgetOrder if str(item or "").strip()],
+            target_webspace_id,
+        )
     if payload.hiddenSections is not None:
-        next_snapshot.hidden_sections = [str(item or "").strip() for item in payload.hiddenSections if str(item or "").strip()]
-    svc.set_snapshot_with_live_room(next_snapshot, target_webspace_id)
+        svc.set_hidden_sections_with_live_room(
+            [str(item or "").strip() for item in payload.hiddenSections if str(item or "").strip()],
+            target_webspace_id,
+        )
     desktop = await svc.get_snapshot_async(target_webspace_id)
     return {
         "ok": True,

@@ -1918,8 +1918,8 @@ def test_node_yjs_set_pinned_widgets_endpoint_uses_desktop_service(monkeypatch) 
     assert result["runtime"]["webspace_id"] == "desktop"
 
 
-def test_node_yjs_update_desktop_endpoint_uses_snapshot_update(monkeypatch) -> None:
-    captured: list[dict[str, object]] = []
+def test_node_yjs_update_desktop_endpoint_uses_granular_updates(monkeypatch) -> None:
+    captured: list[tuple[str, object, str | None]] = []
 
     class _DesktopService:
         async def get_snapshot_async(self, webspace_id: str | None = None):
@@ -1934,19 +1934,26 @@ def test_node_yjs_update_desktop_endpoint_uses_snapshot_update(monkeypatch) -> N
                 hidden_sections=["node:member-01"],
             )
 
-        def set_snapshot_with_live_room(self, snapshot, webspace_id: str | None = None) -> None:
-            captured.append(
-                {
-                    "webspace_id": str(webspace_id or ""),
-                    "installed": snapshot.installed.to_dict(),
-                    "pinnedWidgets": list(snapshot.pinned_widgets),
-                    "topbar": list(snapshot.topbar),
-                    "pageSchema": dict(snapshot.page_schema),
-                    "iconOrder": list(snapshot.icon_order),
-                    "widgetOrder": list(snapshot.widget_order),
-                    "hiddenSections": list(snapshot.hidden_sections),
-                }
-            )
+        def set_installed_with_live_room(self, installed, webspace_id: str | None = None) -> None:
+            captured.append(("installed", installed.to_dict(), webspace_id))
+
+        def set_pinned_widgets_with_live_room(self, pinned_widgets, webspace_id: str | None = None) -> None:
+            captured.append(("pinnedWidgets", list(pinned_widgets), webspace_id))
+
+        def set_topbar_with_live_room(self, topbar, webspace_id: str | None = None) -> None:
+            captured.append(("topbar", list(topbar), webspace_id))
+
+        def set_page_schema_with_live_room(self, page_schema, webspace_id: str | None = None) -> None:
+            captured.append(("pageSchema", dict(page_schema), webspace_id))
+
+        def set_icon_order_with_live_room(self, icon_order, webspace_id: str | None = None) -> None:
+            captured.append(("iconOrder", list(icon_order), webspace_id))
+
+        def set_widget_order_with_live_room(self, widget_order, webspace_id: str | None = None) -> None:
+            captured.append(("widgetOrder", list(widget_order), webspace_id))
+
+        def set_hidden_sections_with_live_room(self, hidden_sections, webspace_id: str | None = None) -> None:
+            captured.append(("hiddenSections", list(hidden_sections), webspace_id))
 
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
     monkeypatch.setattr(node_api_module, "WebDesktopService", _DesktopService)
@@ -1969,25 +1976,18 @@ def test_node_yjs_update_desktop_endpoint_uses_snapshot_update(monkeypatch) -> N
     )
 
     assert captured == [
-        {
-            "webspace_id": "desktop",
-            "installed": {
-                "apps": ["scenario:web_desktop"],
-                "widgets": ["weather"],
-                "removedApps": [],
-                "removedWidgets": [],
-            },
-            "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile"}],
-            "topbar": [{"id": "overlay-home", "label": "Overlay Home"}],
-            "pageSchema": {
+        ("topbar", [{"id": "overlay-home", "label": "Overlay Home"}], "desktop"),
+        (
+            "pageSchema",
+            {
                 "id": "desktop-custom",
                 "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
                 "widgets": [{"id": "desktop-widgets", "type": "desktop.widgets", "area": "main"}],
             },
-            "iconOrder": ["scenario:web_desktop"],
-            "widgetOrder": ["infra-status"],
-            "hiddenSections": ["node:member-01"],
-        }
+            "desktop",
+        ),
+        ("iconOrder", ["scenario:web_desktop"], "desktop"),
+        ("widgetOrder", ["infra-status"], "desktop"),
     ]
     assert result["ok"] is True
     assert result["runtime"]["webspace_id"] == "desktop"
