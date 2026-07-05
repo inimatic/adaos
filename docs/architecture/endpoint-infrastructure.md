@@ -117,6 +117,19 @@ The current ReDevice implementation already covers the core endpoint model:
   display/slideshow surfaces, native settings intents, logout/re-admission,
   active-app reporting, VAD/PTT audio capture, bounded audio segment upload,
   and degraded-friendly diagnostics.
+- Local LAN admission is implemented as a hub-side endpoint onboarding path:
+  the hub opens a short discovery window, unpaired ReDevice agents submit
+  diagnostics and manifests over LAN, the hub publishes a pending operator
+  approval action, and approved endpoints receive scoped credentials for the
+  existing `/v1/redevice/*` command-polling protocol.
+- Endpoint records can carry both the endpoint-facing LAN `endpoint_root_url`
+  and hub-local `root_url` used by SDK command senders. This prevents local
+  skills from accidentally routing a LAN-admitted endpoint through public root
+  relay.
+- The local command-polling queue is lease and acknowledgement based. A command
+  is redelivered until the endpoint acknowledges it or it expires; it is not
+  removed merely because `/commands/next` selected it. This is required for
+  restart and short-link-failure tolerance.
 
 The main gap is no longer endpoint visibility or a settings dashboard. The
 remaining infrastructure work is to promote command-scoped compatibility routes
@@ -168,6 +181,14 @@ current active endpoint, and keep previous admission codes only in
 `admission_history`. SDK helpers may resolve an old pair code to the current
 endpoint for operator convenience, but commands must be sent to the current
 `pair_code` and current policy.
+
+For LAN-admitted endpoints the registry also stores:
+
+- `root_url`: hub-local control base used by SDK calls from hub skills;
+- `endpoint_root_url`: endpoint-facing LAN base sent to the native agent;
+- `endpoint_token`: scoped token presented by the endpoint on poll, event, and
+  acknowledgement calls;
+- `admission_session_id`: the LAN request that produced the current policy.
 
 ## Endpoint Services
 

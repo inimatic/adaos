@@ -201,6 +201,25 @@ def pair_code(endpoint: Mapping[str, Any]) -> str:
     return _text(endpoint.get("code") or endpoint.get("pair_code"))
 
 
+def endpoint_root_base(endpoint: Mapping[str, Any] | None) -> str | None:
+    item = _mapping(endpoint)
+    policy = _mapping(item.get("endpoint_policy"))
+    manifest = _mapping(item.get("endpoint_manifest"))
+    candidates = (
+        item.get("root_url"),
+        item.get("control_root_url"),
+        policy.get("control_root_url"),
+        policy.get("root_url"),
+        manifest.get("control_root_url"),
+        manifest.get("root_url"),
+    )
+    for candidate in candidates:
+        token = _text(candidate)
+        if token:
+            return token.rstrip("/")
+    return None
+
+
 def _endpoint_rank(endpoint: Mapping[str, Any]) -> tuple[int, int]:
     state = online_state(endpoint.get("last_seen_at"))
     state_rank = {"online": 0, "stale": 1, "unknown": 2, "offline": 3}.get(state, 4)
@@ -532,6 +551,8 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
         "assignment": _text(endpoint.get("assignment")) or None,
         "assignment_updated_at": endpoint.get("assignment_updated_at"),
         "endpoint_assignment": _mapping(endpoint.get("endpoint_assignment")) or None,
+        "root_url": endpoint_root_base(endpoint),
+        "endpoint_root_url": _text(endpoint.get("endpoint_root_url")) or _text(policy.get("root_url")) or None,
         "service_state": _mapping(endpoint.get("service_state")) or None,
         "transport_profile": transport_profile(endpoint),
         "aliases": list(endpoint.get("aliases") or []),
@@ -588,6 +609,46 @@ def current_endpoint_records(endpoints: list[Mapping[str, Any]]) -> list[dict[st
             result.append(current)
     result.extend(anonymous)
     result.sort(key=_endpoint_rank)
+    return result
+
+
+def _local_registry_endpoints(*, hub_id: str | None = None, owner_id: str | None = None) -> list[dict[str, Any]]:
+    try:
+        from adaos.services import access_links
+    except Exception:
+        return []
+    expected_hub = _text(hub_id)
+    expected_owner = _text(owner_id)
+    result: list[dict[str, Any]] = []
+    try:
+        entries = access_links.list_links("redevice")
+    except Exception:
+        return []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        item = dict(entry)
+        if not endpoint_matches_scope(item, hub_id=expected_hub, owner_id=expected_owner):
+            continue
+        code = pair_code(item)
+        eid = endpoint_id(item)
+        if not code or not eid:
+            continue
+        state = "consumed" if _text(item.get("connection_state")) in {"online", "stale"} else "approved"
+        if bool(item.get("revoked")) or _text(item.get("admission_policy")) == "deny":
+            state = "revoked"
+        result.append(
+            {
+                **item,
+                "code": code,
+                "pair_code": code,
+                "endpoint_id": eid,
+                "state": state,
+                "root_url": endpoint_root_base(item),
+                "endpoint_root_url": _text(item.get("endpoint_root_url")) or None,
+                "last_seen_at": item.get("last_seen_at"),
+            }
+        )
     return result
 
 
@@ -653,7 +714,16 @@ class ReDeviceBridge:
             for item in endpoints
             if endpoint_matches_scope(item, hub_id=expected_hub, owner_id=expected_owner)
         ]
-        endpoints = current_endpoint_records(endpoints)
+        merged = list(endpoints)
+        seen = {endpoint_id(item) for item in merged if endpoint_id(item)}
+        for local in _local_registry_endpoints(hub_id=expected_hub, owner_id=expected_owner):
+            eid = endpoint_id(local)
+            if eid and eid in seen:
+                continue
+            if eid:
+                seen.add(eid)
+            merged.append(local)
+        endpoints = current_endpoint_records(merged)
         if sync_registry:
             self.sync_local_registry(endpoints)
         return endpoints
@@ -682,6 +752,9 @@ class ReDeviceBridge:
                     pair_code=pair_code(endpoint) or None,
                     hub_id=_text(scope.get("hub_id")) or None,
                     owner_id=_text(scope.get("owner_id")) or None,
+                    root_url=endpoint_root_base(endpoint),
+                    endpoint_root_url=_text(endpoint.get("endpoint_root_url")) or _text(policy.get("root_url")) or None,
+                    endpoint_token=_text(endpoint.get("endpoint_token")) or None,
                     online=compact.get("online_state") in {"online", "stale"},
                     connection_state=_text(compact.get("online_state")) or None,
                     trust_level=trust,

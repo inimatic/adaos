@@ -244,6 +244,10 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
                 "hub_id": str(data.get("hub_id") or data.get("subnet_id") or "").strip() or None,
                 "subnet_id": str(data.get("subnet_id") or data.get("hub_id") or "").strip() or None,
                 "owner_id": str(data.get("owner_id") or "").strip() or None,
+                "root_url": str(data.get("root_url") or "").strip() or None,
+                "endpoint_root_url": str(data.get("endpoint_root_url") or "").strip() or None,
+                "endpoint_token": str(data.get("endpoint_token") or "").strip() or None,
+                "admission_session_id": str(data.get("admission_session_id") or "").strip() or None,
                 "trust_level": str(data.get("trust_level") or "").strip().lower() or None,
                 "endpoint_policy": _mapping_or_none(data.get("endpoint_policy")),
                 "endpoint_manifest": _mapping_or_none(data.get("endpoint_manifest")),
@@ -582,6 +586,10 @@ def touch_redevice_link(
     pair_code: str | None = None,
     hub_id: str | None = None,
     owner_id: str | None = None,
+    root_url: str | None = None,
+    endpoint_root_url: str | None = None,
+    endpoint_token: str | None = None,
+    admission_session_id: str | None = None,
     online: bool | None = None,
     connection_state: str | None = None,
     trust_level: str | None = None,
@@ -614,6 +622,14 @@ def touch_redevice_link(
         entry["subnet_id"] = str(hub_id or "").strip() or None
     if owner_id is not None:
         entry["owner_id"] = str(owner_id or "").strip() or None
+    if root_url is not None:
+        entry["root_url"] = str(root_url or "").strip() or None
+    if endpoint_root_url is not None:
+        entry["endpoint_root_url"] = str(endpoint_root_url or "").strip() or None
+    if endpoint_token is not None:
+        entry["endpoint_token"] = str(endpoint_token or "").strip() or None
+    if admission_session_id is not None:
+        entry["admission_session_id"] = str(admission_session_id or "").strip() or None
     if online is not None:
         entry["online"] = bool(online)
     if connection_state is not None:

@@ -469,6 +469,8 @@ class DeviceInventoryService:
                         "base_url": None,
                         "endpoint_id": endpoint_id,
                         "pair_code": _text_or_none(entry.get("pair_code") or entry.get("code")),
+                        "root_url": _text_or_none(entry.get("root_url")),
+                        "endpoint_root_url": _text_or_none(entry.get("endpoint_root_url")),
                     },
                     "policy": _build_policy_block(
                         kind="redevice",
@@ -488,6 +490,8 @@ class DeviceInventoryService:
                         "snapshot_ready": None,
                         "snapshot_state": _text_or_none(state),
                         "route_mode": "root_command_poll",
+                        "root_url": _text_or_none(entry.get("root_url")),
+                        "endpoint_root_url": _text_or_none(entry.get("endpoint_root_url")),
                         "connected_to_subnet": bool(entry.get("online")),
                         "runtime_version": _text_or_none(version_info.get("software_version")),
                         "software_version": _text_or_none(version_info.get("software_version")),

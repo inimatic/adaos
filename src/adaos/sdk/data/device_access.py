@@ -138,6 +138,22 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
         if target in candidates:
             pair_code = _text(compact.get("code")) or _text(raw.get("code")) or target
             return dict(raw), pair_code
+    try:
+        for raw in _access_links.list_links("redevice"):
+            if not isinstance(raw, Mapping):
+                continue
+            entry = dict(raw)
+            endpoint_id = _text(entry.get("id") or entry.get("endpoint_id"))
+            candidates = {
+                endpoint_id,
+                f"redevice:{endpoint_id}" if endpoint_id else "",
+                _text(entry.get("pair_code")),
+                _text(entry.get("code")),
+            }
+            if target in candidates:
+                return entry, _text(entry.get("pair_code") or entry.get("code")) or target
+    except Exception:
+        pass
     return None, ""
 
 
@@ -358,16 +374,39 @@ def list_endpoint_devices(kind: str | None = None, *, sync_registry: bool = True
             root_devices = [compact_endpoint(item) for item in list_endpoints(sync_registry=True)]
         except Exception:
             root_devices = []
-    if root_devices:
-        return root_devices
+    inventory_devices: list[dict[str, Any]] = []
     try:
         from adaos.sdk.data import devices as _devices
 
-        inventory_devices = _devices.list_devices(kind="redevice")
-        if inventory_devices:
-            return inventory_devices
+        inventory_devices = [dict(item) for item in _devices.list_devices(kind="redevice") if isinstance(item, Mapping)]
     except Exception:
         pass
+    if root_devices or inventory_devices:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def add(item: Mapping[str, Any]) -> None:
+            identity = _mapping(item.get("identity"))
+            policy = _mapping(item.get("policy"))
+            key = (
+                _text(identity.get("endpoint_id"))
+                or _text(item.get("endpoint_id"))
+                or _text(identity.get("pair_code"))
+                or _text(policy.get("pair_code"))
+                or _text(item.get("code"))
+                or _text(item.get("id"))
+            )
+            if key and key in seen:
+                return
+            if key:
+                seen.add(key)
+            merged.append(dict(item))
+
+        for item in inventory_devices:
+            add(item)
+        for item in root_devices:
+            add(item)
+        return merged
     try:
         from adaos.sdk.redevice import compact_endpoint, list_endpoints
 
@@ -394,7 +433,7 @@ def send_endpoint_command(
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
         from adaos.services import endpoint_router
-        from adaos.sdk.redevice import ReDeviceBridge, select_transport
+        from adaos.sdk.redevice import ReDeviceBridge, endpoint_root_base, select_transport
 
         payload = dict(command or {})
         transport = select_transport(endpoint or {}, intent=_text(payload.get("type")) or "endpoint.command")
@@ -408,7 +447,7 @@ def send_endpoint_command(
             constraints=constraints,
         )
         legacy_payload = endpoint_router.legacy_payload_from_envelope(endpoint_command)
-        result = ReDeviceBridge(timeout=12).send_command(pair_code, legacy_payload)
+        result = ReDeviceBridge(root_base=endpoint_root_base(endpoint or {}), timeout=12).send_command(pair_code, legacy_payload)
         return {
             **result,
             "device_ref": target or f"redevice:{_text(_mapping(endpoint).get('endpoint_id')) or pair_code}",
@@ -431,13 +470,13 @@ def update_endpoint_profile(
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
         return {"ok": False, "error": "unsupported_endpoint_kind", "device_ref": target}
-    _, pair_code = _resolve_redevice_endpoint(device_ref, code)
+    endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code)
     if not pair_code:
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
-        from adaos.sdk.redevice import ReDeviceBridge
+        from adaos.sdk.redevice import ReDeviceBridge, endpoint_root_base
 
-        return ReDeviceBridge(timeout=12).update_profile(pair_code, display_name=display_name, aliases=aliases)
+        return ReDeviceBridge(root_base=endpoint_root_base(endpoint or {}), timeout=12).update_profile(pair_code, display_name=display_name, aliases=aliases)
     except Exception as exc:
         return {"ok": False, "error": "endpoint_profile_update_failed", "detail": str(exc), "device_ref": target, "code": pair_code}
 
@@ -446,13 +485,13 @@ def revoke_endpoint(device_ref: str | None = None, *, code: str | None = None) -
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
         return {"ok": False, "error": "unsupported_endpoint_kind", "device_ref": target}
-    _, pair_code = _resolve_redevice_endpoint(device_ref, code)
+    endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code)
     if not pair_code:
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
-        from adaos.sdk.redevice import ReDeviceBridge
+        from adaos.sdk.redevice import ReDeviceBridge, endpoint_root_base
 
-        return ReDeviceBridge(timeout=12).revoke(pair_code)
+        return ReDeviceBridge(root_base=endpoint_root_base(endpoint or {}), timeout=12).revoke(pair_code)
     except Exception as exc:
         return {"ok": False, "error": "endpoint_revoke_failed", "detail": str(exc), "device_ref": target, "code": pair_code}
 
@@ -461,12 +500,12 @@ def retire_endpoint(device_ref: str | None = None, *, code: str | None = None) -
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
         return {"ok": False, "error": "unsupported_endpoint_kind", "device_ref": target}
-    _, pair_code = _resolve_redevice_endpoint(device_ref, code)
+    endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code)
     if not pair_code:
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
-        from adaos.sdk.redevice import ReDeviceBridge
+        from adaos.sdk.redevice import ReDeviceBridge, endpoint_root_base
 
-        return ReDeviceBridge(timeout=12).retire(pair_code)
+        return ReDeviceBridge(root_base=endpoint_root_base(endpoint or {}), timeout=12).retire(pair_code)
     except Exception as exc:
         return {"ok": False, "error": "endpoint_retire_failed", "detail": str(exc), "device_ref": target, "code": pair_code}

@@ -79,6 +79,16 @@ slice. The current baseline is:
 - [x] ReDevice assignments have a structured `endpoint_assignment` projection
   with role, owner, source, reason, and updated timestamp while preserving the
   legacy `assignment` field for existing skills.
+- [x] Local LAN admission is available for same-network onboarding without QR:
+  `redevice_settings` opens a discovery window, unpaired endpoints submit
+  diagnostics to the hub, approval is exposed as a pending action and as
+  Settings skill actions, and credentials are issued only after approval.
+- [x] Endpoint records preserve endpoint-facing and hub-local control URLs so
+  SDK calls can route commands to a LAN-admitted endpoint without using the
+  public root URL.
+- [x] Local ReDevice command polling uses lease plus ack semantics. Commands
+  are not removed when selected by `/commands/next`; they are redelivered until
+  endpoint acknowledgement or expiry.
 - [x] `redevice_settings`, `redevice_voice`, `slideshow_skill`, and
   `redevice_list` are consumers of core registry/SDK state. They are not
   independent registries or transport owners.
@@ -95,6 +105,10 @@ settings". It is:
 
 - [ ] Promote command-scoped ReDevice media routes to router-owned direct media
   sessions when LAN/WebRTC evidence is stable.
+- [ ] Replace the current manual/dev LAN hub URL with automatic LAN discovery
+  evidence such as mDNS, UDP beacon, or hub-published local address hints.
+- [ ] Upgrade LAN admission transport from MVP HTTP to local TLS or mTLS where
+  the target platform can support it.
 - [~] Move endpoint assignments fully into a first-class core
   `EndpointAssignment` model with audit and conflict handling.
 - [ ] Replace remaining compatibility bridge calls with generic
