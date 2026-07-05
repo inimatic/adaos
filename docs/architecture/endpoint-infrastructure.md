@@ -126,6 +126,11 @@ The current ReDevice implementation already covers the core endpoint model:
   and hub-local `root_url` used by SDK command senders. This prevents local
   skills from accidentally routing a LAN-admitted endpoint through public root
   relay.
+- The endpoint-facing URL must be reachable from the endpoint device. `127.0.0.1`
+  is valid only for explicit `adb reverse` development runs; it is wrong for
+  real LAN onboarding because it points to the endpoint itself. Real local
+  admission advertises a LAN address such as `http://<hub-lan-ip>:8777`, and
+  the hub API must listen on that interface.
 - The local command-polling queue is lease and acknowledgement based. A command
   is redelivered until the endpoint acknowledges it or it expires; it is not
   removed merely because `/commands/next` selected it. This is required for

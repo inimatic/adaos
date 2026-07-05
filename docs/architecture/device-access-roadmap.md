@@ -86,6 +86,9 @@ slice. The current baseline is:
 - [x] Endpoint records preserve endpoint-facing and hub-local control URLs so
   SDK calls can route commands to a LAN-admitted endpoint without using the
   public root URL.
+- [x] LAN onboarding now treats loopback endpoint URLs as explicit adb-reverse
+  development mode only. Normal LAN admission must use a hub LAN address that
+  the endpoint can reach.
 - [x] Local ReDevice command polling uses lease plus ack semantics. Commands
   are not removed when selected by `/commands/next`; they are redelivered until
   endpoint acknowledgement or expiry.
