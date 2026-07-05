@@ -45,6 +45,91 @@ async def test_async_get_ydoc_uses_diff_writeback() -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_async_get_ydoc_discards_corrupt_replay_before_write(monkeypatch) -> None:
+    webspace_id = _webspace_id("corrupt-replay")
+    store = get_ystore_for_webspace(webspace_id)
+
+    def _raise_apply_update(_ydoc: object, _update: bytes) -> None:
+        raise RuntimeError("bad yjs update")
+
+    monkeypatch.setattr(ystore_module.Y, "apply_update", _raise_apply_update)
+
+    try:
+        store._loaded_from_disk = True
+        store._updates = [(b"bad-update", b"", 1.0)]
+        store._base_snapshot_present = True
+
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("ui").set(txn, "current_scenario", "todo_list_5b9319fa")
+
+        snapshot = store.runtime_snapshot()
+        assert snapshot["last_disk_load_mode"] == "discarded_corrupt_state"
+        assert snapshot["update_log_entries"] == 1
+        assert snapshot["diff_write_total"] == 1
+        assert snapshot["update_log_bytes"] > len(b"bad-update")
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_ystore_quarantines_corrupt_persisted_snapshot_before_y_py_load(monkeypatch, tmp_path) -> None:
+    webspace_id = _webspace_id("corrupt-persisted")
+    path = tmp_path / f"{webspace_id}.sqlite3"
+    path.write_bytes(b"not-a-valid-yjs-update")
+
+    class _PreflightResult:
+        returncode = 1
+        stderr = b"thread panicked in y_py"
+
+    monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _webspace_id: path)
+    monkeypatch.setattr(ystore_module.subprocess, "run", lambda *_args, **_kwargs: _PreflightResult())
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        await store._load_from_disk_if_needed()
+
+        snapshot = store.runtime_snapshot()
+        assert snapshot["last_disk_load_mode"] == "corrupt_snapshot_quarantined"
+        assert snapshot["update_log_entries"] == 0
+        assert path.exists() is False
+        assert list(tmp_path.glob(f"{path.name}.corrupt.*"))
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_ystore_replace_snapshot_update_replaces_old_crdt_history() -> None:
+    webspace_id = _webspace_id("replace-snapshot")
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("ui").set(txn, "stale_key", "old")
+
+        fresh = Y.YDoc()
+        with fresh.begin_transaction() as txn:
+            fresh.get_map("ui").set(txn, "current_scenario", "todo_list_5b9319fa")
+
+        result = await store.replace_snapshot_update(
+            Y.encode_state_as_update(fresh),
+            state_vector=Y.encode_state_vector(fresh),
+            backup_kind="test_replace_snapshot",
+        )
+
+        assert result["ok"] is True
+        assert result["previous_entries"] >= 1
+        snapshot = store.runtime_snapshot()
+        assert snapshot["update_log_entries"] == 1
+        assert snapshot["base_snapshot_present"] is True
+        assert snapshot["last_backup_kind"] == "test_replace_snapshot"
+        assert snapshot["last_backup_mode"] == "replace_snapshot"
+
+        async with async_get_ydoc(webspace_id, read_only=True) as ydoc:
+            ui_map = ydoc.get_map("ui")
+            assert ui_map.get("current_scenario") == "todo_list_5b9319fa"
+            assert ui_map.get("stale_key") is None
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_memory_ystore_supports_sync_readers_from_worker_threads() -> None:
     webspace_id = _webspace_id("threaded-readers")
     errors: list[BaseException] = []
@@ -648,7 +733,7 @@ async def test_async_get_ydoc_prefers_live_room_when_requested(monkeypatch) -> N
         async def current_state_vector(self) -> bytes | None:
             return None
 
-        async def write_update(self, update: bytes, *, update_kind: str = "raw") -> bool:  # noqa: ARG002
+        async def write_update(self, update: bytes, *, update_kind: str = "raw", notify: bool = True) -> bool:  # noqa: ARG002
             self.write_updates.append(bytes(update or b""))
             return True
 
@@ -677,7 +762,7 @@ async def test_async_get_ydoc_prefers_live_room_when_requested(monkeypatch) -> N
     assert fake_store.start_calls == 0
     assert fake_store.stop_calls == 0
     assert fake_store.apply_updates_calls == 0
-    assert len(fake_store.write_updates) == 0
+    assert len(fake_store.write_updates) == 1
     assert room_doc.get_map("ui").get("current_scenario") == "infrascope"
 
 
@@ -713,3 +798,42 @@ async def test_async_read_ydoc_prefers_live_room_without_store_replay(monkeypatc
     async with async_read_ydoc("live-room-read-only") as ydoc:
         assert ydoc is room_doc
         assert ydoc.get_map("data").get("flag") is True
+
+
+async def test_mutate_live_room_invalidates_cached_current_scenario(monkeypatch) -> None:
+    webspace_id = "live-room-cache-invalidation"
+    room_doc = Y.YDoc()
+    with room_doc.begin_transaction() as txn:
+        room_doc.get_map("ui").set(txn, "current_scenario", "old_scenario")
+    room = type(
+        "Room",
+        (),
+        {
+            "ydoc": room_doc,
+            "ystore": object(),
+            "_task_group": object(),
+            "_thread_id": threading.get_ident(),
+            "_loop": asyncio.get_running_loop(),
+        },
+    )()
+
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
+    ydoc_module.invalidate_live_map_value_cache()
+
+    assert ydoc_module.try_read_live_map_value(webspace_id, "ui", "current_scenario") == (
+        True,
+        "old_scenario",
+    )
+
+    applied = ydoc_module.mutate_live_room(
+        webspace_id,
+        lambda ydoc, txn: ydoc.get_map("ui").set(txn, "current_scenario", "new_scenario"),
+        root_names=["ui"],
+        governed=True,
+    )
+
+    assert applied is True
+    assert ydoc_module.try_read_live_map_value(webspace_id, "ui", "current_scenario") == (
+        True,
+        "new_scenario",
+    )

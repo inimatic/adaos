@@ -141,6 +141,58 @@ def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch)
     assert published[0]["domain_ref"]["tool"] == "files_skill:delete_file"
 
 
+def test_call_tool_allows_operator_ui_device_control_without_pending_action(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    def _publish_pending_action(**_kwargs):
+        raise AssertionError("operator UI device controls should not create a pending action")
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", _publish_pending_action)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="slideshow_skill:control_redevice_slideshow",
+                arguments={
+                    "action": "start",
+                    "_meta": {
+                        "action_source": "operator_ui",
+                        "action_context": {
+                            "widgetId": "slideshow-main-actions",
+                            "widgetType": "input.commandBar",
+                            "eventId": "play",
+                        },
+                    },
+                },
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["trace_id"] == "trace-123"
+    assert calls == ["run_sync", "slideshow_skill:control_redevice_slideshow"]
+
+
 def test_runtime_action_risk_ignores_local_write_freeform_content() -> None:
     body = tool_bridge_module.ToolCall(
         tool="notebook_skill:save_note",
@@ -231,6 +283,29 @@ def test_runtime_action_risk_allows_slideshow_redevice_refresh_tick() -> None:
         body=body,
         skill_name="slideshow_skill",
         public_tool="refresh_redevice_slideshow_state",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("slideshow_skill:select_redevice_endpoint", {"code": "TV-1"}),
+        ("redevice_settings:refresh_redevice_settings_state", {"webspace_id": "desktop"}),
+    ],
+)
+def test_runtime_action_risk_allows_local_redevice_ui_state_tools(tool: str, arguments: dict[str, object]) -> None:
+    public_tool = tool.split(":", 1)[1]
+    body = tool_bridge_module.ToolCall(tool=tool, arguments=arguments)
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name=tool.split(":", 1)[0],
+        public_tool=public_tool,
         payload=dict(body.arguments or {}),
         local_node_id="hub-1",
     )

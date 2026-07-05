@@ -8,6 +8,8 @@ import contextvars
 import asyncio
 import gc
 import inspect
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Tuple
@@ -55,6 +57,8 @@ _YSTORE_APPLY_YIELD_BYTES = _env_int("ADAOS_YSTORE_APPLY_YIELD_BYTES", 512 * 102
 _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum=0.0)
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
 _YSTORE_BACKUP_MALLOC_TRIM = _env_flag("ADAOS_YSTORE_BACKUP_MALLOC_TRIM", True)
+_YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
+_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
 
 
 def _trim_allocator_after_backup_compaction() -> bool:
@@ -226,10 +230,16 @@ def _encode_snapshot_update(updates: List[Tuple[bytes, bytes, float]]) -> bytes:
     if len(updates) == 1:
         return bytes(updates[0][0] or b"")
 
-    ydoc = Y.YDoc()
-    for update, _meta, _ts in updates:
-        Y.apply_update(ydoc, update)  # type: ignore[arg-type]
-    return Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+    ydoc = None
+    try:
+        ydoc = Y.YDoc()
+        for update, _meta, _ts in updates:
+            Y.apply_update(ydoc, update)  # type: ignore[arg-type]
+        return Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+    except Exception as exc:
+        raise RuntimeError(f"yjs_snapshot_encode_failed:{type(exc).__name__}:{exc}") from None
+    finally:
+        ydoc = None
 
 
 def _encode_snapshot_artifacts(updates: List[Tuple[bytes, bytes, float]]) -> tuple[bytes, bytes]:
@@ -238,13 +248,19 @@ def _encode_snapshot_artifacts(updates: List[Tuple[bytes, bytes, float]]) -> tup
     """
     if not updates:
         return b"", b""
-    ydoc = Y.YDoc()
-    for update, _meta, _ts in updates:
-        Y.apply_update(ydoc, update)  # type: ignore[arg-type]
-    return (
-        Y.encode_state_as_update(ydoc),  # type: ignore[arg-type]
-        Y.encode_state_vector(ydoc),  # type: ignore[arg-type]
-    )
+    ydoc = None
+    try:
+        ydoc = Y.YDoc()
+        for update, _meta, _ts in updates:
+            Y.apply_update(ydoc, update)  # type: ignore[arg-type]
+        return (
+            Y.encode_state_as_update(ydoc),  # type: ignore[arg-type]
+            Y.encode_state_vector(ydoc),  # type: ignore[arg-type]
+        )
+    except Exception as exc:
+        raise RuntimeError(f"yjs_snapshot_artifacts_failed:{type(exc).__name__}:{exc}") from None
+    finally:
+        ydoc = None
 
 
 def _decode_state_vector_from_snapshot(snapshot: bytes) -> bytes:
@@ -253,9 +269,64 @@ def _decode_state_vector_from_snapshot(snapshot: bytes) -> bytes:
     """
     if not snapshot:
         return b""
-    ydoc = Y.YDoc()
-    Y.apply_update(ydoc, snapshot)  # type: ignore[arg-type]
-    return Y.encode_state_vector(ydoc)  # type: ignore[arg-type]
+    ydoc = None
+    try:
+        ydoc = Y.YDoc()
+        Y.apply_update(ydoc, snapshot)  # type: ignore[arg-type]
+        return Y.encode_state_vector(ydoc)  # type: ignore[arg-type]
+    except Exception as exc:
+        raise RuntimeError(f"yjs_state_vector_decode_failed:{type(exc).__name__}:{exc}") from None
+    finally:
+        ydoc = None
+
+
+def _preflight_snapshot_file(path: Path) -> tuple[bool, str]:
+    if not _YSTORE_SNAPSHOT_PREFLIGHT:
+        return True, "disabled"
+    if not path.exists():
+        return True, "missing"
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "import y_py as Y\n"
+        "data = Path(sys.argv[1]).read_bytes()\n"
+        "doc = Y.YDoc()\n"
+        "Y.apply_update(doc, data)\n"
+        "Y.encode_state_vector(doc)\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=float(_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except Exception as exc:
+        _log.warning("YStore snapshot preflight failed open path=%s: %s", path, exc, exc_info=True)
+        return True, f"preflight_error:{type(exc).__name__}"
+    if result.returncode == 0:
+        return True, "ok"
+    stderr = (result.stderr or b"")[:500].decode("utf-8", errors="replace").strip()
+    return False, f"returncode={result.returncode} stderr={stderr}"
+
+
+def _quarantine_corrupt_snapshot(path: Path, reason: str) -> Path | None:
+    try:
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        target = path.with_name(f"{path.name}.corrupt.{stamp}")
+        suffix = 0
+        while target.exists():
+            suffix += 1
+            target = path.with_name(f"{path.name}.corrupt.{stamp}.{suffix}")
+        path.replace(target)
+        _log.warning("YStore corrupt snapshot quarantined path=%s target=%s reason=%s", path, target, reason)
+        return target
+    except Exception:
+        _log.warning("failed to quarantine corrupt YStore snapshot path=%s reason=%s", path, reason, exc_info=True)
+        return None
 
 
 def _persist_snapshot(path: Path, snapshot: bytes) -> int:
@@ -421,6 +492,90 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_disk_load_mode = ""
         self._last_disk_snapshot_bytes = 0
 
+    async def replace_snapshot_update(
+        self,
+        snapshot: bytes,
+        *,
+        state_vector: bytes | None = None,
+        backup_kind: str = "replace_snapshot",
+        persist_snapshot: bool = True,
+        notify: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Replace the in-memory/runtime store with a single base snapshot.
+
+        This is intentionally different from appending a "full" Yjs update:
+        applying an update produced from a fresh doc on top of old CRDT history
+        does not delete keys that no longer exist. Callers that rebuild a whole
+        materialized view from authoritative sources need replacement semantics.
+        """
+        payload = bytes(snapshot or b"")
+        state_vector_payload = bytes(state_vector or b"") or None
+        kind_token = str(backup_kind or "").strip() or "replace_snapshot"
+        path = ystore_path_for_webspace(self.path)
+        persist_started = time.perf_counter()
+        written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, payload) if persist_snapshot else 0
+        persist_ms = round((time.perf_counter() - persist_started) * 1000.0, 3)
+        metadata = await self.get_metadata()
+        now = time.time()
+        with self._lock:
+            previous_entries = len(self._updates)
+            previous_bytes = sum(len(update) for update, _meta, _ts in self._updates)
+            self._updates = [(payload, metadata, now)] if payload else []
+            self._base_snapshot_present = bool(payload)
+            self._base_state_vector = state_vector_payload
+            self._loaded_from_disk = True
+            self._generation += 1
+            if persist_snapshot:
+                self._persisted_generation = int(self._generation)
+                self._persisted_snapshot_bytes = int(written_bytes or len(payload))
+            self._write_total += 1
+            self._snapshot_write_total += 1
+            self._last_write_at = now
+            self._last_update_bytes = len(payload)
+            self._last_snapshot_bytes = len(payload)
+            self._compact_total += 1
+            self._last_compact_at = now
+            self._last_compact_reason = kind_token
+            self._backup_total += 1
+            self._backup_by_kind[kind_token] = int(self._backup_by_kind.get(kind_token) or 0) + 1
+            if written_bytes:
+                self._backup_written_by_kind[kind_token] = int(self._backup_written_by_kind.get(kind_token) or 0) + 1
+            else:
+                self._backup_skipped_total += 1
+                self._backup_skipped_by_kind[kind_token] = int(self._backup_skipped_by_kind.get(kind_token) or 0) + 1
+            self._last_backup_kind = kind_token
+            self._last_backup_mode = "replace_snapshot" if persist_snapshot else "replace_snapshot:deferred_disk"
+            self._last_backup_skip_reason = "" if written_bytes else ("deferred_disk" if not persist_snapshot else "empty_snapshot")
+            self._last_backup_written_bytes = int(written_bytes)
+            self._last_backup_at = now
+            self._last_disk_load_mode = "replace_snapshot"
+            if persist_snapshot:
+                self._last_disk_snapshot_bytes = int(written_bytes or len(payload))
+        notify_ms = 0.0
+        if notify:
+            notify_started = time.perf_counter()
+            try:
+                _notify_write_listeners(self.path, payload)
+            except Exception:
+                pass
+            notify_ms = round((time.perf_counter() - notify_started) * 1000.0, 3)
+        return {
+            "ok": True,
+            "webspace_id": self.path,
+            "backup_kind": kind_token,
+            "snapshot_bytes": len(payload),
+            "state_vector_bytes": len(state_vector_payload or b""),
+            "written_bytes": int(written_bytes),
+            "persist_snapshot": bool(persist_snapshot),
+            "persist_ms": persist_ms,
+            "notify": bool(notify),
+            "notify_ms": notify_ms,
+            "previous_entries": int(previous_entries),
+            "previous_bytes": int(previous_bytes),
+            "update_log_entries": 1 if payload else 0,
+        }
+
     async def start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
         """
         For the in-memory store, start/stop are lightweight and idempotent.
@@ -464,6 +619,40 @@ class AdaosMemoryYStore(BaseYStore):
         return {
             "released_update_entries": int(released_entries),
             "released_update_bytes": int(released_bytes),
+        }
+
+    async def discard_corrupt_state(self, *, delete_snapshot: bool = True) -> dict[str, Any]:
+        """
+        Drop replay state after a Y.apply_update panic.
+
+        Continuing to append new updates after a corrupt base snapshot keeps the
+        store unrecoverable: every later reader replays the bad base before the
+        fresh repair update. This helper keeps the store object in cache but
+        removes the unusable runtime and persisted base so the next write starts
+        a clean history.
+        """
+        released = await self.evict_runtime_state()
+        removed_snapshot = False
+        if delete_snapshot:
+            try:
+                path = ystore_path_for_webspace(self.path)
+                if path.exists():
+                    path.unlink()
+                    removed_snapshot = True
+            except Exception:
+                _log.warning("failed to remove corrupt YStore snapshot for webspace=%s", self.path, exc_info=True)
+        with self._lock:
+            self._loaded_from_disk = True
+            self._last_disk_load_mode = "discarded_corrupt_state"
+            self._last_disk_snapshot_bytes = 0
+            self._persisted_snapshot_bytes = 0
+            self._persisted_generation = 0
+            self._base_state_vector = None
+        return {
+            "ok": True,
+            "webspace_id": self.path,
+            "snapshot_deleted": removed_snapshot,
+            **released,
         }
 
     async def write(self, data: bytes) -> None:  # type: ignore[override]
@@ -760,6 +949,24 @@ class AdaosMemoryYStore(BaseYStore):
         path = ystore_path_for_webspace(self.path)
         if not path.exists():
             self._loaded_from_disk = True
+            return
+
+        preflight_ok, preflight_reason = _preflight_snapshot_file(path)
+        if not preflight_ok:
+            quarantined = _quarantine_corrupt_snapshot(path, preflight_reason)
+            with self._lock:
+                self._loaded_from_disk = True
+                self._last_disk_load_mode = "corrupt_snapshot_quarantined"
+                self._last_disk_snapshot_bytes = 0
+                self._persisted_snapshot_bytes = 0
+                self._persisted_generation = 0
+            _log.warning(
+                "YStore corrupt snapshot skipped webspace=%s path=%s quarantine=%s reason=%s",
+                self.path,
+                path,
+                quarantined,
+                preflight_reason,
+            )
             return
 
         try:

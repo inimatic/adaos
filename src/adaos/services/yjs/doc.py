@@ -14,6 +14,7 @@ import y_py as Y
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.yjs.store import (
+    YDocNotFound,
     current_ystore_write_metadata,
     get_ystore_for_webspace,
     ystore_write_metadata,
@@ -28,11 +29,44 @@ _LIVE_MAP_VALUE_CACHE_MAX = 128
 _LIVE_MAP_VALUE_CACHE: dict[tuple[str, str, str], tuple[float, Any]] = {}
 _LIVE_MAP_VALUE_SAFE_KEYS = {
     ("ui", "current_scenario"),
+    ("runtime", "environment"),
 }
 
 
 def _cacheable_live_map_value(value: Any) -> bool:
     return value is None or isinstance(value, (str, int, float, bool))
+
+
+def invalidate_live_map_value_cache(
+    webspace_id: str | None = None,
+    *,
+    map_name: str | None = None,
+    key: str | None = None,
+) -> int:
+    target_webspace = str(webspace_id or "").strip()
+    target_map = str(map_name or "").strip()
+    target_key = str(key or "").strip()
+    removed = 0
+    for cache_key in list(_LIVE_MAP_VALUE_CACHE.keys()):
+        cached_webspace, cached_map, cached_key = cache_key
+        if target_webspace and cached_webspace != target_webspace:
+            continue
+        if target_map and cached_map != target_map:
+            continue
+        if target_key and cached_key != target_key:
+            continue
+        _LIVE_MAP_VALUE_CACHE.pop(cache_key, None)
+        removed += 1
+    return removed
+
+
+def _invalidate_live_map_value_cache_for_roots(webspace_id: str, root_names: list[str] | None) -> None:
+    roots = {str(item or "").strip() for item in list(root_names or []) if str(item or "").strip()}
+    if not roots:
+        invalidate_live_map_value_cache(webspace_id)
+        return
+    for root in roots:
+        invalidate_live_map_value_cache(webspace_id, map_name=root)
 
 
 def _resolve_yjs_write_owner() -> str:
@@ -128,6 +162,30 @@ def _set_doc_timing(timings: dict[str, float] | None, key: str, value: float, *,
         if token:
             timings[token] = round(float(value), 3)
     return round(float(value), 3)
+
+
+async def _discard_corrupt_ystore_state(ystore: Any, webspace_id: str, exc: BaseException) -> None:
+    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+        raise exc
+    discard = getattr(ystore, "discard_corrupt_state", None)
+    if not callable(discard):
+        return
+    try:
+        result = discard(delete_snapshot=True)
+        if inspect.isawaitable(result):
+            result = await result
+        _log.warning(
+            "discarded corrupt YStore state webspace=%s error_type=%s result=%s",
+            webspace_id,
+            type(exc).__name__,
+            json.dumps(result if isinstance(result, dict) else {}, ensure_ascii=True, sort_keys=True)[:1000],
+        )
+    except Exception:
+        _log.warning("failed to discard corrupt YStore state webspace=%s", webspace_id, exc_info=True)
+
+
+def _is_empty_ystore(exc: BaseException) -> bool:
+    return isinstance(exc, YDocNotFound)
 
 
 def _run_blocking(coro: Awaitable[T], *, timeout_s: float | None = None) -> T:
@@ -286,6 +344,7 @@ def _schedule_room_update(
                     governed=True,
                 )
             Y.apply_update(room.ydoc, update)
+            _invalidate_live_map_value_cache_for_roots(webspace_id, None)
         except Exception:
             pass
 
@@ -402,10 +461,11 @@ def get_ydoc(
             stage_started = time.perf_counter()
             await ystore.apply_updates(ydoc)
             _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
-        except BaseException:
-            # Treat corrupted updates as "no state"; start from empty doc.
+        except BaseException as exc:
             _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
-            pass
+            if not _is_empty_ystore(exc):
+                # Treat corrupted updates as "no state"; start from empty doc.
+                await _discard_corrupt_ystore_state(ystore, webspace_id, exc)
         if read_only:
             return None
         stage_started = time.perf_counter()
@@ -589,11 +649,13 @@ async def async_get_ydoc(
                 stage_started = time.perf_counter()
                 await ystore.apply_updates(ydoc)
                 _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
-            except BaseException:
-                # Treat corrupted updates as "no state"; start from empty doc.
+            except BaseException as exc:
                 _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
-                pass
+                if not _is_empty_ystore(exc):
+                    # Treat corrupted updates as "no state"; start from empty doc.
+                    await _discard_corrupt_ystore_state(ystore, webspace_id, exc)
         before = None
+        persist_before = None
         tracked_load_mark_roots = [str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()]
         if not read_only:
             stage_started = time.perf_counter()
@@ -604,6 +666,13 @@ async def async_get_ydoc(
                 except Exception:
                     _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
                     before = None
+                stage_started = time.perf_counter()
+                try:
+                    persist_before = await ystore.current_state_vector()
+                    _record_doc_timing(timings, "ystore_state_vector", stage_started, prefix=timing_prefix)
+                except Exception:
+                    _record_doc_timing(timings, "ystore_state_vector", stage_started, prefix=timing_prefix)
+                    persist_before = None
             else:
                 before = await ystore.current_state_vector()
                 if before is not None:
@@ -620,11 +689,31 @@ async def async_get_ydoc(
             if _state_changed(ydoc, before, timings, prefix=timing_prefix):
                 if use_live_room:
                     # Active YRoom instances already fan backend mutations into
-                    # websocket broadcast and YStore persistence.
+                    # websocket broadcast. Persist the same diff explicitly so
+                    # disk snapshots and restart recovery do not depend on the
+                    # room observer seeing backend-owned in-process changes.
                     stage_started = time.perf_counter()
-                    update = _encode_diff(ydoc, before)
+                    update = _encode_diff(ydoc, persist_before)
                     _record_doc_timing(timings, "encode_diff", stage_started, prefix=timing_prefix)
+                    persisted = False
                     if update:
+                        try:
+                            stage_started = time.perf_counter()
+                            async with ystore_write_metadata(
+                                root_names=tracked_load_mark_roots,
+                                source=live_source_for_session,
+                                owner=owner_for_session or _resolve_yjs_write_owner(),
+                                channel=live_channel_for_session,
+                                governed=True,
+                            ):
+                                try:
+                                    persisted = bool(await ystore.write_update(update, update_kind="diff", notify=False))
+                                except TypeError:
+                                    persisted = bool(await ystore.write_update(update, update_kind="diff"))
+                            _record_doc_timing(timings, "ystore_write_update", stage_started, prefix=timing_prefix)
+                        except Exception as exc:
+                            _record_doc_timing(timings, "ystore_write_update", stage_started, prefix=timing_prefix)
+                            _log.warning("async_get_ydoc live-room write_update failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
                         mark_backend_room_update(
                             webspace_id,
                             update,
@@ -632,7 +721,7 @@ async def async_get_ydoc(
                             owner=owner_for_session or _resolve_yjs_write_owner(),
                             channel=live_channel_for_session,
                             root_names=tracked_load_mark_roots,
-                            already_persisted=False,
+                            already_persisted=persisted,
                             governed=True,
                         )
                         if write_update_callback is not None:
@@ -646,11 +735,13 @@ async def async_get_ydoc(
                                         "channel": live_channel_for_session,
                                         "root_names": tracked_load_mark_roots,
                                         "live_room": True,
+                                        "persisted": persisted,
                                     }
                                 )
                             except Exception:
                                 _log.debug("async_get_ydoc write update callback failed", exc_info=True)
-                    _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
+                    else:
+                        _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
                     _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
                 else:
                     stage_started = time.perf_counter()
@@ -834,6 +925,7 @@ def mutate_live_room(
                     already_persisted=False,
                     governed=True,
                 )
+                _invalidate_live_map_value_cache_for_roots(webspace_id, root_names)
         except Exception:
             pass
 
@@ -879,6 +971,7 @@ def apply_update_to_live_room(
                 already_persisted=False,
                 governed=False,
             )
+            _invalidate_live_map_value_cache_for_roots(webspace_id, root_names)
         except Exception:
             pass
 
@@ -890,6 +983,7 @@ __all__ = [
     "async_get_ydoc",
     "async_read_ydoc",
     "try_read_live_map_value",
+    "invalidate_live_map_value_cache",
     "mutate_live_room",
     "apply_update_to_live_room",
 ]

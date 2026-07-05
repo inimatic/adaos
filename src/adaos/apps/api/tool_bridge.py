@@ -50,6 +50,13 @@ _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "cv_descriptor:cv_descriptor_runtime_command",
     "cv_descriptor:cv_descriptor_record_runtime_event",
     "slideshow_skill:refresh_redevice_slideshow_state",
+    "slideshow_skill:select_redevice_endpoint",
+    "slideshow_skill:toggle_redevice_endpoint",
+    "slideshow_skill:rename_redevice_endpoint",
+    "redevice_settings:refresh_redevice_settings_state",
+    "redevice_settings:select_redevice_settings_endpoint",
+    "redevice_settings:rename_redevice_settings_endpoint",
+    "redevice_settings:set_redevice_assignment",
     "prompt_engineer_skill:prompt_save_base_tz",
     "prompt_engineer_skill:prompt_append_tz_addendum",
     "prompt_engineer_skill:prompt_save_project_file",
@@ -282,6 +289,65 @@ def _approval_contract() -> Dict[str, Any]:
     }
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        token = str(value or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _runtime_operator_ui_approval(
+    *,
+    payload: Dict[str, Any],
+    context: Dict[str, Any] | None,
+    action_risk: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    if str(action_risk.get("risk_class") or "").strip() != "device_control":
+        return None
+    meta = _mapping(payload.get("_meta"))
+    ctx = _mapping(context)
+    meta_context = _mapping(meta.get("action_context"))
+    source = _first_text(meta.get("action_source"), ctx.get("action_source"))
+    if source != "operator_ui":
+        return None
+    auto_action_id = _first_text(
+        meta.get("auto_action_id"),
+        meta.get("autoActionId"),
+        meta_context.get("autoActionId"),
+        meta_context.get("auto_action_id"),
+        ctx.get("autoActionId"),
+        ctx.get("auto_action_id"),
+    )
+    if auto_action_id:
+        return None
+    widget_id = _first_text(
+        meta.get("widget_id"),
+        meta_context.get("widgetId"),
+        meta_context.get("widget_id"),
+        ctx.get("widgetId"),
+        ctx.get("widget_id"),
+    )
+    event_id = _first_text(
+        meta.get("event_id"),
+        meta_context.get("eventId"),
+        meta_context.get("event_id"),
+        ctx.get("eventId"),
+        ctx.get("event_id"),
+    )
+    if not widget_id or not event_id:
+        return None
+    return {
+        "status": "approve",
+        "risk_class": "device_control",
+        "approved_by": "operator_ui",
+        "approval_id": f"operator_ui:{widget_id}:{event_id}",
+        "source": "operator_ui",
+        "widget_id": widget_id,
+        "event_id": event_id,
+    }
+
+
 def _runtime_action_fingerprint_payload(
     *,
     body: "ToolCall",
@@ -488,6 +554,13 @@ async def _enforce_runtime_action_gate(
     for approval in _approval_sources(payload, body.context):
         if _approval_allows_runtime_action(approval, action_risk):
             return {**action_risk, "approval": {k: v for k, v in approval.items() if k != "secret"}}
+    operator_approval = _runtime_operator_ui_approval(
+        payload=payload,
+        context=body.context,
+        action_risk=action_risk,
+    )
+    if operator_approval:
+        return {**action_risk, "approval": operator_approval}
     pending_action: Dict[str, Any] = {}
     pending_action_error = ""
     try:
