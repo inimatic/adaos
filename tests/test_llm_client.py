@@ -230,6 +230,7 @@ def test_response_jobs_submit_and_poll_same_root(monkeypatch: pytest.MonkeyPatch
     from adaos.sdk.llm import llm_client as llm
 
     _clear_llm_env(monkeypatch)
+    llm._ROOT_LLM_HEALTH_CACHE.clear()
     fake_ctx = SimpleNamespace(
         settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
         config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
@@ -244,6 +245,8 @@ def test_response_jobs_submit_and_poll_same_root(monkeypatch: pytest.MonkeyPatch
 
         def request(self, method, path, **kwargs):
             calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if method == "GET" and path == "/v1/health":
+                return {"ok": True}
             if method == "POST" and path == "/v1/llm/jobs":
                 return {
                     "ok": True,
@@ -278,4 +281,69 @@ def test_response_jobs_submit_and_poll_same_root(monkeypatch: pytest.MonkeyPatch
     polled = llm.get_response_job("llm_job_test", base_url=submitted["_client"]["base_url"])
     assert polled["status"] == "succeeded"
     assert polled["output_text"] == "async ok"
-    assert [call["path"] for call in calls] == ["/v1/llm/jobs", "/v1/llm/jobs/llm_job_test"]
+    assert [call["path"] for call in calls] == ["/v1/health", "/v1/llm/jobs", "/v1/llm/jobs/llm_job_test"]
+
+
+def test_response_job_submit_skips_unhealthy_primary_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    llm._ROOT_LLM_HEALTH_CACHE.clear()
+    monkeypatch.setenv("ADAOS_ROOT_LLM_HEALTHCHECK_TIMEOUT_S", "0.25")
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if self.base_url == "https://ru.api.inimatic.com" and method == "GET" and path == "/v1/health":
+                raise llm.RootHttpError(
+                    "GET /v1/health failed: _ssl.c:989: The handshake operation timed out",
+                    status_code=0,
+                )
+            if self.base_url == "https://ru.api.inimatic.com" and method == "POST" and path == "/v1/llm/jobs":
+                raise AssertionError("unhealthy primary root must not receive llm job POST")
+            if self.base_url == "https://api.inimatic.com" and method == "POST" and path == "/v1/llm/jobs":
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_global",
+                    "request_id": "req.async",
+                    "status": "queued",
+                }
+            raise AssertionError(f"unexpected request {self.base_url} {method} {path}")
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    submitted = llm.submit_response_job(
+        [{"role": "user", "content": "Return ok."}],
+        request_id="req.async",
+        timeout=15,
+    )
+
+    assert submitted["job_id"] == "llm_job_global"
+    assert submitted["_client"]["base_url"] == "https://api.inimatic.com"
+    assert [f"{call['base_url']} {call['method']} {call['path']}" for call in calls] == [
+        "https://ru.api.inimatic.com GET /v1/health",
+        "https://api.inimatic.com POST /v1/llm/jobs",
+    ]
+    assert submitted["_protocol"]["llm_proxy"] == {
+        "base_url": "https://api.inimatic.com",
+        "fallback": True,
+        "attempts": [
+            {
+                "base_url": "https://ru.api.inimatic.com",
+                "error": "root_health_unavailable",
+                "detail": "RootHttpError: GET /v1/health failed: _ssl.c:989: The handshake operation timed out",
+            }
+        ],
+    }

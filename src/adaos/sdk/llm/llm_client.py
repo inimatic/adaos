@@ -12,6 +12,7 @@ from adaos.services.root.client import RootHttpClient, RootHttpError
 
 
 _LOG = logging.getLogger("adaos.sdk.llm")
+_ROOT_LLM_HEALTH_CACHE: dict[str, tuple[float, bool, str]] = {}
 
 
 def _env_csv(value: str | None) -> tuple[str, ...]:
@@ -27,6 +28,24 @@ def _env_csv(value: str | None) -> tuple[str, ...]:
 
 def _normalize_root_base_url(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
+
+
+def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    try:
+        value = float(raw) if raw else float(default)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(float(minimum), min(float(value), float(maximum)))
+
+
+def _env_enabled(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _current_ctx() -> Any | None:
@@ -84,6 +103,50 @@ def _root_llm_base_urls(primary: RootHttpClient) -> list[str]:
     ):
         add("https://api.inimatic.com")
     return urls or ["https://api.inimatic.com"]
+
+
+def _root_llm_health_probe(
+    http: RootHttpClient,
+    base_url: str,
+    *,
+    timeout: float | None = None,
+) -> tuple[bool, str]:
+    """
+    Probe a root endpoint before a job submit when another root is available.
+
+    A dead regional root can otherwise hold the Builder chat for the full
+    /v1/llm/jobs submit timeout while the TLS handshake stalls. The cache keeps
+    repeated Builder turns from paying even the short probe timeout.
+    """
+    if not _env_enabled("ADAOS_ROOT_LLM_HEALTHCHECK", True):
+        return True, "disabled"
+    now = time.monotonic()
+    cached = _ROOT_LLM_HEALTH_CACHE.get(base_url)
+    if cached is not None:
+        expires_at, ok, detail = cached
+        if expires_at > now:
+            return ok, detail
+    probe_timeout = timeout if timeout is not None else _env_float(
+        "ADAOS_ROOT_LLM_HEALTHCHECK_TIMEOUT_S",
+        1.0,
+        minimum=0.25,
+        maximum=10.0,
+    )
+    try:
+        raw = http.request("GET", "/v1/health", timeout=probe_timeout)
+        ok = not (isinstance(raw, Mapping) and raw.get("ok") is False)
+        detail = "ok" if ok else "health_not_ok"
+    except Exception as exc:
+        ok = False
+        detail = f"{type(exc).__name__}: {exc}"
+    ttl = _env_float(
+        "ADAOS_ROOT_LLM_HEALTHCHECK_TTL_S" if ok else "ADAOS_ROOT_LLM_UNHEALTHY_TTL_S",
+        30.0 if ok else 120.0,
+        minimum=1.0,
+        maximum=3600.0,
+    )
+    _ROOT_LLM_HEALTH_CACHE[base_url] = (now + ttl, ok, detail)
+    return ok, detail
 
 
 def _root_http_client(ctx: Any | None = None) -> tuple[RootHttpClient, Any | None]:
@@ -279,7 +342,7 @@ def list_llm_models(*, timeout: float | None = None) -> Dict[str, Any]:
         except Exception as exc:
             last_exc = exc
             if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
-                _LOG.warning("root LLM models attempt failed; trying fallback base_url=%s error=%s", base_url, exc)
+                _LOG.warning("root LLM models attempt failed base_url=%s; trying fallback error=%s", base_url, exc)
                 continue
             raise
     if last_exc is not None:
@@ -470,7 +533,7 @@ def send_response(
                 error_label = type(exc).__name__
             attempts.append({"base_url": base_url, "error": error_label})
             if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
-                _LOG.warning("root LLM attempt failed; trying fallback base_url=%s error=%s", base_url, exc)
+                _LOG.warning("root LLM attempt failed base_url=%s; trying fallback error=%s", base_url, exc)
                 continue
             raise
     if last_exc is not None:
@@ -521,6 +584,22 @@ def submit_response_job(
     attempts: list[dict[str, Any]] = []
     for index, base_url in enumerate(base_urls):
         http = _root_http_for_base(primary, primary_base_url, base_url, index)
+        if index + 1 < len(base_urls):
+            healthy, health_detail = _root_llm_health_probe(http, base_url)
+            if not healthy:
+                attempts.append(
+                    {
+                        "base_url": base_url,
+                        "error": "root_health_unavailable",
+                        "detail": health_detail,
+                    }
+                )
+                _LOG.warning(
+                    "root LLM job submit skipped unhealthy base_url=%s; trying fallback detail=%s",
+                    base_url,
+                    health_detail,
+                )
+                continue
         try:
             raw = http.request(
                 "POST",
@@ -545,7 +624,7 @@ def submit_response_job(
                 error_label = type(exc).__name__
             attempts.append({"base_url": base_url, "error": error_label})
             if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
-                _LOG.warning("root LLM job submit failed; trying fallback base_url=%s error=%s", base_url, exc)
+                _LOG.warning("root LLM job submit failed base_url=%s; trying fallback error=%s", base_url, exc)
                 continue
             raise
     if last_exc is not None:
@@ -601,7 +680,7 @@ def get_response_job(job_id: str, *, base_url: str | None = None, timeout: float
                 error_label = type(exc).__name__
             attempts.append({"base_url": candidate_base_url, "error": error_label})
             if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
-                _LOG.warning("root LLM job poll failed; trying fallback base_url=%s error=%s", candidate_base_url, exc)
+                _LOG.warning("root LLM job poll failed base_url=%s; trying fallback error=%s", candidate_base_url, exc)
                 continue
             raise
     if last_exc is not None:
