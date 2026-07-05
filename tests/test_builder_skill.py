@@ -293,7 +293,7 @@ def test_update_current_scenario_swaps_input_and_cards_with_lost_cyrillic(monkey
     monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
 
     skill.create_scenario_draft("create todo list", webspace_id="builder-swap-lost")
-    result = skill.update_current_scenario("????????? ??????? ??????? input ? cards", webspace_id="builder-swap-lost")
+    result = skill.update_current_scenario("\u041f\u0435\u0440\u0435\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043e\u0431\u043b\u0430\u0441\u0442\u0438 Input \u0438 Cards", webspace_id="builder-swap-lost")
 
     assert result["patch"]["operation"] == "swap_layout_areas"
     assert result["preview_state"]["layout_order"] == "cards_first"
