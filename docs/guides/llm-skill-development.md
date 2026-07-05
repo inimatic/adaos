@@ -619,11 +619,25 @@ Stream rules:
 - do not eager-publish a replace stream for the same state that the widget is
   already reading from Yjs; use streams for separate high-churn state or
   snapshot-on-subscribe recovery
+- do not publish full replace snapshots from generic
+  `subscription.changed` handlers. Treat subscription changes as demand
+  bookkeeping; deliver initial state through the receiver's declared
+  snapshot-on-subscribe or explicit refresh tool, with normal coalescing and
+  byte-budget checks.
 - do not copy stream tails back into Yjs just to make them visible
 - for table/list inventory streams, publish a compact row shape containing only
   rendered columns, button predicates, stable ids, and action-feedback fields.
   Keep catalog metadata, dependency lists, diagnostics, and full version
   records behind details/tools unless the table renders them directly.
+- keep the latest command result as a bounded acknowledgement, not as the
+  original tool response. Persist only action id, target id/code, command id,
+  status, error, and a short message. Large diagnostics, manifests, media
+  payloads, policy objects, and transport traces must remain in details tools
+  or diagnostic evidence.
+- stream snapshot builders must read from bounded read models or compact caches.
+  They must not call slow discovery, root relay, remote sync, or legacy fallback
+  paths during browser state rebuilds; those belong behind explicit refresh,
+  repair, or details actions with visible progress and failure.
 
 Stream variables should be demand-aware. A stream receiver that is not
 subscribed should not keep rebuilding full snapshots just in case a browser
@@ -1168,6 +1182,12 @@ Before publishing:
 - verify SDK projection diagnostics show the expected `by_event` pressure
   counters for dirty refresh paths before optimizing a noisy event source
 - verify stream request bursts cannot rebuild every skill section by default
+- verify generic subscription-change hooks do not publish full snapshots or
+  bypass stream coalescing; they may update demand counters, but initial state
+  must use the declared snapshot/refresh path
+- verify stream snapshot builders use bounded read models or compact caches and
+  do not call remote discovery, root relay, sync repair, or legacy fallback
+  paths during browser state rebuilds
 - verify status cards stay small and point to details instead of embedding
   detail payloads
 - verify status-card compact-boundary diagnostics stay clean:
@@ -1177,6 +1197,8 @@ Before publishing:
   real data path
 - verify actions that publish streams return only compact acks and do not
   include `state`, `items`, `sections`, logs, diagnostics, or full snapshots
+- verify cached `last_command` / `last_result` fields are bounded
+  acknowledgements and cannot grow with original command responses
 - verify snapshot/request tools publish the bounded stream/projection payload
   and return only `ok`, `status`, `receiver` or `projection_slot`, counts,
   freshness, and a trace id
