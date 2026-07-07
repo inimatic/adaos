@@ -9,6 +9,15 @@ from adaos.services.agent_context import AgentContext
 DEFAULT_LANG = "en"
 
 
+def normalize_language_code(raw: str | None) -> str:
+    token = str(raw or "").strip().lower().replace("_", "-")
+    if not token:
+        return DEFAULT_LANG
+    if "-" in token:
+        return token.split("-", 1)[0]
+    return token
+
+
 @dataclass(slots=True)
 class I18nService:
     ctx: AgentContext
@@ -27,7 +36,9 @@ class I18nService:
         scope: Optional[str] = None,  # "global" | "skill" | None (auto)
     ) -> str:
         """Единая точка перевода. Без SDK-зависимостей."""
-        lang = lang or getattr(self.ctx.settings, "lang", None) or os.getenv("ADAOS_LANG") or DEFAULT_LANG
+        lang = normalize_language_code(
+            lang or getattr(self.ctx.settings, "lang", None) or os.getenv("ADAOS_LANG") or DEFAULT_LANG
+        )
         params = params or {}
 
         if scope == "global" or (scope is None and not key.startswith("prep.")):
@@ -44,20 +55,22 @@ class I18nService:
 
     # ---------- loaders ----------
     def _load_global(self, lang: str) -> Dict[str, str]:
+        lang = normalize_language_code(lang)
         if lang in self._cache_global:
             return self._cache_global[lang]
         base = self.ctx.paths.locales_dir()
-        dflt = base / f"{DEFAULT_LANG}.json"
-        candidates = [(base / f"{lang}.json"), dflt]
         data: Dict[str, str] = {}
-        for p in candidates:
+        for candidate in dict.fromkeys([DEFAULT_LANG, lang]):
+            p = base / f"{candidate}.json"
             if p.exists():
-                data = json.loads(p.read_text(encoding="utf-8"))
-                break
+                loaded = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data.update(loaded)
         self._cache_global[lang] = data
         return data
 
     def _load_skill(self, lang: str, *, skill_path: Optional[Path], skill_id: Optional[str]) -> Dict[str, str]:
+        lang = normalize_language_code(lang)
         # ключ кэша: (skill_id|path, lang)
         key = ((skill_id or (skill_path.name if skill_path else "")), lang)
         if key in self._cache_skill:

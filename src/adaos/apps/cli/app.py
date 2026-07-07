@@ -337,11 +337,11 @@ def _warn_if_slot_shell_required(argv: list[str] | tuple[str, ...] | None = None
     hint = diagnostic.get("hint") or "source tools/slot-shell.sh --cd"
     try:
         typer.secho(
-            "[AdaOS] warning: state-changing production CLI command is not running from the active slot context.",
+            _("cli.slot.warning"),
             fg=typer.colors.YELLOW,
             err=True,
         )
-        typer.echo(f"[AdaOS] diagnostic: {diagnostic.get('code')}; run `{hint}` before retrying.", err=True)
+        typer.echo(_("cli.slot.diagnostic", code=diagnostic.get("code"), hint=hint), err=True)
     except Exception:
         pass
 
@@ -402,7 +402,7 @@ def _apply_cli_log_noise_defaults() -> None:
 from adaos.sdk.manage.environment import prepare_environment
 from adaos.services.settings import Settings
 from adaos.apps.bootstrap import init_ctx, reload_ctx
-from adaos.apps.cli.i18n import _
+from adaos.apps.cli.i18n import _, supported_language_codes
 from adaos.services.agent_context import get_ctx
 from adaos.services.runtime_paths import current_base_dir
 from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev, node, hub, realtime
@@ -458,16 +458,7 @@ def _write_env_var(key: str, value: str, dotenv_path: Path | None = None):
 
 
 def _supported_core_language_codes() -> list[str]:
-    try:
-        locales_dir = Path(__file__).resolve().parents[2] / "locales"
-        codes = sorted(
-            item.stem.lower()
-            for item in locales_dir.glob("*.json")
-            if item.is_file() and item.stem.strip()
-        )
-        return codes or ["en"]
-    except Exception:
-        return ["en"]
+    return supported_language_codes()
 
 
 def _normalize_core_language_code(raw: str, supported: list[str] | None = None) -> str:
@@ -479,8 +470,7 @@ def _normalize_core_language_code(raw: str, supported: list[str] | None = None) 
     for candidate in candidates:
         if candidate in supported_codes:
             return candidate
-    allowed = ", ".join(supported_codes)
-    raise typer.BadParameter(f"Allowed languages: {allowed}")
+    raise typer.BadParameter(_("cli.switch.lang.allowed", languages=", ".join(supported_codes)))
 
 
 def _restart_self():
@@ -514,9 +504,9 @@ def ensure_environment():
 @app.callback()
 def main(
     ctx: typer.Context,
-    base_dir: Optional[str] = typer.Option(None, "--base-dir", help="Базовый каталог AdaOS (по умолчанию ~/.adaos или из .env/ENV)"),
-    profile: Optional[str] = typer.Option(None, "--profile", help="Профиль настроек (по умолчанию 'default' или из .env/ENV)"),
-    reload: bool = typer.Option(False, "--reload", help="Пересобрать контекст с новыми настройками"),
+    base_dir: Optional[str] = typer.Option(None, "--base-dir", help=_("cli.option.base_dir")),
+    profile: Optional[str] = typer.Option(None, "--profile", help=_("cli.option.profile")),
+    reload: bool = typer.Option(False, "--reload", help=_("cli.option.reload")),
 ):
     """
     Вызывается перед любыми подкомандами: строит (или пересобирает) контекст и гарантирует готовность окружения.
@@ -545,7 +535,7 @@ def main(
 # -------- команды обслуживания --------
 
 
-@app.command("reset")
+@app.command("reset", help=_("cli.reset.help"))
 def reset():
     """Сброс окружения AdaOS (удаляет base_dir)."""
     base_dir = get_ctx().paths.base_dir()
@@ -558,38 +548,38 @@ def reset():
 
 # -------- переключатели профилей интеграций --------
 
-switch_app = typer.Typer(help="Переключение бэкендов / оснасток")
+switch_app = typer.Typer(help=_("cli.switch.help"))
 
 
-@switch_app.command("tts")
-def switch_tts(mode: str = typer.Argument(..., help="native | rhasspy")):
+@switch_app.command("tts", help=_("cli.switch.tts.help"))
+def switch_tts(mode: str = typer.Argument(..., help=_("cli.switch.tts.argument"))):
     mode = mode.strip().lower()
     if mode not in {"native", "rhasspy"}:
-        raise typer.BadParameter("Allowed: native, rhasspy")
+        raise typer.BadParameter(_("cli.switch.tts.allowed"))
     _write_env_var("ADAOS_TTS", mode)
-    typer.echo(f"[AdaOS] ADAOS_TTS set to '{mode}'. Reloading ...")
+    typer.echo(_("cli.switch.tts.changed", mode=mode))
     _restart_self()
 
 
-@switch_app.command("stt")
-def switch_stt(mode: str = typer.Argument(..., help="vosk | rhasspy | native")):
+@switch_app.command("stt", help=_("cli.switch.stt.help"))
+def switch_stt(mode: str = typer.Argument(..., help=_("cli.switch.stt.argument"))):
     mode = mode.strip().lower()
     if mode not in {"vosk", "rhasspy", "native"}:
-        raise typer.BadParameter("Allowed: vosk, rhasspy, native")
+        raise typer.BadParameter(_("cli.switch.stt.allowed"))
     _write_env_var("ADAOS_STT", mode)
-    typer.echo(f"[AdaOS] ADAOS_STT set to '{mode}'. Reloading ...")
+    typer.echo(_("cli.switch.stt.changed", mode=mode))
     _restart_self()
 
 
-@switch_app.command("lang")
-def switch_lang(lang: str = typer.Argument(..., help="Core UI language, e.g. en or ru")):
+@switch_app.command("lang", help=_("cli.switch.lang.help"))
+def switch_lang(lang: str = typer.Argument(..., help=_("cli.switch.lang.argument"))):
     code = _normalize_core_language_code(lang)
     _write_env_var("ADAOS_LANG", code)
     os.environ["ADAOS_LANG"] = code
-    typer.echo(f"[AdaOS] ADAOS_LANG set to '{code}'. Restart long-running services to apply.")
+    typer.echo(_("cli.switch.lang.changed", lang=code))
 
 
-@app.command("where")
+@app.command("where", help=_("cli.where.help"))
 def where():
     print("base_dir:", current_base_dir())
 
@@ -600,35 +590,35 @@ app.add_typer(skill.app, name="skill", help=_("cli.help_skill"))
 app.add_typer(tests_cmd.app, name="tests", help=_("cli.help_test"))
 app.add_typer(runtime.app, name="runtime", help=_("cli.help_runtime"))
 app.add_typer(llm.app, name="llm", help=_("cli.help_llm"))
-app.add_typer(api.app, name="api")
-app.add_typer(builder_cmd.app, name="builder", help="Builder authoring, draft, and preview workflows")
-app.add_typer(realtime.app, name="realtime", help="Realtime sidecar")
-app.add_typer(diag360.app, name="360log", help="360log flight-recorder snapshots")
-app.add_typer(node.app, name="node", help="Node onboarding and role management")
-app.add_typer(hub.app, name="hub", help="Hub operations (join-codes)")
-app.add_typer(maintenance.app, name="maintenance", help="Maintenance and self-hygiene")
-app.add_typer(monitor.app, name="monitor")
+app.add_typer(api.app, name="api", help=_("cli.help_api"))
+app.add_typer(builder_cmd.app, name="builder", help=_("cli.help_builder"))
+app.add_typer(realtime.app, name="realtime", help=_("cli.help_realtime"))
+app.add_typer(diag360.app, name="360log", help=_("cli.help_diag360"))
+app.add_typer(node.app, name="node", help=_("cli.help_node"))
+app.add_typer(hub.app, name="hub", help=_("cli.help_hub"))
+app.add_typer(maintenance.app, name="maintenance", help=_("cli.help_maintenance"))
+app.add_typer(monitor.app, name="monitor", help=_("cli.help_monitor"))
 app.add_typer(repo.app, name="repo", help=_("cli.repo.help"))
-app.add_typer(git_cmd.app, name="git", help="Git availability / archive fallback")
+app.add_typer(git_cmd.app, name="git", help=_("cli.help_git"))
 app.add_typer(scenario.app, name="scenario", help=_("cli.help_scenario"))
-app.add_typer(setup_cmd.autostart_app, name="autostart", help="OS autostart management")
-app.add_typer(switch_app, name="switch", help="Переключение профилей интеграций")
-app.add_typer(secret.app, name="secret")
-app.add_typer(sandbox_cmd.app, name="sandbox")
-app.add_typer(_sdk_export.app, name="sdk")
-app.add_typer(interpreter.app, name="interpreter", help="Интерпретатор и обучение")
-app.add_typer(dev.app, name="dev", help="Developer operations")
+app.add_typer(setup_cmd.autostart_app, name="autostart", help=_("cli.help_autostart"))
+app.add_typer(switch_app, name="switch", help=_("cli.switch.root_help"))
+app.add_typer(secret.app, name="secret", help=_("cli.secret.help"))
+app.add_typer(sandbox_cmd.app, name="sandbox", help=_("cli.help_sandbox"))
+app.add_typer(_sdk_export.app, name="sdk", help=_("cli.help_sdk"))
+app.add_typer(interpreter.app, name="interpreter", help=_("cli.help_interpreter"))
+app.add_typer(dev.app, name="dev", help=_("cli.help_dev"))
 
 # Root-level setup helpers
-app.command("install")(setup_cmd.install)
-app.command("update")(setup_cmd.update)
+app.command("install", help=_("cli.install.help"))(setup_cmd.install)
+app.command("update", help=_("cli.update.help"))(setup_cmd.update)
 
 # ---- Фильтрация интеграций по ENV ----
 _tts = _read("ADAOS_TTS", "native")
 if _tts == "rhasspy":
-    app.add_typer(rhasspy_cmd.app, name="rhasspy", help="Rhasspy-integration")
+    app.add_typer(rhasspy_cmd.app, name="rhasspy", help=_("cli.help_rhasspy"))
 else:
-    app.add_typer(native.app, name="", help="Native commands")
+    app.add_typer(native.app, name="", help=_("cli.help_native"))
 
 if __name__ == "__main__":
     app()

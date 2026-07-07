@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 
 from adaos.sdk.data.context import clear_current_skill, set_current_skill
-from adaos.sdk.data.i18n import _
+from adaos.sdk.data.i18n import I18n, _
 from adaos.services.agent_context import clear_ctx, get_ctx
 
 
 def test_i18n_preboot():
     clear_ctx()
     assert _("cli.help") == "AdaOS CLI \u2013 managing skills, tests and Runtime"
+
+
+def test_i18n_preboot_normalizes_locale():
+    clear_ctx()
+
+    assert I18n(lang="ru-RU").translate("cli.help_skill") == "Работа с навыками"
+    assert I18n(lang="zz").translate("cli.help_skill") == "Working with skills"
 
 
 def test_i18n_runtime_keys_use_current_skill_scope():

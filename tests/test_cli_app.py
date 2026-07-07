@@ -12,12 +12,12 @@ from adaos.apps.cli import app as cli_app
 def test_switch_lang_writes_supported_language(monkeypatch, tmp_path: Path) -> None:
     env_path = tmp_path / ".env"
     monkeypatch.setattr(cli_app, "find_dotenv", lambda *args, **kwargs: str(env_path))
-    monkeypatch.delenv("ADAOS_LANG", raising=False)
+    monkeypatch.setenv("ADAOS_LANG", "en")
 
     result = CliRunner().invoke(cli_app.switch_app, ["lang", "ru-RU"])
 
     assert result.exit_code == 0, result.output
-    assert "ADAOS_LANG set to 'ru'" in result.output
+    assert "ADAOS_LANG установлен в 'ru'" in result.output
     assert env_path.read_text(encoding="utf-8") == "ADAOS_LANG=ru\n"
     assert os.environ["ADAOS_LANG"] == "ru"
 
@@ -25,12 +25,23 @@ def test_switch_lang_writes_supported_language(monkeypatch, tmp_path: Path) -> N
 def test_switch_lang_rejects_unsupported_language(monkeypatch, tmp_path: Path) -> None:
     env_path = tmp_path / ".env"
     monkeypatch.setattr(cli_app, "find_dotenv", lambda *args, **kwargs: str(env_path))
+    monkeypatch.setenv("ADAOS_LANG", "ru")
 
     result = CliRunner().invoke(cli_app.switch_app, ["lang", "zz"])
 
     assert result.exit_code != 0
-    assert "Allowed languages" in result.output
+    assert "Допустимые языки" in result.output
     assert not env_path.exists()
+
+
+def test_cli_i18n_preboot_normalizes_and_falls_back(monkeypatch) -> None:
+    from adaos.apps.cli import i18n as cli_i18n
+
+    monkeypatch.setenv("ADAOS_LANG", "ru-RU")
+    assert cli_i18n._preboot_translate("cli.help_skill") == "Работа с навыками"
+
+    monkeypatch.setenv("ADAOS_LANG", "zz")
+    assert cli_i18n._preboot_translate("cli.help_skill") == "Working with skills"
 
 
 def test_active_slot_manifest_payload_prefers_active_slot_venv(monkeypatch, tmp_path: Path) -> None:

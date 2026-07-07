@@ -7,8 +7,9 @@ from typing import Optional
 import typer
 
 from adaos.adapters.audio.tts.native_tts import NativeTTS
+from adaos.apps.cli.i18n import _
 
-app = typer.Typer(help="Native (audio) commands")
+app = typer.Typer(help=_("cli.native.help"))
 
 
 def _is_android() -> bool:
@@ -28,7 +29,7 @@ def _try_start_android_service() -> bool:
         context.startForegroundService(intent)
         return True
     except Exception as e:
-        typer.echo(f"[AndroidService] failed: {e}")
+        typer.echo(_("cli.native.android_service.failed", error=e))
         return False
 
 
@@ -43,34 +44,31 @@ def _load_vosk_stt_class():
         return VoskSTT
     except Exception as e:
         typer.echo(
-            "Vosk STT is unavailable in this environment.\n"
-            f"Reason: {e}\n"
-            "If you don't need voice, ignore this. If you do:\n"
-            "  Debian/Ubuntu: sudo apt-get install -y libatomic1\n",
+            _("cli.native.vosk.unavailable", reason=e),
             err=True,
         )
         raise typer.Exit(code=1)
 
 
-@app.command("say")
+@app.command("say", help=_("cli.native.say.help"))
 def say(
-    text: str = typer.Argument(..., help="Text to speak"),
-    lang: Optional[str] = typer.Option(None, "--lang", "-l", help="Language"),
-    voice: Optional[str] = typer.Option(None, "--voice", "-v", help="Voice name"),
-    rate: Optional[int] = typer.Option(None, "--rate", help="Speech rate"),
-    volume: Optional[float] = typer.Option(None, "--volume", help="Volume [0..1]"),
+    text: str = typer.Argument(..., help=_("cli.native.say.text_help")),
+    lang: Optional[str] = typer.Option(None, "--lang", "-l", help=_("cli.native.lang_help")),
+    voice: Optional[str] = typer.Option(None, "--voice", "-v", help=_("cli.native.voice_help")),
+    rate: Optional[int] = typer.Option(None, "--rate", help=_("cli.native.rate_help")),
+    volume: Optional[float] = typer.Option(None, "--volume", help=_("cli.native.volume_help")),
 ):
     tts = NativeTTS(voice=voice, rate=rate, volume=volume, lang_hint=(lang or "").lower() or None)
     tts.say(text)
 
 
-@app.command("start")
+@app.command("start", help=_("cli.native.start.help"))
 def start(
-    lang: str = typer.Option("en", "--lang", help="Language"),
-    samplerate: int = typer.Option(16000, "--samplerate", help="Sample rate"),
-    device: Optional[str] = typer.Option(None, "--device", help="Audio input device"),
-    echo: bool = typer.Option(True, "--echo", help="Echo recognized phrases via TTS"),
-    model_path: Optional[str] = typer.Option(None, "--model-path", help="Path to Vosk model"),
+    lang: str = typer.Option("en", "--lang", help=_("cli.native.lang_help")),
+    samplerate: int = typer.Option(16000, "--samplerate", help=_("cli.native.samplerate_help")),
+    device: Optional[str] = typer.Option(None, "--device", help=_("cli.native.device_help")),
+    echo: bool = typer.Option(True, "--echo", help=_("cli.native.echo_help")),
+    model_path: Optional[str] = typer.Option(None, "--model-path", help=_("cli.native.model_path_help")),
     use_android_service: bool = True,
 ):
     """Run offline STT listener (Vosk). Ctrl+C to exit."""
@@ -101,7 +99,7 @@ def start(
         except Exception:
             tts = NativeTTS(lang_hint=lang)
 
-    typer.echo("[Vosk] Ready. Say something...")
+    typer.echo(_("cli.native.vosk.ready"))
     try:
         for phrase in stt.listen_stream():
             typer.echo(f"[STT] {phrase}")
@@ -109,7 +107,7 @@ def start(
                 try:
                     tts.say(phrase)
                 except Exception as e:
-                    typer.echo(f"[TTS error] {e}")
+                    typer.echo(_("cli.native.tts.error", error=e))
     except KeyboardInterrupt:
         pass
     finally:
