@@ -457,6 +457,32 @@ def _write_env_var(key: str, value: str, dotenv_path: Path | None = None):
     dotenv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _supported_core_language_codes() -> list[str]:
+    try:
+        locales_dir = Path(__file__).resolve().parents[2] / "locales"
+        codes = sorted(
+            item.stem.lower()
+            for item in locales_dir.glob("*.json")
+            if item.is_file() and item.stem.strip()
+        )
+        return codes or ["en"]
+    except Exception:
+        return ["en"]
+
+
+def _normalize_core_language_code(raw: str, supported: list[str] | None = None) -> str:
+    supported_codes = supported or _supported_core_language_codes()
+    token = str(raw or "").strip().lower().replace("_", "-")
+    candidates = [token]
+    if "-" in token:
+        candidates.append(token.split("-", 1)[0])
+    for candidate in candidates:
+        if candidate in supported_codes:
+            return candidate
+    allowed = ", ".join(supported_codes)
+    raise typer.BadParameter(f"Allowed languages: {allowed}")
+
+
 def _restart_self():
     # Перезапускаем текущий процесс CLI (кроссплатформенно)
     if hasattr(sys, "frozen"):
@@ -553,6 +579,14 @@ def switch_stt(mode: str = typer.Argument(..., help="vosk | rhasspy | native")):
     _write_env_var("ADAOS_STT", mode)
     typer.echo(f"[AdaOS] ADAOS_STT set to '{mode}'. Reloading ...")
     _restart_self()
+
+
+@switch_app.command("lang")
+def switch_lang(lang: str = typer.Argument(..., help="Core UI language, e.g. en or ru")):
+    code = _normalize_core_language_code(lang)
+    _write_env_var("ADAOS_LANG", code)
+    os.environ["ADAOS_LANG"] = code
+    typer.echo(f"[AdaOS] ADAOS_LANG set to '{code}'. Restart long-running services to apply.")
 
 
 @app.command("where")

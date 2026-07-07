@@ -34,6 +34,18 @@ header settings из API, позволяет signed-in user редактиров
 profile/preference fields и обновляет шапку после save.
 Language, locale, timezone, device и scope controls берут варианты из API
 options вместо free-form text там, где runtime может дать конкретный список.
+Шапка также обновляет header settings при появлении auth-session после
+инициализации приложения, поэтому shell не остается с generic `User` до первого
+клика по панели.
+
+Current-user header chip показывает stable initials из display name, preferred
+name или user id. Это только presentation detail; хранение avatar image и его
+жизненный цикл остаются future product work.
+
+Для core runtime default команда `adaos switch lang <en|ru>` пишет
+`ADAOS_LANG` в `.env`, предварительно валидируя код по
+`src/adaos/locales/*.json`. Browser current-user language остается user
+preference и может переопределять default для authenticated web sessions.
 
 ## Access boundary
 
@@ -54,7 +66,6 @@ session-to-profile binding из Phase 6+ до того, как `current_user` п
 
 Не реализовано в этой фазе:
 
-- avatar/initial rendering polish в header chip;
 - identity switcher для sessions с несколькими valid identities;
 - полноценный owner/admin user-management surface;
 - cross-surface E2E tests кроме strict browser build smoke test.

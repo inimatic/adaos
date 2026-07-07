@@ -4,7 +4,33 @@ import json
 import os
 from pathlib import Path
 
+from typer.testing import CliRunner
+
 from adaos.apps.cli import app as cli_app
+
+
+def test_switch_lang_writes_supported_language(monkeypatch, tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(cli_app, "find_dotenv", lambda *args, **kwargs: str(env_path))
+    monkeypatch.delenv("ADAOS_LANG", raising=False)
+
+    result = CliRunner().invoke(cli_app.switch_app, ["lang", "ru-RU"])
+
+    assert result.exit_code == 0, result.output
+    assert "ADAOS_LANG set to 'ru'" in result.output
+    assert env_path.read_text(encoding="utf-8") == "ADAOS_LANG=ru\n"
+    assert os.environ["ADAOS_LANG"] == "ru"
+
+
+def test_switch_lang_rejects_unsupported_language(monkeypatch, tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(cli_app, "find_dotenv", lambda *args, **kwargs: str(env_path))
+
+    result = CliRunner().invoke(cli_app.switch_app, ["lang", "zz"])
+
+    assert result.exit_code != 0
+    assert "Allowed languages" in result.output
+    assert not env_path.exists()
 
 
 def test_active_slot_manifest_payload_prefers_active_slot_venv(monkeypatch, tmp_path: Path) -> None:

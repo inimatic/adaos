@@ -52,6 +52,11 @@ checked.
   i18n, and the first localized web desktop slice uses skill/scenario
   `resources` plus `*_i18n` schema keys for web_desktop chrome, ReDevice
   slideshow, Notebook, and Prompt IDE live UI schemas.
+- [x] 2026-07-07: Phase 4-5 user-facing tails tightened: browser header
+  settings refresh on auth-session changes, logout clears personalized chrome
+  state, the current-user chip shows stable initials, AdaOS Connect renders
+  invite QR codes, the admin panel exposes an audit drill-down preview, and
+  `adaos switch lang <en|ru>` writes `ADAOS_LANG` from the core locale set.
 
 ## Execution rules
 
@@ -280,7 +285,7 @@ Checklist:
   role/access status, active subnet/workspace, and device trust status.
 - [x] Mark current-user identity resolution as owner fallback until session
   identity binding exists for invited/guest users.
-- [ ] Add avatar/initial rendering polish for the current-user header chip.
+- [x] Add avatar/initial rendering polish for the current-user header chip.
 - [x] Add a current-user settings panel for display name, preferred name,
   language/locale/timezone, theme, UI density, memory/privacy preferences, and
   accessibility preferences.
@@ -289,6 +294,8 @@ Checklist:
 - [x] Wire the header language picker to the current-user profile preference
   when a user session is authenticated; localStorage remains a fallback for
   anonymous/login chrome.
+- [x] Add CLI language switching with `adaos switch lang <code>` backed by the
+  core `src/adaos/locales/*.json` resources and persisted as `ADAOS_LANG`.
 - [x] Use one browser i18n resolver pattern: bundled `assets/i18n/*.json` plus
   runtime `resources` dictionaries, with `title_i18n`, `label_i18n`,
   `placeholder_i18n`, and related `*_i18n` fields carrying fallback text in the
@@ -323,6 +330,8 @@ Local verification:
 
 - [x] API tests for current-user profile/preference/header routes.
 - [x] Browser build smoke test for settings panel and header refresh.
+- [x] Targeted browser test for auth-session-delayed header refresh.
+- [x] CLI unit test for `adaos switch lang`.
 - [x] Audit smoke test for profile/preference updates and denied edits through
   the Phase 2 service tests.
 
@@ -341,7 +350,7 @@ Checklist:
   max sessions, and optional profile hint.
 - [x] Generate invite URLs from the public app base with target subnet and
   root/hub endpoint parameters instead of local loopback API origins.
-- [ ] Add actual QR rendering for created invite links.
+- [x] Add actual QR rendering for created invite links.
 - [x] Let owner/co-owner create a public guest link for classrooms, museums,
   events, demos, and temporary visitors.
 - [x] Let owner/co-owner create a targeted invite by entering a local
@@ -355,7 +364,7 @@ Checklist:
   publicly.
 - [x] List pending, accepted, expired, and revoked links for owner/co-owner,
   with revoke actions.
-- [ ] Add audit-history drill-down to the link management panel.
+- [x] Add audit-history drill-down to the link management panel.
 - [x] Wire invite/session revocation to access-link denial and browser/Yjs
   admission so revoked sessions are denied without manual database edits.
 - [ ] Add direct websocket disconnect orchestration for already-connected
@@ -377,6 +386,7 @@ Local verification:
 
 - [x] API tests for create/preview/claim/revoke flows.
 - [x] Browser build smoke test for guest link and targeted invite panel.
+- [x] Targeted browser test for AdaOS Connect QR/audit panel compilation.
 - [x] Revoked-session admission/cutoff test through the access-link runtime
   path, not only the service hook.
 - [x] Audit query smoke tests for issuer, subject, scope, role preset,

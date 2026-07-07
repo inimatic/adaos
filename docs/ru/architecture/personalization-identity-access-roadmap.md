@@ -47,6 +47,11 @@ Connect или Join Browser, пока не закрыта соответству
   Phase 2 и Phase 3 явно считаются backend slices, а новые must-have фазы
   покрывают Web API/client settings и AdaOS Connect join UX до того, как можно
   заявлять о видимой персонализации.
+- [x] 2026-07-07: закрыты пользовательские хвосты Phase 4-5: browser header
+  refresh срабатывает при изменении auth-session, logout очищает
+  personalized chrome state, current-user chip показывает initials, AdaOS
+  Connect рендерит invite QR, admin panel показывает audit drill-down preview,
+  а `adaos switch lang <en|ru>` пишет `ADAOS_LANG` из набора core locales.
 
 ## Правила выполнения
 
@@ -276,12 +281,15 @@ Checklist:
   role/access status, active subnet/workspace и device trust status.
 - [x] Помечать current-user identity resolution как owner fallback до появления
   session identity binding для invited/guest users.
-- [ ] Добавить avatar/initial rendering polish для current-user header chip.
+- [x] Добавить avatar/initial rendering polish для current-user header chip.
 - [x] Добавить current-user settings panel для display name, preferred name,
   language/locale/timezone, theme, UI density, memory/privacy preferences и
   accessibility preferences.
 - [x] Подкрепить language, locale, timezone, device и invite-scope controls
   runtime/API options вместо free-form text там, где есть конкретные варианты.
+- [x] Добавить CLI language switching через `adaos switch lang <code>`,
+  валидируя код по core `src/adaos/locales/*.json` и сохраняя его как
+  `ADAOS_LANG`.
 - [x] Применять saved theme preferences в browser shell сразу, а не только
   сохранять их server-side.
 - [x] Держать role и membership read-only в current-user settings; любые access
@@ -326,7 +334,7 @@ Checklist:
   expiry, max sessions и optional profile hint.
 - [x] Генерировать invite URLs от public app base с target subnet и root/hub
   endpoint parameters вместо local loopback API origins.
-- [ ] Добавить actual QR rendering для созданных invite links.
+- [x] Добавить actual QR rendering для созданных invite links.
 - [x] Дать owner/co-owner возможность создать public guest link для
   classrooms, museums, events, demos и temporary visitors.
 - [x] Дать owner/co-owner возможность создать targeted invite: ввести local
@@ -339,7 +347,7 @@ Checklist:
   нельзя безопасно выводить публично.
 - [x] Показывать owner/co-owner pending, accepted, expired и revoked links с
   revoke actions.
-- [ ] Добавить audit-history drill-down в link management panel.
+- [x] Добавить audit-history drill-down в link management panel.
 - [x] Связать invite/session revocation с access-link denial и browser/Yjs
   admission, чтобы revoked sessions отклонялись без ручных database edits.
 - [ ] Добавить direct websocket disconnect orchestration для already-connected

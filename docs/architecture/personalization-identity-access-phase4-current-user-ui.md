@@ -37,7 +37,13 @@ authoritative header settings from the API, lets the signed-in user edit
 allowed profile/preference fields, and refreshes the header after saving.
 Language, locale, timezone, device, and scope controls are backed by API
 options instead of free-form text where the runtime can provide a concrete
-enumeration.
+enumeration. The header also refreshes profile settings when the auth session
+becomes available after app initialization, so the shell does not show the
+generic `User` label until the panel is opened.
+
+The current-user header chip renders stable initials from display name,
+preferred name, or user id. This is a presentation detail only; avatar storage
+and image lifecycle remain future product work.
 
 ## Language and Runtime I18n
 
@@ -61,6 +67,11 @@ ReDevice slideshow, Notebook, and Prompt IDE. Skill and scenario manifests
 declare `supported_locales: [en, ru]`; skill-specific translations stay with
 the skill/scenario source instead of being moved into the Angular bundle.
 
+For the core runtime default, `adaos switch lang <en|ru>` writes `ADAOS_LANG`
+to `.env` after validating the code against `src/adaos/locales/*.json`. Browser
+current-user language remains a user preference and can override the default
+for authenticated web sessions.
+
 ## Access Boundary
 
 `role`, `membership`, `grant`, and related access-policy fields stay outside
@@ -81,7 +92,6 @@ owner fallback.
 
 Not implemented in this phase:
 
-- avatar/initial rendering polish in the header chip;
 - identity switcher for sessions with multiple valid identities;
 - full owner/admin user-management surface;
 - cross-surface E2E tests beyond the strict browser build smoke test.

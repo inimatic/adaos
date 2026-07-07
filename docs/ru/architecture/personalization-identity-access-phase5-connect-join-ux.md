@@ -33,7 +33,10 @@ Phase 5 делает Phase 3 join/invite semantics доступными из bro
 скопировать guest link для public/session-bound доступа и targeted invite link
 для named user вроде Маши. Joining browser, открывший
 `?adaos_invite=<id>`, получает preview со scope, role, expiry, profile hint при
-наличии и explicit acceptance action.
+наличии и explicit acceptance action. Созданные ссылки отображаются с QR,
+когда API возвращает `claim_url`, поэтому public guest и device-to-device flows
+могут использовать один и тот же link material как copyable link или scanable
+code.
 
 Invite URLs генерируются от configured public app base, обычно
 `https://inimatic.com`, и несут target subnet вместе с root hub endpoint
@@ -53,13 +56,15 @@ Revocation вызывает personalization service и access-link denial adapte
 последующие browser/Yjs admission checks отклоняли revoked sessions без ручных
 database edits.
 
+Owner/admin panel также показывает audit-history preview: последние audit
+events из summary API раскрываются в компактный drill-down с raw payload. Это
+diagnostic/manageability surface, а не замена Phase 1 audit store.
+
 ## Текущие границы
 
 Не реализовано в этой фазе:
 
-- QR image rendering для invite links;
 - profile picker/create UX вместо free-form profile id entry;
-- audit-history drill-down в link panel;
 - direct websocket disconnect orchestration для already-connected browser
   sessions;
 
