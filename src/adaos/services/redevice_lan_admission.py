@@ -725,6 +725,45 @@ def next_command(code: str, *, endpoint_token: str | None = None) -> dict[str, A
     return {"ok": True, "command": command, "updated_at": _iso()}
 
 
+def heartbeat(code: str, payload: Mapping[str, Any] | None = None, *, endpoint_token: str | None = None) -> dict[str, Any]:
+    token = _text(code)
+    entry, error = _authorize_endpoint(token, endpoint_token)
+    if error:
+        return error
+    data = _mapping(payload)
+    endpoint_health = _mapping(data.get("endpoint_health"))
+    service_state = _mapping(data.get("service_state"))
+    active_app = _mapping(data.get("active_app"))
+    active_surface = _mapping(data.get("active_surface"))
+    saved = access_links.touch_redevice_link(
+        _text(entry.get("id")),
+        pair_code=token,
+        hub_id=_text(entry.get("hub_id")),
+        owner_id=_text(entry.get("owner_id")),
+        online=True,
+        connection_state="online",
+        endpoint_policy=_mapping(entry.get("endpoint_policy")) or None,
+        endpoint_manifest=_mapping(entry.get("endpoint_manifest")) or None,
+        endpoint_health=endpoint_health or None,
+        service_state=service_state or None,
+        active_app=active_app or None,
+        active_surface=active_surface or None,
+    )
+    response_entry = saved if isinstance(saved, Mapping) else entry
+    policy = _mapping(response_entry.get("endpoint_policy"))
+    manifest = _mapping(response_entry.get("endpoint_manifest"))
+    return {
+        "ok": True,
+        "code": token,
+        "pair_code": token,
+        "endpoint_id": _text(response_entry.get("id")),
+        "connection_state": "online",
+        "root_url": _text(response_entry.get("endpoint_root_url")) or _text(policy.get("root_url")) or _text(manifest.get("root_url")),
+        "control_root_url": _text(response_entry.get("root_url")) or _text(policy.get("control_root_url")),
+        "updated_at": _iso(),
+    }
+
+
 def record_event(code: str, event: Mapping[str, Any], *, endpoint_token: str | None = None) -> dict[str, Any]:
     token = _text(code)
     entry, error = _authorize_endpoint(token, endpoint_token)

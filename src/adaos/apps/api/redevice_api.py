@@ -40,6 +40,13 @@ class EventRequest(BaseModel):
     event: dict[str, Any] = Field(default_factory=dict)
 
 
+class HeartbeatRequest(BaseModel):
+    endpoint_health: dict[str, Any] | None = None
+    service_state: dict[str, Any] | None = None
+    active_app: dict[str, Any] | None = None
+    active_surface: dict[str, Any] | None = None
+
+
 class AckRequest(BaseModel):
     state: str | None = None
     event: dict[str, Any] | None = None
@@ -115,6 +122,11 @@ async def redevice_enqueue_command(code: str, body: CommandRequest) -> dict[str,
 @router.get("/v1/redevice/devices/{code}/commands/next")
 async def redevice_next_command(code: str, x_redevice_token: str | None = Header(default=None)) -> dict[str, Any]:
     return lan.next_command(code, endpoint_token=_endpoint_token(x_redevice_token))
+
+
+@router.post("/v1/redevice/devices/{code}/heartbeat")
+async def redevice_heartbeat(code: str, body: HeartbeatRequest, x_redevice_token: str | None = Header(default=None)) -> dict[str, Any]:
+    return lan.heartbeat(code, body.model_dump(exclude_none=True), endpoint_token=_endpoint_token(x_redevice_token))
 
 
 @router.post("/v1/redevice/devices/{code}/events")

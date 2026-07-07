@@ -142,3 +142,39 @@ def test_lan_command_queue_redelivers_until_ack(monkeypatch) -> None:
     assert third["command"]["delivery_attempts"] == 2
     assert ack["state"] == "acknowledged"
     assert after_ack["command"] is None
+
+
+def test_lan_heartbeat_touches_endpoint_without_leasing_command(monkeypatch) -> None:
+    _install_memory_state(monkeypatch)
+    now = {"value": 1000.0}
+    monkeypatch.setattr(lan, "_now_ts", lambda: now["value"])
+    monkeypatch.setattr(
+        lan,
+        "_endpoint_by_code",
+        lambda code: {
+            "id": "redevice-phone",
+            "pair_code": "LAN12345",
+            "endpoint_token": "endpoint-token",
+            "hub_id": "sn_local",
+            "owner_id": "owner_local",
+            "endpoint_root_url": "http://192.168.0.10:8777",
+            "root_url": "http://127.0.0.1:8777",
+            "endpoint_policy": {"root_url": "http://192.168.0.10:8777"},
+        }
+        if code == "LAN12345"
+        else None,
+    )
+    touches: list[dict[str, Any]] = []
+    monkeypatch.setattr(lan.access_links, "touch_redevice_link", lambda endpoint_id, **kwargs: touches.append({"id": endpoint_id, **kwargs}) or {"id": endpoint_id, **kwargs})
+
+    queued = lan.enqueue_command("LAN12345", {"command_id": "cmd:test", "type": "display.clear_surface"})
+    beat = lan.heartbeat("LAN12345", {"endpoint_health": {"battery_level": 0.9}}, endpoint_token="endpoint-token")
+    first = lan.next_command("LAN12345", endpoint_token="endpoint-token")
+
+    assert queued["state"] == "queued"
+    assert beat["ok"] is True
+    assert beat["endpoint_id"] == "redevice-phone"
+    assert beat["root_url"] == "http://192.168.0.10:8777"
+    assert touches[0]["connection_state"] == "online"
+    assert touches[0]["endpoint_health"] == {"battery_level": 0.9}
+    assert first["command"]["command_id"] == "cmd:test"
