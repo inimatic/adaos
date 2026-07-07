@@ -41,6 +41,58 @@ export interface WebUiSkillTransition {
   [key: string]: unknown
 }
 
+export interface WebUiManifest {
+  schema?: 'adaos.webui.v1' | string
+  ui?: WebUiRoot
+  catalog?: Record<string, unknown>
+  apps?: readonly unknown[]
+  widgets?: readonly WebUiWidgetConfig[]
+  registry?: Record<string, unknown>
+  resources?: Record<string, unknown>
+  nlu?: Record<string, unknown>
+  llm_hints?: Record<string, unknown>
+  nlu_hints?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface WebUiRoot {
+  application?: WebUiApplication
+  [key: string]: unknown
+}
+
+export interface WebUiApplication {
+  version?: string
+  desktop?: WebUiDesktopApplication
+  [key: string]: unknown
+}
+
+export interface WebUiDesktopApplication {
+  pageSchema?: WebUiPageSchema
+  [key: string]: unknown
+}
+
+export interface WebUiPageSchema {
+  id: string
+  title?: string
+  layout: Record<string, unknown>
+  widgets: readonly WebUiWidgetConfig[]
+  initialState?: Record<string, unknown>
+  autoActions?: readonly unknown[]
+  semantic?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface WebUiWidgetConfig {
+  id: string
+  type: string
+  area?: string
+  title?: string
+  dataSource?: Record<string, unknown>
+  inputs?: Record<string, unknown>
+  actions?: readonly unknown[]
+  [key: string]: unknown
+}
+
 export interface WebUiModalAddress {
   route?: string
   view?: string

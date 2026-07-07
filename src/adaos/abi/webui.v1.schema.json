@@ -12,6 +12,7 @@
     "apps": { "$ref": "#/$defs/catalogApps" },
     "widgets": { "$ref": "#/$defs/catalogWidgets" },
 
+    "ui": { "$ref": "#/$defs/uiRoot" },
     "registry": { "$ref": "#/$defs/registry" },
     "resources": {
       "$ref": "#/$defs/uiResources",
@@ -686,6 +687,29 @@
     "catalogWidgets": {
       "type": "array",
       "items": { "$ref": "#/$defs/widgetCatalogEntry" }
+    },
+
+    "uiRoot": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "application": { "$ref": "#/$defs/uiApplication" }
+      }
+    },
+    "uiApplication": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "version": { "type": "string" },
+        "desktop": { "$ref": "#/$defs/uiDesktopApplication" }
+      }
+    },
+    "uiDesktopApplication": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "pageSchema": { "$ref": "#/$defs/pageSchema" }
+      }
     },
 
     "launchAction": {

@@ -84,7 +84,10 @@ def test_create_shopping_list_scenario_draft_writes_declarative_webui(tmp_path, 
     assert result["preview_state"]["datasources"][0]["type"] == "internal_crud"
     webui = artifact_root / "webui.json"
     assert webui.exists()
-    assert "preview_state" in webui.read_text(encoding="utf-8")
+    webui_payload = json.loads(webui.read_text(encoding="utf-8"))
+    assert webui_payload["schema"] == "adaos.webui.v1"
+    assert "preview_state" not in webui_payload
+    assert webui_payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     scenario = yaml.safe_load((artifact_root / "scenario.json").read_text(encoding="utf-8"))
     page_schema = scenario["ui"]["application"]["desktop"]["pageSchema"]
     assert page_schema["title"] == "\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a"
@@ -331,7 +334,8 @@ def test_update_current_scenario_prefers_llm_for_ui_changes_when_enabled(monkeyp
     created = skill.create_scenario_draft("create todo list", webspace_id="builder-swap-no-llm")
     preview = dict(created["preview_state"])
     preview["layout_order"] = "cards_first"
-    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    page_schema = skill._page_schema_from_preview(preview)
+    payload = {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
     monkeypatch.setattr(
         skill,
         "_apply_llm_webui_transform",
@@ -480,7 +484,9 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
     created = skill.create_scenario_draft("create todo list", webspace_id="builder-llm")
     preview = dict(created["preview_state"])
     preview["title"] = "English Todo"
-    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    page_schema = skill._page_schema_from_preview(preview)
+    page_schema["title"] = "English Todo"
+    payload = {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
     monkeypatch.setattr(
         skill,
         "_apply_llm_webui_transform",
@@ -498,7 +504,8 @@ def test_update_current_scenario_uses_llm_webui_fallback(monkeypatch, tmp_path) 
     assert result["preview_state"]["title"] == "English Todo"
     assert result["ui_revision"]["revision"] == "003"
     saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
-    assert saved["preview_state"]["title"] == "English Todo"
+    assert saved["schema"] == "adaos.webui.v1"
+    assert saved["ui"]["application"]["desktop"]["pageSchema"]["title"] == "English Todo"
 
 
 def test_llm_webui_transform_uses_stable_request_id_and_compact_prompt(monkeypatch) -> None:
@@ -507,13 +514,19 @@ def test_llm_webui_transform_uses_stable_request_id_and_compact_prompt(monkeypat
 
     monkeypatch.setenv("ADAOS_BUILDER_LLM_TIMEOUT_S", "181")
     monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", "4321")
+    page_schema = {
+        "id": "todo_list",
+        "title": "Todo List",
+        "layout": {"type": "split", "areas": [{"id": "main"}]},
+        "widgets": [{"id": "prototype-form", "type": "ui.form", "area": "main", "inputs": {"fields": []}}],
+    }
     preview = {
         "title": "Todo List",
         "current_ui": {"layout_order": "input_first"},
         "datasources": [{"id": "prototype_items", "type": "array"}],
         "mock_data": {"prototype_items": [{"title": "Buy tickets"}]},
     }
-    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    payload = {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
     captured: dict[str, object] = {}
 
     def _send_response(messages, **kwargs):
@@ -522,7 +535,7 @@ def test_llm_webui_transform_uses_stable_request_id_and_compact_prompt(monkeypat
         return {"output_text": json.dumps({**payload, "comment": "Updated."}, ensure_ascii=False)}
 
     monkeypatch.setattr(llm_client, "send_response", _send_response)
-    monkeypatch.setattr(skill, "_normalise_llm_webui_payload", lambda parsed, previous_preview: (parsed, parsed["preview_state"]))
+    monkeypatch.setattr(skill, "_normalise_llm_webui_payload", lambda parsed, previous_preview: (parsed, {"title": "Todo List", "page_schema": page_schema}))
     monkeypatch.setattr(skill, "_validate_builder_webui_payload", lambda payload_arg, preview_arg: {"ok": True})
 
     result = skill._apply_llm_webui_transform(
@@ -612,7 +625,8 @@ def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> No
             {"title": "Invite speakers", "notes": "Send CFP reminders"},
         ]
     }
-    payload = {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview}
+    page_schema = skill._page_schema_from_preview(preview)
+    payload = {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
     skill._save_session("builder-async", session)
 
     submit_calls: list[dict] = []
@@ -652,7 +666,11 @@ def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> No
     assert submit_calls
     assert finished.wait(3), emitted
     webui = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8-sig"))
-    rows = webui["preview_state"]["mock_data"]["prototype_items"]
+    assert webui["schema"] == "adaos.webui.v1"
+    assert "preview_state" not in webui
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    table = next(item for item in widgets if item["id"] == "prototype-table")
+    rows = table["dataSource"]["value"]
     assert rows[0]["title"] == "Book venue"
     assert rows[1]["title"] == "Invite speakers"
     revision_files = sorted((artifact_root / "ui_revisions").glob("*.json"))
@@ -699,18 +717,21 @@ def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_pat
 
     user_payload = json.loads(request["user_prompt"])
     current = user_payload["current_webui_json"]
-    assert current["preview_state"]["page_schema"]["widgets"][0]["id"] == "prototype-cards"
-    assert current["runtime_context"]["current_page_schema"]["widgets"][0]["inputs"]["previewKey"] == "status"
+    assert current["schema"] == "adaos.webui.v1"
+    assert "preview_state" not in current
+    assert current["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["id"] == "prototype-cards"
+    assert user_payload["runtime_context"]["current_page_schema"]["widgets"][0]["inputs"]["previewKey"] == "status"
     assert user_payload["runtime_component_contracts"]["ui.list"]["inputs"]["previewKey"].startswith("Single object path")
     assert "Always prefer conference vocabulary" in request["system_prompt"]
     assert (artifact_root / "builder_memory.md").exists()
     assert (artifact_root / "tz" / "base_tz.md").exists()
 
 
-def test_normalise_llm_payload_regenerates_stale_page_schema_when_compact_changed() -> None:
+def test_normalise_llm_payload_uses_webui_page_schema_as_source_of_truth() -> None:
     skill = _load_module()
     previous_page_schema = {
         "id": "todo",
+        "layout": {"type": "split", "areas": [{"id": "main"}, {"id": "right"}]},
         "widgets": [
             {"id": "prototype-form", "type": "ui.form", "area": "main", "inputs": {"fields": []}},
             {
@@ -745,27 +766,125 @@ def test_normalise_llm_payload_regenerates_stale_page_schema_when_compact_change
         "mock_data": {"prototype_items": [{"title": "Talk", "notes": "CFP", "date": "2026-07-02"}]},
         "layout_order": "input_first",
     }
+    next_page_schema = {
+        "id": "todo",
+        "title": "Todo",
+        "layout": {"type": "split", "areas": [{"id": "main"}, {"id": "right"}]},
+        "widgets": [
+            {
+                "id": "prototype-cards",
+                "type": "ui.list",
+                "area": "main",
+                "inputs": {"variant": "cards", "titleKey": "title", "subtitleKey": "notes", "previewKey": "date"},
+            },
+            {"id": "prototype-form", "type": "ui.form", "area": "right", "inputs": {"fields": []}},
+        ],
+    }
     parsed = {
-        "schema": "adaos.webui.prototype.v1",
+        "schema": "adaos.webui.v1",
         "generated_by": "builder_skill",
-        "preview_state": {
-            **previous_preview,
-            "page_schema": copy.deepcopy(previous_page_schema),
-            "layout_order": "cards_first",
-        },
+        "ui": {"application": {"desktop": {"pageSchema": next_page_schema}}},
     }
 
     _payload, preview = skill._normalise_llm_webui_payload(parsed, previous_preview=previous_preview)
-    assert "page_schema" in preview
-    derived = skill._page_schema_from_preview(preview)
-    form = next(item for item in derived["widgets"] if item["id"] == "prototype-form")
-    cards = next(item for item in derived["widgets"] if item["id"] == "prototype-cards")
+    assert _payload["schema"] == "adaos.webui.v1"
+    assert "preview_state" not in _payload
+    assert "current_ui" not in preview
+    assert preview["page_schema"] == next_page_schema
+    form = next(item for item in preview["page_schema"]["widgets"] if item["id"] == "prototype-form")
+    cards = next(item for item in preview["page_schema"]["widgets"] if item["id"] == "prototype-cards")
     assert form["area"] == "right"
     assert cards["area"] == "main"
     assert cards["inputs"]["previewKey"] == "date"
 
 
-def test_page_schema_from_preview_preserves_select_options_from_current_ui() -> None:
+def test_builder_webui_validation_rejects_select_without_options() -> None:
+    skill = _load_module()
+    page_schema = {
+        "id": "city_survey",
+        "title": "City survey",
+        "layout": {"type": "split", "areas": [{"id": "main"}]},
+        "widgets": [
+            {
+                "id": "prototype-form",
+                "type": "ui.form",
+                "area": "main",
+                "inputs": {
+                    "fields": [
+                        {
+                            "id": "growth_factor",
+                            "label": "Strongest city growth factor?",
+                            "type": "select",
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    payload = {"schema": "adaos.webui.v1", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
+
+    validation = skill._validate_builder_webui_payload(payload, {"page_schema": page_schema})
+
+    assert validation["ok"] is False
+    assert validation["error"] == "component_contract_invalid"
+    assert "options" in validation["detail"]
+
+    fixed_page_schema = copy.deepcopy(page_schema)
+    fixed_page_schema["widgets"][0]["inputs"]["fields"][0]["options"] = [
+        {"label": "Economic", "value": "economic"},
+        {"label": "Social", "value": "social"},
+    ]
+    fixed_payload = {"schema": "adaos.webui.v1", "ui": {"application": {"desktop": {"pageSchema": fixed_page_schema}}}}
+
+    assert skill._validate_builder_webui_payload(fixed_payload, {"page_schema": fixed_page_schema})["ok"] is True
+
+
+def test_write_webui_payload_projects_canonical_page_schema_to_scenario(tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "canonical_webui"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        json.dumps({"id": "canonical_webui", "name": "canonical_webui", "type": "desktop"}),
+        encoding="utf-8",
+    )
+    page_schema = {
+        "id": "canonical_webui",
+        "title": "City survey",
+        "layout": {"type": "split", "areas": [{"id": "main"}]},
+        "widgets": [
+            {
+                "id": "prototype-form",
+                "type": "ui.form",
+                "area": "main",
+                "inputs": {
+                    "fields": [
+                        {
+                            "id": "growth_factor",
+                            "label": "Strongest city growth factor?",
+                            "type": "select",
+                            "options": [
+                                {"label": "Economic", "value": "economic"},
+                                {"label": "Social", "value": "social"},
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    payload = {"schema": "adaos.webui.v1", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
+
+    skill._write_webui_payload(str(artifact_root), payload)
+
+    saved_webui = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
+    saved_scenario = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    saved_field = saved_scenario["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["fields"][0]
+    assert saved_webui["schema"] == "adaos.webui.v1"
+    assert "preview_state" not in saved_webui
+    assert saved_field["options"][0]["value"] == "economic"
+
+
+def test_legacy_page_schema_from_preview_preserves_select_options_from_current_ui() -> None:
     skill = _load_module()
     preview = {
         "title": "City survey",
@@ -886,9 +1005,10 @@ def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_file
                 {"title": "Confirm speakers", "notes": "Collect talk titles and short bios", "status": "Planned", "date": "2026-07-02"},
             ]
         }
+        page_schema = skill._page_schema_from_preview(preview)
         return {
             "ok": True,
-            "payload": {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview},
+            "payload": {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}},
             "preview_state": preview,
             "comment": "Updated mock data for conference preparation.",
             "validation": {"ok": True},
@@ -1713,9 +1833,10 @@ def test_chat_from_dev_webspace_updates_source_session_and_mirrors_response(monk
                 {"item": "Bread", "quantity": 1, "category": "Bakery", "done": True, "price": 54.0},
             ]
         }
+        page_schema = skill._page_schema_from_preview(preview)
         return {
             "ok": True,
-            "payload": {"schema": "adaos.webui.prototype.v1", "generated_by": "builder_skill", "preview_state": preview},
+            "payload": {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}},
             "preview_state": preview,
             "comment": "Updated sample data.",
             "validation": {"ok": True},
