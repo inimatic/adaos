@@ -707,7 +707,7 @@ def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_pat
     assert (artifact_root / "tz" / "base_tz.md").exists()
 
 
-def test_normalise_llm_payload_drops_stale_page_schema_when_compact_changed() -> None:
+def test_normalise_llm_payload_regenerates_stale_page_schema_when_compact_changed() -> None:
     skill = _load_module()
     previous_page_schema = {
         "id": "todo",
@@ -756,13 +756,73 @@ def test_normalise_llm_payload_drops_stale_page_schema_when_compact_changed() ->
     }
 
     _payload, preview = skill._normalise_llm_webui_payload(parsed, previous_preview=previous_preview)
-    assert "page_schema" not in preview
+    assert "page_schema" in preview
     derived = skill._page_schema_from_preview(preview)
     form = next(item for item in derived["widgets"] if item["id"] == "prototype-form")
     cards = next(item for item in derived["widgets"] if item["id"] == "prototype-cards")
     assert form["area"] == "right"
     assert cards["area"] == "main"
     assert cards["inputs"]["previewKey"] == "date"
+
+
+def test_page_schema_from_preview_preserves_select_options_from_current_ui() -> None:
+    skill = _load_module()
+    preview = {
+        "title": "City survey",
+        "current_ui": {
+            "id": "city_survey",
+            "type": "page",
+            "children": [
+                {
+                    "id": "editor",
+                    "type": "section",
+                    "children": [
+                        {
+                            "id": "input_growth_factor",
+                            "type": "select",
+                            "label": "Strongest city growth factor?",
+                            "binding": "draft.growth_factor",
+                            "options": [
+                                {"label": "Economic", "value": "economic"},
+                                {"label": "Social", "value": "social"},
+                                {"label": "Infrastructure", "value": "infrastructure"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        "page_schema": {
+            "id": "city_survey",
+            "widgets": [
+                {
+                    "id": "prototype-form",
+                    "type": "ui.form",
+                    "area": "main",
+                    "inputs": {
+                        "fields": [
+                            {
+                                "id": "growth_factor",
+                                "label": "Strongest city growth factor?",
+                                "type": "select",
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+    }
+
+    derived = skill._page_schema_from_preview(preview)
+    form = next(item for item in derived["widgets"] if item["id"] == "prototype-form")
+    field = form["inputs"]["fields"][0]
+
+    assert field["type"] == "select"
+    assert field["options"] == [
+        {"label": "Economic", "value": "economic"},
+        {"label": "Social", "value": "social"},
+        {"label": "Infrastructure", "value": "infrastructure"},
+    ]
 
 
 def test_repair_mojibake_text_handles_common_cyrillic_and_keeps_other_languages() -> None:
