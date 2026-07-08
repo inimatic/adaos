@@ -69,6 +69,38 @@ def test_sdk_device_access_resolves_redevice_by_alias_and_assignment(monkeypatch
     assert resolved["resolution"]["online"] is True
 
 
+def test_sdk_device_access_resolves_redevice_by_active_app(monkeypatch) -> None:
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    devices = [
+        {
+            "ref": "redevice:endpoint-1",
+            "kind": "redevice",
+            "identity": {"endpoint_id": "endpoint-1", "pair_code": "ABCD1234"},
+            "policy": {"effective_name": "Kitchen tablet"},
+            "observation": {"online": True},
+            "runtime": {"assignment": "idle", "active_app": {"app_id": "slideshow_skill", "skill_id": "slideshow_skill"}},
+        },
+        {
+            "ref": "redevice:endpoint-2",
+            "kind": "redevice",
+            "identity": {"endpoint_id": "endpoint-2", "pair_code": "WXYZ1234"},
+            "policy": {"effective_name": "Desk phone"},
+            "observation": {"online": True},
+            "runtime": {"assignment": "idle", "active_app": {"app_id": "redevice_voice"}},
+        },
+    ]
+
+    monkeypatch.setattr(sdk_device_access, "list_endpoint_devices", lambda kind="redevice", sync_registry=True: devices)
+
+    resolved = sdk_device_access.resolve_endpoint_device(active_app="slideshow_skill")
+
+    assert resolved["ok"] is True
+    assert resolved["device_ref"] == "redevice:endpoint-1"
+    assert resolved["resolution"]["active_app_filter"] == "slideshow_skill"
+    assert resolved["resolution"]["active_app"] == {"app_id": "slideshow_skill", "skill_id": "slideshow_skill"}
+
+
 def test_sdk_device_access_prefers_live_root_redevice_snapshot(monkeypatch) -> None:
     from adaos.sdk import redevice as sdk_redevice
     from adaos.sdk.data import device_access as sdk_device_access

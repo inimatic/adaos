@@ -103,9 +103,128 @@ def legacy_payload_from_envelope(envelope: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _endpoint_ref(endpoint: Mapping[str, Any] | None, code: str | None = None, device_ref: str | None = None) -> str:
+    endpoint_map = _mapping(endpoint)
+    identity = _mapping(endpoint_map.get("identity"))
+    endpoint_id = _text(endpoint_map.get("endpoint_id") or identity.get("endpoint_id") or identity.get("node_id") or endpoint_map.get("id"))
+    if _text(device_ref):
+        return _text(device_ref)
+    if endpoint_id:
+        return f"redevice:{endpoint_id}"
+    pair_code = _text(code or endpoint_map.get("code") or endpoint_map.get("pair_code") or identity.get("pair_code"))
+    return f"redevice:{pair_code}" if pair_code else ""
+
+
+def send_redevice_command(
+    endpoint: Mapping[str, Any] | None,
+    code: str,
+    command: Mapping[str, Any] | None,
+    *,
+    device_ref: str | None = None,
+    requested_by: Mapping[str, Any] | None = None,
+    constraints: Mapping[str, Any] | None = None,
+    timeout: int | float = 12,
+) -> dict[str, Any]:
+    """Route a command to a ReDevice endpoint through the current compatibility path.
+
+    The important ownership boundary is that skills and SDK callers receive a
+    generic endpoint-command envelope and router evidence. The legacy root
+    command queue remains an implementation detail until LAN/WebRTC media
+    sessions are stable enough to replace it.
+    """
+
+    pair_code = _text(code)
+    if not pair_code:
+        return {"ok": False, "error": "endpoint_ref_required", "code": pair_code}
+    endpoint_map = _mapping(endpoint)
+    payload = _mapping(command)
+    try:
+        from adaos.sdk.redevice import ReDeviceBridge, endpoint_root_base, select_transport
+
+        transport = select_transport(endpoint_map, intent=_text(payload.get("type")) or "endpoint.command")
+        endpoint_command = build_endpoint_command(
+            payload,
+            endpoint=endpoint_map,
+            device_ref=_endpoint_ref(endpoint_map, pair_code, device_ref),
+            code=pair_code,
+            requested_by=requested_by,
+            transport=transport,
+            constraints=constraints,
+        )
+        legacy_payload = legacy_payload_from_envelope(endpoint_command)
+        root_base = endpoint_root_base(endpoint_map)
+        try:
+            bridge = ReDeviceBridge(root_base=root_base, timeout=timeout)
+        except TypeError:
+            bridge = ReDeviceBridge(timeout=timeout)
+        result = bridge.send_command(pair_code, legacy_payload)
+        router_evidence = {
+            "schema_version": "endpoint-router-result.v1",
+            "route": "redevice_compat_command_queue",
+            "target": dict(endpoint_command.get("target") or {}),
+            "transport": transport,
+            "legacy_payload": True,
+            "updated_at": _iso_now(),
+        }
+        return {
+            **dict(result or {}),
+            "device_ref": _endpoint_ref(endpoint_map, pair_code, device_ref),
+            "code": pair_code,
+            "endpoint": endpoint_map or None,
+            "transport": transport,
+            "endpoint_command": endpoint_command,
+            "endpoint_router": router_evidence,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "endpoint_command_failed",
+            "detail": str(exc),
+            "device_ref": _endpoint_ref(endpoint_map, pair_code, device_ref),
+            "code": pair_code,
+        }
+
+
+def build_media_session(
+    *,
+    endpoint: Mapping[str, Any] | None = None,
+    code: str | None = None,
+    owner: Mapping[str, Any] | None = None,
+    intent: str = "display.media",
+    item_count: int = 0,
+    primary_transport: str | None = None,
+    fallback_transport: str | None = None,
+    inline_fallback: bool = False,
+) -> dict[str, Any]:
+    endpoint_map = _mapping(endpoint)
+    session_id = "ems:" + uuid.uuid4().hex
+    return {
+        "schema_version": "endpoint-media-session.v1",
+        "session_id": session_id,
+        "intent": _text(intent) or "display.media",
+        "target": {
+            key: value
+            for key, value in {
+                "kind": "redevice",
+                "device_ref": _endpoint_ref(endpoint_map, code),
+                "code": _text(code),
+            }.items()
+            if value
+        },
+        "owner": dict(owner or {}),
+        "item_count": max(0, int(item_count or 0)),
+        "primary_transport": _text(primary_transport) or "endpoint_media_pull",
+        "fallback_transport": _text(fallback_transport) or "root_relay_inline",
+        "inline_fallback": bool(inline_fallback),
+        "created_at": _iso_now(),
+    }
+
+
 __all__ = [
     "build_endpoint_command",
+    "build_media_session",
     "command_type",
     "legacy_payload_from_envelope",
+    "send_redevice_command",
     "service_for_command",
 ]

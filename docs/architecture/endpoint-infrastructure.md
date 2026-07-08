@@ -101,15 +101,17 @@ The current ReDevice implementation already covers the core endpoint model:
 - Endpoint lookup now returns `endpoint-resolution.v1` evidence so operator
   skills can explain alias/assignment/active-app/online-state matches and
   historical admission-code healing.
-- ReDevice commands sent through the compatibility bridge are wrapped in
-  `endpoint-command.v1` envelopes. The endpoint still receives a
-  legacy-compatible payload, but command id, target, requested_by, constraints,
-  and transport evidence are now explicit.
+- ReDevice commands use the minimal `EndpointRouter` path. Skills call
+  `sdk.data.device_access`; the SDK resolves current endpoint identity; the
+  router builds `endpoint-command.v1`, records target, requested_by,
+  constraints and transport evidence, then emits a legacy-compatible payload
+  for the current command queue adapter.
 - ReDevice assignment is projected as structured `endpoint_assignment` while
   preserving the legacy string `assignment`.
 - `sdk.redevice` remains a compatibility layer for ReDevice transport
-  selection, compact endpoint projection, and legacy command delivery while
-  the generic `EndpointRouter` is being built.
+  selection, compact endpoint projection, and legacy root/queue adapters.
+  Ordinary settings, slideshow, and voice-capture commands are already routed
+  through the `EndpointRouter` boundary.
 - ReDevice scenario skills (`redevice_settings`, `slideshow_skill`,
   `redevice_voice`, and `redevice_list`) consume these registry and SDK
   surfaces instead of owning private endpoint registries.
@@ -136,10 +138,11 @@ The current ReDevice implementation already covers the core endpoint model:
   removed merely because `/commands/next` selected it. This is required for
   restart and short-link-failure tolerance.
 
-The main gap is no longer endpoint visibility or a settings dashboard. The
-remaining infrastructure work is to promote command-scoped compatibility routes
-into generic router-owned sessions, make assignments first-class core records,
-and define restart-safe media/audio session continuity.
+The main gap is no longer endpoint visibility, a settings dashboard, or basic
+router-owned command delivery. The remaining infrastructure work is to replace
+the compatibility command queue with proven direct LAN/WebRTC media adapters,
+make assignments first-class core records, and define restart-safe media/audio
+session continuity.
 
 ## Registry Model
 
@@ -885,8 +888,9 @@ Completed M1:
 2. `[done]` Add `display_endpoint` command polling and active endpoint mode to
    the Android ReDevice agent.
 3. `[done]` Add first endpoint assignments for slideshow and voice scenarios.
-4. `[done]` Expose compatibility command APIs through `sdk.data.device_access`
-   and `sdk.redevice`.
+4. `[done]` Expose endpoint command APIs through `sdk.data.device_access`,
+   backed by the minimal `EndpointRouter` and the current ReDevice
+   compatibility adapter.
 5. `[done]` Add `redevice_settings`, `redevice_list`, `slideshow_skill`, and
    `redevice_voice` as first consumers.
 6. `[done]` Add bounded voice control for slideshow commands such as start,
@@ -895,15 +899,19 @@ Completed M1:
 
 Current M2:
 
-1. Promote ReDevice display/media/audio commands from compatibility bridge to
-   generic `EndpointRouter` APIs.
+1. `[done]` Promote ordinary ReDevice display/settings/audio-capture commands
+   from skill-local compatibility bridge calls to generic `EndpointRouter`
+   command APIs.
 2. `[must]` Add hub-local ReDevice command/event polling routes and have
    Android prefer them over public root polling after admission.
 3. `[partial]` Store assignments in structured `endpoint_assignment`
    projections with node-qualified owner `node_id:skill_id`; remaining work is
    durable `EndpointAssignment` records with audit and conflict handling.
-4. Define router-owned media session lifecycle for local HTTP/WebRTC routes,
-   including restart policy and fallback to bounded relay only when required.
+4. `[partial]` Define router-owned media session lifecycle for local
+   HTTP/WebRTC routes. `slideshow_skill` now emits
+   `endpoint-media-session.v1` with endpoint pull as the primary intent;
+   remaining work is durable session state, restart policy, and proven direct
+   LAN/WebRTC adapters before bounded relay fallback.
 5. Close response routing from Voice/NLU/dialog results to endpoint speaker,
    endpoint display, browser UI, notification, or text buffer.
 6. Add endpoint audio arbitration so several endpoints do not dispatch the same

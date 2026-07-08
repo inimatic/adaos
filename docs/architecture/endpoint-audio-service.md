@@ -220,7 +220,9 @@ Current implementation rules:
   restore the last cached voice state only.
 - Explicit tools such as `refresh_redevice_voice_state`,
   `start_redevice_voice`, and `check_redevice_audio_input` may call endpoint
-  inventory or ReDevice bridges.
+  inventory and endpoint commands. Command delivery goes through
+  `sdk.data.device_access` and `EndpointRouter`; the skill does not own a
+  private ReDevice command bridge.
 - Raw or base64 audio is stored under EndpointAudioService debug retention and
   exposed through explicit checks, not through the WebUI stream.
 
@@ -368,8 +370,9 @@ transport stack:
   and hardware controls.
 - `redevice_voice` is a diagnostic skill over the service. It can tune VAD
   thresholds and shows VAD state, STT status, last segment, retention, and
-  transport. It can also verify that the latest audio segment is an actual
-  readable content artifact, including WAV metadata.
+  transport. It resolves endpoints through `sdk.data.device_access`, sends
+  capture commands through `EndpointRouter`, and can verify that the latest
+  audio segment is an actual readable content artifact, including WAV metadata.
 - `redevice_settings` surfaces the endpoint audio, Bluetooth, display, battery,
   active app, subnet, and logout/reconnect controls through Endpoint Registry.
 - ReDevice slideshow and voice controls can be driven by published skill
@@ -457,10 +460,12 @@ Recommended MVP:
    through SDK, without giving the skill ownership of raw transport.
 7. `[done]` Publish compact `endpoint-audio-readiness.v1` through SDK and
    `redevice_voice` for browser-safe status rendering.
-8. `[partial]` Return optional response to display or speaker route.
+8. `[done]` Route the first ReDevice audio capture command through
+   `sdk.data.device_access` and the minimal `EndpointRouter`.
+9. `[partial]` Return optional response to display or speaker route.
    `audio-response-route.v1` now validates route availability; actual playback
    or rendered response dispatch remains next.
-9. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
+10. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
 
 Do not make local STT mandatory for legacy Android 4.1. Treat Vosk and similar
 engines as optional `local_stt` profiles that must pass benchmark gates.

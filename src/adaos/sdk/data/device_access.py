@@ -76,6 +76,7 @@ def _resolution_evidence(
     query: str | None = None,
     score: int | None = None,
     assignment: str | None = None,
+    active_app: str | None = None,
     require_online: bool = False,
 ) -> dict[str, Any]:
     runtime = _mapping(device.get("runtime"))
@@ -86,6 +87,7 @@ def _resolution_evidence(
         "query": _text(query) or None,
         "score": int(score or 0),
         "assignment_filter": _text(assignment) or None,
+        "active_app_filter": _text(active_app) or None,
         "require_online": bool(require_online),
         "matched_names": _device_names(device),
         "assignment": _text(runtime.get("assignment") or endpoint_assignment.get("role")) or None,
@@ -163,6 +165,7 @@ def resolve_endpoint_device(
     code: str | None = None,
     query: str | None = None,
     assignment: str | None = None,
+    active_app: str | None = None,
     kind: str = "redevice",
     require_online: bool = False,
 ) -> dict[str, Any]:
@@ -173,6 +176,7 @@ def resolve_endpoint_device(
     direct_code = _text(code)
     query_token = _text(query)
     assignment_token = _text(assignment)
+    active_app_token = _text(active_app)
     devices = list_endpoint_devices("redevice")
     candidates: list[dict[str, Any]] = []
     for item in devices:
@@ -189,6 +193,14 @@ def resolve_endpoint_device(
             continue
         if assignment_token and _text(runtime.get("assignment")).casefold() != assignment_token.casefold():
             continue
+        if active_app_token:
+            app = _mapping(runtime.get("active_app"))
+            app_ids = {
+                _text(app.get("app_id")).casefold(),
+                _text(app.get("skill_id")).casefold(),
+            }
+            if active_app_token.casefold() not in app_ids:
+                continue
         if require_online and not bool(_mapping(device.get("observation")).get("online")):
             continue
         candidates.append(device)
@@ -209,6 +221,7 @@ def resolve_endpoint_device(
             "code": direct_code,
             "query": query_token,
             "assignment": assignment_token,
+            "active_app": active_app_token,
         }
     device = candidates[0]
     identity = _mapping(device.get("identity"))
@@ -226,6 +239,7 @@ def resolve_endpoint_device(
             query=query_token,
             score=scores.get(id(device), 0),
             assignment=assignment_token,
+            active_app=active_app_token,
             require_online=require_online,
         ),
     }
@@ -437,29 +451,15 @@ def send_endpoint_command(
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
         from adaos.services import endpoint_router
-        from adaos.sdk.redevice import ReDeviceBridge, endpoint_root_base, select_transport
 
-        payload = dict(command or {})
-        transport = select_transport(endpoint or {}, intent=_text(payload.get("type")) or "endpoint.command")
-        endpoint_command = endpoint_router.build_endpoint_command(
-            payload,
+        return endpoint_router.send_redevice_command(
             endpoint=endpoint or {},
-            device_ref=target or None,
             code=pair_code,
+            command=dict(command or {}),
+            device_ref=target or None,
             requested_by=requested_by,
-            transport=transport,
             constraints=constraints,
         )
-        legacy_payload = endpoint_router.legacy_payload_from_envelope(endpoint_command)
-        result = ReDeviceBridge(root_base=endpoint_root_base(endpoint or {}), timeout=12).send_command(pair_code, legacy_payload)
-        return {
-            **result,
-            "device_ref": target or f"redevice:{_text(_mapping(endpoint).get('endpoint_id')) or pair_code}",
-            "code": pair_code,
-            "endpoint": endpoint or None,
-            "transport": transport,
-            "endpoint_command": endpoint_command,
-        }
     except Exception as exc:
         return {"ok": False, "error": "endpoint_command_failed", "detail": str(exc), "device_ref": target, "code": pair_code}
 

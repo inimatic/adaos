@@ -48,8 +48,9 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [ ] Keep `sdk.data.access_links` as the low-level access-policy surface.
 - [x] Migrate device skills to SDK entrypoints instead of direct `services.*` imports.
 - [x] Expose a stable settings-schema or command-profile contract through the SDK for modal and assistant consumers.
-- [x] Expose ReDevice endpoint command compatibility helpers through `sdk.data.device_access` while `EndpointRouter` is being built.
-- [ ] Move ReDevice endpoint commands from the compatibility bridge to core `EndpointRouter`.
+- [x] Expose ReDevice endpoint command helpers through `sdk.data.device_access`.
+- [x] Move skill-facing ReDevice endpoint commands from skill-local bridge calls
+  to `sdk.data.device_access` and the minimal core `EndpointRouter`.
 
 ## Current ReDevice implementation snapshot
 
@@ -68,11 +69,14 @@ slice. The current baseline is:
 - [x] `sdk.data.device_access` exposes ReDevice-compatible operations:
   endpoint resolution, command send, profile update, rename, assignment,
   revoke, and retire.
-- [x] `sdk.redevice` owns the compatibility transport ladder and compact
-  endpoint projection used by scenario skills.
-- [x] `sdk.data.device_access` wraps ReDevice commands in
-  `endpoint-command.v1` envelopes before passing a legacy-compatible payload
-  to the current ReDevice root command bridge.
+- [x] `sdk.redevice` still owns compatibility transport selection and compact
+  endpoint projection, but scenario skills no longer call it directly for
+  ordinary endpoint commands.
+- [x] `EndpointRouter` owns the skill-facing ReDevice command envelope:
+  `sdk.data.device_access` resolves endpoint identity and calls router command
+  send, while the router builds `endpoint-command.v1`, selects transport
+  evidence, and emits the legacy-compatible payload for the current command
+  queue adapter.
 - [x] Endpoint resolution returns `endpoint-resolution.v1` evidence with
   matched names, assignment, active app/surface, online state, and historical
   admission-code healing details.
@@ -93,8 +97,8 @@ slice. The current baseline is:
   are not removed when selected by `/commands/next`; they are redelivered until
   endpoint acknowledgement or expiry.
 - [x] `redevice_settings`, `redevice_voice`, `slideshow_skill`, and
-  `redevice_list` are consumers of core registry/SDK state. They are not
-  independent registries or transport owners.
+  `redevice_list` are consumers of core registry/SDK/router state. They are
+  not independent registries or transport owners.
 - [x] Android ReDevice Agent supports active endpoint mode, command polling,
   slideshow/display commands, active-app reporting, logout/re-admission,
   native settings intents, VAD/PTT audio capture, bounded audio segment upload,
@@ -106,16 +110,21 @@ slice. The current baseline is:
 Remaining architecture work is therefore not "create ReDevice registry and
 settings". It is:
 
-- [ ] Promote command-scoped ReDevice media routes to router-owned direct media
-  sessions when LAN/WebRTC evidence is stable.
+- [~] Promote command-scoped ReDevice media routes to router-owned direct media
+  sessions. `slideshow_skill` now sends `endpoint-media-session.v1` with
+  `endpoint_media_pull` as the primary intent and inline only as fallback; the
+  remaining work is replacing the compatibility adapter with proven direct
+  LAN/WebRTC media sessions.
 - [ ] Replace the current manual/dev LAN hub URL with automatic LAN discovery
   evidence such as mDNS, UDP beacon, or hub-published local address hints.
 - [ ] Upgrade LAN admission transport from MVP HTTP to local TLS or mTLS where
   the target platform can support it.
 - [~] Move endpoint assignments fully into a first-class core
   `EndpointAssignment` model with audit and conflict handling.
-- [ ] Replace remaining compatibility bridge calls with generic
-  `EndpointRouter` APIs.
+- [~] Replace remaining compatibility bridge calls with generic
+  `EndpointRouter` APIs. Ordinary ReDevice settings, slideshow, and voice
+  capture commands use router-owned send; profile/revoke/retire and future
+  direct-media adapters still use compatibility helpers.
 - [ ] Add sidecar/runtime restart continuity rules for active endpoint media
   sessions.
 - [ ] Close response routes from Voice/NLU/dialog back to endpoint speaker,
@@ -183,6 +192,9 @@ settings". It is:
 - [x] Treat ReDevice aliases as endpoint named-entity labels for active-app routing.
 - [x] Route the first bounded slideshow voice commands through the selected
   endpoint's active app using `slideshow_skill.voice_control_redevice_slideshow`.
+- [x] Resolve slideshow voice commands through `DeviceInventoryService`
+  projections, including assignment and `active_app=slideshow_skill`, before
+  falling back to the selected endpoint.
 - [ ] Support operator and assistant intents such as:
   - [ ] "disconnect the living room TV"
   - [ ] "show apps on kitchen tablet"
