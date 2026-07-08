@@ -685,18 +685,6 @@ def _schedule_safe_emit_chat(
     delay_s: float | None = None,
 ) -> dict[str, Any]:
     effective_delay = _builder_revision_chat_emit_delay_s() if delay_s is None else max(0.0, min(float(delay_s), 10.0))
-    if effective_delay <= 0:
-        _safe_emit_chat(
-            text,
-            webspace_id=webspace_id,
-            _meta=_meta,
-            session=session,
-            binding=binding,
-            topic_ref=topic_ref,
-            actions=actions,
-        )
-        return {"scheduled": False, "mode": "inline", "delay_s": 0.0}
-
     def _runner() -> None:
         _safe_emit_chat(
             text,
@@ -707,6 +695,11 @@ def _schedule_safe_emit_chat(
             topic_ref=topic_ref,
             actions=actions,
         )
+
+    if effective_delay <= 0:
+        thread = threading.Thread(target=_runner, name=f"builder-chat-emit:{webspace_id}", daemon=True)
+        thread.start()
+        return {"scheduled": True, "mode": "thread", "delay_s": 0.0}
 
     timer = threading.Timer(effective_delay, _runner)
     timer.name = f"builder-chat-emit:{webspace_id}"
@@ -1291,6 +1284,25 @@ def _builder_runtime_component_contracts() -> dict[str, Any]:
             "areas": "The current rapid prototype normally uses split layout areas 'main' and 'right'.",
             "move_widgets": "To move visible sections, update pageSchema.widgets[*].area and keep layout.areas consistent.",
         },
+    }
+
+
+def _builder_webui_abi_summary() -> dict[str, Any]:
+    return {
+        "schema": "adaos.webui.v1",
+        "validated_by": "src/adaos/abi/webui.v1.schema.json",
+        "root_shape": {
+            "schema": "adaos.webui.v1",
+            "ui": {"application": {"desktop": {"pageSchema": "required complete renderable page schema"}}},
+        },
+        "page_schema_required": ["id", "layout", "widgets"],
+        "widget_required": ["id", "type"],
+        "supported_widget_contracts": _builder_runtime_component_contracts(),
+        "notes": [
+            "Return only the complete updated ui.application.desktop.pageSchema inside the root webui manifest.",
+            "Keep dataSource static values in the widgets that render them.",
+            "The server validates the returned object against the full ABI schema.",
+        ],
     }
 
 
@@ -2759,10 +2771,19 @@ def _builder_llm_async_enabled(_meta: Mapping[str, Any] | None = None) -> bool:
 def _builder_llm_job_submit_timeout_s() -> float:
     raw = os.getenv("ADAOS_BUILDER_LLM_JOB_SUBMIT_TIMEOUT_S")
     try:
-        value = float(raw) if raw else 15.0
+        value = float(raw) if raw else 3.0
     except (TypeError, ValueError):
-        value = 15.0
-    return max(3.0, min(value, 60.0))
+        value = 3.0
+    return max(0.75, min(value, 60.0))
+
+
+def _builder_llm_job_submit_warn_ms() -> float:
+    raw = os.getenv("ADAOS_BUILDER_LLM_JOB_SUBMIT_WARN_MS")
+    try:
+        value = float(raw) if raw else 5000.0
+    except (TypeError, ValueError):
+        value = 5000.0
+    return max(100.0, min(value, 120000.0))
 
 
 def _builder_llm_job_timeout_s() -> float:
@@ -2857,8 +2878,6 @@ def _builder_runtime_context(session: Mapping[str, Any], current_payload: Mappin
         }
         if scenario_manifest
         else {},
-        "current_page_schema": _extract_webui_page_schema(current_payload),
-        "component_contracts": _builder_runtime_component_contracts(),
     }
 
 
@@ -2869,7 +2888,6 @@ def _builder_llm_webui_transform_request(
     preview_state: Mapping[str, Any],
 ) -> dict[str, Any]:
     current_payload = _current_webui_payload(session, preview_state)
-    schema = _load_webui_schema()
     project_memory = _project_memory(session)
     project_system_prompt = str(project_memory.get("project_system_prompt_text") or "").strip()
     history = [
@@ -2892,7 +2910,7 @@ def _builder_llm_webui_transform_request(
         "When the user asks to move, remove, resize, redesign, or otherwise change visible widgets, update ui.application.desktop.pageSchema.widgets and layout. "
         "The runtime uses ui.list inputs titleKey/subtitleKey/previewKey as single object paths, not templates. "
         "If cards need combined text like status plus date, add a derived string property to the relevant static dataSource.value rows, then point previewKey to that property. "
-        "Use the supplied adaos.webui.v1 schema as the webui.json compatibility contract. "
+        "Use the supplied compact adaos.webui.v1 ABI summary as the webui.json compatibility contract. "
         "You are responsible for all domain-specific content: sample rows, translations, labels, examples, copy, and mock data. "
         "When the user asks for sample data, realistic examples, a different domain, or translation, update the relevant widget dataSource/static values inside ui.application.desktop.pageSchema instead of leaving old rows in place. "
         "Do not rely on hidden application code to generate domain examples after your response; your JSON must be complete. "
@@ -2908,9 +2926,8 @@ def _builder_llm_webui_transform_request(
         "current_webui_json": current_payload,
         "runtime_context": _builder_runtime_context(session, current_payload),
         "project_memory": project_memory,
-        "runtime_component_contracts": _builder_runtime_component_contracts(),
         "recent_patch_history": history,
-        "webui_v1_schema": schema,
+        "webui_v1_abi": _builder_webui_abi_summary(),
         "required_output_shape": {
             "schema": "adaos.webui.v1",
             "ui": {
@@ -4788,15 +4805,18 @@ def chat(
     result = update_current_scenario(instruction=utterance, webspace_id=ws, auto_apply=auto_apply, _meta=_meta)
     if result.get("ok"):
         actions = result.get("message_actions") if isinstance(result.get("message_actions"), list) else None
-        _safe_emit_chat(
-            str(result.get("message") or ""),
-            webspace_id=ws,
-            _meta=_meta,
-            session=session,
-            binding=binding,
-            topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic,
-            actions=actions,
-        )
+        emit_kwargs = {
+            "webspace_id": ws,
+            "_meta": _meta,
+            "session": session,
+            "binding": binding,
+            "topic_ref": result.get("topic") if isinstance(result.get("topic"), Mapping) else topic,
+            "actions": actions,
+        }
+        if str(result.get("status") or "") == "llm_pending":
+            _schedule_safe_emit_chat(str(result.get("message") or ""), delay_s=0.0, **emit_kwargs)
+        else:
+            _safe_emit_chat(str(result.get("message") or ""), **emit_kwargs)
     return {**result, "dialog": _dialog_state(ws, topic_ref=result.get("topic") if isinstance(result.get("topic"), Mapping) else topic)}
 
 
@@ -5208,6 +5228,16 @@ def _submit_llm_webui_transform_job(
         {"role": "system", "content": str(request["system_prompt"])},
         {"role": "user", "content": str(request["user_prompt"])},
     ]
+    system_prompt_bytes = len(str(request["system_prompt"]).encode("utf-8", errors="replace"))
+    user_prompt_bytes = len(str(request["user_prompt"]).encode("utf-8", errors="replace"))
+    _LOG.debug(
+        "builder LLM job submit start scenario=%s request_id=%s context_build_ms=%d system_prompt_bytes=%d user_prompt_bytes=%d",
+        str(session.get("scenario_id") or ""),
+        request_id,
+        int((context_ready_at - started_at) * 1000),
+        system_prompt_bytes,
+        user_prompt_bytes,
+    )
     try:
         from adaos.sdk.llm.llm_client import submit_response_job
 
@@ -5222,6 +5252,15 @@ def _submit_llm_webui_transform_job(
     except Exception as exc:
         failed_at = _now()
         detail = f"{type(exc).__name__}: {exc}"
+        _LOG.warning(
+            "builder LLM job submit failed scenario=%s request_id=%s context_build_ms=%d submit_ms=%d total_ms=%d detail=%s",
+            str(session.get("scenario_id") or ""),
+            request_id,
+            int((context_ready_at - started_at) * 1000),
+            int((failed_at - context_ready_at) * 1000),
+            int((failed_at - started_at) * 1000),
+            detail,
+        )
         return {
             "ok": False,
             "error": "llm_job_submit_timeout" if _looks_like_timeout(detail) else "llm_job_submit_failed",
@@ -5243,31 +5282,20 @@ def _submit_llm_webui_transform_job(
     job_id = str(response.get("job_id") or "").strip()
     client = response.get("_client") if isinstance(response.get("_client"), Mapping) else {}
     base_url = str(client.get("base_url") or "").strip()
-    if status == "succeeded":
-        output_text = str(response.get("output_text") or "")
-        try:
-            parsed = _parse_llm_webui_transform_output(
-                output_text=output_text,
-                previous_preview=current_payload.get("preview_state")
-                if isinstance(current_payload.get("preview_state"), Mapping)
-                else preview_state,
-                request_id=request_id,
-                job_id=job_id,
-            )
-        except Exception as exc:
-            detail = f"{type(exc).__name__}: {exc}"
-            return {
-                "ok": False,
-                "error": "llm_response_parse_failed",
-                "detail": detail,
-                "request_id": request_id,
-                "job_id": job_id,
-                "last_response": output_text,
-            }
-        parsed["job"] = response
-        parsed["timing"] = timing
-        return parsed
-    if status in {"queued", "running"} and job_id:
+    if client:
+        timing["client"] = dict(client)
+    (_LOG.warning if timing["total_ms"] >= _builder_llm_job_submit_warn_ms() else _LOG.debug)(
+        "builder LLM job submit completed scenario=%s request_id=%s job_id=%s base_url=%s status=%s context_build_ms=%d submit_ms=%d total_ms=%d",
+        str(session.get("scenario_id") or ""),
+        request_id,
+        job_id,
+        base_url,
+        status,
+        timing["context_build_ms"],
+        timing["submit_ms"],
+        timing["total_ms"],
+    )
+    if status in {"queued", "running", "succeeded"} and job_id:
         return {
             "ok": True,
             "pending": True,

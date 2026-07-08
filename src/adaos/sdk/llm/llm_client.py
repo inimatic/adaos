@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
+import json
 import logging
 import os
 import time
@@ -28,6 +29,13 @@ def _env_csv(value: str | None) -> tuple[str, ...]:
 
 def _normalize_root_base_url(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
+
+
+def _json_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value).encode("utf-8", errors="replace"))
 
 
 def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
@@ -128,7 +136,7 @@ def _root_llm_health_probe(
             return ok, detail
     probe_timeout = timeout if timeout is not None else _env_float(
         "ADAOS_ROOT_LLM_HEALTHCHECK_TIMEOUT_S",
-        1.0,
+        2.5,
         minimum=0.25,
         maximum=10.0,
     )
@@ -141,12 +149,26 @@ def _root_llm_health_probe(
         detail = f"{type(exc).__name__}: {exc}"
     ttl = _env_float(
         "ADAOS_ROOT_LLM_HEALTHCHECK_TTL_S" if ok else "ADAOS_ROOT_LLM_UNHEALTHY_TTL_S",
-        30.0 if ok else 120.0,
+        30.0 if ok else 15.0,
         minimum=1.0,
         maximum=3600.0,
     )
     _ROOT_LLM_HEALTH_CACHE[base_url] = (now + ttl, ok, detail)
     return ok, detail
+
+
+def _mark_root_llm_submit_unhealthy(base_url: str, detail: str) -> None:
+    ttl = _env_float(
+        "ADAOS_ROOT_LLM_UNHEALTHY_TTL_S",
+        15.0,
+        minimum=1.0,
+        maximum=3600.0,
+    )
+    _ROOT_LLM_HEALTH_CACHE[_normalize_root_base_url(base_url)] = (
+        time.monotonic() + ttl,
+        False,
+        str(detail or "submit_failed"),
+    )
 
 
 def _root_http_client(ctx: Any | None = None) -> tuple[RootHttpClient, Any | None]:
@@ -559,6 +581,7 @@ def submit_response_job(
     Returns the job envelope. If Root already has a cached response for
     request_id, the returned job can be immediately "succeeded".
     """
+    submit_started = time.perf_counter()
     root_payload, _ = _llm_root_payload(
         messages,
         model=model,
@@ -567,12 +590,24 @@ def submit_response_job(
         top_p=top_p,
         request_id=request_id,
     )
+    payload_bytes = _json_size_bytes(root_payload)
     if _legacy_http_enabled():
+        legacy_started = time.perf_counter()
         resp = requests.post(_llm_jobs_endpoint(), json=root_payload, headers=_auth_headers(), timeout=timeout or 15)
         resp.raise_for_status()
         data: Dict[str, Any] = resp.json() if resp.text else {}
         data["output_text"] = _extract_job_output_text(data)
         data.setdefault("_client", {})["base_url"] = _llm_jobs_endpoint().rsplit("/v1/llm/jobs", 1)[0]
+        _LOG.debug(
+            "root LLM job submit legacy completed request_id=%s endpoint=%s payload_bytes=%d duration_ms=%.1f total_ms=%.1f status=%s job_id=%s",
+            str(request_id or ""),
+            _llm_jobs_endpoint(),
+            payload_bytes,
+            (time.perf_counter() - legacy_started) * 1000.0,
+            (time.perf_counter() - submit_started) * 1000.0,
+            str(data.get("status") or ""),
+            str(data.get("job_id") or ""),
+        )
         return data
 
     ctx = _current_ctx()
@@ -582,10 +617,63 @@ def submit_response_job(
     last_exc: Exception | None = None
     primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     attempts: list[dict[str, Any]] = []
+    trace_attempts: list[dict[str, Any]] = []
+    _LOG.debug(
+        "root LLM job submit start request_id=%s base_urls=%s primary=%s timeout_s=%s payload_bytes=%d",
+        str(request_id or ""),
+        base_urls,
+        primary_base_url,
+        str(timeout or 15),
+        payload_bytes,
+    )
     for index, base_url in enumerate(base_urls):
+        attempt_started: float | None = None
         http = _root_http_for_base(primary, primary_base_url, base_url, index)
         if index + 1 < len(base_urls):
+            cached = _ROOT_LLM_HEALTH_CACHE.get(base_url)
+            if cached is not None:
+                expires_at, cached_ok, cached_detail = cached
+                if expires_at > time.monotonic() and not cached_ok:
+                    attempts.append(
+                        {
+                            "base_url": base_url,
+                            "error": "recent_submit_unhealthy",
+                            "detail": cached_detail,
+                        }
+                    )
+                    trace_attempts.append(
+                        {
+                            "base_url": base_url,
+                            "phase": "cached_skip",
+                            "ok": False,
+                            "detail": cached_detail,
+                        }
+                    )
+                    continue
+        should_probe_health = index + 1 < len(base_urls) and (
+            index > 0 or _env_enabled("ADAOS_ROOT_LLM_HEALTHCHECK_PRIMARY", False)
+        )
+        if should_probe_health:
+            health_started = time.perf_counter()
             healthy, health_detail = _root_llm_health_probe(http, base_url)
+            health_ms = (time.perf_counter() - health_started) * 1000.0
+            trace_attempts.append(
+                {
+                    "base_url": base_url,
+                    "phase": "health",
+                    "ok": bool(healthy),
+                    "duration_ms": round(health_ms, 1),
+                    "detail": health_detail,
+                }
+            )
+            _LOG.debug(
+                "root LLM job health request_id=%s base_url=%s ok=%s duration_ms=%.1f detail=%s",
+                str(request_id or ""),
+                base_url,
+                bool(healthy),
+                health_ms,
+                health_detail,
+            )
             if not healthy:
                 attempts.append(
                     {
@@ -601,6 +689,7 @@ def submit_response_job(
                 )
                 continue
         try:
+            attempt_started = time.perf_counter()
             raw = http.request(
                 "POST",
                 "/v1/llm/jobs",
@@ -608,12 +697,40 @@ def submit_response_job(
                 headers=headers or None,
                 timeout=timeout or 15,
             )
+            attempt_ms = (time.perf_counter() - attempt_started) * 1000.0
             data = dict(raw) if isinstance(raw, Mapping) else {"result": raw}
             _llm_proxy_protocol(data, base_url=base_url, fallback=index > 0, attempts=attempts)
-            data.setdefault("_client", {})["base_url"] = base_url
+            client_meta = data.setdefault("_client", {})
+            client_meta["base_url"] = base_url
+            client_meta["fallback"] = index > 0
+            client_meta["payload_bytes"] = payload_bytes
+            client_meta["attempt_ms"] = round(attempt_ms, 1)
+            client_meta["total_ms"] = round((time.perf_counter() - submit_started) * 1000.0, 1)
+            client_meta["attempts"] = list(attempts)
+            client_meta["trace_attempts"] = list(trace_attempts) + [
+                {
+                    "base_url": base_url,
+                    "phase": "submit",
+                    "ok": True,
+                    "duration_ms": round(attempt_ms, 1),
+                    "status": str(data.get("status") or ""),
+                }
+            ]
             data["output_text"] = _extract_job_output_text(data)
+            _LOG.debug(
+                "root LLM job submit completed request_id=%s base_url=%s fallback=%s attempt_ms=%.1f total_ms=%.1f status=%s job_id=%s attempts=%s",
+                str(request_id or ""),
+                base_url,
+                index > 0,
+                attempt_ms,
+                (time.perf_counter() - submit_started) * 1000.0,
+                str(data.get("status") or ""),
+                str(data.get("job_id") or ""),
+                attempts,
+            )
             return data
         except Exception as exc:
+            attempt_ms = (time.perf_counter() - attempt_started) * 1000.0 if attempt_started is not None else -1.0
             last_exc = exc
             if isinstance(exc, RootHttpError):
                 status_code = int(getattr(exc, "status_code", 0) or 0)
@@ -623,6 +740,28 @@ def submit_response_job(
             else:
                 error_label = type(exc).__name__
             attempts.append({"base_url": base_url, "error": error_label})
+            if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
+                _mark_root_llm_submit_unhealthy(base_url, str(exc))
+            trace_attempts.append(
+                {
+                    "base_url": base_url,
+                    "phase": "submit",
+                    "ok": False,
+                    "duration_ms": round(attempt_ms, 1),
+                    "error": error_label,
+                    "detail": str(exc),
+                }
+            )
+            _LOG.warning(
+                "root LLM job submit attempt failed request_id=%s base_url=%s fallback=%s attempt_ms=%.1f total_ms=%.1f error=%s detail=%s",
+                str(request_id or ""),
+                base_url,
+                index > 0,
+                attempt_ms,
+                (time.perf_counter() - submit_started) * 1000.0,
+                error_label,
+                exc,
+            )
             if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
                 _LOG.warning("root LLM job submit failed base_url=%s; trying fallback error=%s", base_url, exc)
                 continue

@@ -30,11 +30,30 @@ def _is_routine_control_report(method: str, path: str) -> bool:
     return method.upper() == "POST" and str(path or "").rstrip("/") == "/v1/hub/control/report"
 
 
-def _log_root_http_success(method: str, path: str, duration_s: float, status_code: int) -> None:
+def _trace_root_http_request(path: str) -> bool:
+    normalized = str(path or "").strip()
+    if normalized.startswith("/v1/hub/control/"):
+        return True
+    raw = str(os.getenv("ADAOS_ROOT_HTTP_TRACE_PREFIXES") or "").strip()
+    if not raw:
+        return False
+    prefixes = [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
+    return any(normalized.startswith(prefix) for prefix in prefixes)
+
+
+def _log_root_http_success(
+    method: str,
+    path: str,
+    duration_s: float,
+    status_code: int,
+    *,
+    base_url: str | None = None,
+) -> None:
     log = _ROOT_HTTP_LOG.debug if _is_routine_control_report(method, path) else _ROOT_HTTP_LOG.info
     log(
-        "root http response method=%s path=%s duration_s=%.3f status=%s",
+        "root http response method=%s base_url=%s path=%s duration_s=%.3f status=%s",
         method,
+        str(base_url or ""),
         path,
         duration_s,
         status_code,
@@ -163,7 +182,7 @@ class RootHttpClient:
         timeout: float | None = None,
         accept_204: bool = False,
     ) -> Any:
-        trace_request = str(path or "").startswith("/v1/hub/control/")
+        trace_request = _trace_root_http_request(path)
         started = time.perf_counter()
         request_headers: MutableMapping[str, str] | None = None
         if headers:
@@ -196,8 +215,9 @@ class RootHttpClient:
         except httpx.RequestError as exc:  # pragma: no cover - network errors are environment specific
             if trace_request:
                 _ROOT_HTTP_LOG.warning(
-                    "root http failed method=%s path=%s duration_s=%.3f error_type=%s error=%s",
+                    "root http failed method=%s base_url=%s path=%s duration_s=%.3f error_type=%s error=%s",
                     method,
+                    self.base_url,
                     path,
                     time.perf_counter() - started,
                     type(exc).__name__,
@@ -214,7 +234,13 @@ class RootHttpClient:
 
         if response.status_code == 204 and accept_204:
             if trace_request:
-                _log_root_http_success(method, path, time.perf_counter() - started, response.status_code)
+                _log_root_http_success(
+                    method,
+                    path,
+                    time.perf_counter() - started,
+                    response.status_code,
+                    base_url=self.base_url,
+                )
             return {}
 
         if response.status_code >= 400:
@@ -229,8 +255,9 @@ class RootHttpClient:
                     error_code = code
             if trace_request:
                 _ROOT_HTTP_LOG.warning(
-                    "root http response method=%s path=%s duration_s=%.3f status=%s error_code=%s",
+                    "root http response method=%s base_url=%s path=%s duration_s=%.3f status=%s error_code=%s",
                     method,
+                    self.base_url,
                     path,
                     time.perf_counter() - started,
                     response.status_code,
@@ -239,7 +266,7 @@ class RootHttpClient:
             raise RootHttpError(message, status_code=response.status_code, error_code=error_code, payload=content)
 
         if trace_request:
-            _log_root_http_success(method, path, time.perf_counter() - started, response.status_code)
+            _log_root_http_success(method, path, time.perf_counter() - started, response.status_code, base_url=self.base_url)
         return content if content is not None else {}
 
     # ------------------------------------------------------------------

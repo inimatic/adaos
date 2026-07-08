@@ -4795,9 +4795,39 @@ class RouterService:
                 observed_failure=observed_failure,
             )
 
+        def _dialog_latency_warn_ms() -> float:
+            try:
+                value = float(os.getenv("ADAOS_ROUTER_DIALOG_LATENCY_WARN_MS") or "5000")
+            except Exception:
+                value = 5000.0
+            return max(100.0, min(value, 120000.0))
+
+        def _dialog_timing_level(duration_ms: float, *, failed: bool = False) -> int:
+            if failed or duration_ms >= _dialog_latency_warn_ms():
+                return logging.WARNING
+            return logging.DEBUG
+
         def _call_runtime_skill_tool(skill: str, tool: str, payload: dict[str, Any], meta: dict) -> Any:
+            log = logging.getLogger("adaos.router.voice_chat")
+            route_meta = dict(meta)
+            scheduled_raw = route_meta.pop("_router_tool_scheduled_at", None)
+            worker_started = time.perf_counter()
+            queue_ms: float | None = None
+            try:
+                scheduled_at = float(scheduled_raw)
+                queue_ms = max(0.0, (worker_started - scheduled_at) * 1000.0)
+            except Exception:
+                queue_ms = None
+            log.debug(
+                "dialog runtime tool thread started skill=%s tool=%s webspace=%s queue_ms=%s",
+                skill,
+                tool,
+                str(route_meta.get("webspace_id") or "").strip(),
+                f"{queue_ms:.1f}" if queue_ms is not None else "-",
+            )
             ctx = get_ctx()
             prev = ctx.skill_ctx.get()
+            manager_started = time.perf_counter()
             mgr = SkillManager(
                 repo=ctx.skills_repo,
                 registry=SqliteSkillRegistry(ctx.sql),
@@ -4807,8 +4837,8 @@ class RouterService:
                 caps=ctx.caps,
                 settings=ctx.settings,
             )
+            manager_ms = (time.perf_counter() - manager_started) * 1000.0
             try:
-                route_meta = dict(meta)
                 tool_payload: dict[str, Any] = dict(payload)
                 tool_payload["_meta"] = route_meta
                 webspace_id = str(route_meta.get("webspace_id") or "").strip()
@@ -4818,22 +4848,69 @@ class RouterService:
                 if target_node_id:
                     tool_payload.setdefault("target_node_id", target_node_id)
                 with io_meta(route_meta):
+                    run_started = time.perf_counter()
                     try:
-                        return mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
+                        result = mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
+                        run_ms = (time.perf_counter() - run_started) * 1000.0
+                        total_ms = (time.perf_counter() - worker_started) * 1000.0
+                        log.log(
+                            _dialog_timing_level(total_ms),
+                            "dialog runtime tool run completed skill=%s tool=%s webspace=%s fallback=workspace manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                            skill,
+                            tool,
+                            webspace_id,
+                            manager_ms,
+                            run_ms,
+                            total_ms,
+                        )
+                        return result
                     except Exception as workspace_exc:
                         if skill != BUILDER_SKILL_ID or not hasattr(mgr, "run_dev_tool"):
+                            log.warning(
+                                "dialog runtime tool run failed skill=%s tool=%s webspace=%s fallback=none manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                                skill,
+                                tool,
+                                webspace_id,
+                                manager_ms,
+                                (time.perf_counter() - run_started) * 1000.0,
+                                (time.perf_counter() - worker_started) * 1000.0,
+                            )
                             raise
                         dev_root_attr = getattr(ctx.paths, "dev_skills_dir", None)
                         dev_root = dev_root_attr() if callable(dev_root_attr) else dev_root_attr
                         dev_skill_dir = (Path(dev_root) / skill) if dev_root else None
                         if dev_skill_dir is None or not dev_skill_dir.exists():
+                            log.warning(
+                                "dialog runtime tool run failed skill=%s tool=%s webspace=%s fallback=dev_missing manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                                skill,
+                                tool,
+                                webspace_id,
+                                manager_ms,
+                                (time.perf_counter() - run_started) * 1000.0,
+                                (time.perf_counter() - worker_started) * 1000.0,
+                            )
                             raise workspace_exc
                         logging.getLogger("adaos.router.voice_chat").info(
                             "workspace builder skill unavailable; trying dev runtime tool=%s",
                             tool,
                             exc_info=True,
                         )
-                        return mgr.run_dev_tool(skill, tool, tool_payload)
+                        dev_run_started = time.perf_counter()
+                        result = mgr.run_dev_tool(skill, tool, tool_payload)
+                        dev_run_ms = (time.perf_counter() - dev_run_started) * 1000.0
+                        total_ms = (time.perf_counter() - worker_started) * 1000.0
+                        log.log(
+                            _dialog_timing_level(total_ms),
+                            "dialog runtime tool run completed skill=%s tool=%s webspace=%s fallback=dev manager_ms=%.1f workspace_run_ms=%.1f dev_run_ms=%.1f total_ms=%.1f",
+                            skill,
+                            tool,
+                            webspace_id,
+                            manager_ms,
+                            (dev_run_started - run_started) * 1000.0,
+                            dev_run_ms,
+                            total_ms,
+                        )
+                        return result
             finally:
                 if prev is None:
                     try:
@@ -5092,15 +5169,25 @@ class RouterService:
             )
             target_node_id = str(action_meta.get("target_node_id") or meta.get("target_node_id") or "").strip() or None
             materialized_chat_appends, materialization_probe = _subscribe_dialog_materialization_probe()
+            tool_started = time.perf_counter()
+            tool_meta = dict(action_meta)
+            tool_meta["_router_tool_scheduled_at"] = tool_started
             try:
                 result = await asyncio.to_thread(
                     _call_runtime_skill_tool,
                     skill,
                     tool,
                     dict(action_payload),
-                    dict(action_meta),
+                    tool_meta,
                 )
             except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "dialog follow-up tool failed timing skill=%s tool=%s webspace=%s took_ms=%.1f",
+                    skill,
+                    tool,
+                    webspace_id,
+                    (time.perf_counter() - tool_started) * 1000.0,
+                )
                 logging.getLogger("adaos.router.voice_chat").warning(
                     "dialog follow-up tool failed skill=%s tool=%s",
                     skill,
@@ -5132,6 +5219,17 @@ class RouterService:
                 return True
             finally:
                 _unsubscribe_dialog_materialization_probe(materialization_probe)
+            tool_ms = (time.perf_counter() - tool_started) * 1000.0
+            logging.getLogger("adaos.router.voice_chat").log(
+                _dialog_timing_level(tool_ms),
+                "dialog follow-up tool completed skill=%s tool=%s webspace=%s took_ms=%.1f ok=%s status=%s",
+                skill,
+                tool,
+                webspace_id,
+                tool_ms,
+                bool(isinstance(result, dict) and result.get("ok")),
+                str(result.get("status") or "") if isinstance(result, dict) else type(result).__name__,
+            )
             if not isinstance(result, dict) or not bool(result.get("ok")):
                 logging.getLogger("adaos.router.voice_chat").warning(
                     "dialog follow-up tool returned non-ok skill=%s tool=%s result=%r",
@@ -5587,6 +5685,24 @@ class RouterService:
             )
 
         async def _on_voice_user(ev: Event) -> None:
+            voice_started = time.perf_counter()
+            phase_started = voice_started
+            voice_ws = "-"
+
+            def _log_voice_phase(phase: str, *, level: int = logging.DEBUG, extra: str = "") -> None:
+                nonlocal phase_started
+                now = time.perf_counter()
+                logging.getLogger("adaos.router.voice_chat").log(
+                    level,
+                    "voice chat user phase=%s webspace=%s phase_ms=%.1f total_ms=%.1f%s",
+                    phase,
+                    voice_ws,
+                    (now - phase_started) * 1000.0,
+                    (now - voice_started) * 1000.0,
+                    f" {extra}" if extra else "",
+                )
+                phase_started = now
+
             payload = ev.payload or {}
             if self._event_originates_from_remote_member(payload):
                 return
@@ -5597,6 +5713,8 @@ class RouterService:
             except Exception:
                 target_webspaces = []
             ws = target_webspaces[0] if target_webspaces else "default"
+            voice_ws = ws
+            _log_voice_phase("resolve_webspace", extra=f"targets={len(target_webspaces)}")
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 return
@@ -5645,6 +5763,13 @@ class RouterService:
                     meta["voice_gender"] = str(pre_agent.get("gender") or "").strip()
                     meta["voice"] = str(pre_agent.get("voice") or "").strip()
                     meta["voice_profile"] = _agent_voice_profile(pre_agent)
+            _log_voice_phase(
+                "metadata_prepared",
+                extra=(
+                    f"event_kind={event_kind} requested_channel={requested_dialog_channel_id or '-'} "
+                    f"pre_addressed={bool(pre_addressed_agent)}"
+                ),
+            )
             if requested_dialog_channel_id == GENERAL_DIALOG_CHANNEL_ID:
                 _persist_general_dialog_channel(ws, event="general_channel_requested")
                 current_dialog_channel = dialog_runtime.get_active_channel(ws)
@@ -5662,6 +5787,7 @@ class RouterService:
                     await _write_dialog_state(ws, event="general_channel_requested")
                 except Exception:
                     pass
+                _log_voice_phase("general_channel_requested")
             # Ensure voice chat history is updated even if io.out.chat.append routing breaks.
             msg = {
                 "id": _make_id("m"),
@@ -5685,6 +5811,7 @@ class RouterService:
                 await _append_voice_chat_message(ws, msg, target_node_id)
             except Exception:
                 pass
+            _log_voice_phase("append_user_message")
             try:
                 self.bus.publish(
                     Event(
@@ -5702,6 +5829,7 @@ class RouterService:
                   )
             except Exception:
                 pass
+            _log_voice_phase("publish_user_echo")
             try:
                 from adaos.services.nlu.teacher_confirmation_runtime import (
                     should_consume_voice_confirmation_answer,
@@ -5709,6 +5837,7 @@ class RouterService:
                 )
 
                 if await should_consume_voice_confirmation_answer(ws, text):
+                    _log_voice_phase("teacher_confirmation_consumed")
                     try:
                         logging.getLogger("adaos.router.voice_chat").debug(
                             "voice.chat.user consumed as NLU Teacher confirmation answer webspace=%s text=%r",
@@ -5719,6 +5848,7 @@ class RouterService:
                         pass
                     return
                 if await should_suppress_voice_text_for_confirmation(ws, text):
+                    _log_voice_phase("teacher_confirmation_suppressed")
                     try:
                         logging.getLogger("adaos.router.voice_chat").debug(
                             "voice.chat.user suppressed during active NLU Teacher confirmation webspace=%s text=%r",
@@ -5730,6 +5860,7 @@ class RouterService:
                     return
             except Exception:
                 pass
+            _log_voice_phase("teacher_confirmation_checked")
             try:
                 correction = correct_light_text(text)
                 if correction.text and correction.text != text:
@@ -5739,7 +5870,9 @@ class RouterService:
                     text = correction.text
             except Exception:
                 pass
+            _log_voice_phase("text_correction")
             addressed_agent = _extract_addressed_agent(text)
+            _log_voice_phase("addressed_agent_extracted", extra=f"addressed={bool(addressed_agent)}")
             if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
                 addressed_general_text = addressed_agent[1]
                 general_meta = _general_agent_metadata()
@@ -5846,6 +5979,7 @@ class RouterService:
                         pass
                     return
                 text = addressed_general_text
+                _log_voice_phase("general_agent_forwarded")
             elif addressed_agent is not None:
                 agent, agent_rest = addressed_agent
                 channel_id = str(agent.get("channel_id") or "").strip()
@@ -5901,6 +6035,10 @@ class RouterService:
                             agent.get("id"),
                             exc_info=True,
                         )
+                    _log_voice_phase(
+                        "addressed_agent_channel_activated",
+                        extra=f"channel={channel_id} skill={skill} tool={talk_tool}",
+                    )
                     if agent_rest or channel_id != CONVERSATIONAL_DIALOG_CHANNEL_ID:
                         forwarded_text = text if channel_id == CONVERSATIONAL_DIALOG_CHANNEL_ID else (agent_rest or text)
                         action_payload = {
@@ -5931,10 +6069,15 @@ class RouterService:
                         route_id="voice_chat",
                         mark_request=False,
                     ):
+                        _log_voice_phase(
+                            "addressed_agent_action_handled",
+                            extra=f"channel={channel_id} skill={skill} tool={action_tool}",
+                        )
                         try:
                             await _ensure_tts_state(ws)
                         except Exception:
                             pass
+                        _log_voice_phase("ensure_tts_after_addressed")
                         return
             try:
                 current_channel_for_roster = dialog_runtime.get_active_channel(ws)
@@ -5984,6 +6127,7 @@ class RouterService:
                 )
                 if requested_non_general_channel:
                     await _activate_requested_dialog_channel(ws, requested_non_general_channel, meta)
+                    _log_voice_phase("requested_dialog_channel_activated", extra=f"channel={requested_non_general_channel}")
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,
                     text=text,
@@ -5992,6 +6136,7 @@ class RouterService:
                 )
             except Exception:
                 dialog_action = None
+            _log_voice_phase("followup_action_resolved", extra=f"has_action={isinstance(dialog_action, dict)}")
             if isinstance(dialog_action, dict) and await _handle_dialog_action(
                 dialog_action=dialog_action,
                 webspace_id=ws,
@@ -5999,10 +6144,12 @@ class RouterService:
                 route_id="voice_chat",
                 mark_request=False,
             ):
+                _log_voice_phase("followup_action_handled")
                 try:
                     await _ensure_tts_state(ws)
                 except Exception:
                     pass
+                _log_voice_phase("ensure_tts_after_followup")
                 return
             if requested_dialog_channel_id and requested_dialog_channel_id != GENERAL_DIALOG_CHANNEL_ID:
                 _record_voice_turn_trace(
@@ -6058,6 +6205,7 @@ class RouterService:
                 )
             except Exception:
                 pass
+            _log_voice_phase("nlu_request_published")
             try:
                 await _append_voice_intent_demo(ws, text, meta, target_node_id)
             except Exception:
@@ -6065,10 +6213,12 @@ class RouterService:
                     "voice.chat intent demo failed",
                     exc_info=True,
                 )
+            _log_voice_phase("nlu_demo_appended")
             try:
                 await _ensure_tts_state(ws)
             except Exception:
                 pass
+            _log_voice_phase("ensure_tts_after_nlu")
             # NLU pipeline + dispatcher + skills are responsible for producing
             # responses via io.out.chat.append / io.out.say.
 
