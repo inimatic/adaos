@@ -1,0 +1,67 @@
+[AdaOS] realtime sidecar: adopted existing listener pid=8892 local=nats://127.0.0.1:7422
+[AdaOS] uvicorn loop mode=auto
+[bootstrap] IO bus: LocalEventBus
+[diag] event loop lag 2422ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] loop lag dump:
+- task=adaos-loop-lag-monitor done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2423
+- task=Task-4 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\server.py:71
+- task=Task-5 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\lifespan\on.py:86
+- task=Task-50 done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\eventbus.py:174
+- task=Task-52 done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\eventbus.py:174
+- task=Task-53 done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\eventbus.py:174
+- task=adaos-lease-monitor done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2635
+- task=adaos-scheduler done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\scheduler.py:100
+- task=adaos-skill-service-health done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\skill\service_supervisor.py:1397
+- task=adaos-skill-service-watchdog done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\skill\service_supervisor.py:1331
+- eventbus.active_task type=sys.ready handler=adaos.sdk.data.bus._adapt adapted=adaos.services.named_entity_projection.on_sys_ready skill=<unknown> topic=sys.ready age=2.937s
+- eventbus.active_task type=sys.ready handler=adaos.sdk.data.bus._adapt adapted=adaos_skill_D:_git_inimatic_adaos_.adaos_workspace_skills_.runtime_cv_descriptor_v0.1_slots_A_src_skills_cv_descriptor_handlers.on_sys_ready skill=cv_descriptor topic=sys.ready age=2.937s
+- eventbus.active_task type=sys.ready handler=adaos.sdk.data.bus._adapt adapted=adaos_skill_D:_git_inimatic_adaos_.adaos_workspace_skills_.runtime_diagnostics_skill_v0.1_slots_B_src_skills_diagnostics_skill_handlers._refresh_on_runtime_event skill=diagnostics_skill topic=sys.ready age=2.937s
+[hub-io] nats supervisor: start bridge
+[diag] event loop lag 2015ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] loop lag dump:
+- task=adaos-loop-lag-monitor done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2423
+- task=Task-4 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\server.py:71
+- task=Task-5 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\lifespan\on.py:86
+- task=Task-88 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\server.py:236
+- task=Task-89 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py:244
+- task=Task-90 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:945
+- task=Task-91 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:1234
+- task=Task-92 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:1279
+- task=Task-96 done=False cancelled=False at=C:\Users\Zver\AppData\Roaming\uv\python\cpython-3.11.9-windows-x86_64-none\Lib\asyncio\windows_events.py:608
+- task=Task-97 done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\yjs\gateway_ws.py:7004
+[hub-io] Connecting NATS candidates=['nats://127.0.0.1:7422', 'wss://ru.api.inimatic.com/nats'] user=hub_sn_6acf0c01 pass=bsj***AW
+[hub-io] nats error_cb: TimeoutError
+[hub-io] nats server unreachable (disconnected)
+[hub-io] nats error_cb: ClientConnectorError
+[diag] event loop lag 1672ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 1282ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 1125ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 1984ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 4281ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] loop lag dump:
+- task=adaos-loop-lag-monitor done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2423
+- task=Task-4 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\server.py:71
+- task=Task-5 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\lifespan\on.py:86
+- task=adaos-control-lifecycle-heartbeat done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2097
+- task=adaos-lease-monitor done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2635
+- task=adaos-nats-io-bridge done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:10147
+- task=adaos-node-status-push-heartbeat done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2161
+- task=adaos-scheduler done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\scheduler.py:107
+- task=adaos-skill-service-health done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\skill\service_supervisor.py:1401
+- task=adaos-skill-service-watchdog done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\skill\service_supervisor.py:1331
+[diag] event loop lag 1828ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 1297ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 2515ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] loop lag dump:
+- task=adaos-loop-lag-monitor done=False cancelled=False at=D:\git\inimatic\adaos\src\adaos\services\bootstrap.py:2423
+- task=Task-1016 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\server.py:236
+- task=Task-1017 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py:244
+- task=Task-1026 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:945
+- task=Task-1027 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:1234
+- task=Task-1028 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:1279
+- task=Task-1497 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\server.py:236
+- task=Task-1498 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py:244
+- task=Task-1500 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:945
+- task=Task-1501 done=False cancelled=False at=D:\git\inimatic\adaos\.venv\Lib\site-packages\websockets\legacy\protocol.py:1234
+[diag] event loop lag 1438ms (interval=0.50s warn=1000ms dump=2000ms)
+[diag] event loop lag 2672ms (interval=0.50s warn=1000ms dump=2000ms)
