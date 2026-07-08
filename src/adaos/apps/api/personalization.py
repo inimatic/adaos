@@ -170,7 +170,7 @@ def _sync_browser_device_link(device_id: str, *, display_name: str | None = None
         }
         name = str(display_name or "").strip()
         if name:
-            patch["display_name"] = name
+            patch["device_display_name"] = name
         access_links.upsert_link("browser", token, patch)
     except Exception:
         pass
@@ -464,7 +464,7 @@ def _workspace_scope_options(ctx: AgentContext) -> list[dict[str, str]]:
 def _device_name(entry: Mapping[str, Any] | None) -> str:
     if not isinstance(entry, Mapping):
         return ""
-    for key in ("display_name", "hostname", "browser_family", "os_name"):
+    for key in ("device_display_name", "display_name", "hostname", "browser_family", "os_name"):
         token = str(entry.get(key) or "").strip()
         if token:
             return token

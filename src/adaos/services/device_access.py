@@ -430,6 +430,7 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
         "device_ref": device_ref_token,
         "kind": _text(device.get("kind")),
         "title": effective_name,
+        "endpoint_title": _text(policy.get("endpoint_display_name")) or _text(policy.get("display_name")) or None,
         "id": {
             "value": device_ref_token,
             "kind": _text(device.get("kind")),
@@ -526,6 +527,8 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "node_id": _text(identity.get("node_id")) or None,
             "browser_device_id": _text(identity.get("browser_device_id")) or None,
             "hostname": _text(identity.get("hostname")) or None,
+            "device_display_name": _text(identity.get("device_display_name")) or _text(policy.get("device_display_name")) or None,
+            "endpoint_display_name": _text(identity.get("endpoint_display_name")) or _text(policy.get("endpoint_display_name")) or _text(policy.get("display_name")) or None,
         },
     }
 
@@ -555,6 +558,26 @@ def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
             "runtime_update": {"attempted": False, "applied": True},
         }
     return _device_inventory.get_device_inventory_service().rename_device(_text(device_ref), display_name)
+
+
+def rename_browser_device_name(device_ref: str, device_display_name: str) -> dict[str, Any]:
+    parsed = _device_inventory.parse_device_ref(_text(device_ref))
+    if parsed is None:
+        return {"ok": False, "error": "invalid_device_ref", "device_ref": _text(device_ref)}
+    kind, link_id = parsed
+    if kind != "browser":
+        return {"ok": False, "error": "unsupported_device_kind", "device_ref": _text(device_ref), "kind": kind}
+    name = _text(device_display_name)
+    if not name:
+        return {"ok": False, "error": "name_required", "device_ref": _text(device_ref)}
+    entry = _access_links.rename_browser_device_name(link_id, name)
+    return {
+        "ok": True,
+        "device_ref": _text(device_ref),
+        "entry": entry,
+        "device": _device_inventory.get_device(_text(device_ref)),
+        "runtime_update": {"attempted": False, "applied": True},
+    }
 
 
 def add_device_alias(
@@ -694,6 +717,7 @@ __all__ = [
     "get_device_settings",
     "get_command_profile",
     "remove_device_alias",
+    "rename_browser_device_name",
     "rename_device",
     "set_device_lifetime",
 ]

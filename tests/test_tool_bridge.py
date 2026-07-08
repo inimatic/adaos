@@ -296,9 +296,13 @@ def test_runtime_action_risk_allows_slideshow_redevice_refresh_tick() -> None:
     [
         ("slideshow_skill:select_redevice_endpoint", {"code": "TV-1"}),
         ("redevice_settings:refresh_redevice_settings_state", {"webspace_id": "desktop"}),
+        ("browsers_skill:select_browser", {"browser_device_id": "dev_phone"}),
+        ("browsers_skill:rename_selected_browser", {"name": "Chrome"}),
+        ("browsers_skill:rename_device", {"device_id": "dev_phone", "name": "Chrome"}),
+        ("browsers_skill:rename_browser_device_name", {"browser_device_id": "dev_phone", "name": "My phone"}),
     ],
 )
-def test_runtime_action_risk_allows_local_redevice_ui_state_tools(tool: str, arguments: dict[str, object]) -> None:
+def test_runtime_action_risk_allows_local_ui_state_tools(tool: str, arguments: dict[str, object]) -> None:
     public_tool = tool.split(":", 1)[1]
     body = tool_bridge_module.ToolCall(tool=tool, arguments=arguments)
 

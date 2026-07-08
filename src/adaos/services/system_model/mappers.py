@@ -572,6 +572,8 @@ def canonical_object_from_device_endpoint(payload: Any) -> CanonicalObject:
         online = observation.get("online")
         last_seen = observation.get("last_seen_at")
         display_name = str(policy.get("display_name") or "").strip() or None
+        device_display_name = str(policy.get("device_display_name") or "").strip() or None
+        endpoint_display_name = str(policy.get("endpoint_display_name") or "").strip() or display_name
         effective_name = str(policy.get("effective_name") or "").strip() or link_id
         managed_state = str(policy.get("managed_state") or "").strip() or None
         connected_to_subnet = _connected_to_subnet_value(runtime_state)
@@ -627,6 +629,8 @@ def canonical_object_from_device_endpoint(payload: Any) -> CanonicalObject:
                     "session_ids": session_ids,
                     "source": data.get("source"),
                     "display_name": display_name,
+                    "device_display_name": device_display_name,
+                    "endpoint_display_name": endpoint_display_name,
                     "hostname": identity.get("hostname"),
                     "node_names": identity.get("node_names"),
                     "base_url": identity.get("base_url"),

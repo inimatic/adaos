@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 from adaos.services import access_links
@@ -145,6 +146,84 @@ def test_browser_snapshot_marks_parent_online_from_active_yws_peer(monkeypatch) 
     assert by_id["dev-browser"]["connection_state"] == "connected"
     assert by_id["dev-browser"]["last_webspace_id"] == "desktop"
     assert by_id["dev-browser"]["last_seen_at"] == 2000.0
+
+
+def test_browser_snapshot_marks_parent_and_session_online_from_webrtc_peer(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(access_links, "_now_ts", lambda: 3000.0)
+    monkeypatch.setattr(gateway_ws, "active_browser_session_snapshot", lambda: {"peers": []})
+
+    fake_webrtc_peer = SimpleNamespace(
+        webrtc_peer_snapshot=lambda: {
+            "peers": [
+                {
+                    "device_id": "dev-browser",
+                    "webspace_id": "desktop",
+                    "connection_state": "connecting",
+                    "yjs_channel_state": "open",
+                    "events_channel_state": "open",
+                }
+            ]
+        }
+    )
+    monkeypatch.setitem(sys.modules, "adaos.services.webrtc.peer", fake_webrtc_peer)
+
+    access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="old",
+        online=False,
+        browser_family="Chrome",
+    )
+
+    by_id = {item["id"]: item for item in access_links.browser_snapshot()}
+
+    assert by_id["dev-browser"]["online"] is True
+    assert by_id["dev-browser"]["connection_state"] == "connected"
+    assert by_id["dev-browser"]["last_webspace_id"] == "desktop"
+    assert by_id["dev-browser::webrtc"]["access_class"] == "client"
+    assert by_id["dev-browser::webrtc"]["runtime_source"] == "webrtc_peer"
+    assert by_id["dev-browser::webrtc"]["yjs_channel_state"] == "open"
+
+
+def test_rename_browser_device_name_keeps_endpoint_display_name(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+
+    access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="desktop",
+        online=True,
+        browser_family="Chrome",
+    )
+    access_links.rename_link("browser", "dev-browser", "Chrome")
+
+    saved = access_links.rename_browser_device_name("dev-browser", "Мой телефон")
+    link = access_links.get_link("browser", "dev-browser")
+
+    assert saved["display_name"] == "Chrome"
+    assert saved["device_display_name"] == "Мой телефон"
+    assert link is not None
+    assert link["display_name"] == "Chrome"
+    assert link["device_display_name"] == "Мой телефон"
+
+
+def test_touch_browser_session_splits_device_and_endpoint_names(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+
+    saved = access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="desktop",
+        online=True,
+        browser_family="Chrome",
+        device_display_name="Мой телефон",
+        endpoint_display_name="Chrome",
+    )
+
+    assert saved is not None
+    assert saved["device_display_name"] == "Мой телефон"
+    assert saved["display_name"] == "Chrome"
 
 
 def test_detach_and_deny_have_distinct_admission_policy(monkeypatch) -> None:

@@ -276,6 +276,8 @@ def _build_policy_block(
         "present": present,
         "managed_state": managed_state,
         "display_name": _text_or_none(entry.get("display_name")),
+        "device_display_name": _text_or_none(entry.get("device_display_name")),
+        "endpoint_display_name": _text_or_none(entry.get("display_name")) if kind == "browser" else None,
         "effective_name": effective_name or entry_id,
         "access_class": access_class,
         "lifetime_mode": lifetime_mode,
@@ -328,6 +330,19 @@ def _effective_name(
     if host:
         return host
     return fallback_id
+
+
+def _browser_endpoint_name(entry: Mapping[str, Any]) -> str:
+    return _text(entry.get("display_name")) or _text(entry.get("hostname"))
+
+
+def _browser_effective_name(entry: Mapping[str, Any], *, hostname: str | None, fallback_id: str) -> str:
+    access_class = _text(entry.get("access_class")).casefold() or "device"
+    device_name = _text(entry.get("device_display_name"))
+    endpoint_name = _browser_endpoint_name(entry)
+    if access_class == "client":
+        return endpoint_name or device_name or _text(hostname) or fallback_id
+    return device_name or endpoint_name or _text(hostname) or fallback_id
 
 
 def _runtime_projection_like(
@@ -743,11 +758,7 @@ class DeviceInventoryService:
             if not device_id:
                 continue
             hostname = _text_or_none(entry.get("hostname"))
-            effective_name = _effective_name(
-                policy_entry=entry,
-                hostname=hostname,
-                fallback_id=device_id,
-            )
+            effective_name = _browser_effective_name(entry, hostname=hostname, fallback_id=device_id)
             items.append(
                 {
                     "ref": make_device_ref("browser", device_id),
@@ -757,6 +768,8 @@ class DeviceInventoryService:
                         "browser_device_id": device_id,
                         "node_id": None,
                         "hostname": hostname,
+                        "device_display_name": _text_or_none(entry.get("device_display_name")),
+                        "endpoint_display_name": _text_or_none(_browser_endpoint_name(entry)),
                         "node_names": [],
                         "base_url": None,
                         "browser_family": _text_or_none(entry.get("browser_family")),
@@ -781,9 +794,12 @@ class DeviceInventoryService:
                     "runtime": {
                         "snapshot_ready": None,
                         "snapshot_state": None,
-                        "route_mode": None,
-                        "connected_to_subnet": None,
+                        "route_mode": _text_or_none(entry.get("runtime_source")),
+                        "connected_to_subnet": bool(entry.get("online")),
                         "runtime_version": None,
+                        "active_runtime_sources": list(entry.get("active_runtime_sources") or []),
+                        "events_channel_state": _text_or_none(entry.get("events_channel_state")),
+                        "yjs_channel_state": _text_or_none(entry.get("yjs_channel_state")),
                     },
                     "diagnostics": {
                         "policy_source": "access_links",

@@ -147,6 +147,39 @@ def test_named_entity_service_suggests_browser_draft_name_without_display_overwr
     assert record.status == "draft"
 
 
+def test_named_entity_service_uses_browser_device_display_name_before_endpoint_name() -> None:
+    service = named_entities.NamedEntityService(
+        device_inventory_service=_FakeDeviceInventory(
+            [
+                {
+                    "ref": "browser:browser-1",
+                    "kind": "browser",
+                    "identity": {
+                        "browser_device_id": "browser-1",
+                        "browser_family": "chrome",
+                        "os_name": "android",
+                    },
+                    "policy": {
+                        "display_name": "Chrome",
+                        "device_display_name": "Мой телефон",
+                        "managed_state": "managed",
+                    },
+                    "observation": {"source": "browser_session", "last_seen_at": 120.0},
+                    "diagnostics": {},
+                }
+            ]
+        ),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    record = service.list_entities()[0]
+
+    assert record.canonical_ref == "device:browser:browser-1"
+    assert record.display_name == "Мой телефон"
+    assert record.display_label == "Мой телефон"
+    assert record.source_authority["display_name"] == "access_links.device_display_name"
+
+
 def test_resolver_matches_exact_labels_without_dispatch_side_effects() -> None:
     service = named_entities.NamedEntityService(
         static_entities=[

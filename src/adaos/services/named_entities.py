@@ -633,7 +633,12 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
         entity_kind = f"device.{kind_token}" if kind_token else "device"
         fallback = compatibility_device_ref(canonical_ref)
         draft_name = None
-    display_name = _text_or_none(policy.get("display_name"))
+    if kind_token == "browser":
+        display_name = _text_or_none(policy.get("device_display_name")) or _text_or_none(policy.get("display_name"))
+        display_source = "access_links.device_display_name" if policy.get("device_display_name") else "access_links" if display_name else None
+    else:
+        display_name = _text_or_none(policy.get("display_name"))
+        display_source = "access_links" if display_name else None
     registered_names = _tuple_of_texts(identity.get("node_names"))
     observed_name = _text_or_none(identity.get("hostname"))
     aliases = _tuple_of_texts(policy.get("aliases"))
@@ -657,7 +662,7 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
         },
         source="device_inventory",
         source_authority={
-            "display_name": "access_links" if display_name else None,
+            "display_name": display_source,
             "registered_names": "device_inventory",
             "observed_name": observation.get("source") or "device_inventory",
             "draft_name": "named_entity_service.browser_draft" if draft_name else None,

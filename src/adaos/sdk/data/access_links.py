@@ -60,14 +60,24 @@ def _enrich_browser_link(entry: Mapping[str, Any] | None) -> dict[str, Any] | No
         return None
     out = dict(entry)
     display_name = _text(out.get("display_name"))
+    device_display_name = _text(out.get("device_display_name"))
     hostname = _text(out.get("hostname"))
     draft_name = _browser_draft_name(out)
     entry_id = _text(out.get("id"))
-    effective_name = display_name or hostname or draft_name or entry_id or "browser"
+    endpoint_name = display_name or hostname or draft_name
+    access_class = _text(out.get("access_class")).casefold() or "device"
+    if access_class == "client":
+        effective_name = endpoint_name or device_display_name or entry_id or "browser"
+    else:
+        effective_name = device_display_name or endpoint_name or entry_id or "browser"
 
+    if device_display_name:
+        out["device_name_source"] = "policy"
+    out["endpoint_display_name"] = endpoint_name or None
     out["effective_name"] = effective_name
-    if not _text(out.get("title")):
-        out["title"] = effective_name
+    out["title"] = effective_name
+    if endpoint_name:
+        out["endpoint_title"] = endpoint_name
     if draft_name:
         out["draft_name"] = draft_name
         out["suggested_display_name"] = draft_name
@@ -118,6 +128,10 @@ def get_redevice_link(endpoint_id: str) -> dict[str, Any] | None:
 
 def rename_browser_link(device_id: str, display_name: str) -> dict[str, Any]:
     return _service.rename_link("browser", device_id, display_name)
+
+
+def rename_browser_device_name(device_id: str, device_display_name: str) -> dict[str, Any]:
+    return _service.rename_browser_device_name(device_id, device_display_name)
 
 
 def rename_member_link(node_id: str, display_name: str) -> dict[str, Any]:

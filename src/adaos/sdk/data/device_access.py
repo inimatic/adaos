@@ -291,6 +291,10 @@ def rename_device(device_ref: str, display_name: str) -> dict:
     return _service.rename_device(str(device_ref or ""), str(display_name or ""))
 
 
+def rename_browser_device_name(device_ref: str, device_display_name: str) -> dict:
+    return _service.rename_browser_device_name(str(device_ref or ""), str(device_display_name or ""))
+
+
 def add_device_alias(
     device_ref: str,
     alias: str,

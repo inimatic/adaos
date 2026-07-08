@@ -169,6 +169,10 @@ def test_phase7_admin_api_grants_pairs_summarizes_and_revokes_device() -> None:
     assert claimed.status_code == 200
     assert claimed.json()["device"]["device_id"] == device_id
     assert access_links.authorize_link("browser", device_id) == (True, None)
+    browser_link = access_links.get_link("browser", device_id)
+    assert browser_link is not None
+    assert browser_link["device_display_name"] == "API phase67 phone"
+    assert browser_link["display_name"] == ""
 
     summary = client.get("/api/personalization/admin/summary", headers=TOKEN_HEADERS)
     assert summary.status_code == 200

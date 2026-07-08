@@ -200,6 +200,8 @@ def _clean_signaling_device_id(value: Any) -> str | None:
 def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     raw: dict[str, Any] = {
         "browser_family": params.get("browser_family") or params.get("browserFamily") or params.get("browser"),
+        "device_display_name": params.get("device_display_name") or params.get("deviceDisplayName") or params.get("device_name") or params.get("deviceName"),
+        "endpoint_display_name": params.get("endpoint_display_name") or params.get("endpointDisplayName") or params.get("endpoint_name") or params.get("endpointName"),
         "client_build_id": params.get("client_build_id") or params.get("clientBuildId") or params.get("build_id") or params.get("buildId"),
         "client_build_version": params.get("client_build_version") or params.get("clientBuildVersion") or params.get("build_version") or params.get("buildVersion"),
         "os_name": params.get("os_name") or params.get("osName") or params.get("os") or params.get("platform"),
@@ -210,7 +212,7 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     for key, value in raw.items():
         cleaned = _clean_browser_metadata_value(
             value,
-            max_len=512 if key == "user_agent" else (128 if key == "client_build_version" else 96),
+            max_len=512 if key == "user_agent" else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name"} else 96),
         )
         if cleaned:
             out[key] = cleaned

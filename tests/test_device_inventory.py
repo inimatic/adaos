@@ -57,6 +57,7 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
                 "id": "browser-1",
                 "kind": "browser",
                 "display_name": "Living room TV",
+                "device_display_name": "Мой телефон",
                 "access_class": "device",
                 "lifetime_mode": "permanent",
                 "revoked": False,
@@ -77,7 +78,11 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
     assert [item["ref"] for item in items] == ["browser:browser-1"]
     item = items[0]
     assert item["policy"]["managed_state"] == "managed"
-    assert item["policy"]["effective_name"] == "Living room TV"
+    assert item["policy"]["effective_name"] == "Мой телефон"
+    assert item["policy"]["device_display_name"] == "Мой телефон"
+    assert item["policy"]["endpoint_display_name"] == "Living room TV"
+    assert item["identity"]["device_display_name"] == "Мой телефон"
+    assert item["identity"]["endpoint_display_name"] == "Living room TV"
     assert item["observation"] == {
         "online": True,
         "connection_state": "connected",
@@ -88,7 +93,7 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
     assert item["identity"]["browser_family"] == "Edge"
     assert item["identity"]["os_name"] == "Windows"
     assert item["identity"]["form_factor"] == "Desktop"
-    assert item["runtime"]["connected_to_subnet"] is None
+    assert item["runtime"]["connected_to_subnet"] is True
 
 
 def test_device_inventory_reads_live_browser_snapshot_clients(monkeypatch) -> None:
@@ -646,8 +651,8 @@ def test_sdk_devices_inspect_device_separates_diagnostics(monkeypatch) -> None:
             "sync_runtime_name": {"enabled": False},
             "detach_runtime": {"enabled": False},
         },
-        "runtime": {
-            "connected_to_subnet": None,
-            "observation_source": "browser_session",
-        },
-    }
+            "runtime": {
+                "connected_to_subnet": False,
+                "observation_source": "browser_session",
+            },
+        }

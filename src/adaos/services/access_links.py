@@ -217,6 +217,7 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "last_webspace_id": str(data.get("last_webspace_id") or "").strip() or None,
         "connection_state": str(data.get("connection_state") or "").strip().lower() or None,
         "hostname": str(data.get("hostname") or "").strip() or None,
+        "device_display_name": str(data.get("device_display_name") or "").strip() or None,
         "node_names": [
             str(item or "").strip()
             for item in list(data.get("node_names") or [])
@@ -287,6 +288,20 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         ]
         if active_clients:
             entry["active_client_limit_ids"] = active_clients
+        active_runtime_sources = [
+            str(item or "").strip()
+            for item in list(data.get("active_runtime_sources") or [])
+            if str(item or "").strip()
+        ]
+        if active_runtime_sources:
+            entry["active_runtime_sources"] = active_runtime_sources
+        runtime_source = str(data.get("runtime_source") or "").strip()
+        if runtime_source:
+            entry["runtime_source"] = runtime_source
+        for field_name in ("events_channel_state", "yjs_channel_state"):
+            token = str(data.get(field_name) or "").strip().lower()
+            if token:
+                entry[field_name] = token
     return entry
 
 
@@ -357,6 +372,7 @@ _ENTITY_REGISTRY_FIELDS = {
     "client_build_id",
     "client_build_version",
     "display_name",
+    "device_display_name",
     "form_factor",
     "hostname",
     "labels",
@@ -529,6 +545,8 @@ def touch_browser_session(
     connection_state: str | None = None,
     online: bool | None = None,
     browser_family: str | None = None,
+    device_display_name: str | None = None,
+    endpoint_display_name: str | None = None,
     os_name: str | None = None,
     form_factor: str | None = None,
     user_agent: str | None = None,
@@ -555,6 +573,10 @@ def touch_browser_session(
         entry["online"] = bool(online)
     if browser_family is not None:
         entry["browser_family"] = str(browser_family or "").strip() or None
+    if device_display_name is not None:
+        entry["device_display_name"] = str(device_display_name or "").strip() or None
+    if endpoint_display_name is not None:
+        entry["display_name"] = str(endpoint_display_name or "").strip()
     if os_name is not None:
         entry["os_name"] = str(os_name or "").strip() or None
     if form_factor is not None:
@@ -765,6 +787,25 @@ def rename_link(
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
     _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="display_name.changed")
+    return saved
+
+
+def rename_browser_device_name(
+    device_id: str,
+    device_display_name: str,
+) -> dict[str, Any]:
+    token = str(device_id or "").strip()
+    if not token:
+        raise ValueError("entry id is required")
+    registry = _load_registry()
+    _purge_expired_browsers(registry)
+    entry = _get_entry(registry, "browser", token) or _normalize_entry("browser", token, {})
+    previous = dict(entry)
+    entry["device_display_name"] = str(device_display_name or "").strip()
+    entry = _updated(entry)
+    saved = _put_entry(registry, "browser", entry)
+    _save_registry(registry)
+    _emit_entity_registry_changed_if_needed("browser", previous, saved, reason="device_display_name.changed")
     return saved
 
 
@@ -1147,6 +1188,57 @@ def deny_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
     return saved
 
 
+def _runtime_peer_online(peer: Mapping[str, Any]) -> bool:
+    state = str(peer.get("connection_state") or "").strip().lower()
+    if state in {"connected", "open", "ready", "online"}:
+        return True
+    for key in ("events_channel_state", "yjs_channel_state", "data_channel_state"):
+        if str(peer.get(key) or "").strip().lower() == "open":
+            return True
+    return bool(peer.get("online"))
+
+
+def _active_browser_runtime_peers() -> list[dict[str, Any]]:
+    peers: list[dict[str, Any]] = []
+    try:
+        from adaos.services.yjs.gateway_ws import active_browser_session_snapshot
+
+        active = active_browser_session_snapshot()
+    except Exception:
+        active = {}
+    for raw in list(active.get("peers") or []):
+        if not isinstance(raw, Mapping):
+            continue
+        row = dict(raw)
+        row.setdefault("source", "yws_gateway")
+        row.setdefault("runtime_client_id", "yws")
+        row["online"] = True
+        peers.append(row)
+
+    try:
+        from adaos.services.webrtc.peer import webrtc_peer_snapshot
+
+        active_webrtc = webrtc_peer_snapshot()
+    except Exception:
+        active_webrtc = {}
+    for raw in list(active_webrtc.get("peers") or []):
+        if not isinstance(raw, Mapping):
+            continue
+        device_id = str(raw.get("device_id") or raw.get("id") or "").strip()
+        if not device_id:
+            continue
+        row = dict(raw)
+        online = _runtime_peer_online(row)
+        if online:
+            row["connection_state"] = "connected"
+        row["online"] = online
+        row.setdefault("session_count", 1)
+        row.setdefault("source", "webrtc_peer")
+        row.setdefault("runtime_client_id", "webrtc")
+        peers.append(row)
+    return peers
+
+
 def browser_snapshot() -> list[dict[str, Any]]:
     entries = [entry for entry in list_links("browser") if entry.get("last_seen_at")]
     by_id = {
@@ -1154,43 +1246,60 @@ def browser_snapshot() -> list[dict[str, Any]]:
         for entry in entries
         if str(entry.get("id") or "").strip()
     }
-    try:
-        from adaos.services.yjs.gateway_ws import active_browser_session_snapshot
-
-        active = active_browser_session_snapshot()
-    except Exception:
-        active = {}
     now = _now_ts()
-    for peer in list(active.get("peers") or []):
-        if not isinstance(peer, Mapping):
-            continue
+    for peer in _active_browser_runtime_peers():
         device_id = str(peer.get("device_id") or peer.get("id") or "").strip()
-        client_id = str(peer.get("client_limit_id") or "").strip()
         if not device_id:
             continue
+        source = str(peer.get("source") or "runtime").strip() or "runtime"
+        client_id = str(peer.get("client_limit_id") or peer.get("runtime_client_id") or "").strip()
         webspace_id = str(peer.get("webspace_id") or "").strip() or None
         connection_state = str(peer.get("connection_state") or "connected").strip() or "connected"
+        online = _runtime_peer_online(peer)
+        if online and connection_state not in {"connected", "open", "ready", "online"}:
+            connection_state = "connected"
         parent = by_id.get(device_id)
-        if parent is not None:
-            parent["online"] = True
-            parent["connection_state"] = connection_state
-            parent["last_seen_at"] = max(float(parent.get("last_seen_at") or 0.0), now)
-            if webspace_id:
-                parent["last_webspace_id"] = webspace_id
-            try:
-                parent["active_session_count"] = int(parent.get("active_session_count") or 0) + int(peer.get("session_count") or 0)
-            except Exception:
-                parent["active_session_count"] = int(parent.get("active_session_count") or 0)
-            if client_id:
-                active_clients = [
-                    str(item or "").strip()
-                    for item in list(parent.get("active_client_limit_ids") or [])
-                    if str(item or "").strip()
-                ]
-                if client_id not in active_clients:
-                    active_clients.append(client_id)
-                parent["active_client_limit_ids"] = active_clients
-            by_id[device_id] = parent
+        if parent is None:
+            parent = _normalize_entry(
+                "browser",
+                device_id,
+                {
+                    "id": device_id,
+                    "access_class": "device",
+                    "lifetime_mode": "permanent",
+                    "online": online,
+                    "connection_state": connection_state,
+                    "last_seen_at": now,
+                    "last_webspace_id": webspace_id,
+                },
+            )
+        parent["online"] = bool(parent.get("online")) or online
+        parent["connection_state"] = connection_state if online else str(parent.get("connection_state") or connection_state or "").strip() or None
+        parent["last_seen_at"] = max(float(parent.get("last_seen_at") or 0.0), now if online else 0.0)
+        if webspace_id:
+            parent["last_webspace_id"] = webspace_id
+        try:
+            parent["active_session_count"] = int(parent.get("active_session_count") or 0) + max(1, int(peer.get("session_count") or 0))
+        except Exception:
+            parent["active_session_count"] = int(parent.get("active_session_count") or 0) + 1
+        if client_id:
+            active_clients = [
+                str(item or "").strip()
+                for item in list(parent.get("active_client_limit_ids") or [])
+                if str(item or "").strip()
+            ]
+            if client_id not in active_clients:
+                active_clients.append(client_id)
+            parent["active_client_limit_ids"] = active_clients
+        active_transports = [
+            str(item or "").strip()
+            for item in list(parent.get("active_runtime_sources") or [])
+            if str(item or "").strip()
+        ]
+        if source and source not in active_transports:
+            active_transports.append(source)
+        parent["active_runtime_sources"] = active_transports
+        by_id[device_id] = parent
         if not client_id:
             continue
         entry_id = f"{device_id}::{client_id}"
@@ -1214,6 +1323,9 @@ def browser_snapshot() -> list[dict[str, Any]]:
                 "browser_client_id": client_id,
                 "parent_browser_device_id": device_id,
                 "session_count": int(peer.get("session_count") or 0),
+                "runtime_source": source,
+                "events_channel_state": str(peer.get("events_channel_state") or "").strip() or None,
+                "yjs_channel_state": str(peer.get("yjs_channel_state") or "").strip() or None,
             },
         )
     return list(by_id.values())
