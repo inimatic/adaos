@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import fnmatch
+import json
 from pathlib import Path
 from typing import Any, Literal
+
+import yaml
 
 from adaos.domain.workspace_manifest import SkillActivationPolicy
 from adaos.services.workspace_registry import find_workspace_registry_entry
 
 
 InactiveSubscriptionStrategy = Literal["always_registered", "early_cheap_handlers"]
+_STREAM_RECEIVER_CONTROL_TOPICS = {
+    "webio.stream.snapshot.requested",
+    "webio.stream.subscription.changed",
+    "webio.yjs.snapshot.requested",
+    "webio.yjs.subscription.changed",
+}
 
 
 def load_skill_activation_policy(
@@ -28,6 +38,178 @@ def load_skill_activation_policy(
     if not isinstance(entry, dict):
         return None
     return SkillActivationPolicy.from_mapping(entry.get("activation"))
+
+
+def _clean_receiver(value: Any) -> str:
+    try:
+        token = str(value or "").strip()
+    except Exception:
+        return ""
+    return token
+
+
+def _append_receiver_pattern(patterns: list[str], value: Any) -> None:
+    token = _clean_receiver(value)
+    if token and token not in patterns:
+        patterns.append(token)
+
+
+def _candidate_skill_roots(base: Path, skill_name: str) -> list[Path]:
+    root = Path(base)
+    token = str(skill_name or "").strip()
+    if not token:
+        return []
+    candidates = [
+        root / token,
+        root / ".runtime" / token,
+        root / "skills" / token,
+        root / "skills" / ".runtime" / token,
+    ]
+    seen: set[str] = set()
+    result: list[Path] = []
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve())
+        except Exception:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result
+
+
+def _receiver_patterns_from_webui(path: Path) -> list[str]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    webio = raw.get("webio")
+    if not isinstance(webio, dict):
+        return []
+    receivers = webio.get("receivers")
+    patterns: list[str] = []
+    if isinstance(receivers, dict):
+        for key in receivers.keys():
+            _append_receiver_pattern(patterns, key)
+    return patterns
+
+
+def _receiver_patterns_from_skill_yaml(path: Path) -> list[str]:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    patterns: list[str] = []
+    data_routes = raw.get("data_routes")
+    if isinstance(data_routes, list):
+        for item in data_routes:
+            if not isinstance(item, dict):
+                continue
+            if _clean_receiver(item.get("route")) != "stream":
+                continue
+            _append_receiver_pattern(patterns, item.get("receiver"))
+    return patterns
+
+
+def load_skill_stream_receiver_patterns(skills_root: Path, skill_name: str) -> tuple[str, ...]:
+    """Return stream receiver patterns declared by a skill's webui/manifest files."""
+
+    patterns: list[str] = []
+    for skill_root in _candidate_skill_roots(Path(skills_root), skill_name):
+        webui_patterns = _receiver_patterns_from_webui(skill_root / "webui.json")
+        for pattern in webui_patterns:
+            _append_receiver_pattern(patterns, pattern)
+        yaml_patterns = _receiver_patterns_from_skill_yaml(skill_root / "skill.yaml")
+        for pattern in yaml_patterns:
+            _append_receiver_pattern(patterns, pattern)
+    return tuple(patterns)
+
+
+def _receiver_pattern_matches(pattern: str, receiver: str) -> bool:
+    pattern_token = _clean_receiver(pattern)
+    receiver_token = _clean_receiver(receiver)
+    if not pattern_token or not receiver_token:
+        return False
+    if pattern_token in {"*", receiver_token}:
+        return True
+    if "*" in pattern_token:
+        return fnmatch.fnmatchcase(receiver_token, pattern_token)
+    if "$" in pattern_token:
+        wildcard = ".".join("*" if part.startswith("$") else part for part in pattern_token.split("."))
+        return fnmatch.fnmatchcase(receiver_token, wildcard)
+    return False
+
+
+def _receiver_from_topic_token(topic_token: str) -> str:
+    token = _clean_receiver(topic_token)
+    for prefix in ("webio.stream.", "webio.yjs."):
+        if not token.startswith(prefix):
+            continue
+        suffix = token[len(prefix) :]
+        parts = [part for part in suffix.split(".") if part]
+        if len(parts) < 2:
+            return ""
+        if parts[0] == "nodes":
+            return ".".join(parts[2:]) if len(parts) >= 3 else ""
+        receiver_parts = parts[1:]
+        if len(receiver_parts) >= 3 and receiver_parts[0] == "nodes":
+            receiver_parts = receiver_parts[2:]
+        return ".".join(receiver_parts)
+    return ""
+
+
+def _stream_receiver_from_event(evt: Any) -> str:
+    payload = _event_payload(evt)
+    receiver = _clean_receiver(
+        payload.get("receiver")
+        or payload.get("projection_slot")
+        or payload.get("slot")
+        or payload.get("stream")
+    )
+    if receiver:
+        return receiver
+    return _receiver_from_topic_token(payload.get("topic"))
+
+
+def stream_receiver_event_admission(
+    receiver_patterns: tuple[str, ...] | list[str],
+    evt: Any,
+    topic: str,
+) -> dict[str, Any]:
+    event_type = _event_type(evt, topic)
+    if event_type not in _STREAM_RECEIVER_CONTROL_TOPICS:
+        return {"allowed": True, "governed": False, "reason": "not_stream_receiver_control"}
+
+    receiver = _stream_receiver_from_event(evt)
+    if not receiver:
+        return {"allowed": True, "governed": False, "reason": "stream_receiver_unknown"}
+
+    patterns = tuple(_clean_receiver(item) for item in receiver_patterns or () if _clean_receiver(item))
+    if not patterns:
+        return {"allowed": True, "governed": False, "reason": "stream_receiver_policy_missing"}
+
+    for pattern in patterns:
+        if _receiver_pattern_matches(pattern, receiver):
+            return {
+                "allowed": True,
+                "governed": True,
+                "reason": "stream_receiver_admitted",
+                "receiver": receiver,
+                "matched_pattern": pattern,
+            }
+
+    return {
+        "allowed": False,
+        "governed": True,
+        "reason": "stream_receiver_not_declared",
+        "receiver": receiver,
+        "receiver_patterns": list(patterns[:12]),
+    }
 
 
 def subscription_strategy_for_policy(policy: SkillActivationPolicy | None) -> InactiveSubscriptionStrategy:
@@ -212,6 +394,8 @@ __all__ = [
     "InactiveSubscriptionStrategy",
     "allows_background_refresh",
     "load_skill_activation_policy",
+    "load_skill_stream_receiver_patterns",
+    "stream_receiver_event_admission",
     "subscription_event_admission",
     "subscription_strategy_for_policy",
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -25,6 +26,15 @@ _LAST_CITY_TARGET_NODE: Dict[str, Optional[str]] = {}
 _ACTIVE_CITY_CHECK_INTERVAL_S = 0.5
 _IDLE_CITY_CHECK_INTERVAL_S = 5.0
 _NO_CITY_LOG_INTERVAL_S = 30.0
+_AUTO_REGISTERED = False
+
+
+def _truthy_env(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ydoc_observer_auto_register_enabled() -> bool:
+    return _truthy_env(os.environ.get("ADAOS_WEATHER_YDOC_OBSERVER"))
 
 
 def _stats_entry(webspace_id: str) -> dict[str, Any]:
@@ -85,6 +95,8 @@ def weather_observer_snapshot(*, webspace_id: str | None = None) -> dict[str, An
             **stats,
         }
     return {
+        "auto_register_enabled": _ydoc_observer_auto_register_enabled(),
+        "auto_registered": bool(_AUTO_REGISTERED),
         "active_observer_total": active_total,
         "pending_emit_total": pending_total,
         "webspaces": details,
@@ -431,7 +443,13 @@ def _room_observer(webspace_id: str, ydoc):
 try:
     from adaos.services.yjs.observers import register_room_observer
 
-    register_room_observer(_room_observer)
+    if _ydoc_observer_auto_register_enabled():
+        register_room_observer(_room_observer)
+        _AUTO_REGISTERED = True
+    else:
+        _log.info(
+            "weather YDoc observer auto-registration disabled; set ADAOS_WEATHER_YDOC_OBSERVER=1 to enable legacy city-change observation"
+        )
 except Exception:
     # Do not break boot if Yjs observers are not available.
     pass

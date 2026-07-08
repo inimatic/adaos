@@ -97,8 +97,13 @@ def _thread_safe_plain(value: Any, *, _depth: int = 0) -> Any:
         try:
             return {str(key): _thread_safe_plain(item, _depth=_depth + 1) for key, item in items()}
         except Exception:
+            return {}
+    if not isinstance(value, (str, bytes, bytearray)):
+        try:
+            return [_thread_safe_plain(item, _depth=_depth + 1) for item in value]
+        except Exception:
             pass
-    return value
+    return repr(value)
 
 
 async def emit(topic: str, payload: dict, **kw: Any):

@@ -10,7 +10,7 @@ from typing import Any
 
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.bootstrap import is_ready, load_config
-from adaos.services.reliability import reliability_snapshot
+from adaos.services.reliability import reliability_snapshot, sidecar_runtime_snapshot
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.runtime_paths import current_base_dir
 from adaos.services.runtime_environment import runtime_environment_payload
@@ -107,6 +107,20 @@ def _node_status_supervisor_runtime(base_dir: Path) -> dict[str, Any]:
     }
 
 
+def _node_status_sidecar_runtime(role: str | None) -> dict[str, Any]:
+    try:
+        payload = sidecar_runtime_snapshot(
+            role=role,
+            readiness_tree={},
+            hub_root_protocol={},
+            transport_strategy={},
+            media_runtime={},
+        )
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
 def current_node_status_payload() -> dict[str, Any]:
     conf = load_config()
     route_mode, connected = route_info(conf.role)
@@ -114,6 +128,13 @@ def current_node_status_payload() -> dict[str, Any]:
     runtime_environment = runtime_environment_payload()
     base_dir = current_base_dir()
     supervisor_runtime = _node_status_supervisor_runtime(base_dir)
+    sidecar_runtime = _node_status_sidecar_runtime(conf.role)
+    if sidecar_runtime:
+        runtime_state = supervisor_runtime.get("runtime")
+        runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
+        runtime_state["sidecar"] = sidecar_runtime
+        runtime_state["sidecar_source"] = "reliability.sidecar_runtime_snapshot"
+        supervisor_runtime["runtime"] = runtime_state
     core_update_status = supervisor_runtime.get("status")
     return {
         "node_id": conf.node_id,
@@ -131,6 +152,7 @@ def current_node_status_payload() -> dict[str, Any]:
             "environment": runtime_environment,
             "supervisor_available": bool(supervisor_runtime.get("available")),
             "supervisor_runtime": supervisor_runtime,
+            "sidecar_runtime": sidecar_runtime,
             "core_update_status": core_update_status if isinstance(core_update_status, dict) else {},
         },
         "environment": runtime_environment,

@@ -16,6 +16,8 @@ from adaos.services.node_config import load_config
 from adaos.services.status.hot_events import HotEventBudget
 from adaos.services.skill.activation import (
     load_skill_activation_policy,
+    load_skill_stream_receiver_patterns,
+    stream_receiver_event_admission,
     subscription_event_admission,
     subscription_strategy_for_policy,
 )
@@ -40,6 +42,22 @@ _STREAM_CONTROL_SUBSCRIPTION_TOPICS = {
     "webio.yjs.snapshot.requested",
     "webio.yjs.subscription.changed",
 }
+
+
+def _stream_receiver_admission_enabled() -> bool:
+    try:
+        raw = str(os.getenv("ADAOS_SKILL_SUBSCRIPTION_RECEIVER_ADMISSION", "1") or "1").strip().lower()
+    except Exception:
+        return True
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _stream_receiver_deny_logging_enabled() -> bool:
+    try:
+        raw = str(os.getenv("ADAOS_SKILL_SUBSCRIPTION_RECEIVER_DENY_LOG", "0") or "0").strip().lower()
+    except Exception:
+        return False
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -364,6 +382,25 @@ def _log_subscription_activation_denied(skill_name: str, topic: str, admission: 
     )
 
 
+def _log_subscription_receiver_denied(skill_name: str, topic: str, admission: dict[str, Any]) -> None:
+    if not _stream_receiver_deny_logging_enabled():
+        return
+    key = f"{skill_name}:{topic}:{admission.get('receiver') or '-'}:receiver"
+    now = time.monotonic()
+    last = float(_SUBSCRIPTION_DENY_LOG_AT.get(key) or 0.0)
+    if now - last < _SUBSCRIPTION_DENY_LOG_INTERVAL_S:
+        return
+    _SUBSCRIPTION_DENY_LOG_AT[key] = now
+    _LOG.info(
+        "skill subscription skipped by receiver policy skill=%s topic=%s receiver=%s reason=%s receiver_patterns=%s",
+        skill_name,
+        topic,
+        admission.get("receiver") or "-",
+        admission.get("reason") or "stream_receiver_not_declared",
+        admission.get("receiver_patterns") or [],
+    )
+
+
 def _load_subscription_activation_policy(skill_name: str | None):
     token = str(skill_name or "").strip()
     if not token or token == "<unknown>":
@@ -374,6 +411,36 @@ def _load_subscription_activation_policy(skill_name: str | None):
     except Exception:
         _LOG.debug("failed to load activation policy for skill=%s", token, exc_info=True)
         return None
+
+
+def _load_subscription_stream_receiver_patterns(skill_name: str | None) -> tuple[str, ...]:
+    token = str(skill_name or "").strip()
+    if not token or token == "<unknown>" or not _stream_receiver_admission_enabled():
+        return ()
+    try:
+        ctx = require_ctx("sdk.core.decorators.stream_receiver_policy")
+        paths = getattr(ctx, "paths", None)
+        roots: list[Path] = []
+        for attr in ("skills_dir", "dev_skills_dir", "workspace_dir"):
+            getter = getattr(paths, attr, None) if paths is not None else None
+            if not callable(getter):
+                continue
+            try:
+                roots.append(Path(getter()))
+            except Exception:
+                continue
+        patterns: list[str] = []
+        seen: set[str] = set()
+        for root in roots:
+            for pattern in load_skill_stream_receiver_patterns(root, token):
+                if pattern in seen:
+                    continue
+                seen.add(pattern)
+                patterns.append(pattern)
+        return tuple(patterns)
+    except Exception:
+        _LOG.debug("failed to load stream receiver policy for skill=%s", token, exc_info=True)
+        return ()
 
 
 def _admit_skill_activation_policy(policy: Any, skill_name: str | None, topic: str, evt: object) -> dict[str, Any]:
@@ -551,16 +618,21 @@ async def register_subscriptions(
     skill_topic_handlers: Dict[str, Dict[str, str]] = {}
     skill_summaries: Dict[str, list[tuple[str, str]]] = {}
     activation_policy_by_skill: Dict[str, Any] = {}
+    receiver_patterns_by_skill: Dict[str, tuple[str, ...]] = {}
 
     for topic, fn in _target_subscription_entries(target_skills):
         skill_name = _infer_skill_name(fn)
         generation: int | None = None
         activation_policy: Any = None
+        receiver_patterns: tuple[str, ...] = ()
         if skill_name:
             generation = int(_SKILL_SUBSCRIPTION_GENERATIONS.setdefault(skill_name, 1))
             if skill_name not in activation_policy_by_skill:
                 activation_policy_by_skill[skill_name] = _load_subscription_activation_policy(skill_name)
             activation_policy = activation_policy_by_skill.get(skill_name)
+            if skill_name not in receiver_patterns_by_skill:
+                receiver_patterns_by_skill[skill_name] = _load_subscription_stream_receiver_patterns(skill_name)
+            receiver_patterns = receiver_patterns_by_skill.get(skill_name) or ()
 
         if skill_name:
             handlers_for_skill = skill_topic_handlers.setdefault(skill_name, {})
@@ -584,10 +656,16 @@ async def register_subscriptions(
                 _topic=topic,
                 _generation=generation,
                 _activation_policy=activation_policy,
+                _receiver_patterns=receiver_patterns,
             ):
                 if not _subscription_is_current(_skill, _generation):
                     return None
                 if _skill and not _skill_event_targets_this_node(evt):
+                    return None
+                receiver_admission = stream_receiver_event_admission(_receiver_patterns, evt, _topic)
+                if not receiver_admission.get("allowed", True):
+                    if _skill:
+                        _log_subscription_receiver_denied(_skill, _topic, receiver_admission)
                     return None
                 activation_admission = _admit_skill_activation_policy(_activation_policy, _skill, _topic, evt)
                 if not activation_admission.get("allowed", True):
@@ -622,10 +700,16 @@ async def register_subscriptions(
                 _topic=topic,
                 _generation=generation,
                 _activation_policy=activation_policy,
+                _receiver_patterns=receiver_patterns,
             ):
                 if not _subscription_is_current(_skill, _generation):
                     return None
                 if _skill and not _skill_event_targets_this_node(evt):
+                    return None
+                receiver_admission = stream_receiver_event_admission(_receiver_patterns, evt, _topic)
+                if not receiver_admission.get("allowed", True):
+                    if _skill:
+                        _log_subscription_receiver_denied(_skill, _topic, receiver_admission)
                     return None
                 activation_admission = _admit_skill_activation_policy(_activation_policy, _skill, _topic, evt)
                 if not activation_admission.get("allowed", True):

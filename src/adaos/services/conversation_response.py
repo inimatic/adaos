@@ -162,6 +162,13 @@ def materialize_tool_result(
     materialized_chat_appends: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     meta = {**dict(raw_meta or {}), **dict(payload_meta or {})}
+    if tool_result_suppresses_visible_message(result):
+        return {
+            "ok": True,
+            "materialized": False,
+            "published_chat": [],
+            "reason": "tool_result_message_receipt_only",
+        }
     response = _tool_result_response(result)
     if response is None:
         return {
@@ -304,6 +311,21 @@ def _tool_result_response(result: Any) -> Any | None:
             "meta": value.get("meta") if isinstance(value.get("meta"), Mapping) else {},
         }
     return None
+
+
+def tool_result_suppresses_visible_message(result: Any) -> bool:
+    value = _as_mapping(result)
+    if value is None or value.get("ok") is False:
+        return False
+    if isinstance(value.get("response_envelope"), Mapping) or isinstance(value.get("response"), Mapping):
+        return False
+    if not str(value.get("message") or "").strip():
+        return False
+    chat_emit = value.get("chat_emit") if isinstance(value.get("chat_emit"), Mapping) else {}
+    mode = str(chat_emit.get("mode") or value.get("message_mode") or "").strip().lower()
+    if mode in {"receipt_only", "ephemeral", "none"}:
+        return True
+    return chat_emit.get("persisted") is False
 
 
 def _append_ledger_message(

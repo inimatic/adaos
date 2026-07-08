@@ -1959,6 +1959,10 @@ class BootstrapService:
         except Exception:
             pass
         conf = getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)
+        _control_lifecycle_report_enabled = _env_truthy(
+            os.getenv("ADAOS_HUB_CONTROL_REPORT_ENABLED"),
+            default=True,
+        )
         _control_lifecycle_await_watch_enabled = _env_truthy(
             os.getenv("ADAOS_CONTROL_LIFECYCLE_AWAIT_WATCH"),
             default=_env_truthy(os.getenv("HUB_TRACE"), default=False),
@@ -1967,6 +1971,8 @@ class BootstrapService:
         async def _report_control_lifecycle(trigger: str) -> None:
             try:
                 if getattr(conf, "role", None) != "hub":
+                    return
+                if not _control_lifecycle_report_enabled:
                     return
                 done_box: dict[str, Any] = {"thread_done_at": None, "dumped": False}
                 main_tid = threading.get_ident()
@@ -2645,7 +2651,8 @@ class BootstrapService:
             _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
             await _report_control_lifecycle("sys.ready")
             _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
-            self._start_boot_task_once("adaos-control-lifecycle-heartbeat", _control_lifecycle_heartbeat)
+            if _control_lifecycle_report_enabled:
+                self._start_boot_task_once("adaos-control-lifecycle-heartbeat", _control_lifecycle_heartbeat)
             self._start_boot_task_once("adaos-node-status-push-heartbeat", _node_status_push_heartbeat)
         else:
             member_ready_announced = False

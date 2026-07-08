@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.yjs.doc import async_get_ydoc
+from adaos.services.yjs.json_merge import clone_json_like, set_map_value_if_changed
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -66,7 +67,7 @@ class WebToastService:
             async with async_get_ydoc(webspace) as ydoc:
                 data_map = ydoc.get_map("data")
                 with ydoc.begin_transaction() as txn:
-                    desktop = data_map.get("desktop")
+                    desktop = clone_json_like(data_map.get("desktop"))
                     if not isinstance(desktop, dict):
                         desktop = {}
                     raw_toasts = desktop.get("toasts") or []
@@ -78,6 +79,6 @@ class WebToastService:
                     if max_items > 0 and len(items) > max_items:
                         items = items[-max_items:]
                     desktop["toasts"] = json.loads(json.dumps(items))
-                    data_map.set(txn, "desktop", json.loads(json.dumps(desktop)))
+                    set_map_value_if_changed(data_map, txn, "desktop", desktop)
 
         _log.debug("toast pushed webspace=%s level=%s code=%s", webspace, level, code)

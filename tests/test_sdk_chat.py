@@ -121,6 +121,36 @@ def test_response_envelope_materializes_chat_and_speech() -> None:
     assert projection["messages"][0]["active_agent_avatar_ref"] == "resource:assistant.arseni.avatar"
 
 
+def test_tool_result_receipt_only_message_is_not_materialized() -> None:
+    bus = LocalEventBus()
+    seen: list[Event] = []
+    bus.subscribe("io.out.chat.append", lambda ev: seen.append(ev))
+
+    result = conversation_response.materialize_tool_result(
+        {
+            "ok": True,
+            "message": "Builder: restored UI revision 022.",
+            "chat_emit": {
+                "mode": "receipt_only",
+                "persisted": False,
+                "reason": "revision_current_success_not_persistent",
+            },
+        },
+        webspace_id="desktop-dev",
+        conversation_id="conv.receipt.only",
+        channel_id="builder",
+        owner="skill:builder",
+        bus=bus,
+        route_id="voice_chat",
+    )
+
+    assert result["materialized"] is False
+    assert result["reason"] == "tool_result_message_receipt_only"
+    assert seen == []
+    conversation_store.ensure_schema()
+    assert conversation_store.list_projection("conv.receipt.only")["messages"] == []
+
+
 def test_response_planner_infers_structured_targets() -> None:
     envelope = conversation_response.normalize_response_envelope(
         {

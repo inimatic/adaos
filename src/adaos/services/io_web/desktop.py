@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, get_ydoc, mutate_live_room
+from adaos.services.yjs.json_merge import set_map_value_if_changed
 from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.workspaces import index as workspace_index
@@ -34,6 +35,39 @@ def _desktop_sync_write_meta():
     )
 
 
+def _clone_json_like(value: Any) -> Any:
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            raw = to_json()
+            if isinstance(raw, str):
+                return json.loads(raw)
+            return json.loads(json.dumps(raw, ensure_ascii=True))
+        except Exception:
+            pass
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=True))
+    except Exception:
+        if value is None:
+            return None
+        if isinstance(value, (str, bytes, bytearray)):
+            return value
+        if isinstance(value, Mapping):
+            return {str(k): _clone_json_like(v) for k, v in value.items()}
+        items = getattr(value, "items", None)
+        if callable(items):
+            try:
+                return {str(k): _clone_json_like(v) for k, v in items() if str(k)}
+            except Exception:
+                return {}
+        if isinstance(value, Iterable):
+            try:
+                return [_clone_json_like(v) for v in value]
+            except Exception:
+                return []
+        return str(value)
+
+
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     """
     Best-effort conversion of YJS map-like values to a plain dict.
@@ -42,38 +76,30 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
     but typically expose `.items()`. Treating them as non-mapping silently
     drops state (e.g. installed apps/widgets) during scenario switches.
     """
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return dict(value)
-    if isinstance(value, (str, bytes, bytearray)):
-        return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    items = getattr(value, "items", None)
-    if callable(items):
-        try:
-            return {str(k): v for k, v in items()}
-        except Exception:
-            return {}
-    return {}
+    payload = _clone_json_like(value)
+    return dict(payload) if isinstance(payload, dict) else {}
 
 
 def _iter_ids(value: Any) -> List[str]:
     """
     Extract string ids from list-like values (including YArray-like iterables).
     """
-    if value is None:
+    payload = _clone_json_like(value)
+    if payload is None:
         return []
-    if isinstance(value, (str, bytes, bytearray)) or isinstance(value, Mapping):
+    if isinstance(payload, (str, bytes, bytearray)) or isinstance(payload, Mapping):
         return []
-    if not isinstance(value, Iterable):
+    if not isinstance(payload, Iterable):
         return []
     out: List[str] = []
-    for item in value:
+    for item in payload:
         if isinstance(item, (str, int)):
             out.append(str(item))
     return out
+
+
+def _set_json_map_value(y_map: Any, txn: Any, key: str, value: Any) -> None:
+    set_map_value_if_changed(y_map, txn, key, value)
 
 
 @dataclass(slots=True)
@@ -115,11 +141,12 @@ class WebDesktopSnapshot:
 
 
 def _clone_pinned_widgets(items: Any) -> List[Dict[str, Any]]:
-    if not isinstance(items, list):
+    payload = _clone_json_like(items)
+    if not isinstance(payload, list):
         return []
     out: List[Dict[str, Any]] = []
     seen: set[str] = set()
-    for item in items:
+    for item in payload:
         if not isinstance(item, dict):
             continue
         item_id = str(item.get("id") or "").strip()
@@ -136,31 +163,22 @@ def _clone_pinned_widgets(items: Any) -> List[Dict[str, Any]]:
 
 
 def _clone_json_dict(value: Any) -> Dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    try:
-        payload = json.loads(json.dumps(value, ensure_ascii=True))
-    except Exception:
-        payload = dict(value)
+    payload = _clone_json_like(value)
     return payload if isinstance(payload, dict) else {}
 
 
 def _clone_json_list(value: Any) -> List[Any]:
-    if not isinstance(value, list):
-        return []
-    try:
-        payload = json.loads(json.dumps(value, ensure_ascii=True))
-    except Exception:
-        payload = list(value)
+    payload = _clone_json_like(value)
     return payload if isinstance(payload, list) else []
 
 
 def _clone_text_list(value: Any) -> List[str]:
-    if not isinstance(value, list):
+    payload = _clone_json_like(value)
+    if not isinstance(payload, list):
         return []
     out: List[str] = []
     seen: set[str] = set()
-    for item in value:
+    for item in payload:
         token = str(item or "").strip()
         if not token or token in seen:
             continue
@@ -284,7 +302,7 @@ class WebDesktopService:
             "apps": list(dict.fromkeys(installed.apps)),
             "widgets": list(dict.fromkeys(installed.widgets)),
         }
-        data_map.set(txn, "installed", next_installed)
+        _set_json_map_value(data_map, txn, "installed", next_installed)
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_installed_raw = desktop_next.get("installed") or {}
@@ -292,7 +310,7 @@ class WebDesktopService:
         desktop_installed["apps"] = next_installed["apps"]
         desktop_installed["widgets"] = next_installed["widgets"]
         desktop_next["installed"] = desktop_installed
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _read_overlay_installed(webspace_id: str) -> tuple[WebDesktopInstalled, bool]:
@@ -394,12 +412,12 @@ class WebDesktopService:
         app_desktop = _coerce_dict(app_desktop_raw)
         app_desktop["pinnedWidgets"] = next_pinned
         application_next["desktop"] = app_desktop
-        ui_map.set(txn, "application", application_next)
+        _set_json_map_value(ui_map, txn, "application", application_next)
 
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["pinnedWidgets"] = next_pinned
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _apply_topbar_state(ydoc: Any, txn: Any, topbar: List[Any]) -> None:
@@ -411,13 +429,13 @@ class WebDesktopService:
         app_desktop = _coerce_dict(app_desktop_raw)
         app_desktop["topbar"] = next_topbar
         application_next["desktop"] = app_desktop
-        ui_map.set(txn, "application", application_next)
+        _set_json_map_value(ui_map, txn, "application", application_next)
 
         data_map = ydoc.get_map("data")
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["topbar"] = next_topbar
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _apply_page_schema_state(ydoc: Any, txn: Any, page_schema: Dict[str, Any]) -> None:
@@ -429,13 +447,13 @@ class WebDesktopService:
         app_desktop = _coerce_dict(app_desktop_raw)
         app_desktop["pageSchema"] = next_schema
         application_next["desktop"] = app_desktop
-        ui_map.set(txn, "application", application_next)
+        _set_json_map_value(ui_map, txn, "application", application_next)
 
         data_map = ydoc.get_map("data")
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["pageSchema"] = next_schema
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _apply_icon_order_state(ydoc: Any, txn: Any, icon_order: List[str]) -> None:
@@ -444,7 +462,7 @@ class WebDesktopService:
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["iconOrder"] = next_order
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _apply_widget_order_state(ydoc: Any, txn: Any, widget_order: List[str]) -> None:
@@ -453,7 +471,7 @@ class WebDesktopService:
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["widgetOrder"] = next_order
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _apply_hidden_sections_state(ydoc: Any, txn: Any, hidden_sections: List[str]) -> None:
@@ -462,7 +480,7 @@ class WebDesktopService:
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["hiddenSections"] = next_hidden_sections
-        data_map.set(txn, "desktop", desktop_next)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
     def _apply_snapshot_state(ydoc: Any, txn: Any, snapshot: WebDesktopSnapshot) -> None:

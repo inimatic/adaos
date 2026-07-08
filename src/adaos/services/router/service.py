@@ -158,6 +158,36 @@ def _voice_chat_yjs_timeout_s() -> float:
         return 0.75
 
 
+def _voice_chat_persist_debounce_s() -> float:
+    try:
+        return max(0.0, min(float(str(os.getenv("ADAOS_VOICE_CHAT_PERSIST_DEBOUNCE_S") or "0.05").strip()), 5.0))
+    except Exception:
+        return 0.05
+
+
+def _voice_chat_persist_failure_backoff_s() -> float:
+    try:
+        return max(0.0, min(float(str(os.getenv("ADAOS_VOICE_CHAT_PERSIST_FAILURE_BACKOFF_S") or "2.0").strip()), 60.0))
+    except Exception:
+        return 2.0
+
+
+def _voice_chat_persist_stream_snapshots_enabled() -> bool:
+    return str(os.getenv("ADAOS_VOICE_CHAT_PERSIST_STREAM_SNAPSHOTS") or "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _voice_chat_snapshot_republish_interval_s() -> float:
+    try:
+        return max(0.0, min(float(str(os.getenv("ADAOS_VOICE_CHAT_SNAPSHOT_REPUBLISH_INTERVAL_S") or "30.0").strip()), 300.0))
+    except Exception:
+        return 30.0
+
+
 def _webio_stream_guard_enabled() -> bool:
     return str(os.getenv("ADAOS_WEBIO_STREAM_GUARD_ENABLE") or "1").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -1311,7 +1341,13 @@ class RouterService:
         self._tg_reply_via_root_http = str(os.getenv("HUB_TG_REPLY_VIA_ROOT_HTTP") or "").strip() == "1"
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
+        self._voice_chat_append_tasks: set[asyncio.Task[None]] = set()
+        self._voice_chat_append_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._voice_chat_persist_tasks: set[asyncio.Task[None]] = set()
+        self._voice_chat_persist_tasks_by_key: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._voice_chat_persist_pending: dict[tuple[str, str], dict[str, Any]] = {}
+        self._voice_chat_persist_committed_signatures: dict[tuple[str, str], str] = {}
+        self._voice_chat_persist_next_allowed_at: dict[tuple[str, str], float] = {}
         self._dialog_state_tasks: dict[str, asyncio.Task[None]] = {}
         self._dialog_state_pending_events: dict[str, str] = {}
         self._webio_receiver_metadata_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
@@ -1860,6 +1896,7 @@ class RouterService:
             return base_ids
 
         _voice_chat_stream_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        _voice_chat_snapshot_published: dict[tuple[str, str], tuple[float, str]] = {}
 
         def _voice_chat_data_path(target_node_id: str | None) -> str:
             return node_scope_data_path("data/voice_chat", str(target_node_id or "").strip())
@@ -2318,26 +2355,35 @@ class RouterService:
             cached = _voice_chat_stream_cache.get(cache_key) or {}
             cached_raw = cached.get("messages") if isinstance(cached, dict) else None
             messages = [dict(item) for item in cached_raw if isinstance(item, dict)] if isinstance(cached_raw, list) else []
+            try:
+                previous_total = int(cached.get("total_message_count") or len(messages)) if isinstance(cached, dict) else len(messages)
+            except Exception:
+                previous_total = len(messages)
             messages.append(dict(msg))
+            total_count = max(previous_total + 1, len(messages))
             messages = messages[-VOICE_CHAT_VISIBLE_TAIL:]
+            effective_has_more_before = bool(has_more_before) or total_count > len(messages)
+            effective_before_cursor = str(before_cursor or "")
+            if not effective_before_cursor and effective_has_more_before:
+                effective_before_cursor = str(max(0, total_count - len(messages)))
             last_refresh_ts = time.time()
             _publish_voice_chat_stream(
                 webspace_id,
                 target_node_id,
                 messages,
                 last_refresh_ts,
-                before_cursor=before_cursor,
-                has_more_before=has_more_before,
-                total_message_count=len(messages),
+                before_cursor=effective_before_cursor,
+                has_more_before=effective_has_more_before,
+                total_message_count=total_count,
             )
             _schedule_voice_chat_persist(
                 webspace_id,
                 target_node_id,
                 messages,
                 last_refresh_ts,
-                before_cursor=before_cursor,
-                has_more_before=has_more_before,
-                total_message_count=len(messages),
+                before_cursor=effective_before_cursor,
+                has_more_before=effective_has_more_before,
+                total_message_count=total_count,
             )
 
         def _read_voice_chat_state(data_map: Any, target_node_id: str | None) -> dict:
@@ -2675,7 +2721,7 @@ class RouterService:
                         webspace_id,
                         _mutator,
                         channel="core.router.dialog.store",
-                        prefer_live_room=False,
+                        prefer_live_room=True,
                     ),
                     timeout=_voice_chat_yjs_timeout_s(),
                 )
@@ -2761,7 +2807,7 @@ class RouterService:
                         webspace_id,
                         _mutator,
                         channel="core.router.voice_chat.live_room",
-                        prefer_live_room=False,
+                        prefer_live_room=True,
                     ),
                     timeout=_voice_chat_yjs_timeout_s(),
                 )
@@ -2807,6 +2853,51 @@ class RouterService:
                 if conversation_id or channel_id or topic_id:
                     return conversation_id, channel_id, topic_id
             return "", "", ""
+
+        def _voice_chat_persist_key(webspace_id: str, target_node_id: str | None) -> tuple[str, str]:
+            return (
+                str(webspace_id or "default").strip() or "default",
+                str(target_node_id or "").strip(),
+            )
+
+        def _voice_chat_persist_signature(
+            messages: list[dict[str, Any]],
+            *,
+            before_cursor: str | None = None,
+            has_more_before: bool = False,
+            total_message_count: int | None = None,
+        ) -> str:
+            try:
+                return json.dumps(
+                    {
+                        "messages": [dict(item) for item in messages if isinstance(item, dict)],
+                        "before_cursor": str(before_cursor or ""),
+                        "has_more_before": bool(has_more_before),
+                        "total_message_count": int(
+                            total_message_count if total_message_count is not None else len(messages)
+                        ),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+            except Exception:
+                return repr((messages, str(before_cursor or ""), bool(has_more_before), total_message_count))
+
+        def _voice_chat_state_signature(current: dict[str, Any]) -> str:
+            raw_messages = current.get("messages") if isinstance(current, dict) else None
+            messages = [dict(item) for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
+            try:
+                total_count = int(current.get("total_message_count") or len(messages)) if isinstance(current, dict) else len(messages)
+            except Exception:
+                total_count = len(messages)
+            return _voice_chat_persist_signature(
+                messages,
+                before_cursor=str(current.get("before_cursor") or "") if isinstance(current, dict) else "",
+                has_more_before=bool(current.get("has_more_before")) if isinstance(current, dict) else False,
+                total_message_count=total_count,
+            )
 
         def _conversation_id_for_dialog_channel(webspace_id: str, channel_id: str) -> str:
             ws = str(webspace_id or "default").strip() or "default"
@@ -2893,12 +2984,23 @@ class RouterService:
             before_cursor: str | None = None,
             has_more_before: bool = False,
             total_message_count: int | None = None,
-        ) -> None:
+            suppress_unchanged: bool = False,
+        ) -> str:
             # Keep the browser stream as a compact tail. Voice must never wait
             # on heavier YJS history writes before dispatching NLU.
             cached_messages = [dict(item) for item in messages if isinstance(item, dict)]
             total_count = int(total_message_count if total_message_count is not None else len(cached_messages))
             conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(cached_messages)
+            signature = _voice_chat_persist_signature(
+                cached_messages,
+                before_cursor=str(before_cursor or ""),
+                has_more_before=bool(has_more_before),
+                total_message_count=total_count,
+            )
+            cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
+            current_cache = _voice_chat_stream_cache.get(cache_key) or {}
+            if suppress_unchanged and str(current_cache.get("stream_signature") or "") == signature:
+                return signature
             stream_params = {
                 key: value
                 for key, value in {
@@ -2909,7 +3011,7 @@ class RouterService:
                 }.items()
                 if str(value or "").strip()
             }
-            _voice_chat_stream_cache[(str(webspace_id or "").strip(), str(target_node_id or "").strip())] = {
+            _voice_chat_stream_cache[cache_key] = {
                 "messages": cached_messages,
                 "last_refresh_ts": last_refresh_ts,
                 "message_count": len(cached_messages),
@@ -2921,6 +3023,7 @@ class RouterService:
                 "dialog_channel_id": dialog_channel_id,
                 "conversation_topic_id": topic_id,
                 "thread_id": topic_id,
+                "stream_signature": signature,
             }
             payload: dict[str, Any] = {
                 "receiver": "voice_chat.messages",
@@ -2968,6 +3071,7 @@ class RouterService:
                 )
             except Exception:
                 pass
+            return signature
 
         def _schedule_voice_chat_persist(
             webspace_id: str,
@@ -2983,61 +3087,141 @@ class RouterService:
             if not snapshot:
                 return
             conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(snapshot)
+            key = _voice_chat_persist_key(webspace_id, target_node_id)
+            signature = _voice_chat_persist_signature(
+                snapshot,
+                before_cursor=before_cursor,
+                has_more_before=has_more_before,
+                total_message_count=total_message_count,
+            )
+            if self._voice_chat_persist_committed_signatures.get(key) == signature and key not in self._voice_chat_persist_pending:
+                return
+            current_pending = self._voice_chat_persist_pending.get(key)
+            if isinstance(current_pending, dict) and str(current_pending.get("signature") or "") == signature:
+                return
+            self._voice_chat_persist_pending[key] = {
+                "webspace_id": str(webspace_id or "default").strip() or "default",
+                "target_node_id": str(target_node_id or "").strip(),
+                "snapshot": snapshot,
+                "last_refresh_ts": float(last_refresh_ts or time.time()),
+                "before_cursor": str(before_cursor or ""),
+                "has_more_before": bool(has_more_before),
+                "total_message_count": int(total_message_count if total_message_count is not None else len(snapshot)),
+                "conversation_id": conversation_id,
+                "dialog_channel_id": dialog_channel_id,
+                "topic_id": topic_id,
+                "signature": signature,
+            }
 
-            async def _persist() -> None:
+            async def _persist_payload(payload: dict[str, Any]) -> bool:
+                payload_snapshot = [
+                    dict(item)
+                    for item in (payload.get("snapshot") if isinstance(payload.get("snapshot"), list) else [])
+                    if isinstance(item, dict)
+                ]
+                if not payload_snapshot:
+                    return True
+                payload_signature = str(payload.get("signature") or "")
+                payload_webspace_id = str(payload.get("webspace_id") or "default").strip() or "default"
+                payload_target_node_id = str(payload.get("target_node_id") or "").strip() or None
+                payload_before_cursor = str(payload.get("before_cursor") or "")
+                payload_has_more_before = bool(payload.get("has_more_before"))
+                payload_total_message_count = int(payload.get("total_message_count") or len(payload_snapshot))
+                payload_conversation_id = str(payload.get("conversation_id") or "").strip()
+                payload_dialog_channel_id = str(payload.get("dialog_channel_id") or "").strip()
+                payload_topic_id = str(payload.get("topic_id") or "").strip()
+                payload_last_refresh_ts = float(payload.get("last_refresh_ts") or time.time())
+
                 def _mutator(data_map: Any, txn: Any) -> None:
-                    current = _read_voice_chat_state(data_map, target_node_id)
+                    current = _read_voice_chat_state(data_map, payload_target_node_id)
+                    if isinstance(current, dict) and _voice_chat_state_signature(current) == payload_signature:
+                        return
                     try:
                         current_ts = float(current.get("last_refresh_ts") or 0.0) if isinstance(current, dict) else 0.0
                     except Exception:
                         current_ts = 0.0
-                    if current_ts > float(last_refresh_ts or 0.0):
+                    if current_ts > payload_last_refresh_ts:
                         return
                     _write_voice_chat_state(
                         data_map,
                         txn,
-                        target_node_id,
+                        payload_target_node_id,
                         {
-                            "messages": [dict(item) for item in snapshot],
-                            "last_refresh_ts": float(last_refresh_ts or time.time()),
-                            "message_count": len(snapshot),
-                            "total_message_count": int(total_message_count if total_message_count is not None else len(snapshot)),
-                            "has_more_before": bool(has_more_before),
-                            "before_cursor": str(before_cursor or ""),
+                            "messages": [dict(item) for item in payload_snapshot],
+                            "last_refresh_ts": payload_last_refresh_ts,
+                            "message_count": len(payload_snapshot),
+                            "total_message_count": payload_total_message_count,
+                            "has_more_before": payload_has_more_before,
+                            "before_cursor": payload_before_cursor,
                             "history_mode": "compact_tail",
-                            "conversation_id": conversation_id,
-                            "dialog_channel_id": dialog_channel_id,
-                            "conversation_topic_id": topic_id,
-                            "thread_id": topic_id,
+                            "conversation_id": payload_conversation_id,
+                            "dialog_channel_id": payload_dialog_channel_id,
+                            "conversation_topic_id": payload_topic_id,
+                            "thread_id": payload_topic_id,
                         },
                     )
 
                 try:
                     await asyncio.wait_for(
                         _mutate_data_map(
-                            webspace_id,
+                            payload_webspace_id,
                             _mutator,
                             channel="core.router.voice_chat.live_room",
-                            prefer_live_room=False,
+                            prefer_live_room=True,
                         ),
                         timeout=_voice_chat_yjs_timeout_s(),
                     )
+                    return True
                 except asyncio.TimeoutError:
+                    self._voice_chat_persist_next_allowed_at[key] = time.monotonic() + _voice_chat_persist_failure_backoff_s()
                     self._vlog.warning(
                         "voice_chat.persist yjs write timed out webspace=%s node_id=%s count=%d",
-                        webspace_id,
-                        str(target_node_id or "").strip() or None,
-                        len(snapshot),
+                        payload_webspace_id,
+                        payload_target_node_id,
+                        len(payload_snapshot),
                     )
+                    return False
                 except asyncio.CancelledError:
                     raise
                 except Exception:
+                    self._voice_chat_persist_next_allowed_at[key] = time.monotonic() + _voice_chat_persist_failure_backoff_s()
                     self._vlog.warning(
                         "voice_chat.persist yjs write failed webspace=%s node_id=%s",
-                        webspace_id,
-                        str(target_node_id or "").strip() or None,
+                        payload_webspace_id,
+                        payload_target_node_id,
                         exc_info=True,
                     )
+                    return False
+
+            existing = self._voice_chat_persist_tasks_by_key.get(key)
+            if existing is not None and not existing.done():
+                return
+
+            async def _persist() -> None:
+                while True:
+                    payload = self._voice_chat_persist_pending.pop(key, None)
+                    if not isinstance(payload, dict):
+                        return
+                    payload_signature = str(payload.get("signature") or "")
+                    if self._voice_chat_persist_committed_signatures.get(key) == payload_signature:
+                        if key not in self._voice_chat_persist_pending:
+                            return
+                        continue
+                    delay = max(0.0, _voice_chat_persist_debounce_s())
+                    next_allowed = float(self._voice_chat_persist_next_allowed_at.get(key) or 0.0)
+                    if next_allowed > 0.0:
+                        delay = max(delay, max(0.0, next_allowed - time.monotonic()))
+                    if delay > 0.0:
+                        await asyncio.sleep(delay)
+                    ok = await _persist_payload(payload)
+                    if ok:
+                        self._voice_chat_persist_committed_signatures[key] = payload_signature
+                        self._voice_chat_persist_next_allowed_at.pop(key, None)
+                    else:
+                        self._voice_chat_persist_pending.setdefault(key, payload)
+                        return
+                    if key not in self._voice_chat_persist_pending:
+                        return
 
             try:
                 task = asyncio.create_task(
@@ -3047,9 +3231,12 @@ class RouterService:
             except RuntimeError:
                 return
             self._voice_chat_persist_tasks.add(task)
+            self._voice_chat_persist_tasks_by_key[key] = task
 
             def _forget(done: asyncio.Task[None]) -> None:
                 self._voice_chat_persist_tasks.discard(done)
+                if self._voice_chat_persist_tasks_by_key.get(key) is done:
+                    self._voice_chat_persist_tasks_by_key.pop(key, None)
                 try:
                     done.result()
                 except asyncio.CancelledError:
@@ -3066,8 +3253,11 @@ class RouterService:
             conversation_id: Any = None,
             dialog_channel_id: Any = None,
             thread_id: Any = None,
+            persist: bool = False,
+            suppress_unchanged: bool = False,
         ) -> None:
-            current = _voice_chat_stream_cache.get((str(webspace_id or "").strip(), str(target_node_id or "").strip())) or {}
+            cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
+            current = _voice_chat_stream_cache.get(cache_key) or {}
             raw_messages = current.get("messages") if isinstance(current, dict) else None
             messages = [dict(item) for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
             resolved_conversation_id = _resolve_voice_chat_conversation_id(
@@ -3083,6 +3273,45 @@ class RouterService:
                 current if isinstance(current, dict) else {},
                 *messages,
             )
+            if messages:
+                cached_conversation_id = str(current.get("conversation_id") or "").strip() if isinstance(current, dict) else ""
+                if not cached_conversation_id:
+                    cached_conversation_id, _channel_id, _topic_id = _voice_chat_projection_identity(messages)
+                if cached_conversation_id and cached_conversation_id != resolved_conversation_id:
+                    return
+                cached_topic_id = _voice_chat_topic_id_from_sources(current if isinstance(current, dict) else {}, *messages)
+                if resolved_topic_id and cached_topic_id and cached_topic_id != resolved_topic_id:
+                    return
+                before_cursor = str(current.get("before_cursor") or "") if isinstance(current, dict) else ""
+                has_more_before = bool(current.get("has_more_before")) if isinstance(current, dict) else False
+                total_message_count = int(current.get("total_message_count") or len(messages)) if isinstance(current, dict) else len(messages)
+                signature = str(current.get("stream_signature") or "") if isinstance(current, dict) else ""
+                if not signature:
+                    signature = _voice_chat_persist_signature(
+                        messages,
+                        before_cursor=before_cursor,
+                        has_more_before=has_more_before,
+                        total_message_count=total_message_count,
+                    )
+                if suppress_unchanged:
+                    last = _voice_chat_snapshot_published.get(cache_key)
+                    min_interval = _voice_chat_snapshot_republish_interval_s()
+                    now_monotonic = time.monotonic()
+                    if last and last[1] == signature and (now_monotonic - float(last[0] or 0.0)) < min_interval:
+                        return
+                last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
+                published_signature = _publish_voice_chat_stream(
+                    webspace_id,
+                    target_node_id,
+                    messages,
+                    last_refresh_ts,
+                    before_cursor=before_cursor,
+                    has_more_before=has_more_before,
+                    total_message_count=total_message_count,
+                )
+                if suppress_unchanged:
+                    _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
+                return
             try:
                 projection = conversation_store.recover_projection_from_store(
                     current if isinstance(current, dict) else {},
@@ -3106,36 +3335,29 @@ class RouterService:
                     has_more_before=bool(projection.get("has_more_before")),
                     total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
                 )
-                _schedule_voice_chat_persist(
-                    webspace_id,
-                    target_node_id,
-                    stream_messages,
-                    last_refresh_ts,
-                    before_cursor=str(projection.get("before_cursor") or ""),
-                    has_more_before=bool(projection.get("has_more_before")),
-                    total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
-                )
+                if suppress_unchanged:
+                    _voice_chat_snapshot_published[cache_key] = (
+                        time.monotonic(),
+                        _voice_chat_persist_signature(
+                            stream_messages,
+                            before_cursor=str(projection.get("before_cursor") or ""),
+                            has_more_before=bool(projection.get("has_more_before")),
+                            total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
+                        ),
+                    )
+                if persist:
+                    _schedule_voice_chat_persist(
+                        webspace_id,
+                        target_node_id,
+                        stream_messages,
+                        last_refresh_ts,
+                        before_cursor=str(projection.get("before_cursor") or ""),
+                        has_more_before=bool(projection.get("has_more_before")),
+                        total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
+                    )
                 return
             if not messages:
                 return
-            cached_conversation_id = str(current.get("conversation_id") or "").strip() if isinstance(current, dict) else ""
-            if not cached_conversation_id and messages:
-                cached_conversation_id = str(messages[-1].get("conversation_id") or "").strip()
-            if cached_conversation_id and cached_conversation_id != resolved_conversation_id:
-                return
-            cached_topic_id = _voice_chat_topic_id_from_sources(current if isinstance(current, dict) else {}, *messages)
-            if resolved_topic_id and cached_topic_id and cached_topic_id != resolved_topic_id:
-                return
-            last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
-            _publish_voice_chat_stream(
-                webspace_id,
-                target_node_id,
-                messages,
-                last_refresh_ts,
-                before_cursor=str(current.get("before_cursor") or ""),
-                has_more_before=bool(current.get("has_more_before")),
-                total_message_count=int(current.get("total_message_count") or len(messages)),
-            )
 
         async def _publish_voice_chat_history_more(
             webspace_id: str,
@@ -3193,15 +3415,6 @@ class RouterService:
                 has_more_before=bool(projection.get("has_more_before")),
                 total_message_count=int(projection.get("total_message_count") or len(window)),
             )
-            _schedule_voice_chat_persist(
-                webspace_id,
-                target_node_id,
-                window,
-                last_refresh_ts,
-                before_cursor=str(projection.get("before_cursor") or ""),
-                has_more_before=bool(projection.get("has_more_before")),
-                total_message_count=int(projection.get("total_message_count") or len(window)),
-            )
 
         async def _append_voice_chat_message(
             webspace_id: str,
@@ -3241,68 +3454,88 @@ class RouterService:
                 clean_msg["conversation_topic_id"] = topic_id
                 clean_msg["topic_id"] = topic_id
             turn_trace_id = str(meta.get("turn_trace_id") or clean_msg.get("turn_trace_id") or "").strip()
-            existing_trace = None
-            if turn_trace_id:
-                try:
-                    existing_trace = conversation_store.get_turn_trace(turn_trace_id)
-                except Exception:
-                    existing_trace = None
-            if not turn_trace_id or existing_trace is None:
-                try:
-                    turn_trace_id = conversation_store.start_turn_trace(
-                        turn_trace_id=turn_trace_id or None,
-                        webspace_id=str(webspace_id or "default").strip() or "default",
-                        conversation_id=conversation_id,
-                        channel_id=channel_id,
-                        agent_id=str(agent.get("id") or "") or None,
-                        selected_tool=str(
-                            meta.get("tool")
-                            or meta.get("default_tool")
-                            or (context.get("channel") or {}).get("default_tool")
-                            or ""
-                        ),
-                        policy_decision={
-                            "selected_channel": channel_id,
-                            "selected_owner": owner,
-                            "selected_agent_id": str(agent.get("id") or ""),
-                            "route_id": route_id,
-                        },
-                        renderer={"receiver": "voice_chat.messages", "projection": "compact_tail"},
-                        message_id=str(clean_msg.get("id") or "") or None,
-                    ) or ""
-                except Exception:
-                    turn_trace_id = ""
             if turn_trace_id:
                 clean_msg["turn_trace_id"] = turn_trace_id
+            worker_webspace_id = str(webspace_id or "default").strip() or "default"
+            worker_msg = dict(clean_msg)
+            worker_meta = dict(meta)
+            worker_context_channel = dict(context.get("channel") or {})
+            worker_agent = dict(agent)
+            optimistic_published = False
             try:
+                _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
+                optimistic_published = True
+            except Exception:
+                optimistic_published = False
+
+            def _append_voice_chat_message_sync() -> dict[str, Any]:
+                local_msg = dict(worker_msg)
+                local_meta = dict(worker_meta)
+                local_turn_trace_id = str(local_msg.get("turn_trace_id") or "").strip()
+                if not local_turn_trace_id:
+                    local_turn_trace_id = turn_trace_id
+                local_existing_trace = None
+                if local_turn_trace_id:
+                    try:
+                        local_existing_trace = conversation_store.get_turn_trace(local_turn_trace_id)
+                    except Exception:
+                        local_existing_trace = None
+                if not local_turn_trace_id or local_existing_trace is None:
+                    try:
+                        local_turn_trace_id = conversation_store.start_turn_trace(
+                            turn_trace_id=local_turn_trace_id or None,
+                            webspace_id=worker_webspace_id,
+                            conversation_id=conversation_id,
+                            channel_id=channel_id,
+                            agent_id=str(worker_agent.get("id") or "") or None,
+                            selected_tool=str(
+                                local_meta.get("tool")
+                                or local_meta.get("default_tool")
+                                or worker_context_channel.get("default_tool")
+                                or ""
+                            ),
+                            policy_decision={
+                                "selected_channel": channel_id,
+                                "selected_owner": owner,
+                                "selected_agent_id": str(worker_agent.get("id") or ""),
+                                "route_id": route_id,
+                            },
+                            renderer={"receiver": "voice_chat.messages", "projection": "compact_tail"},
+                            message_id=str(local_msg.get("id") or "") or None,
+                        ) or ""
+                    except Exception:
+                        local_turn_trace_id = ""
+                if local_turn_trace_id:
+                    local_msg["turn_trace_id"] = local_turn_trace_id
+
                 conversation_store.upsert_conversation(
                     conversation_id=conversation_id,
-                    webspace_id=str(webspace_id or "default").strip() or "default",
+                    webspace_id=worker_webspace_id,
                     owner=owner,
                     kind="dialog",
                     title="General" if channel_id == GENERAL_DIALOG_CHANNEL_ID else channel_id,
-                    active_agent_id=str(agent.get("id") or "") or None,
+                    active_agent_id=str(worker_agent.get("id") or "") or None,
                     meta={"route_id": route_id, "channel_id": channel_id},
                 )
-                _store_dialog_channel_projection(str(webspace_id or "default").strip() or "default", context.get("channel") or {})
+                _store_dialog_channel_projection(worker_webspace_id, worker_context_channel)
                 stored = conversation_store.append_message(
                     conversation_id=conversation_id,
                     thread_id=topic_id or None,
-                    webspace_id=str(webspace_id or "default").strip() or "default",
+                    webspace_id=worker_webspace_id,
                     channel_id=channel_id,
                     owner=owner,
-                    role=str(clean_msg.get("from") or "hub"),
-                    text=str(clean_msg.get("text") or ""),
-                    payload=clean_msg,
-                    meta=meta,
-                    actor_id=str(clean_msg.get("active_agent_id") or "") or None,
-                    actor_label=str(clean_msg.get("active_agent_label") or "") or None,
-                    actor_icon=str(clean_msg.get("active_agent_icon") or clean_msg.get("agent_icon") or "") or None,
+                    role=str(local_msg.get("from") or "hub"),
+                    text=str(local_msg.get("text") or ""),
+                    payload=local_msg,
+                    meta=local_meta,
+                    actor_id=str(local_msg.get("active_agent_id") or "") or None,
+                    actor_label=str(local_msg.get("active_agent_label") or "") or None,
+                    actor_icon=str(local_msg.get("active_agent_icon") or local_msg.get("agent_icon") or "") or None,
                     route_id=route_id,
-                    request_id=str(meta.get("request_id") or clean_msg.get("request_id") or "") or None,
-                    turn_trace_id=turn_trace_id or None,
-                    idempotency_key=str(meta.get("idempotency_key") or "") or None,
-                    ts=float(clean_msg.get("ts") or time.time()),
+                    request_id=str(local_meta.get("request_id") or local_msg.get("request_id") or "") or None,
+                    turn_trace_id=local_turn_trace_id or None,
+                    idempotency_key=str(local_meta.get("idempotency_key") or "") or None,
+                    ts=float(local_msg.get("ts") or time.time()),
                 )
                 projection = conversation_store.list_projection(
                     conversation_id,
@@ -3310,67 +3543,170 @@ class RouterService:
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
                 )
-            except Exception:
-                logging.getLogger("adaos.router.voice_chat").debug(
-                    "voice_chat ledger append failed; using live projection fallback",
-                    exc_info=True,
-                )
-                _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
-                return
-            stream_snapshot = [
-                dict(item)
-                for item in (projection.get("messages") if isinstance(projection, dict) else []) or []
-                if isinstance(item, dict)
-            ]
-            if not stream_snapshot and isinstance(stored, dict):
-                stream_snapshot = [dict(stored)]
-            last_refresh_ts = time.time()
-            _publish_voice_chat_stream(
-                webspace_id,
-                target_node_id,
-                stream_snapshot,
-                last_refresh_ts,
-                before_cursor=str(projection.get("before_cursor") or "") if isinstance(projection, dict) else "",
-                has_more_before=bool(projection.get("has_more_before")) if isinstance(projection, dict) else False,
-                total_message_count=int(projection.get("total_message_count") or len(stream_snapshot)) if isinstance(projection, dict) else len(stream_snapshot),
-            )
-            _schedule_voice_chat_persist(
-                webspace_id,
-                target_node_id,
-                stream_snapshot,
-                last_refresh_ts,
-                before_cursor=str(projection.get("before_cursor") or "") if isinstance(projection, dict) else "",
-                has_more_before=bool(projection.get("has_more_before")) if isinstance(projection, dict) else False,
-                total_message_count=int(projection.get("total_message_count") or len(stream_snapshot)) if isinstance(projection, dict) else len(stream_snapshot),
-            )
-            if turn_trace_id and str(clean_msg.get("from") or "").strip() == "hub":
+                stream_snapshot = [
+                    dict(item)
+                    for item in (projection.get("messages") if isinstance(projection, dict) else []) or []
+                    if isinstance(item, dict)
+                ]
+                ledger_backed = bool(stream_snapshot)
+                if not stream_snapshot and isinstance(stored, dict):
+                    stream_snapshot = [dict(stored)]
+                    ledger_backed = True
+                if not stream_snapshot:
+                    stream_snapshot = [dict(local_msg)]
+                finished_turn_trace = False
+                if local_turn_trace_id and str(local_msg.get("from") or "").strip() == "hub":
+                    try:
+                        conversation_store.finish_turn_trace(
+                            local_turn_trace_id,
+                            status="materialized",
+                            summary=f"Rendered to voice_chat.messages via {route_id}",
+                            renderer={
+                                "receiver": "voice_chat.messages",
+                                "projection": "compact_tail",
+                                "message_id": local_msg.get("id"),
+                            },
+                        )
+                        finished_turn_trace = True
+                    except Exception:
+                        finished_turn_trace = False
+                return {
+                    "clean_msg": local_msg,
+                    "stream_snapshot": stream_snapshot,
+                    "before_cursor": str(projection.get("before_cursor") or "") if isinstance(projection, dict) else "",
+                    "has_more_before": bool(projection.get("has_more_before")) if isinstance(projection, dict) else False,
+                    "total_message_count": int(projection.get("total_message_count") or len(stream_snapshot))
+                    if isinstance(projection, dict)
+                    else len(stream_snapshot),
+                    "turn_trace_id": local_turn_trace_id,
+                    "finished_turn_trace": finished_turn_trace,
+                    "ledger_backed": ledger_backed,
+                }
+
+            async def _materialize_voice_chat_append() -> None:
+                append_key = (worker_webspace_id, str(target_node_id or "").strip())
+                append_lock = self._voice_chat_append_locks.setdefault(append_key, asyncio.Lock())
+                async with append_lock:
+                    await _materialize_voice_chat_append_locked()
+
+            async def _materialize_voice_chat_append_locked() -> None:
                 try:
-                    conversation_store.finish_turn_trace(
-                        turn_trace_id,
-                        status="materialized",
-                        summary=f"Rendered to voice_chat.messages via {route_id}",
-                        renderer={
-                            "receiver": "voice_chat.messages",
-                            "projection": "compact_tail",
-                            "message_id": clean_msg.get("id"),
-                        },
+                    materialized = await asyncio.to_thread(_append_voice_chat_message_sync)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").debug(
+                        "voice_chat ledger append failed; using live projection fallback",
+                        exc_info=True,
                     )
+                    if not optimistic_published:
+                        _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
+                    return
+                if optimistic_published and not bool(materialized.get("ledger_backed")):
+                    return
+                materialized_msg = (
+                    dict(materialized.get("clean_msg") or {})
+                    if isinstance(materialized.get("clean_msg"), dict)
+                    else clean_msg
+                )
+                stream_snapshot = [
+                    dict(item)
+                    for item in (materialized.get("stream_snapshot") if isinstance(materialized, dict) else []) or []
+                    if isinstance(item, dict)
+                ]
+                if optimistic_published and stream_snapshot:
+                    current_cache = _voice_chat_stream_cache.get((str(webspace_id or "").strip(), str(target_node_id or "").strip())) or {}
+                    current_raw = current_cache.get("messages") if isinstance(current_cache, dict) else None
+                    current_messages = [
+                        dict(item)
+                        for item in current_raw
+                        if isinstance(item, dict)
+                    ] if isinstance(current_raw, list) else []
+                    if current_messages:
+                        def _order_value(item: Mapping[str, Any]) -> float:
+                            try:
+                                seq = float(item.get("seq") or 0.0)
+                            except Exception:
+                                seq = 0.0
+                            if seq > 0:
+                                return seq
+                            try:
+                                return float(item.get("ts") or 0.0)
+                            except Exception:
+                                return 0.0
+
+                        current_last = current_messages[-1]
+                        next_last = stream_snapshot[-1]
+                        current_order = _order_value(current_last)
+                        next_order = _order_value(next_last)
+                        if current_order > 0 and next_order > 0 and next_order < current_order:
+                            return
+                        current_last_id = str(current_last.get("id") or "").strip()
+                        next_last_id = str(next_last.get("id") or "").strip()
+                        if (
+                            len(stream_snapshot) < len(current_messages)
+                            and current_last_id
+                            and current_last_id == next_last_id
+                        ):
+                            return
+                last_refresh_ts = time.time()
+                _publish_voice_chat_stream(
+                    webspace_id,
+                    target_node_id,
+                    stream_snapshot,
+                    last_refresh_ts,
+                    before_cursor=str(materialized.get("before_cursor") or "") if isinstance(materialized, dict) else "",
+                    has_more_before=bool(materialized.get("has_more_before")) if isinstance(materialized, dict) else False,
+                    total_message_count=int(materialized.get("total_message_count") or len(stream_snapshot))
+                    if isinstance(materialized, dict)
+                    else len(stream_snapshot),
+                    suppress_unchanged=True,
+                )
+                _schedule_voice_chat_persist(
+                    webspace_id,
+                    target_node_id,
+                    stream_snapshot,
+                    last_refresh_ts,
+                    before_cursor=str(materialized.get("before_cursor") or "") if isinstance(materialized, dict) else "",
+                    has_more_before=bool(materialized.get("has_more_before")) if isinstance(materialized, dict) else False,
+                    total_message_count=int(materialized.get("total_message_count") or len(stream_snapshot))
+                    if isinstance(materialized, dict)
+                    else len(stream_snapshot),
+                )
+                if bool(materialized.get("finished_turn_trace")):
                     _schedule_dialog_state_write(webspace_id, event="turn_materialized")
+
+                count = len(stream_snapshot)
+                try:
+                    self._vlog.debug(
+                        "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
+                        webspace_id,
+                        str(target_node_id or "").strip() or None,
+                        count,
+                        materialized_msg.get("from"),
+                        materialized_msg.get("text"),
+                    )
                 except Exception:
                     pass
 
-            count = len(stream_snapshot)
             try:
-                self._vlog.debug(
-                    "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
-                    webspace_id,
-                    str(target_node_id or "").strip() or None,
-                    count,
-                    clean_msg.get("from"),
-                    clean_msg.get("text"),
+                task = asyncio.create_task(
+                    _materialize_voice_chat_append(),
+                    name=f"voice-chat-append:{str(webspace_id or 'default')}:{str(target_node_id or 'shared')}",
                 )
-            except Exception:
-                pass
+            except RuntimeError:
+                await _materialize_voice_chat_append()
+                return
+            self._voice_chat_append_tasks.add(task)
+
+            def _forget_append_task(done: asyncio.Task[None]) -> None:
+                self._voice_chat_append_tasks.discard(done)
+                try:
+                    done.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    self._vlog.warning("voice_chat.append materialization task failed", exc_info=True)
+
+            task.add_done_callback(_forget_append_task)
 
         def _voice_intent_demo_enabled() -> bool:
             return str(os.getenv("ADAOS_VOICE_CHAT_INTENT_DEMO") or "0").strip().lower() in {
@@ -3461,7 +3797,7 @@ class RouterService:
                 webspace_id,
                 _mutator,
                 channel="core.router.tts.store",
-                prefer_live_room=False,
+                prefer_live_room=True,
             )
 
         async def _append_tts_queue_item(webspace_id: str, item: dict) -> None:
@@ -3479,7 +3815,7 @@ class RouterService:
                 webspace_id,
                 _mutator,
                 channel="core.router.tts.store",
-                prefer_live_room=False,
+                prefer_live_room=True,
             )
 
         def _local_stream_node_id() -> str:
@@ -4003,6 +4339,7 @@ class RouterService:
                     conversation_id=payload.get("conversation_id") or meta.get("conversation_id"),
                     dialog_channel_id=payload.get("dialog_channel_id") or meta.get("dialog_channel_id"),
                     thread_id=_voice_chat_topic_id_from_sources(payload, meta),
+                    persist=True,
                 )
 
         async def _on_io_out_chat_append(ev: Event) -> None:
@@ -4380,6 +4717,8 @@ class RouterService:
                     conversation_id=conversation_id,
                     dialog_channel_id=dialog_channel_id,
                     thread_id=thread_id,
+                    persist=_voice_chat_persist_stream_snapshots_enabled(),
+                    suppress_unchanged=ev.type == "webio.stream.snapshot.requested",
                 )
 
         async def _on_conversation_history_more(ev: Event) -> None:
@@ -4860,6 +5199,7 @@ class RouterService:
                 materialized_chat_appends=materialized_chat_appends,
             )
             result_message = str(result.get("message") or "").strip()
+            suppress_visible_result_message = conversation_response.tool_result_suppresses_visible_message(result)
             materialized_payload = None
             if result_message:
                 materialized_payload = next(
@@ -4887,6 +5227,7 @@ class RouterService:
                 "result_ok": True,
                 "result_status": "ok",
                 "result_has_message": bool(result_message),
+                "result_message_receipt_only": bool(suppress_visible_result_message),
                 "response_envelope_materialized": bool(
                     isinstance(materialization, dict) and materialization.get("materialized")
                 ),
@@ -4900,6 +5241,14 @@ class RouterService:
                 }
                 trace_summary = f"{skill}.{tool} returned ok and materialized visible output"
                 trace_policy["materialization_status"] = "materialized"
+            elif result_message and suppress_visible_result_message:
+                trace_renderer = {
+                    "receiver": "skill_runtime",
+                    "projection": "receipt_only",
+                }
+                trace_summary = f"{skill}.{tool} returned receipt-only message; visible output suppressed"
+                trace_policy["materialization_status"] = "suppressed"
+                trace_policy["diagnostic"] = "skill_result_message_receipt_only"
             elif result_message:
                 trace_status = "unmaterialized"
                 trace_renderer = {
@@ -5949,6 +6298,22 @@ class RouterService:
             except Exception:
                 pass
             self._notify_tasks.clear()
+        if self._voice_chat_append_tasks:
+            try:
+                timeout_s = max(0.0, float(os.getenv("ADAOS_VOICE_CHAT_APPEND_DRAIN_TIMEOUT_S") or "1.0"))
+            except Exception:
+                timeout_s = 1.0
+            pending = list(self._voice_chat_append_tasks)
+            try:
+                await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+            except Exception:
+                pass
+            self._voice_chat_append_tasks.clear()
+            self._voice_chat_append_locks.clear()
         if self._voice_chat_persist_tasks:
             try:
                 timeout_s = max(0.0, float(os.getenv("ADAOS_VOICE_CHAT_PERSIST_DRAIN_TIMEOUT_S") or "1.0"))
@@ -5964,6 +6329,9 @@ class RouterService:
             except Exception:
                 pass
             self._voice_chat_persist_tasks.clear()
+            self._voice_chat_persist_tasks_by_key.clear()
+            self._voice_chat_persist_pending.clear()
+            self._voice_chat_persist_next_allowed_at.clear()
         if self._dialog_state_tasks:
             try:
                 timeout_s = max(0.0, float(os.getenv("ADAOS_DIALOG_STATE_DRAIN_TIMEOUT_S") or "1.0"))

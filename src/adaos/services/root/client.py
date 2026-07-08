@@ -41,6 +41,18 @@ def _log_root_http_success(method: str, path: str, duration_s: float, status_cod
     )
 
 
+def _env_timeout_s(name: str, default: float, *, minimum: float = 0.25, maximum: float = 120.0) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except Exception:
+            value = default
+    else:
+        value = default
+    return max(float(minimum), min(float(value), float(maximum)))
+
+
 @dataclass(slots=True)
 class RootHttpClient:
     """HTTP client for the Inimatic Root API."""
@@ -802,7 +814,7 @@ class RootHttpClient:
                 headers=headers,
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
-                timeout=30.0,
+                timeout=_env_timeout_s("ADAOS_HUB_CONTROL_REPORT_TIMEOUT_S", 5.0, minimum=0.25, maximum=30.0),
             )
         )
 

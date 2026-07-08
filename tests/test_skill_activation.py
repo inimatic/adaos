@@ -5,6 +5,8 @@ from pathlib import Path
 from adaos.services.skill.activation import (
     allows_background_refresh,
     load_skill_activation_policy,
+    load_skill_stream_receiver_patterns,
+    stream_receiver_event_admission,
     subscription_event_admission,
     subscription_strategy_for_policy,
 )
@@ -104,3 +106,54 @@ def test_subscription_event_admission_respects_active_scenario(monkeypatch) -> N
     admitted = subscription_event_admission(policy, evt, "webio.stream.snapshot.requested")
     assert admitted["allowed"] is True
     assert admitted["snapshot_request"] is True
+
+
+def test_load_skill_stream_receiver_patterns_reads_webui_and_data_routes(tmp_path: Path) -> None:
+    skills_root = tmp_path / "skills"
+    skill_dir = skills_root / "demo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "webui.json").write_text(
+        '{"webio":{"receivers":{"demo.notes":{},"demo.metrics":{}}}}',
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: demo_skill",
+                "data_routes:",
+                "- route: stream",
+                "  receiver: demo.details.*",
+                "- route: yjs",
+                "  receiver: demo.yjs_ignored",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_skill_stream_receiver_patterns(skills_root, "demo_skill") == (
+        "demo.notes",
+        "demo.metrics",
+        "demo.details.*",
+    )
+
+
+def test_stream_receiver_event_admission_rejects_foreign_receiver() -> None:
+    from types import SimpleNamespace
+
+    foreign_evt = SimpleNamespace(
+        type="webio.stream.snapshot.requested",
+        payload={"receiver": "browsers.summary"},
+    )
+    own_evt = SimpleNamespace(
+        type="webio.stream.snapshot.requested",
+        payload={"receiver": "demo.details.42"},
+    )
+
+    denied = stream_receiver_event_admission(("demo.notes", "demo.details.*"), foreign_evt, "webio.stream.snapshot.requested")
+    admitted = stream_receiver_event_admission(("demo.notes", "demo.details.*"), own_evt, "webio.stream.snapshot.requested")
+
+    assert denied["allowed"] is False
+    assert denied["reason"] == "stream_receiver_not_declared"
+    assert admitted["allowed"] is True
+    assert admitted["matched_pattern"] == "demo.details.*"

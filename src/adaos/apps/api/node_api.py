@@ -69,6 +69,7 @@ from adaos.services.scenario.webspace_runtime import (
     describe_webspace_projection_state,
     describe_webspace_rebuild_state,
     ensure_dev_webspace_for_scenario,
+    get_webspace_rebuild_materialized_payload,
     go_home_webspace,
     reload_webspace_from_scenario,
     restore_webspace_from_snapshot,
@@ -196,11 +197,17 @@ _BROWSER_RESOURCE_MAX_BYTES = int(
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        return dict(value)
+    cloned = _clone_json_like(value)
+    return dict(cloned) if isinstance(cloned, dict) else {}
 
 
 def _coerce_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
+    if isinstance(value, list):
+        return list(value)
+    cloned = _clone_json_like(value)
+    return list(cloned) if isinstance(cloned, list) else []
 
 
 def _clone_json_like(value: Any) -> Any:
@@ -231,8 +238,13 @@ def _clone_json_like(value: Any) -> Any:
             try:
                 return {str(k): _clone_json_like(v) for k, v in items() if str(k)}
             except Exception:
-                return value
-        return value
+                return {}
+        if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, bytearray)):
+            try:
+                return [_clone_json_like(v) for v in value]
+            except Exception:
+                return []
+        return str(value)
 
 
 def _coerce_node_webspace_id(value: Any = None) -> str:
@@ -2450,7 +2462,7 @@ async def _describe_yjs_materialization(
             has_widgets_catalog_modal = "widgets_catalog" in modals
             has_catalog_apps = isinstance(catalog.get("apps"), list)
             has_catalog_widgets = isinstance(catalog.get("widgets"), list)
-            has_data_desktop = isinstance(data_desktop_raw, dict)
+            has_data_desktop = isinstance(_clone_json_like(data_desktop_raw), dict)
             has_installed_apps = isinstance(installed.get("apps"), list)
             has_installed_widgets = isinstance(installed.get("widgets"), list)
             missing_branches = _collect_materialization_missing_branches(
@@ -2603,6 +2615,172 @@ async def _read_yjs_materialization_snapshot(
         }
 
 
+def _materialized_payload_to_snapshot(
+    webspace_id: str,
+    payload: Mapping[str, Any] | None,
+    *,
+    scope: str = "essential",
+) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping) or not payload:
+        return None
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    scenario_id = str(payload.get("scenario_id") or "").strip()
+    if not scenario_id:
+        return None
+    metadata = _coerce_dict(payload.get("metadata") or {})
+    materialization = _coerce_dict(metadata.get("materialization") or {})
+    materialization["scenario_id"] = str(materialization.get("scenario_id") or scenario_id).strip() or scenario_id
+    runtime = {
+        "environment": {
+            "materialization": materialization,
+        },
+    }
+    ui = {
+        "current_scenario": scenario_id,
+        "application": _coerce_dict(_clone_json_like(payload.get("application") or {})),
+    }
+    data = {
+        "catalog": _coerce_dict(_clone_json_like(payload.get("catalog") or {})),
+        "desktop": _coerce_dict(_clone_json_like(payload.get("desktop") or {})),
+        "installed": _coerce_dict(_clone_json_like(payload.get("installed") or {})),
+        "nodes": {},
+        "webspaces": {},
+        "webio": _coerce_dict(_clone_json_like(payload.get("webio") or {})),
+        "routing": _coerce_dict(_clone_json_like(payload.get("routing") or {})),
+    }
+    registry_payload = _coerce_dict(_clone_json_like(payload.get("registry") or {}))
+    registry = {"merged": registry_payload} if registry_payload else {}
+    if str(scope or "").strip().lower() == "full":
+        return {
+            "ui": ui,
+            "data": data,
+            "registry": registry,
+            "runtime": runtime,
+        }
+    return {
+        "ui": ui,
+        "data": data,
+        "registry": registry,
+        "runtime": runtime,
+    }
+
+
+def _describe_materialization_snapshot_payload(
+    webspace_id: str,
+    snapshot: Mapping[str, Any] | None,
+    *,
+    rebuild_state: Mapping[str, Any] | None = None,
+    source: str = "disk_snapshot",
+) -> dict[str, Any]:
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    payload = snapshot if isinstance(snapshot, Mapping) else {}
+    ui = _coerce_dict(payload.get("ui") or {})
+    data = _coerce_dict(payload.get("data") or {})
+    registry = _coerce_dict(payload.get("registry") or {})
+    application = _coerce_dict(ui.get("application") or {})
+    desktop = _coerce_dict(application.get("desktop") or {})
+    modals = _coerce_dict(application.get("modals") or {})
+    catalog = _coerce_dict(data.get("catalog") or {})
+    apps = _coerce_list(catalog.get("apps"))
+    widgets = _coerce_list(catalog.get("widgets"))
+    data_desktop_raw = data.get("desktop")
+    installed_raw = data.get("installed")
+    installed = _coerce_dict(installed_raw or {})
+    installed_apps = _coerce_list(installed.get("apps"))
+    installed_widgets = _coerce_list(installed.get("widgets"))
+    page_schema = _coerce_dict(desktop.get("pageSchema") or {})
+    page_widgets = _coerce_list(page_schema.get("widgets"))
+    topbar = _coerce_list(desktop.get("topbar"))
+    current_scenario = str(ui.get("current_scenario") or "").strip() or None
+    scenarios_ui = _coerce_dict(ui.get("scenarios") or {})
+    scenario_ui_entry = _read_node_scoped_scenario_entry(scenarios_ui, current_scenario) if current_scenario else {}
+    scenario_ui_application = _coerce_dict(scenario_ui_entry.get("application") or {})
+    scenario_registry_map = _coerce_dict(registry.get("scenarios") or {})
+    scenario_registry_entry = _read_node_scoped_scenario_entry(scenario_registry_map, current_scenario) if current_scenario else {}
+    scenario_data_map = _coerce_dict(data.get("scenarios") or {})
+    scenario_data_entry = _read_node_scoped_scenario_entry(scenario_data_map, current_scenario) if current_scenario else {}
+    scenario_catalog = _coerce_dict(scenario_data_entry.get("catalog") or {})
+
+    has_ui_application = bool(application)
+    has_desktop_config = bool(desktop)
+    has_desktop_page_schema = bool(page_schema)
+    has_apps_catalog_modal = "apps_catalog" in modals
+    has_widgets_catalog_modal = "widgets_catalog" in modals
+    has_catalog_apps = isinstance(catalog.get("apps"), list)
+    has_catalog_widgets = isinstance(catalog.get("widgets"), list)
+    has_data_desktop = isinstance(data_desktop_raw, dict)
+    has_installed_apps = isinstance(installed.get("apps"), list)
+    has_installed_widgets = isinstance(installed.get("widgets"), list)
+    missing_branches = _collect_materialization_missing_branches(
+        has_ui_application=has_ui_application,
+        has_desktop_config=has_desktop_config,
+        has_desktop_page_schema=has_desktop_page_schema,
+        has_apps_catalog_modal=has_apps_catalog_modal,
+        has_widgets_catalog_modal=has_widgets_catalog_modal,
+        has_catalog_apps=has_catalog_apps,
+        has_catalog_widgets=has_catalog_widgets,
+        has_data_desktop=has_data_desktop,
+        has_installed_apps=has_installed_apps,
+        has_installed_widgets=has_installed_widgets,
+    )
+    ready = not missing_branches
+    readiness_state = _derive_materialization_readiness_state(
+        ready=ready,
+        current_scenario=current_scenario,
+        has_ui_application=has_ui_application,
+        has_desktop_config=has_desktop_config,
+        has_desktop_page_schema=has_desktop_page_schema,
+        has_apps_catalog_modal=has_apps_catalog_modal,
+        has_widgets_catalog_modal=has_widgets_catalog_modal,
+        has_catalog_apps=has_catalog_apps,
+        has_catalog_widgets=has_catalog_widgets,
+        has_data_desktop=has_data_desktop,
+        has_installed_apps=has_installed_apps,
+        has_installed_widgets=has_installed_widgets,
+    )
+    compatibility_caches = _describe_compatibility_caches(
+        current_scenario=current_scenario,
+        has_scenario_ui_application=bool(scenario_ui_application),
+        has_scenario_registry_entry=bool(scenario_registry_entry),
+        has_scenario_catalog=bool(scenario_catalog),
+        effective_ready=ready,
+        rebuild_state=rebuild_state,
+    )
+    return {
+        "ready": ready,
+        "readiness_state": readiness_state,
+        "missing_branches": missing_branches,
+        "compatibility_caches": compatibility_caches,
+        "webspace_id": target_webspace_id,
+        "current_scenario": current_scenario,
+        "has_ui_application": has_ui_application,
+        "has_desktop_config": has_desktop_config,
+        "has_desktop_page_schema": has_desktop_page_schema,
+        "has_apps_catalog_modal": has_apps_catalog_modal,
+        "has_widgets_catalog_modal": has_widgets_catalog_modal,
+        "has_catalog_apps": has_catalog_apps,
+        "has_catalog_widgets": has_catalog_widgets,
+        "has_data_desktop": has_data_desktop,
+        "has_installed_apps": has_installed_apps,
+        "has_installed_widgets": has_installed_widgets,
+        "catalog_counts": {
+            "apps": len(apps),
+            "widgets": len(widgets),
+        },
+        "installed_counts": {
+            "apps": len(installed_apps),
+            "widgets": len(installed_widgets),
+        },
+        "topbar_count": len(topbar),
+        "page_widget_count": len(page_widgets),
+        "snapshot_source": source,
+        "observed_at": time.time(),
+        "stale": not ready,
+        "stale_reason": "" if ready else "disk_snapshot_missing_required_branches",
+        "cache_fresh": ready,
+    }
+
+
 def _materialization_seed_health(
     *,
     state: str,
@@ -2671,8 +2849,8 @@ async def _read_live_catalog_items(webspace_id: str, kind: str) -> list[dict[str
     try:
         async with async_read_ydoc(target_webspace_id) as ydoc:
             data_map = ydoc.get_map("data")
-            catalog = _coerce_dict(data_map.get("catalog") or {})
-            items = catalog.get(bucket)
+            catalog = _coerce_dict(_clone_json_like(data_map.get("catalog") or {}))
+            items = _clone_json_like(catalog.get(bucket))
             return [dict(it) for it in _coerce_list(items) if isinstance(it, dict)]
     except Exception:
         return []
@@ -2681,6 +2859,27 @@ async def _read_live_catalog_items(webspace_id: str, kind: str) -> list[dict[str
 async def _materialize_catalog_items(webspace_id: str, kind: str) -> list[dict[str, Any]]:
     bucket = "widgets" if str(kind or "").strip().lower() == "widgets" else "apps"
     raw_items = await _read_live_catalog_items(webspace_id, bucket)
+    if not raw_items:
+        try:
+            operational_state = await describe_webspace_operational_state(webspace_id)
+            expected_scenario = (
+                str(getattr(operational_state, "current_scenario", None) or "").strip()
+                or str(getattr(operational_state, "effective_home_scenario", None) or "").strip()
+            )
+            payload_snapshot = _materialized_payload_to_snapshot(
+                webspace_id,
+                get_webspace_rebuild_materialized_payload(webspace_id),
+                scope="full",
+            )
+            payload_ui = _coerce_dict(_coerce_dict(payload_snapshot or {}).get("ui") or {})
+            payload_scenario = str(payload_ui.get("current_scenario") or "").strip()
+            payload_data = _coerce_dict(_coerce_dict(payload_snapshot or {}).get("data") or {})
+            payload_catalog = _coerce_dict(payload_data.get("catalog") or {})
+            payload_items = _coerce_list(payload_catalog.get(bucket))
+            if expected_scenario and payload_scenario == expected_scenario and payload_items:
+                raw_items = [dict(it) for it in payload_items if isinstance(it, dict)]
+        except Exception:
+            raw_items = []
     desktop_snapshot = await WebDesktopService().get_snapshot_async(webspace_id)
     installed_ids = set(
         list(getattr(getattr(desktop_snapshot, "installed", None), "apps", []) or [])
@@ -2820,6 +3019,8 @@ class WebspaceYjsActionRequest(BaseModel):
     recreate_room: bool | None = None
     requested_id: str | None = None
     title: str | None = None
+    request_id: str | None = None
+    request_source: str | None = None
 
 
 class WebspaceCreateRequest(BaseModel):
@@ -3943,8 +4144,40 @@ def _windows_virtual_memory_summary() -> dict[str, Any]:
 
 
 @router.get("/memory/diagnostics", dependencies=[Depends(require_token)])
-async def node_memory_diagnostics() -> dict[str, Any]:
+async def node_memory_diagnostics(force_gc: bool = Query(False)) -> dict[str, Any]:
     """Return bounded heap/native-memory diagnostics for debug builds."""
+    forced_gc: dict[str, Any] | None = None
+    if force_gc:
+        started = time.perf_counter()
+        allow_unsafe_gc = str(os.getenv("ADAOS_MEMORY_DIAGNOSTICS_FORCE_GC_ALLOW_UNSAFE") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if "y_py" in sys.modules and not allow_unsafe_gc:
+            forced_gc = {
+                "requested": True,
+                "skipped": "unsafe:y_py_loaded",
+                "allow_env": "ADAOS_MEMORY_DIAGNOSTICS_FORCE_GC_ALLOW_UNSAFE",
+                "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+            }
+        else:
+            try:
+                collected = int(gc.collect() or 0)
+                forced_gc = {
+                    "requested": True,
+                    "collected": collected,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+                }
+            except BaseException as exc:
+                if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit)):
+                    raise
+                forced_gc = {
+                    "requested": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+                }
     base = await node_memory_status()
     errors: dict[str, str] = dict(base.get("errors") or {})
     gc_types: list[dict[str, Any]] = []
@@ -3955,6 +4188,7 @@ async def node_memory_diagnostics() -> dict[str, Any]:
     return {
         **base,
         "diagnostics": {
+            "forced_gc": forced_gc or {"requested": False},
             "loaded_modules": _memory_loaded_module_flags(),
             "allocated_blocks": int(getattr(sys, "getallocatedblocks", lambda: 0)()),
             "gc_objects_total": len(gc.get_objects()),
@@ -4559,36 +4793,131 @@ async def node_yjs_webspace_materialization_snapshot(
     rebuild = describe_webspace_rebuild_state(target_webspace_id)
     degraded = False
     try:
-        snapshot = await asyncio.wait_for(
-            _read_yjs_materialization_snapshot(
-                target_webspace_id,
-                scope=snapshot_scope,
-                prefer_live_room=False,
-            ),
-            timeout=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+        operational_state = await describe_webspace_operational_state(target_webspace_id)
+        expected_effective_scenario = (
+            str(getattr(operational_state, "current_scenario", None) or "").strip()
+            or str(getattr(operational_state, "effective_home_scenario", None) or "").strip()
+            or None
         )
         materialization = await _describe_yjs_materialization(
             target_webspace_id,
             rebuild_state=rebuild,
             verify_live=False,
         )
-        seed_health = _materialization_seed_health(
-            state="ready" if bool(materialization.get("ready")) else "degraded",
-            reason=(
-                "disk_snapshot_read"
-                if bool(materialization.get("ready"))
-                else str(materialization.get("readiness_state") or "materialization_cache_missing")
-            ),
-            source="disk_snapshot",
-            stale=not bool(materialization.get("ready")),
-            last_good_snapshot_at=(
-                materialization.get("observed_at")
-                or rebuild.get("finished_at")
-                or rebuild.get("updated_at")
-            ),
-            timeout_s=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+        expected_snapshot_scenario = (
+            expected_effective_scenario
+            or str(materialization.get("current_scenario") or "").strip()
+            or str(rebuild.get("scenario_id") or "").strip()
+            or None
         )
-        degraded = bool(seed_health.get("state") != "ready")
+        payload_snapshot = _materialized_payload_to_snapshot(
+            target_webspace_id,
+            get_webspace_rebuild_materialized_payload(target_webspace_id),
+            scope=snapshot_scope,
+        )
+        if payload_snapshot is not None:
+            payload_materialization = _describe_materialization_snapshot_payload(
+                target_webspace_id,
+                payload_snapshot,
+                rebuild_state=rebuild,
+                source="rebuild_materialized_payload",
+            )
+            payload_scenario = str(payload_materialization.get("current_scenario") or "").strip() or None
+            if (
+                bool(payload_materialization.get("ready"))
+                and (
+                    bool(expected_snapshot_scenario)
+                    and bool(payload_scenario)
+                    and payload_scenario == expected_snapshot_scenario
+                )
+            ):
+                snapshot = payload_snapshot
+                if not bool(materialization.get("ready")):
+                    materialization = payload_materialization
+                else:
+                    materialization = dict(materialization)
+                    materialization["snapshot_validation"] = {
+                        "ready": True,
+                        "readiness_state": payload_materialization.get("readiness_state"),
+                        "missing_branches": [],
+                        "snapshot_source": "rebuild_materialized_payload",
+                    }
+                seed_health = _materialization_seed_health(
+                    state="ready",
+                    reason="rebuild_materialized_payload",
+                    source="rebuild_materialized_payload",
+                    stale=False,
+                    last_good_snapshot_at=(
+                        materialization.get("observed_at")
+                        or rebuild.get("finished_at")
+                        or rebuild.get("updated_at")
+                    ),
+                    timeout_s=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+                )
+                degraded = False
+            else:
+                payload_snapshot = None
+        else:
+            payload_snapshot = None
+        if payload_snapshot is None:
+            snapshot = await asyncio.wait_for(
+                _read_yjs_materialization_snapshot(
+                    target_webspace_id,
+                    scope=snapshot_scope,
+                    prefer_live_room=False,
+                ),
+                timeout=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+            )
+            snapshot_materialization = _describe_materialization_snapshot_payload(
+                target_webspace_id,
+                snapshot,
+                rebuild_state=rebuild,
+                source="disk_snapshot",
+            )
+            snapshot_scenario = str(snapshot_materialization.get("current_scenario") or "").strip() or None
+            if expected_snapshot_scenario and snapshot_scenario and snapshot_scenario != expected_snapshot_scenario:
+                snapshot_materialization = dict(snapshot_materialization)
+                snapshot_materialization["ready"] = False
+                snapshot_materialization["readiness_state"] = "degraded"
+                missing = list(snapshot_materialization.get("missing_branches") or [])
+                if "ui.current_scenario" not in missing:
+                    missing.append("ui.current_scenario")
+                snapshot_materialization["missing_branches"] = missing
+                snapshot_materialization["materialization_mismatch"] = True
+                snapshot_materialization["expected_current_scenario"] = expected_snapshot_scenario
+                snapshot_materialization["stale"] = True
+                snapshot_materialization["stale_reason"] = "disk_snapshot_scenario_mismatch"
+                snapshot_materialization["cache_fresh"] = False
+            if bool(snapshot_materialization.get("ready")):
+                if not bool(materialization.get("ready")):
+                    materialization = snapshot_materialization
+                else:
+                    materialization = dict(materialization)
+                    materialization["snapshot_validation"] = {
+                        "ready": True,
+                        "readiness_state": snapshot_materialization.get("readiness_state"),
+                        "missing_branches": [],
+                        "snapshot_source": "disk_snapshot",
+                    }
+            else:
+                materialization = snapshot_materialization
+            seed_health = _materialization_seed_health(
+                state="ready" if bool(materialization.get("ready")) else "degraded",
+                reason=(
+                    "disk_snapshot_read"
+                    if bool(materialization.get("ready"))
+                    else str(materialization.get("readiness_state") or "materialization_cache_missing")
+                ),
+                source="disk_snapshot",
+                stale=not bool(materialization.get("ready")),
+                last_good_snapshot_at=(
+                    materialization.get("observed_at")
+                    or rebuild.get("finished_at")
+                    or rebuild.get("updated_at")
+                ),
+                timeout_s=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+            )
+            degraded = bool(seed_health.get("state") != "ready")
     except asyncio.TimeoutError:
         fallback = _fallback_materialization_snapshot_from_cache(
             target_webspace_id,
@@ -4928,7 +5257,11 @@ async def node_yjs_update_desktop(
 
 
 @router.post("/yjs/webspaces/{webspace_id}/scenario", dependencies=[Depends(require_token)])
-async def node_yjs_switch_scenario(webspace_id: str, payload: WebspaceYjsActionRequest) -> dict[str, Any]:
+async def node_yjs_switch_scenario(
+    webspace_id: str,
+    payload: WebspaceYjsActionRequest,
+    request: Request,
+) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
@@ -4948,11 +5281,25 @@ async def node_yjs_switch_scenario(webspace_id: str, payload: WebspaceYjsActionR
         }
     requested_wait_for_rebuild = bool(payload.wait_for_rebuild) if payload.wait_for_rebuild is not None else False
     effective_wait_for_rebuild = False
+    request_source = (
+        str(payload.request_source or "").strip()
+        or str(request.headers.get("x-adaos-source") or request.headers.get("x-request-source") or "").strip()
+        or "api.node.yjs.switch_scenario"
+    )
+    request_id = (
+        str(payload.request_id or "").strip()
+        or str(request.headers.get("x-request-id") or request.headers.get("x-trace-id") or "").strip()
+        or None
+    )
+    request_client = _request_client_label(request, endpoint="node_yjs_switch_scenario")
     result = await switch_webspace_scenario(
         target_webspace_id,
         scenario_id,
         set_home=payload.set_home,
         wait_for_rebuild=effective_wait_for_rebuild,
+        request_id=request_id,
+        request_source=request_source,
+        request_client=request_client,
     )
     result = _attach_wait_for_rebuild_guard(
         result,

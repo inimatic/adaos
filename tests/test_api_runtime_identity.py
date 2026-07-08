@@ -31,6 +31,7 @@ if "ypy_websocket" not in sys.modules:
 
 from adaos.apps.api import server as api_server
 from adaos.apps.api import node_api
+from adaos.services.system_model import service as system_model_service
 
 
 def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
@@ -84,6 +85,42 @@ def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
     assert payload["environment"]["envType"] == "dev"
     assert payload["environment"]["debug"] is True
     assert payload["runtime"]["environment"]["envType"] == "dev"
+
+
+def test_node_status_overlays_fresh_sidecar_runtime(monkeypatch) -> None:
+    fresh_sidecar = {
+        "enabled": True,
+        "status": "ready",
+        "route_tunnel_contract": {
+            "ws": {"current_owner": "sidecar", "handoff_ready": True},
+            "yws": {"current_owner": "sidecar", "handoff_ready": True},
+        },
+    }
+
+    monkeypatch.setattr(
+        system_model_service,
+        "_node_status_supervisor_runtime",
+        lambda _base_dir: {
+            "available": True,
+            "runtime": {
+                "runtime_state": "ready",
+                "sidecar": {"enabled": False, "status": "stale"},
+            },
+            "status": {},
+        },
+    )
+    monkeypatch.setattr(
+        system_model_service,
+        "sidecar_runtime_snapshot",
+        lambda **_kwargs: fresh_sidecar,
+    )
+
+    payload = node_api._node_status_payload()
+
+    assert payload["runtime"]["sidecar_runtime"] == fresh_sidecar
+    supervisor_runtime = payload["runtime"]["supervisor_runtime"]
+    assert supervisor_runtime["runtime"]["sidecar"] == fresh_sidecar
+    assert supervisor_runtime["runtime"]["sidecar_source"] == "reliability.sidecar_runtime_snapshot"
 
 
 @pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])

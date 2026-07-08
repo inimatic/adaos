@@ -31,16 +31,30 @@ pytestmark = pytest.mark.anyio
 
 
 async def _drain_voice_chat_persist(router: RouterService) -> None:
-    pending = list(getattr(router, "_voice_chat_persist_tasks", set()))
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-    dialog_pending = [
-        task
-        for task in getattr(router, "_dialog_state_tasks", {}).values()
-        if task is not None and not task.done()
-    ]
-    if dialog_pending:
-        await asyncio.gather(*dialog_pending, return_exceptions=True)
+    for _ in range(3):
+        append_pending = [
+            task
+            for task in getattr(router, "_voice_chat_append_tasks", set())
+            if task is not None and not task.done()
+        ]
+        if append_pending:
+            await asyncio.gather(*append_pending, return_exceptions=True)
+        persist_pending = [
+            task
+            for task in getattr(router, "_voice_chat_persist_tasks", set())
+            if task is not None and not task.done()
+        ]
+        if persist_pending:
+            await asyncio.gather(*persist_pending, return_exceptions=True)
+        dialog_pending = [
+            task
+            for task in getattr(router, "_dialog_state_tasks", {}).values()
+            if task is not None and not task.done()
+        ]
+        if dialog_pending:
+            await asyncio.gather(*dialog_pending, return_exceptions=True)
+        if not append_pending and not persist_pending and not dialog_pending:
+            return
 
 
 class _Txn:
@@ -1476,11 +1490,16 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     bus = LocalEventBus()
     seen_nlu: list[Event] = []
     seen_stream: list[Event] = []
+    async_get_calls: list[dict[str, object]] = []
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
     monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
-    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc())
+    def _fake_async_get_ydoc(*_args, **kwargs):
+        async_get_calls.append(dict(kwargs))
+        return _AsyncDoc()
+
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", _fake_async_get_ydoc)
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
 
     router = RouterService(eventbus=bus, base_dir=Path("."))
@@ -1518,6 +1537,7 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     assert seen_stream[0].payload["data"]["messages"][0]["text"] == "weather in Moscow"
     assert seen_stream[0].payload["data"]["message_count"] == 1
 
+    persisted_call_count = len(async_get_calls)
     seen_stream.clear()
     bus.publish(
         Event(
@@ -1536,6 +1556,24 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     assert seen_stream[0].payload["receiver"] == "voice_chat.messages"
     assert seen_stream[0].payload["data"]["messages"][0]["text"] == "weather in Moscow"
     assert seen_stream[0].payload["data"]["message_count"] == 1
+    assert len(async_get_calls) == persisted_call_count
+
+    seen_stream.clear()
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=2.5,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": "desktop",
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert seen_stream == []
+    assert len(async_get_calls) == persisted_call_count
 
 
 async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeypatch) -> None:
@@ -1690,6 +1728,101 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
         "active_agent_id": "agent:conversation_companions:arseni",
     }
     assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "free form companion turn"
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_receipt_only_tool_message_does_not_append_fallback(monkeypatch) -> None:
+    from adaos.services import conversation_store, dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    webspace_id = "receipt-only-dialog-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "Builder: restored UI revision 022.",
+            "chat_emit": {
+                "mode": "receipt_only",
+                "persisted": False,
+                "reason": "revision_current_success_not_persistent",
+            },
+            "dialog": {
+                "dialog_channel_id": "builder",
+                "conversation_id": f"conv.skill.builder.default.{webspace_id}",
+                "owner": "skill:builder",
+                "default_tool": "builder_skill.set_ui_revision_current",
+                "active_agent_id": "agent:builder:builder",
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="builder",
+        owner="skill:builder",
+        default_skill="builder_skill",
+        default_tool="set_ui_revision_current",
+        conversation_id=f"conv.skill.builder.default.{webspace_id}",
+        active_agent_id="agent:builder:builder",
+        route_id="voice_chat",
+    )
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "set current 022",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert [item["text"] for item in messages] == ["set current 022"]
+    turn_trace_id = calls[0][2]["_meta"]["turn_trace_id"]
+    trace = conversation_store.get_turn_trace(turn_trace_id)
+    assert trace is not None
+    assert trace["policy_decision"]["materialization_status"] == "suppressed"
+    assert trace["policy_decision"]["diagnostic"] == "skill_result_message_receipt_only"
+    assert trace["renderer"]["projection"] == "receipt_only"
     dialog_runtime.reset_all()
 
 
