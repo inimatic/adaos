@@ -29,3 +29,5 @@ example2
 example3
 examples
 .ssh
+.codex-diagnostics
+.gitignore
