@@ -340,6 +340,50 @@ def _register_root_invite_session(
     return None
 
 
+def _register_root_invite_revocation(
+    invite: Mapping[str, Any],
+    request: Request,
+    ctx: AgentContext,
+    *,
+    reason: str | None = None,
+    guest_sessions_only: bool = False,
+) -> None:
+    token = _root_invite_registration_token(ctx)
+    if not token:
+        return
+    invite_id = str(invite.get("invite_id") or "").strip()
+    subnet_id = personalization_runtime.current_subnet_id(ctx)
+    if not invite_id or not subnet_id:
+        return
+    api_base = _setting_text(ctx, "api_base", "").rstrip("/")
+    if not api_base:
+        return
+    path = "guest-sessions/revoke" if guest_sessions_only else "revoke"
+    body: dict[str, Any] = {
+        "invite_id": invite_id,
+        "subnet_id": subnet_id,
+        "hub_id": subnet_id,
+        "status": str(invite.get("status") or ""),
+        "revoked_at": invite.get("revoked_at") or time.time(),
+        "reason": str(reason or "").strip(),
+    }
+    try:
+        req = UrlRequest(
+            f"{api_base}/v1/personalization/invites/{invite_id}/{path}",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Root-Token": token,
+            },
+            method="POST",
+        )
+        with urlopen(req, timeout=1.5):
+            pass
+    except Exception:
+        return
+
+
 def _public_invite_view(invite: Mapping[str, Any], request: Request, ctx: AgentContext) -> dict[str, Any]:
     invite_id = str(invite.get("invite_id") or "").strip()
     result = dict(invite)
@@ -921,10 +965,12 @@ async def admin_revoke_session(
 async def revoke_invite(
     invite_id: str,
     body: InviteRevokeRequest,
+    request: Request,
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
         data = _access(ctx).revoke_invite(invite_id, actor=_actor(ctx), reason=body.reason)
+        _register_root_invite_revocation(data, request, ctx, reason=body.reason)
         return {"ok": True, "invite": data}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -934,10 +980,12 @@ async def revoke_invite(
 async def revoke_guest_sessions(
     invite_id: str,
     body: InviteRevokeRequest,
+    request: Request,
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
         data = _access(ctx).revoke_guest_join_sessions(invite_id, actor=_actor(ctx), reason=body.reason)
+        _register_root_invite_revocation(data, request, ctx, reason=body.reason, guest_sessions_only=True)
         return {"ok": True, "invite": data}
     except Exception as exc:
         raise _http_error(exc) from exc
