@@ -108,6 +108,8 @@ def test_browser_snapshot_includes_active_yws_scoped_clients(monkeypatch) -> Non
     assert by_id["dev-browser::tab-1"]["access_class"] == "client"
     assert by_id["dev-browser::tab-1"]["online"] is True
     assert by_id["dev-browser::tab-1"]["last_webspace_id"] == "desktop"
+    assert by_id["dev-browser::tab-1"]["parent_browser_device_id"] == "dev-browser"
+    assert by_id["dev-browser::tab-1"]["browser_client_id"] == "tab-1"
 
 
 def test_browser_snapshot_marks_parent_online_from_active_yws_peer(monkeypatch) -> None:
