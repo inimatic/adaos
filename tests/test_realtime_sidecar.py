@@ -900,6 +900,55 @@ async def test_realtime_sidecar_relays_bytes_between_local_nats_and_remote_ws(
 
 
 @pytest.mark.asyncio
+async def test_realtime_sidecar_retries_remote_connect_without_dropping_local_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    fake_ws = _FakeRemoteWS()
+    attempts = 0
+
+    async def _fake_connect(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary dns failure")
+        return fake_ws
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_INITIAL_S", "0.05")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_MAX_S", "0.05")
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    await server.start()
+    try:
+        _reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        writer.write(b"PING\r\n")
+        await writer.drain()
+
+        for _ in range(40):
+            if fake_ws.sent:
+                break
+            await asyncio.sleep(0.01)
+
+        assert attempts >= 2
+        assert fake_ws.sent == [b"PING\r\n"]
+        assert server._stats.remote_connect_fail_total == 1
+        assert server._stats.remote_connect_retry_total >= 1
+        assert server._stats.remote_connect_retrying is False
+        assert server._stats.last_error is None
+
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_realtime_sidecar_treats_normal_remote_ws_close_as_session_close(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
