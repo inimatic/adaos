@@ -141,8 +141,20 @@ def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch)
     assert published[0]["domain_ref"]["tool"] == "files_skill:delete_file"
 
 
-def test_call_tool_allows_operator_ui_device_control_without_pending_action(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("slideshow_skill:control_redevice_slideshow", {"action": "start"}),
+        ("browsers_skill:identify_device", {"device_ref": "browser:dev-phone"}),
+    ],
+)
+def test_call_tool_allows_operator_ui_device_control_without_pending_action(
+    monkeypatch,
+    tool: str,
+    arguments: dict[str, object],
+) -> None:
     calls: list[str] = []
+    skill_name, public_tool = tool.split(":", 1)
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -169,9 +181,9 @@ def test_call_tool_allows_operator_ui_device_control_without_pending_action(monk
     result = asyncio.run(
         tool_bridge_module.call_tool(
             tool_bridge_module.ToolCall(
-                tool="slideshow_skill:control_redevice_slideshow",
+                tool=tool,
                 arguments={
-                    "action": "start",
+                    **arguments,
                     "_meta": {
                         "action_source": "operator_ui",
                         "action_context": {
@@ -190,7 +202,7 @@ def test_call_tool_allows_operator_ui_device_control_without_pending_action(monk
 
     assert result["ok"] is True
     assert result["trace_id"] == "trace-123"
-    assert calls == ["run_sync", "slideshow_skill:control_redevice_slideshow"]
+    assert calls == ["run_sync", f"{skill_name}:{public_tool}"]
 
 
 def test_runtime_action_risk_ignores_local_write_freeform_content() -> None:
@@ -215,6 +227,105 @@ def test_runtime_action_risk_ignores_local_write_freeform_content() -> None:
 
     assert risk["risk_class"] == "local_write"
     assert risk["approval_required"] is False
+
+
+def test_runtime_action_risk_allows_notebook_upload_attachment_paths() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="notebook_skill:attach_note_upload",
+        arguments={
+            "note_id": "note-1",
+            "kind": "photo",
+            "side_effect_class": "local_write",
+            "artifact_ref": {
+                "id": "skill_file:notebook_skill:photos:abcdef0123456789",
+                "artifact_id": "skill_file:notebook_skill:photos:abcdef0123456789",
+                "kind": "skill_file",
+                "skill": "notebook_skill",
+                "purpose": "photos",
+                "name": "photo.jpg",
+                "relative_path": "uploads/photos/photo.jpg",
+                "path": r"D:\git\inimatic\adaos\.adaos\workspace\skills\.runtime\notebook_skill\v0.1\data\files\uploads\photos\photo.jpg",
+                "local_path": r"D:\git\inimatic\adaos\.adaos\workspace\skills\.runtime\notebook_skill\v0.1\data\files\uploads\photos\photo.jpg",
+                "stored_path": r"D:\git\inimatic\adaos\.adaos\workspace\skills\.runtime\notebook_skill\v0.1\data\files\uploads\photos\photo.jpg",
+                "uri": "file:///D:/git/inimatic/adaos/.adaos/workspace/skills/.runtime/notebook_skill/v0.1/data/files/uploads/photos/photo.jpg",
+                "size_bytes": 5606,
+                "sha256": "abcdef0123456789",
+                "mime": "image/jpeg",
+            },
+            "upload": {
+                "name": "photo.jpg",
+                "mime": "image/jpeg",
+                "size_bytes": 5606,
+                "sha256": "abcdef0123456789",
+                "purpose": "photos",
+            },
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="notebook_skill",
+        public_tool="attach_note_upload",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
+def test_call_tool_allows_notebook_upload_attachment_without_approval(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("notebook uploads must not require approval")))
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="notebook_skill:attach_note_upload",
+                arguments={
+                    "note_id": "note-1",
+                    "kind": "photo",
+                    "side_effect_class": "local_write",
+                    "artifact_ref": {
+                        "artifact_id": "skill_file:notebook_skill:photos:abcdef0123456789",
+                        "relative_path": "uploads/photos/photo.jpg",
+                        "path": r"D:\git\inimatic\adaos\.adaos\workspace\skills\.runtime\notebook_skill\v0.1\data\files\uploads\photos\photo.jpg",
+                    },
+                    "upload": {
+                        "name": "photo.jpg",
+                        "mime": "image/jpeg",
+                        "size_bytes": 5606,
+                        "sha256": "abcdef0123456789",
+                        "purpose": "photos",
+                    },
+                },
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["run_sync", "notebook_skill:attach_note_upload"]
 
 
 def test_runtime_action_risk_allows_prompt_project_file_save_with_markdown_memory() -> None:
