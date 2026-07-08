@@ -3650,6 +3650,23 @@ def _websocket_device_id(websocket: WebSocket) -> str:
         return "unknown"
 
 
+def _websocket_browser_session_id(websocket: WebSocket) -> str:
+    try:
+        params = getattr(websocket, "query_params", {}) or {}
+    except Exception:
+        params = {}
+    return (
+        _clean_browser_metadata_value(
+            params.get("browser_session_id")
+            or params.get("browserSessionId")
+            or params.get("client_session_id")
+            or params.get("clientSessionId"),
+            max_len=128,
+        )
+        or ""
+    )
+
+
 def _active_yws_connection_total_for_client(
     webspace_id: str,
     dev_id: str,
@@ -3799,6 +3816,68 @@ async def _close_existing_yws_client_connections(
         )
         await asyncio.sleep(0)
     return closed
+
+
+async def close_browser_yws_connections(
+    token: str,
+    *,
+    code: int = 1008,
+    reason: str = "browser_access_revoked",
+) -> int:
+    clean_token = _clean_browser_metadata_value(token, max_len=128)
+    if not clean_token:
+        return 0
+    close_reason = str(reason or "browser_access_revoked").strip()[:120] or "browser_access_revoked"
+    with _ACTIVE_YWS_LOCK:
+        sockets = [
+            (webspace_id, websocket)
+            for webspace_id, webspace_sockets in _ACTIVE_YWS_CONNECTIONS.items()
+            for websocket in list(webspace_sockets or [])
+            if _websocket_device_id(websocket) == clean_token
+            or _websocket_browser_session_id(websocket) == clean_token
+        ]
+    closed = 0
+    for webspace_id, websocket in sockets:
+        close_ok = False
+        try:
+            await asyncio.wait_for(websocket.close(code=code, reason=close_reason), timeout=0.5)
+            close_ok = True
+            closed += 1
+        except Exception:
+            pass
+        if close_ok:
+            try:
+                _untrack_yws_connection(webspace_id, websocket)
+            except Exception:
+                pass
+    if closed:
+        _ylog.info("closed browser yws connections token=%s closed=%s reason=%s", clean_token, closed, close_reason)
+        await asyncio.sleep(0)
+    return closed
+
+
+def request_close_browser_yws_connections(
+    token: str,
+    *,
+    code: int = 1008,
+    reason: str = "browser_access_revoked",
+) -> int:
+    clean_token = _clean_browser_metadata_value(token, max_len=128)
+    if not clean_token:
+        return 0
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            return int(asyncio.run(close_browser_yws_connections(clean_token, code=code, reason=reason)) or 0)
+        except Exception:
+            _ylog.exception("failed to close browser yws connections token=%s", clean_token)
+            return 0
+    try:
+        loop.create_task(close_browser_yws_connections(clean_token, code=code, reason=reason))
+    except Exception:
+        _ylog.exception("failed to schedule browser yws disconnect token=%s", clean_token)
+    return 0
 
 
 def _record_yws_open(webspace_id: str, dev_id: str) -> None:

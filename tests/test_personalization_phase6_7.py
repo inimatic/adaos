@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from adaos.apps.api import personalization
 from adaos.domain.personalization_access import DeviceKey, ScopeRef, SessionKey, SubjectRef
 from adaos.services import access_links
+from adaos.services.yjs import gateway_ws as gateway_module
 from adaos.services.personalization_access import PersonalizationAccessService, PersonalizationAccessStore
 
 
@@ -13,6 +15,7 @@ TOKEN_HEADERS = {"X-AdaOS-Token": "dev-local-token"}
 OWNER = SubjectRef("user", "owner")
 MASHA = SubjectRef("user", "masha")
 FAMILY = ScopeRef("workspace", "family")
+WORK = ScopeRef("workspace", "work")
 
 
 def _client() -> TestClient:
@@ -76,6 +79,62 @@ def test_phase6_device_pairing_link_records_device_and_revocation_cuts_sessions(
     )
 
 
+def test_phase6_child_device_pairing_requires_admin_approval(tmp_path) -> None:
+    store = PersonalizationAccessStore(tmp_path / "access.json")
+    service = PersonalizationAccessService(store, owner=OWNER)
+    child = SubjectRef("user", "child-masha")
+
+    service.grant_role_preset(subject=child, scope=FAMILY, role="child", actor=OWNER)
+
+    with pytest.raises(PermissionError, match="missing_capability"):
+        service.create_device_pairing_link(
+            invite_id="child-self-device",
+            subject=child,
+            scope=FAMILY,
+            role="child",
+            issued_by=child,
+            expires_at=9999999999.0,
+            device_id="child-tablet",
+            device_name="Child tablet",
+        )
+
+    approved = service.create_device_pairing_link(
+        invite_id="child-owner-approved-device",
+        subject=child,
+        scope=FAMILY,
+        role="child",
+        issued_by=OWNER,
+        expires_at=9999999999.0,
+        device_id="child-tablet",
+        device_name="Child tablet",
+    )
+
+    assert approved["subject_id"] == "child-masha"
+    assert service.list_audit(actor=child, event_type="policy.deny")
+
+
+def test_phase6_browser_link_denial_requests_live_yws_disconnect(monkeypatch) -> None:
+    requested: list[tuple[str, str]] = []
+
+    def _record_disconnect(token: str, *, reason: str = "", **kwargs: object) -> int:  # noqa: ARG001
+        requested.append((token, reason))
+        return 0
+
+    monkeypatch.setattr(gateway_module, "request_close_browser_yws_connections", _record_disconnect)
+    access_links.upsert_link(
+        "browser",
+        "phase67-runtime-device",
+        {"admission_session_id": "phase67-runtime-session", "admission_policy": "allow"},
+    )
+
+    access_links.deny_link("browser", "phase67-runtime-device")
+
+    assert requested == [
+        ("phase67-runtime-device", "browser_access_denied"),
+        ("phase67-runtime-session", "browser_access_denied"),
+    ]
+
+
 def test_phase6_admin_recovery_link_replaces_lost_device_and_revokes_old_sessions(tmp_path) -> None:
     denied: list[str] = []
     store = PersonalizationAccessStore(tmp_path / "access.json")
@@ -127,6 +186,49 @@ def test_phase6_admin_recovery_link_replaces_lost_device_and_revokes_old_session
     assert store.get_session("masha-lost-session")["status"] == "revoked"
     assert denied == ["masha-lost-phone", "masha-lost-session"]
     assert service.list_audit(subject=MASHA, event_type="admin_recovery.completed")
+
+
+def test_phase7_multi_admin_grant_and_denial_paths(tmp_path) -> None:
+    store = PersonalizationAccessStore(tmp_path / "access.json")
+    service = PersonalizationAccessService(store, owner=OWNER)
+    co_owner = SubjectRef("user", "co-parent")
+    scoped_admin = SubjectRef("user", "family-admin")
+    member = SubjectRef("user", "family-member")
+
+    service.grant_role_preset(subject=co_owner, scope=FAMILY, role="co_owner", actor=OWNER)
+    service.grant_role_preset(subject=scoped_admin, scope=FAMILY, role="admin", actor=OWNER)
+    service.grant_role_preset(subject=member, scope=FAMILY, role="member", actor=OWNER)
+
+    co_owner_grant = service.grant_role_preset(
+        subject=SubjectRef("user", "co-owner-added-member"),
+        scope=FAMILY,
+        role="member",
+        actor=co_owner,
+    )
+    admin_grant = service.grant_role_preset(
+        subject=SubjectRef("user", "admin-added-guest"),
+        scope=FAMILY,
+        role="guest",
+        actor=scoped_admin,
+    )
+
+    assert co_owner_grant["membership"]["issued_by"] == co_owner.to_dict()
+    assert admin_grant["membership"]["issued_by"] == scoped_admin.to_dict()
+
+    with pytest.raises(PermissionError, match="missing_capability"):
+        service.grant_role_preset(
+            subject=SubjectRef("user", "member-added-user"),
+            scope=FAMILY,
+            role="guest",
+            actor=member,
+        )
+    with pytest.raises(PermissionError, match="missing_capability"):
+        service.grant_role_preset(
+            subject=SubjectRef("user", "cross-scope-user"),
+            scope=WORK,
+            role="member",
+            actor=scoped_admin,
+        )
 
 
 def test_phase7_admin_api_grants_pairs_summarizes_and_revokes_device() -> None:

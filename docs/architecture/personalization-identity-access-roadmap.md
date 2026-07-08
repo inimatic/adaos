@@ -439,9 +439,9 @@ Exit gate:
 Local verification:
 
 - [x] device pairing tests.
-- [ ] child approval tests beyond default policy denial.
+- [x] child approval tests beyond default policy denial.
 - [x] lost-device revoke/session invalidation tests.
-- [ ] recovery-code lifecycle tests if recovery codes are included.
+- [ ] recovery-code lifecycle tests if recovery codes are later included.
 
 ## Phase 7 - Owner and Admin User Management Surface
 
@@ -462,12 +462,14 @@ Checklist:
 - [x] Allow role preset changes through policy-checked shared services.
 - [x] Allow device/session revoke through shared services.
 - [x] Show admin-visible privacy metadata without showing private content.
+- [x] Keep direct owner/admin UI and API operations explicit, policy checked,
+  and audited.
 - [ ] Use Pending Actions for sensitive conversational requests such as binding
   a device, granting membership, changing active user, or invoking dangerous
-  tools.
-- [x] Support multiple administrators explicitly: owner, co_owner, scoped admin,
-  workspace admin, device admin, and guest moderator are grants, not profile
-  fields.
+  tools; this is carried into Phase 9 with skill/tool enforcement.
+- [x] Support multiple administrators explicitly through `owner`, `co_owner`,
+  and scoped `admin` grants. Device-admin and guest-moderator variants remain
+  future custom-capability presets, not current profile fields.
 
 Exit gate:
 
@@ -482,7 +484,7 @@ Local verification:
 - [x] API/service tests.
 - [x] browser UI build smoke test.
 - [ ] dedicated skill action tests.
-- [ ] multi-admin grant and denial tests beyond owner/co-owner preset creation.
+- [x] multi-admin grant and denial tests beyond owner/co-owner preset creation.
 - [x] audit query smoke tests.
 
 ## Phase 8 - Privacy Zone Enforcement and User Data Management
@@ -706,8 +708,8 @@ These tests should be added across phases as the corresponding surfaces land:
 - [ ] Public guest QR is scope-limited and visibly temporary in the joining UI.
 - [ ] Targeted invite preview shows subnet/workspace, issuer, role preset,
   expiry, and consent before claim.
-- [ ] Revoked device loses live browser/Yjs/API access.
-- [ ] Child cannot add a device without approval when policy requires it.
+- [x] Revoked device loses live browser/Yjs/API access.
+- [x] Child cannot add a device without approval when policy requires it.
 - [x] Member can add own device only with `devices.add.self`.
 - [x] Member cannot invite users without `users.invite`.
 - [ ] Recovery without owner/co-owner, trusted device, recovery code, passkey,

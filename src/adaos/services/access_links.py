@@ -1170,6 +1170,18 @@ def detach_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
     return saved
 
 
+def _request_browser_runtime_disconnect(token: str) -> None:
+    clean_token = str(token or "").strip()
+    if not clean_token:
+        return
+    try:
+        from adaos.services.yjs.gateway_ws import request_close_browser_yws_connections
+
+        request_close_browser_yws_connections(clean_token, reason="browser_access_denied")
+    except Exception:
+        pass
+
+
 def deny_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
     token = str(entry_id or "").strip()
     if not token:
@@ -1187,6 +1199,11 @@ def deny_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
+    if kind == "browser":
+        _request_browser_runtime_disconnect(token)
+        session_id = str(saved.get("admission_session_id") or "").strip()
+        if session_id and session_id != token:
+            _request_browser_runtime_disconnect(session_id)
     _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="link.denied")
     return saved
 

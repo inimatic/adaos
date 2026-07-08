@@ -3124,6 +3124,48 @@ def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
     assert gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"] == []
 
 
+def test_close_browser_yws_connections_by_device_or_session() -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+
+    class _FakeWebSocket:
+        def __init__(self, dev_id: str, browser_session_id: str) -> None:
+            self.query_params = {"dev": dev_id, "browser_session_id": browser_session_id}
+            self.closed: list[tuple[int, str]] = []
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed.append((code, str(reason or "")))
+
+    device_ws = _FakeWebSocket("dev-revoked", "tab-a")
+    session_ws = _FakeWebSocket("dev-other", "session-revoked")
+    active_ws = _FakeWebSocket("dev-active", "session-active")
+    gateway_module._track_yws_connection("ops", device_ws, device_id="dev-revoked")
+    gateway_module._track_yws_connection("ops", session_ws, device_id="dev-other")
+    gateway_module._track_yws_connection("ops", active_ws, device_id="dev-active")
+
+    closed_by_device = asyncio.run(gateway_module.close_browser_yws_connections("dev-revoked"))
+    closed_by_session = asyncio.run(gateway_module.close_browser_yws_connections("session-revoked"))
+
+    assert closed_by_device == 1
+    assert closed_by_session == 1
+    assert device_ws.closed == [(1008, "browser_access_revoked")]
+    assert session_ws.closed == [(1008, "browser_access_revoked")]
+    assert active_ws.closed == []
+    assert gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"] == [
+        {
+            "device_id": "dev-active",
+            "webspace_id": "ops",
+            "connection_state": "connected",
+            "yjs_channel_state": "open",
+            "session_count": 1,
+            "source": "yws_gateway",
+            "client_limit_id": "session-active",
+        }
+    ]
+
+    gateway_module._untrack_yws_connection("ops", active_ws)
+
+
 def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()

@@ -362,15 +362,23 @@ Current status:
 - [x] Phase 5 AdaOS Connect/browser shell UI adopts the Phase 3 services for
   guest links, targeted invite, preview/consent, link listing, and revocation
   UX.
-- [ ] QR image rendering, profile picker/create UX, audit-history drill-down,
-  and direct websocket disconnect orchestration remain open after Phase 5.
+- [ ] QR image rendering, profile picker/create UX, and audit-history
+  drill-down remain open after Phase 5/7.
+- [x] Direct websocket disconnect orchestration for revoked browser sessions
+  now bridges `access_links.deny_link("browser", ...)` to the YJS gateway and
+  closes active connections by device id or browser-session id.
 - [ ] Runtime API/UI paths do not yet enforce the personalization access kernel
   globally.
-- [ ] Direct websocket disconnect orchestration for revoked guest/browser
-  sessions remains a runtime integration task; Phase 3 provides the cutoff hook.
-- [ ] Device pairing, authenticator lifecycle, and admin recovery remain open.
+- [x] Device pairing and admin-assisted recovery have Phase 6 backend/API
+  foundations, tests, session revocation, and live browser/YJS cutoff.
+- [ ] Optional WebAuthn/passkey authenticators, device key rotation hooks, and
+  recovery codes remain open after Phase 6.
 - [ ] User-private data zones are not enforced by product UI.
-- [ ] User management is not yet a shared owner/admin control-plane surface.
+- [x] User management has a shared owner/admin control-plane surface for
+  users, profiles, grants/memberships, devices, sessions, invites, recovery,
+  revocation, and audit metadata.
+- [ ] Pending Actions for conversational admin requests and custom capability
+  editing remain open after Phase 7 and are carried into Phase 9.
 - [ ] Skill/tool manifest enforcement is not yet wired across sensitive
   invocations.
 
