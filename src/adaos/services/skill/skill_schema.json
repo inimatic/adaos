@@ -26,6 +26,63 @@
 			"items": { "type": "string", "minLength": 1 },
 			"uniqueItems": true
 		},
+		"permissions": {
+			"description": "Legacy runtime permissions or Phase 9 capability declarations. A list remains legacy-compatible; an object may contain required/optional policy capability arrays.",
+			"oneOf": [
+				{
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 },
+					"uniqueItems": true
+				},
+				{
+					"type": "object",
+					"additionalProperties": true,
+					"properties": {
+						"required": {
+							"type": "array",
+							"items": { "type": "string", "minLength": 1 },
+							"uniqueItems": true
+						},
+						"optional": {
+							"type": "array",
+							"items": { "type": "string", "minLength": 1 },
+							"uniqueItems": true
+						}
+					}
+				}
+			]
+		},
+		"personalization": {
+			"description": "Personalization and policy surface declared by the skill author.",
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"uses": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 },
+					"uniqueItems": true
+				},
+				"required_permissions": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 },
+					"uniqueItems": true
+				},
+				"optional_permissions": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 },
+					"uniqueItems": true
+				},
+				"role_variants": {
+					"oneOf": [{ "type": "object" }, { "type": "array" }]
+				},
+				"user_variants": {
+					"oneOf": [{ "type": "object" }, { "type": "array" }]
+				},
+				"device_variants": {
+					"oneOf": [{ "type": "object" }, { "type": "array" }]
+				}
+			}
+		},
 		"default_tool": {
 			"type": "string"
 		},

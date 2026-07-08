@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from adaos.domain.personalization_access import (
     AuditRecord,
+    DATA_ZONE_RULES,
     DeviceKey,
     Grant,
     GrantConstraint,
@@ -111,6 +112,10 @@ def _not_expired(record: Mapping[str, Any], *, now: float) -> bool:
 
 def _record_status(record: Mapping[str, Any]) -> str:
     return str(record.get("status") or "active").strip() or "active"
+
+
+def _data_zone_rules(zone: str) -> dict[str, Any]:
+    return dict(DATA_ZONE_RULES.get(zone) or {})
 
 
 class PersonalizationAccessStore:
@@ -498,6 +503,93 @@ class PersonalizationAccessService:
 
     def list_preferences(self, subject: SubjectRef, scope: ScopeRef | None = None) -> list[dict[str, Any]]:
         return self.store.list_preferences(subject, scope=scope)
+
+    def classify_data_zone(
+        self,
+        data_kind: str,
+        *,
+        subject: SubjectRef | None = None,
+        scope: ScopeRef | None = None,
+    ) -> dict[str, Any]:
+        kind = str(data_kind or "").strip().lower()
+        if kind in {"profile", "preference", "preferences", "memory", "conversation"}:
+            zone = "user_private"
+            zone_scope = scope or (ScopeRef("user_private", subject.id) if subject and subject.kind == "user" else None)
+        elif kind in {"audit", "device", "device_key", "grant", "membership", "session", "user"}:
+            zone = "admin_visible_metadata"
+            zone_scope = scope
+        else:
+            zone = "shared_workspace"
+            zone_scope = scope
+        return {
+            "data_kind": kind or "unknown",
+            "zone": zone,
+            "scope": zone_scope.to_dict() if zone_scope else None,
+            "rules": _data_zone_rules(zone),
+        }
+
+    def profile_metadata(self, user_id: str, *, actor: SubjectRef) -> dict[str, Any]:
+        subject = SubjectRef("user", str(user_id or "").strip())
+        scope = ScopeRef("user_private", subject.id)
+        decision = self.evaluate(actor=actor, action="profile.read.members", subject=subject, scope=scope)
+        if decision.decision != "allow":
+            raise PermissionError(f"profile metadata denied: {decision.reason_code or 'profile.read.members'}")
+        raw = self.store.get_profile(subject.id) or {"user_id": subject.id}
+        return {
+            "user_id": subject.id,
+            "display_name": raw.get("display_name"),
+            "preferred_name": raw.get("preferred_name"),
+            "locale": raw.get("locale"),
+            "language": raw.get("language"),
+            "timezone": raw.get("timezone"),
+            "metadata_only": True,
+            "data_zone": "user_private",
+            "content_visible": False,
+        }
+
+    def require_user_private_content_access(
+        self,
+        *,
+        actor: SubjectRef,
+        action: str,
+        subject: SubjectRef,
+        resource: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> PolicyDecision:
+        if subject.kind != "user":
+            raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
+        scope = ScopeRef("user_private", subject.id)
+        decision = self.evaluate(
+            actor=actor,
+            action=action,
+            subject=subject,
+            scope=scope,
+            resource=resource,
+            context=context,
+        )
+        if decision.decision != "allow":
+            raise PermissionError(f"user-private content denied: {decision.reason_code or action}")
+        if self._actor_controls_user(actor, subject):
+            return decision
+        denied = PolicyDecision(
+            decision="deny",
+            actor=actor,
+            action=decision.action,
+            subject=subject,
+            scope=scope,
+            resource=resource,
+            reason_code="private_content_subject_mismatch",
+            grant_ids=decision.grant_ids,
+        )
+        self._audit(
+            "policy.deny",
+            actor=actor,
+            subject=subject,
+            scope=scope,
+            decision=denied,
+            metadata={"resource": resource, "reason_code": denied.reason_code, "data_zone": "user_private"},
+        )
+        raise PermissionError(f"user-private content denied: {denied.reason_code}")
 
     def put_user_key(self, key: UserKey, *, actor: SubjectRef | None = None) -> dict[str, Any]:
         data = self.store.put_user_key(key)
@@ -1527,6 +1619,17 @@ class PersonalizationAccessService:
             return True
         prefix = action.split(".", 1)[0] + ".*"
         return prefix in capabilities
+
+    def _actor_controls_user(self, actor: SubjectRef, subject: SubjectRef) -> bool:
+        if actor.ref() == subject.ref():
+            return True
+        if actor.kind == "session":
+            session = self.store.get_session(actor.id)
+            return _ref_key(_dict((session or {}).get("subject"))) == subject.ref()
+        if actor.kind == "device":
+            device = self.store.get_device_key(actor.id)
+            return str((device or {}).get("user_id") or "").strip() == subject.id
+        return False
 
     def _audit(
         self,

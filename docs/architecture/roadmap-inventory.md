@@ -373,14 +373,21 @@ Current status:
   foundations, tests, session revocation, and live browser/YJS cutoff.
 - [ ] Optional WebAuthn/passkey authenticators, device key rotation hooks, and
   recovery codes remain open after Phase 6.
-- [ ] User-private data zones are not enforced by product UI.
+- [x] Phase 8 first slice classifies personalization data zones and gates
+  profile/preference private-content reads through the access kernel; owner/admin
+  paths get metadata-only profile views unless they are the subject user.
+- [ ] Memory, conversation, projection, export/redaction, and product UI privacy
+  zones remain open after the Phase 8 first slice.
 - [x] User management has a shared owner/admin control-plane surface for
   users, profiles, grants/memberships, devices, sessions, invites, recovery,
   revocation, and audit metadata.
 - [ ] Pending Actions for conversational admin requests and custom capability
   editing remain open after Phase 7 and are carried into Phase 9.
-- [ ] Skill/tool manifest enforcement is not yet wired across sensitive
-  invocations.
+- [x] Phase 9 first slice extends `skill.yaml` validation with
+  `personalization` declarations and policy capability checks against the
+  access-kernel vocabulary.
+- [ ] Runtime skill/tool invocation enforcement, SDK policy helpers, and
+  sensitive tool denial paths remain open after the Phase 9 first slice.
 
 Developer-doc gap:
 

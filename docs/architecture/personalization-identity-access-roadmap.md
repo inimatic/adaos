@@ -496,15 +496,19 @@ own data before multi-user personalization is treated as product-complete.
 
 Checklist:
 
-- [ ] Add service-level data classification for shared workspace data,
+- [x] Add service-level data classification for shared workspace data,
   user-private data, admin-visible metadata, and encrypted/private future data.
-- [ ] Enforce user-private read/write policy in memory, conversation, profile,
-  preference, and projection services.
+- [x] Enforce user-private read/write policy for profile/preference service
+  access, including explicit cross-user content denial below the UI.
+- [ ] Enforce the same user-private policy in memory, conversation, and
+  projection services.
 - [ ] Add user-owned memory/profile search, edit, export, and redaction flows.
-- [ ] Add admin-visible metadata views that show existence, usage, policy
-  events, and retention without revealing private content.
+- [x] Add service-level admin-visible profile metadata that does not reveal
+  private settings/preferences content.
+- [ ] Add broader admin-visible metadata views that show existence, usage,
+  policy events, and retention without revealing private content.
 - [ ] Add retention defaults and redaction audit trails for user-private data.
-- [ ] Add compatibility checks so existing owner-superuser paths do not become
+- [x] Add compatibility checks so existing owner-superuser paths do not become
   ordinary product read APIs for private user data.
 - [ ] Add UI copy and policy explanations for private-data denials that are
   clear to both owner and non-owner users.
@@ -519,8 +523,8 @@ Exit gate:
 
 Local verification:
 
-- [ ] user-private access tests.
-- [ ] admin metadata/no-content tests.
+- [x] user-private profile/preference access tests.
+- [x] admin metadata/no-content service tests.
 - [ ] export/redaction tests.
 - [ ] projection leakage tests.
 
@@ -533,7 +537,7 @@ execution, not only user-management flows.
 
 Checklist:
 
-- [ ] Extend skill manifest vocabulary for declared personalization usage,
+- [x] Extend skill manifest vocabulary for declared personalization usage,
   required permissions, optional permissions, role variants, user variants, and
   device variants.
 - [ ] Add SDK helpers for `ctx.actor`, `ctx.current_user`, `ctx.subject_user`,
@@ -552,14 +556,16 @@ Exit gate:
 - [ ] A skill cannot read or write another user's private data without a grant.
 - [ ] A tool invocation can be denied based on actor role/capability even when
   the skill exists and is installed.
-- [ ] Manifest-declared permissions are validated before activation or use.
+- [x] Manifest-declared personalization permissions are validated before
+  activation or use.
 
 Local verification:
 
-- [ ] manifest validation tests.
+- [x] manifest validation tests.
 - [ ] SDK policy tests.
 - [ ] sensitive tool denial tests.
-- [ ] memory/profile cross-user denial tests.
+- [x] profile cross-user denial tests.
+- [ ] memory cross-user denial tests.
 
 ## Phase 10 - Optional Global Identity and Root-Server Trust
 

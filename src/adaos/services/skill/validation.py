@@ -10,6 +10,7 @@ import yaml
 from jsonschema import Draft202012Validator, ValidationError
 import importlib.resources as ir
 
+from adaos.domain.personalization_access import CAPABILITY_VOCABULARY, validate_capability
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.webui_contract import validate_webui_contract
 
@@ -49,6 +50,26 @@ _MEMORY_SDK_PATTERNS = (
     "memory.write_policy(",
     "memory.record_consent(",
 )
+_PERSONALIZATION_USES = {
+    "browser_automation",
+    "devices",
+    "memory",
+    "preferences",
+    "profile",
+    "tools",
+    "user_private",
+    "workspace",
+}
+_PERSONALIZATION_PERMISSION_PREFIXES = {
+    "memory": ("memory.",),
+    "preferences": ("preferences.",),
+    "profile": ("profile.",),
+    "devices": ("devices.",),
+    "browser_automation": ("tools.invoke.browser_automation",),
+    "tools": ("tools.",),
+    "workspace": ("workspace.",),
+    "user_private": ("profile.", "preferences.", "memory."),
+}
 
 
 @dataclass
@@ -177,7 +198,113 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     # webui.json (optional): validate declarative WebUI contributions and
     # cross-link the public skill interface with modal routes/actions.
     issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
+    issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
+    return issues
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def _manifest_permission_lists(manifest: Dict[str, Any]) -> tuple[list[str], list[str]]:
+    required: list[str] = []
+    optional: list[str] = []
+    permissions = manifest.get("permissions")
+    if isinstance(permissions, dict):
+        required.extend(_as_string_list(permissions.get("required")))
+        optional.extend(_as_string_list(permissions.get("optional")))
+    personalization = manifest.get("personalization")
+    if isinstance(personalization, dict):
+        required.extend(_as_string_list(personalization.get("required_permissions")))
+        optional.extend(_as_string_list(personalization.get("optional_permissions")))
+    return required, optional
+
+
+def _known_capability(value: str) -> bool:
+    if value in CAPABILITY_VOCABULARY:
+        return True
+    if value.endswith(".*"):
+        prefix = value[:-1]
+        return any(str(item).startswith(prefix) for item in CAPABILITY_VOCABULARY)
+    return False
+
+
+def _personalization_manifest_policy_issues(manifest: Dict[str, Any], *, install_mode: bool) -> List[Issue]:
+    issues: List[Issue] = []
+    personalization = manifest.get("personalization")
+    if personalization is not None and not isinstance(personalization, dict):
+        return [
+            Issue(
+                "error",
+                "personalization.invalid",
+                "skill.yaml personalization section must be an object",
+                "skill.yaml:personalization",
+            )
+        ]
+    personalization_data = personalization if isinstance(personalization, dict) else {}
+    uses = _as_string_list(personalization_data.get("uses"))
+    for value in uses:
+        if value not in _PERSONALIZATION_USES:
+            issues.append(
+                Issue(
+                    "error",
+                    "personalization.uses.invalid",
+                    f"unsupported personalization use: {value}",
+                    "skill.yaml:personalization.uses",
+                )
+            )
+    for key in ("role_variants", "user_variants", "device_variants"):
+        value = personalization_data.get(key)
+        if value is not None and not isinstance(value, (dict, list)):
+            issues.append(
+                Issue(
+                    "error",
+                    f"personalization.{key}.invalid",
+                    f"personalization.{key} must be an object or list",
+                    f"skill.yaml:personalization.{key}",
+                )
+            )
+    required, optional = _manifest_permission_lists(manifest)
+    for capability in [*required, *optional]:
+        try:
+            validate_capability(capability)
+        except Exception as exc:
+            issues.append(
+                Issue(
+                    "error",
+                    "permissions.capability.invalid",
+                    f"invalid capability declaration {capability!r}: {exc}",
+                    "skill.yaml:permissions",
+                )
+            )
+            continue
+        if not _known_capability(capability):
+            issues.append(
+                Issue(
+                    "error",
+                    "permissions.capability.unknown",
+                    f"unknown capability declaration: {capability}",
+                    "skill.yaml:permissions",
+                )
+            )
+    required_set = set(required)
+    for use in uses:
+        prefixes = _PERSONALIZATION_PERMISSION_PREFIXES.get(use) or ()
+        if not prefixes:
+            continue
+        if any(any(item.startswith(prefix) for prefix in prefixes) for item in required_set):
+            continue
+        issues.append(
+            Issue(
+                "error" if install_mode else "warning",
+                "personalization.permissions_missing",
+                f"personalization use '{use}' has no matching required permission declaration",
+                "skill.yaml:personalization.required_permissions",
+            )
+        )
     return issues
 
 
@@ -411,8 +538,19 @@ def _dynamic_checks(skill_name: str, skill_dir: Path, install_mode: bool, probe_
     и сверяем экспорт инструментов/подписок.
     """
     code = f"""
-import os, json, importlib.util
+import os, json, importlib.util, sys, types
 os.environ['ADAOS_VALIDATE'] = '1'
+if 'y_py' not in sys.modules:
+    sys.modules['y_py'] = types.SimpleNamespace(
+        YDoc=object,
+        apply_update=lambda *args, **kwargs: None,
+        encode_state_as_update=lambda *args, **kwargs: b'',
+        encode_state_vector=lambda *args, **kwargs: b'',
+    )
+if 'ypy_websocket' not in sys.modules:
+    ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
+    sys.modules['ypy_websocket'] = types.SimpleNamespace(ystore=ystore_mod)
+    sys.modules['ypy_websocket.ystore'] = ystore_mod
 mod_name = 'adaos_skill_{skill_name}_handlers_main'
 handler_file = r'{(skill_dir / 'handlers' / 'main.py').as_posix()}'
 spec = importlib.util.spec_from_file_location(mod_name, handler_file)
