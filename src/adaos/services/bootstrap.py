@@ -1220,6 +1220,16 @@ def _build_realtime_sidecar_fallback_candidates(
     return fallback_candidates
 
 
+def _should_quarantine_nats_candidate(candidate: str | None, *, local_sidecar_url: str | None = None) -> bool:
+    candidate_text = str(candidate or "").strip()
+    if not candidate_text:
+        return False
+    sidecar_text = str(local_sidecar_url or "").strip()
+    if sidecar_text and candidate_text == sidecar_text:
+        return False
+    return True
+
+
 def _resolve_nats_log_server(
     *,
     server: str | None = None,
@@ -10145,7 +10155,9 @@ class BootstrapService:
                         try:
                             _rl_log("nats.supervisor.start", "[hub-io] nats supervisor: start bridge", every_s=5.0)
                             await _nats_bridge()
-                            await asyncio.sleep(3600)
+                            self._log.warning("nats bridge returned without error; restarting hub_id=%s", hub_id)
+                            await asyncio.sleep(delay)
+                            delay = min(max(delay, 0.5), 2.0)
                         except asyncio.CancelledError:
                             try:
                                 self._log.info(
@@ -10396,12 +10408,23 @@ class BootstrapService:
                             try:
                                 if is_transient and ran_for_s < q_min_uptime_s and isinstance(nats_last_server, str) and nats_last_server:
                                     q_seconds = max(30.0, q_for_s)
-                                    nats_server_quarantine_until[nats_last_server] = time.monotonic() + q_seconds
-                                    _rl_log(
-                                        "nats.supervisor.quarantine",
-                                        f"[hub-io] nats supervisor: quarantine server={nats_last_server} for {q_seconds:.0f}s (ran_for={ran_for_s:.1f}s)",
-                                        every_s=1.0,
-                                    )
+                                    local_sidecar_url = realtime_sidecar_local_url()
+                                    if _should_quarantine_nats_candidate(
+                                        nats_last_server,
+                                        local_sidecar_url=local_sidecar_url,
+                                    ):
+                                        nats_server_quarantine_until[nats_last_server] = time.monotonic() + q_seconds
+                                        _rl_log(
+                                            "nats.supervisor.quarantine",
+                                            f"[hub-io] nats supervisor: quarantine server={nats_last_server} for {q_seconds:.0f}s (ran_for={ran_for_s:.1f}s)",
+                                            every_s=1.0,
+                                        )
+                                    else:
+                                        _rl_log(
+                                            "nats.supervisor.quarantine.skip",
+                                            f"[hub-io] nats supervisor: skip quarantine for local sidecar={nats_last_server} (ran_for={ran_for_s:.1f}s)",
+                                            every_s=1.0,
+                                        )
                             except Exception:
                                 pass
 

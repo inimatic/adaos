@@ -74,6 +74,23 @@ def test_realtime_sidecar_fallback_candidates_can_keep_raw_tcp_fallback(monkeypa
     ) == ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"]
 
 
+def test_nats_quarantine_skips_local_realtime_sidecar_candidate() -> None:
+    assert (
+        bootstrap_mod._should_quarantine_nats_candidate(
+            "nats://127.0.0.1:7422",
+            local_sidecar_url="nats://127.0.0.1:7422",
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._should_quarantine_nats_candidate(
+            "wss://ru.api.inimatic.com/nats",
+            local_sidecar_url="nats://127.0.0.1:7422",
+        )
+        is True
+    )
+
+
 def test_resolve_nats_log_server_prefers_current_attempt() -> None:
     assert (
         bootstrap_mod._resolve_nats_log_server(
