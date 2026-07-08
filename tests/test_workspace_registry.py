@@ -69,6 +69,36 @@ def test_rebuild_workspace_registry_reads_skill_and_scenario_manifests(tmp_path:
     assert payload["scenarios"][0]["io"]["output"] == ["text", "voice"]
 
 
+def test_rebuild_workspace_registry_prefers_scenario_yaml_title_and_i18n(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "prototype_app"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: prototype_app",
+                "name: prototype_app",
+                "title: Prototype App",
+                "title_i18n:",
+                "  key: scenario.prototype_app.title",
+                "  fallback: Prototype App",
+                "version: '0.3.2'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = rebuild_workspace_registry(workspace)
+
+    entry = payload["scenarios"][0]
+    assert entry["name"] == "prototype_app"
+    assert entry["id"] == "prototype_app"
+    assert entry["title"] == "Prototype App"
+    assert entry["title_i18n"] == {"key": "scenario.prototype_app.title", "fallback": "Prototype App"}
+    assert entry["version"] == "0.3.2"
+
+
 def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Path):
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "weather_skill"

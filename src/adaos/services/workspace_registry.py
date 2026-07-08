@@ -234,7 +234,7 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
 
     artifact_name = directory.name
     manifest_id = _clean_text(manifest.get("id")) or artifact_name
-    title = _clean_text(manifest.get("name"))
+    title = _clean_text(manifest.get("title")) or _clean_text(manifest.get("name"))
     description = _clean_text(manifest.get("description"))
     tags = _clean_tags(manifest.get("tags"))
     entry: dict[str, Any] = {
@@ -257,6 +257,9 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
     }
     if title and title != artifact_name:
         entry["title"] = title
+    title_i18n = manifest.get("title_i18n")
+    if isinstance(title_i18n, dict):
+        entry["title_i18n"] = {str(key): value for key, value in title_i18n.items() if value is not None}
     if description:
         entry["description"] = description
     if tags:

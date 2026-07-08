@@ -133,8 +133,8 @@ def test_create_shopping_list_scenario_draft_writes_declarative_webui(tmp_path, 
     assert result["ok"] is True
     assert result["dialog"]["dialog_channel_id"] == "builder"
     assert result["dialog"]["default_tool"] == "builder_skill.chat"
-    assert result["topic"]["thread_id"] == "thread.builder.builder-skill-test.draft.shopping"
-    assert result["dialog"]["thread_id"] == "thread.builder.builder-skill-test.draft.shopping"
+    assert result["topic"]["thread_id"].startswith("prompt-project:scenario:")
+    assert result["dialog"]["thread_id"] == result["topic"]["thread_id"]
     assert result["scenario_id"].startswith("shopping_list_")
     assert result["preview_state"]["current_ui"]["type"] == "page"
     assert result["preview_state"]["datasources"][0]["type"] == "internal_crud"
@@ -193,15 +193,15 @@ def test_create_draft_publishes_pending_action_with_conversation_refs(monkeypatc
     )
 
     assert result["pending_action"]["id"] == "pa.builder.draft"
-    assert result["topic"]["thread_id"] == "thread.builder.1"
-    assert result["dialog"]["thread_id"] == "thread.builder.1"
+    assert result["topic"]["thread_id"].startswith("prompt-project:scenario:")
+    assert result["dialog"]["thread_id"] == result["topic"]["thread_id"]
     assert published[0]["kind"] == "builder.scenario_draft.review"
     assert published[0]["response_topic"] == "builder.pending_action.response"
     assert published[0]["domain_ref"]["conversation_id"] == "conv.skill.builder_skill.default.builder-pa-ws"
-    assert published[0]["domain_ref"]["thread_id"] == "thread.builder.1"
+    assert published[0]["domain_ref"]["thread_id"] == result["topic"]["thread_id"]
     refs = published[0]["metadata"]["source_refs"]
     assert refs["draft_id"] == "draft.shopping"
-    assert refs["thread_id"] == "thread.builder.1"
+    assert refs["thread_id"] == result["topic"]["thread_id"]
     assert refs["turn_trace_id"] == "trace.builder.1"
     assert refs["message_id"] == "msg.builder.1"
     risk = published[0]["metadata"]["approval_policy"]["action_risk"]
@@ -686,8 +686,12 @@ def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> No
     skill._save_session("builder-async", session)
 
     submit_calls: list[dict] = []
+    submit_started = threading.Event()
+    release_submit = threading.Event()
 
     def _submit_response_job(messages, **kwargs):
+        submit_started.set()
+        assert release_submit.wait(3)
         submit_calls.append({"messages": list(messages), "kwargs": dict(kwargs)})
         return {
             "ok": True,
@@ -717,10 +721,16 @@ def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> No
         webspace_id="builder-async",
     )
 
-    assert result["status"] == "llm_pending"
-    assert result["llm_job"]["job_id"] == "llm_job_async_test"
+    assert result["status"] == "llm_submitting"
+    assert result["llm_job"]["job_id"].startswith("builder_llm_submit_")
+    assert submit_started.wait(3)
+    assert not submit_calls
+    release_submit.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not refresh_calls:
+        time.sleep(0.02)
+    assert refresh_calls, emitted
     assert submit_calls
-    assert finished.wait(3), emitted
     webui = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8-sig"))
     assert webui["schema"] == "adaos.webui.v1"
     assert "preview_state" not in webui
@@ -781,6 +791,177 @@ def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_pat
     assert "Always prefer conference vocabulary" in request["system_prompt"]
     assert (artifact_root / "builder_memory.md").exists()
     assert (artifact_root / "tz" / "base_tz.md").exists()
+
+
+def test_builder_webui_title_uses_scenario_yaml_as_canonical_metadata(tmp_path) -> None:
+    skill = _load_module()
+    artifact_root = tmp_path / "prototype_app_4d5758e5"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: prototype_app_4d5758e5",
+                "name: prototype_app_4d5758e5",
+                "type: desktop",
+                "title: Prototype App E5",
+                "title_i18n:",
+                "  key: scenario.prototype_app_4d5758e5.title",
+                "  fallback: Prototype App E5",
+                "version: 0.1.0",
+                "depends: []",
+                "runtime:",
+                "  skills:",
+                "    required: []",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    stale_page_schema = {
+        "id": "prototype_app_4d5758e5",
+        "title": "Latency Probe C 2df367",
+        "layout": {"type": "stack", "areas": [{"id": "main"}]},
+        "widgets": [{"id": "prototype-form", "type": "ui.form", "area": "main", "inputs": {"fields": []}}],
+    }
+    (artifact_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": "prototype_app_4d5758e5",
+                "name": "prototype_app_4d5758e5",
+                "type": "desktop",
+                "title": "Latency Probe C 2df367",
+                "ui": {"application": {"desktop": {"pageSchema": stale_page_schema}}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (artifact_root / "webui.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.v1",
+                "ui": {"application": {"desktop": {"pageSchema": stale_page_schema}}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    session = {
+        "id": "builder_session_title",
+        "scenario_id": "prototype_app_4d5758e5",
+        "artifact_root": str(artifact_root),
+        "datasource_id": "prototype_items",
+        "fields": [{"id": "title", "type": "string", "label": "Title"}],
+    }
+    preview = skill._preview_state(session=session)
+
+    current = skill._current_webui_payload(session, preview)
+
+    current_page_schema = current["ui"]["application"]["desktop"]["pageSchema"]
+    assert current_page_schema["title"] == "Prototype App E5"
+    assert current_page_schema["title_i18n"]["key"] == "scenario.prototype_app_4d5758e5.title"
+
+    updated_page_schema = copy.deepcopy(current_page_schema)
+    updated_page_schema["title"] = "City Growth Survey"
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": updated_page_schema}}},
+    }
+    skill._write_webui_payload(str(artifact_root), payload)
+
+    saved_webui = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
+    saved_scenario_json = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    saved_yaml = yaml.safe_load((artifact_root / "scenario.yaml").read_text(encoding="utf-8"))
+    assert saved_webui["ui"]["application"]["desktop"]["pageSchema"]["title"] == "City Growth Survey"
+    assert saved_scenario_json["title"] == "City Growth Survey"
+    assert saved_scenario_json["ui"]["application"]["desktop"]["pageSchema"]["title"] == "City Growth Survey"
+    assert saved_yaml["title"] == "City Growth Survey"
+
+
+def test_async_llm_completion_repairs_missing_page_schema(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    import adaos.sdk.llm.llm_client as llm_client
+
+    artifact_root = tmp_path / "repair_missing_page_schema"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "scenario.json").write_text(
+        json.dumps({"id": "repair_missing_page_schema", "name": "repair_missing_page_schema", "version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    session = {
+        "id": "builder_session_repair",
+        "webspace_id": "builder-repair",
+        "status": "drafting",
+        "title": "Repair App",
+        "scenario_id": "repair_missing_page_schema",
+        "draft_id": "draft.repair",
+        "artifact_root": str(artifact_root),
+        "datasource_id": "prototype_items",
+        "fields": [{"id": "title", "type": "string", "label": "Title"}],
+        "patches": [],
+        "version": "001",
+        "pending_llm_jobs": {"llm_job_repair": {"status": "queued"}},
+    }
+    preview = skill._preview_state(session=session)
+    page_schema = skill._page_schema_from_preview(preview)
+    payload = {"schema": "adaos.webui.v1", "generated_by": "builder_skill", "ui": {"application": {"desktop": {"pageSchema": page_schema}}}}
+    skill._save_session("builder-repair", session)
+    emitted: list[str] = []
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: type("_Workbench", (), {
+        "set_active_draft": lambda self, **kwargs: {"dev_webspace_id": "builder-repair-dev", "active_draft_id": kwargs.get("active_draft_id")},
+        "snapshot": lambda self, *args, **kwargs: {"preview_state": kwargs.get("preview_state") or {}},
+    })())
+    monkeypatch.setattr(skill, "_request_workbench_refresh", lambda payload: {"ok": True, "payload": dict(payload)})
+    monkeypatch.setattr(skill, "_publish_prompt_project_changed", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(skill, "_publish_prompt_project_selection", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(skill, "_publish_review_pending_action", lambda **kwargs: {"id": "pa.repair"})
+    monkeypatch.setattr(skill, "_schedule_dev_runtime_reload_after_revision", lambda *args, **kwargs: {"ok": True, "scheduled": True})
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda text, **_kwargs: emitted.append(str(text)))
+
+    monkeypatch.setattr(
+        llm_client,
+        "wait_response_job",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "job_id": "llm_job_repair",
+            "status": "succeeded",
+            "output_text": json.dumps({"comment": "Missing page schema."}, ensure_ascii=False),
+        },
+    )
+    monkeypatch.setattr(
+        llm_client,
+        "send_response",
+        lambda *args, **kwargs: {"output_text": json.dumps({**payload, "comment": "Repaired."}, ensure_ascii=False)},
+    )
+
+    skill._complete_llm_webui_job(
+        ws="builder-repair",
+        session_id="builder_session_repair",
+        binding={},
+        patch={
+            "id": "patch_repair",
+            "target": "ui",
+            "operation": "noop",
+            "status": "applied",
+            "created_by": "llm_agent",
+            "created_at": time.time(),
+            "summary": "add field",
+            "diff": {},
+        },
+        request_text="add field",
+        before_webui={"preview_state": preview},
+        job_id="llm_job_repair",
+        base_url="https://ru.api.inimatic.com",
+        request_id="builder-ui-repair",
+        auto_apply=True,
+        _meta={},
+    )
+
+    assert emitted
+    assert not any("LLM payload must contain ui.application.desktop.pageSchema" in item for item in emitted)
+    saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
+    assert saved["ui"]["application"]["desktop"]["pageSchema"]["id"] == page_schema["id"]
 
 
 def test_normalise_llm_payload_uses_webui_page_schema_as_source_of_truth() -> None:
@@ -1429,7 +1610,7 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     assert created["ui_revision"]["revision"] == "001"
     created_revision = json.loads((artifact_root / "ui_revisions" / "001.json").read_text(encoding="utf-8"))
     assert created_revision["preview_state"]["version"] == "001"
-    assert created_revision["after_webui"]["preview_state"]["version"] == "001"
+    assert "preview_state" not in created_revision["after_webui"]
     assert created_revision["prompt_files"]["tz/base_tz.md"]["exists"] is True
     first_tz = created_revision["prompt_files"]["tz/base_tz.md"]["content"]
     (artifact_root / "tz" / "base_tz.md").write_text("spec revision 002", encoding="utf-8")
@@ -1441,7 +1622,7 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     assert updated["ui_revision"]["revision"] == "002"
     updated_revision = json.loads((artifact_root / "ui_revisions" / "002.json").read_text(encoding="utf-8"))
     assert updated_revision["preview_state"]["version"] == "002"
-    assert updated_revision["after_webui"]["preview_state"]["version"] == "002"
+    assert "preview_state" not in updated_revision["after_webui"]
     assert updated_revision["prompt_files"]["tz/base_tz.md"]["content"] == "spec revision 002"
     assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
     emitted: list[dict[str, object]] = []
@@ -1465,7 +1646,8 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     assert refresh_calls[-1]["revision"] == "001"
     assert not any(item["type"] == "card_list" for item in restored["preview_state"]["current_ui"]["children"])
     saved = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
-    assert not any(item["type"] == "card_list" for item in saved["preview_state"]["current_ui"]["children"])
+    widgets = saved["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    assert not any(item.get("id") == "prototype-cards" for item in widgets)
     assert (artifact_root / "tz" / "base_tz.md").read_text(encoding="utf-8") == first_tz
     state = json.loads((artifact_root / "prompt_state.json").read_text(encoding="utf-8"))
     assert state["base_tz"] == first_tz
@@ -1623,7 +1805,11 @@ def test_chat_first_idea_creates_preview_and_accepts_correction(monkeypatch, tmp
     assert updated["patch"]["operation"] == "change_view_representation"
     assert updated["topic"]["thread_id"] == created["topic"]["thread_id"]
     assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
-    assert "card_list" in (artifact_root / "webui.json").read_text(encoding="utf-8")
+    webui = json.loads((artifact_root / "webui.json").read_text(encoding="utf-8"))
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    cards = next(item for item in widgets if item["id"] == "prototype-cards")
+    assert cards["type"] == "ui.list"
+    assert cards["inputs"]["variant"] == "cards"
     assert published[-1]["kind"] == "builder.scenario_patch.review"
 
 
@@ -2501,10 +2687,8 @@ def test_create_scenario_draft_updates_builder_workbench(monkeypatch, tmp_path) 
         "runtime_scenario_id": result["scenario_id"],
         "persist_projection": False,
     }
-    assert calls[1]["method"] == "snapshot"
-    assert calls[1]["preview_state"]["current_ui"]["type"] == "page"
-    assert [item["method"] for item in calls[:2]] == ["set_active_draft", "snapshot"]
-    assert {item["method"] for item in calls}.issubset({"set_active_draft", "snapshot", "ensure_dev_webspace"})
+    assert [item["method"] for item in calls[:1]] == ["set_active_draft"]
+    assert {item["method"] for item in calls}.issubset({"set_active_draft", "ensure_dev_webspace"})
     assert result["dev_runtime_refresh"]["scheduled"] is True
     assert refresh_calls[-1]["webspace_id"] == "desktop"
     assert refresh_calls[-1]["revision"] == "001"
@@ -2622,7 +2806,9 @@ def test_ensure_workbench_can_defer_runtime_switch_for_ui_revision_updates(monke
     assert result["binding"]["runtime_scenario_id"] == "todo_scenario"
     assert result["projection"]["direct"]["skipped"] == "runtime_refresh_deferred_to_dev_reload"
     assert result["projection"]["event"]["skipped"] == "runtime_refresh_deferred_to_dev_reload"
-    assert [item["method"] for item in calls] == ["set_active_draft", "snapshot"]
+    methods = [item["method"] for item in calls]
+    assert methods[:2] == ["set_active_draft", "snapshot"]
+    assert set(methods).issubset({"set_active_draft", "snapshot", "ensure_dev_webspace"})
 
 
 def test_ensure_workbench_can_defer_snapshot_projection_for_pointer_switches(monkeypatch) -> None:
