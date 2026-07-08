@@ -742,6 +742,66 @@ def test_update_current_scenario_uses_async_llm_job(monkeypatch, tmp_path) -> No
     revision_files = sorted((artifact_root / "ui_revisions").glob("*.json"))
     assert revision_files
     assert refresh_calls and refresh_calls[0]["revision"] == "001"
+    assert submit_calls[0]["kwargs"]["request_id"].startswith("builder-ui-")
+    assert "-job-" in submit_calls[0]["kwargs"]["request_id"]
+
+
+def test_submit_llm_webui_transform_job_retries_request_id_conflict(monkeypatch, tmp_path) -> None:
+    skill = _load_module()
+    import adaos.sdk.llm.llm_client as llm_client
+    from adaos.services.root.client import RootHttpError
+
+    artifact_root = tmp_path / "llm_conflict"
+    artifact_root.mkdir(parents=True)
+    session = {
+        "id": "builder_session_conflict",
+        "scenario_id": "llm_conflict",
+        "artifact_root": str(artifact_root),
+        "datasource_id": "prototype_items",
+        "fields": [{"id": "title", "type": "string", "label": "Title"}],
+    }
+    preview = skill._preview_state(session=session)
+    calls: list[str] = []
+
+    def _submit_response_job(_messages, **kwargs):
+        request_id = str(kwargs.get("request_id") or "")
+        calls.append(request_id)
+        if len(calls) == 1:
+            raise RootHttpError(
+                "llm_request_id_conflict",
+                status_code=409,
+                error_code="llm_request_id_conflict",
+                payload={"code": "llm_request_id_conflict"},
+            )
+        return {
+            "ok": True,
+            "schema": "adaos.root.llm.job.v1",
+            "job_id": "llm_job_conflict_retry",
+            "request_id": request_id,
+            "status": "queued",
+            "_client": {"base_url": "https://ru.api.inimatic.com"},
+        }
+
+    monkeypatch.setattr(llm_client, "submit_response_job", _submit_response_job)
+
+    result = skill._submit_llm_webui_transform_job(
+        session=session,
+        instruction="Add full name field",
+        preview_state=preview,
+        job_nonce="builder_llm_submit_deadbeef",
+    )
+
+    assert result["ok"] is True
+    assert result["pending"] is True
+    assert result["job_id"] == "llm_job_conflict_retry"
+    assert result["request_id"] == calls[1]
+    assert len(calls) == 2
+    assert calls[0] != calls[1]
+    assert all(item.startswith("builder-ui-") and "-job-" in item for item in calls)
+    attempts = result["timing"]["submit_attempts"]
+    assert attempts[0]["ok"] is False
+    assert attempts[0]["error"] == "llm_request_id_conflict"
+    assert attempts[1]["ok"] is True
 
 
 def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_path) -> None:
