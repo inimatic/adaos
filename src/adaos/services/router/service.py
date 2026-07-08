@@ -2231,6 +2231,40 @@ class RouterService:
                 "channel": channel,
             }
 
+        def _active_voice_chat_channel_id(webspace_id: str) -> str:
+            ws = str(webspace_id or "default").strip() or "default"
+            try:
+                active = dialog_runtime.get_active_channel(ws) or _restore_active_dialog_channel_from_store(ws)
+                if active is not None:
+                    channel_id = str(active.as_dict().get("channel_id") or active.channel_id or "").strip()
+                    if channel_id:
+                        return channel_id
+            except Exception:
+                pass
+            try:
+                active_row = conversation_store.get_active_dialog_channel(ws)
+            except Exception:
+                active_row = None
+            if isinstance(active_row, dict):
+                return str(active_row.get("channel_id") or active_row.get("id") or "").strip()
+            return ""
+
+        def _voice_chat_message_targets_active_stream(
+            webspace_id: str,
+            msg: Mapping[str, Any],
+            *,
+            channel_id: str,
+        ) -> bool:
+            if str(msg.get("from") or "").strip() == "user":
+                return True
+            message_channel_id = str(channel_id or "").strip()
+            if not message_channel_id:
+                return True
+            active_channel_id = _active_voice_chat_channel_id(webspace_id)
+            if not active_channel_id:
+                return True
+            return active_channel_id == message_channel_id
+
         def _record_voice_turn_trace(
             webspace_id: str,
             meta: dict[str, Any],
@@ -3461,16 +3495,27 @@ class RouterService:
             worker_meta = dict(meta)
             worker_context_channel = dict(context.get("channel") or {})
             worker_agent = dict(agent)
+            visible_in_active_stream = _voice_chat_message_targets_active_stream(
+                worker_webspace_id,
+                clean_msg,
+                channel_id=channel_id,
+            )
             optimistic_published = False
-            try:
-                _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
-                optimistic_published = True
-            except Exception:
-                optimistic_published = False
+            if visible_in_active_stream:
+                try:
+                    _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
+                    optimistic_published = True
+                except Exception:
+                    optimistic_published = False
 
             def _append_voice_chat_message_sync() -> dict[str, Any]:
                 local_msg = dict(worker_msg)
                 local_meta = dict(worker_meta)
+                local_visible_in_active_stream = _voice_chat_message_targets_active_stream(
+                    worker_webspace_id,
+                    local_msg,
+                    channel_id=channel_id,
+                )
                 local_turn_trace_id = str(local_msg.get("turn_trace_id") or "").strip()
                 if not local_turn_trace_id:
                     local_turn_trace_id = turn_trace_id
@@ -3559,11 +3604,15 @@ class RouterService:
                     try:
                         conversation_store.finish_turn_trace(
                             local_turn_trace_id,
-                            status="materialized",
-                            summary=f"Rendered to voice_chat.messages via {route_id}",
+                            status="materialized" if local_visible_in_active_stream else "stored",
+                            summary=(
+                                f"Rendered to voice_chat.messages via {route_id}"
+                                if local_visible_in_active_stream
+                                else f"Stored inactive dialog message via {route_id}"
+                            ),
                             renderer={
-                                "receiver": "voice_chat.messages",
-                                "projection": "compact_tail",
+                                "receiver": "voice_chat.messages" if local_visible_in_active_stream else "conversation_store",
+                                "projection": "compact_tail" if local_visible_in_active_stream else "inactive_dialog_ledger",
                                 "message_id": local_msg.get("id"),
                             },
                         )
@@ -3581,6 +3630,7 @@ class RouterService:
                     "turn_trace_id": local_turn_trace_id,
                     "finished_turn_trace": finished_turn_trace,
                     "ledger_backed": ledger_backed,
+                    "visible_in_active_stream": local_visible_in_active_stream,
                 }
 
             async def _materialize_voice_chat_append() -> None:
@@ -3597,8 +3647,12 @@ class RouterService:
                         "voice_chat ledger append failed; using live projection fallback",
                         exc_info=True,
                     )
-                    if not optimistic_published:
+                    if not optimistic_published and visible_in_active_stream:
                         _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
+                    return
+                if not bool(materialized.get("visible_in_active_stream")):
+                    if bool(materialized.get("finished_turn_trace")):
+                        _schedule_dialog_state_write(webspace_id, event="inactive_turn_stored")
                     return
                 if optimistic_published and not bool(materialized.get("ledger_backed")):
                     return

@@ -1731,6 +1731,92 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     dialog_runtime.reset_all()
 
 
+async def test_voice_chat_inactive_builder_append_stays_out_of_active_stream(monkeypatch) -> None:
+    import adaos.services.conversation_store as conversation_store
+    import adaos.services.dialog_runtime as dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "inactive-builder-append-ws"
+    builder_conversation_id = f"conv.skill.builder.default.{webspace_id}"
+    companion_conversation_id = f"conv.skill.conversation_companions.default.{webspace_id}"
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    conversation_store.ensure_schema()
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=companion_conversation_id,
+        active_agent_id="agent:conversation_companions:arseni",
+        active_agent_label="Арсений",
+        route_id="voice_chat",
+    )
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="io.out.chat.append",
+            source="builder_skill",
+            ts=1.0,
+            payload={
+                "id": "delayed-builder-message",
+                "from": "hub",
+                "text": "Строитель: обновил прототип. Ревизия UI: 015.",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "dialog_channel_id": "builder",
+                    "conversation_id": builder_conversation_id,
+                    "conversation_owner": "skill:builder_skill",
+                    "active_agent_id": "agent:builder_skill:builder",
+                    "active_agent_label": "Строитель",
+                },
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    data = doc.get_map("data")
+    visible_messages = list((data.get("voice_chat") or {}).get("messages") or [])
+    assert all("Строитель: обновил прототип" not in str(item.get("text") or "") for item in visible_messages)
+    projection = conversation_store.list_projection(builder_conversation_id, limit=8, max_items=8)
+    stored_messages = projection.get("messages") if isinstance(projection, dict) else []
+    assert any(item.get("text") == "Строитель: обновил прототип. Ревизия UI: 015." for item in stored_messages)
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "conversational"
+    dialog_runtime.reset_all()
+
+
 async def test_voice_chat_receipt_only_tool_message_does_not_append_fallback(monkeypatch) -> None:
     from adaos.services import conversation_store, dialog_runtime
 
