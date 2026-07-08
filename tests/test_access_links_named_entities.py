@@ -110,6 +110,41 @@ def test_browser_snapshot_includes_active_yws_scoped_clients(monkeypatch) -> Non
     assert by_id["dev-browser::tab-1"]["last_webspace_id"] == "desktop"
 
 
+def test_browser_snapshot_marks_parent_online_from_active_yws_peer(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(access_links, "_now_ts", lambda: 2000.0)
+    monkeypatch.setattr(
+        gateway_ws,
+        "active_browser_session_snapshot",
+        lambda: {
+            "peers": [
+                {
+                    "device_id": "dev-browser",
+                    "client_limit_id": "tab-1",
+                    "webspace_id": "desktop",
+                    "connection_state": "connected",
+                    "session_count": 1,
+                }
+            ]
+        },
+    )
+
+    access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="old",
+        online=False,
+        browser_family="Chrome",
+    )
+
+    by_id = {item["id"]: item for item in access_links.browser_snapshot()}
+
+    assert by_id["dev-browser"]["online"] is True
+    assert by_id["dev-browser"]["connection_state"] == "connected"
+    assert by_id["dev-browser"]["last_webspace_id"] == "desktop"
+    assert by_id["dev-browser"]["last_seen_at"] == 2000.0
+
+
 def test_detach_and_deny_have_distinct_admission_policy(monkeypatch) -> None:
     _patch_registry_store(monkeypatch)
     monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)

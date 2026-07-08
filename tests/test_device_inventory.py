@@ -39,6 +39,7 @@ def _patch_sources(
 
     monkeypatch.setattr(device_inventory, "_now_ts", lambda: now)
     monkeypatch.setattr(device_inventory._access_links, "list_links", _list_links)
+    monkeypatch.setattr(device_inventory._access_links, "browser_snapshot", lambda: [dict(item) for item in browser_items])
     monkeypatch.setattr(device_inventory, "_local_redevice_scope", lambda: ("", ""))
     monkeypatch.setattr(device_inventory, "get_directory", lambda: _FakeDirectory(directory_nodes))
     monkeypatch.setattr(
@@ -88,6 +89,46 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
     assert item["identity"]["os_name"] == "Windows"
     assert item["identity"]["form_factor"] == "Desktop"
     assert item["runtime"]["connected_to_subnet"] is None
+
+
+def test_device_inventory_reads_live_browser_snapshot_clients(monkeypatch) -> None:
+    _patch_sources(
+        monkeypatch,
+        browser_entries=[
+            {
+                "id": "browser-1",
+                "display_name": "Living room TV",
+                "access_class": "device",
+                "lifetime_mode": "permanent",
+                "last_seen_at": 995.0,
+                "online": True,
+                "connection_state": "connected",
+                "last_webspace_id": "desktop",
+                "browser_family": "Chrome",
+                "os_name": "Windows",
+            },
+            {
+                "id": "browser-1::tab-1",
+                "display_name": "Living room TV",
+                "access_class": "client",
+                "lifetime_mode": "fixed",
+                "last_seen_at": 1000.0,
+                "online": True,
+                "connection_state": "connected",
+                "last_webspace_id": "desktop",
+                "browser_family": "Chrome",
+                "os_name": "Windows",
+                "parent_browser_device_id": "browser-1",
+            },
+        ],
+    )
+
+    items = device_inventory.list_devices(kind="browser")
+
+    by_ref = {item["ref"]: item for item in items}
+    assert set(by_ref) == {"browser:browser-1", "browser:browser-1::tab-1"}
+    assert by_ref["browser:browser-1::tab-1"]["policy"]["access_class"] == "client"
+    assert by_ref["browser:browser-1::tab-1"]["observation"]["online"] is True
 
 
 def test_device_inventory_hides_detached_devices_by_default(monkeypatch) -> None:
