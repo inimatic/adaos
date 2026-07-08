@@ -1506,6 +1506,15 @@
               "params": { "$ref": "#/$defs/navigateModalActionParams" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "openUrl" } } },
+          "then": {
+            "required": ["params"],
+            "properties": {
+              "params": { "$ref": "#/$defs/openUrlActionParams" }
+            }
+          }
         }
       ]
     },
@@ -1573,6 +1582,42 @@
         "restoreFocus": {
           "type": "boolean",
           "description": "Per-open shortcut for presentation.focus.restoreOrigin."
+        }
+      }
+    },
+
+    "openUrlActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        { "required": ["url"] },
+        { "required": ["href"] }
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute http(s) URL or browser-safe relative URL. /api URLs are resolved against the AdaOS API base."
+        },
+        "href": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Alias for url."
+        },
+        "target": {
+          "type": "string",
+          "default": "_blank",
+          "description": "Browser window target, usually _blank."
+        },
+        "download": {
+          "type": "boolean",
+          "default": false,
+          "description": "Append download=1 for API-backed file links when not already present."
+        },
+        "withAuth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach the current AdaOS token to same-backend /api URLs."
         }
       }
     },

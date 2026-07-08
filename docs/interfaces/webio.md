@@ -873,6 +873,10 @@ first reusable stream/file widgets are:
   configured with `inputs.xKey` and `inputs.yKey`
 * `input.fileUpload` - uploads a browser-selected file to the core
   skill-owned file store and dispatches `uploaded` actions with `artifact_ref`
+* `openUrl` actions - open browser-safe `http(s)` or relative `/api` URLs.
+  Same-backend `/api` links receive the current AdaOS token as a query param,
+  which lets skills expose uploaded files through read-only file endpoints
+  without leaking local filesystem paths.
 
 The schema also supports coarse staged-readiness hints on page/widget/modal
 and catalog surfaces via a `load` object:

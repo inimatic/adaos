@@ -378,6 +378,49 @@ def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> Non
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_validates_open_url_actions() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "attachments",
+                "type": "ui.list",
+                "actions": [
+                    {
+                        "on": "click:open",
+                        "type": "openUrl",
+                        "params": {
+                            "url": "$event.url",
+                            "target": "_blank",
+                            "download": True,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+    broken = {
+        "widgets": [
+            {
+                "id": "attachments",
+                "type": "ui.list",
+                "actions": [
+                    {
+                        "on": "click:open",
+                        "type": "openUrl",
+                        "params": {"target": "_blank"},
+                    }
+                ],
+            }
+        ],
+    }
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(broken)
+
+
 def test_webui_schema_accepts_frame_viewer_media_surface_contract() -> None:
     schema = _load_schema()
     payload = {

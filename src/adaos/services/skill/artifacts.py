@@ -66,6 +66,31 @@ def skill_upload_dir(skills_root: Path, skill_name: str, *, purpose: str | None 
     return (base / purpose_token).resolve()
 
 
+def skill_files_dir(skills_root: Path, skill_name: str) -> Path:
+    safe_skill_name = _safe_skill_name(skill_name)
+    env = SkillRuntimeEnvironment(skills_root=Path(skills_root), skill_name=safe_skill_name)
+    return env.files_dir().resolve()
+
+
+def resolve_skill_file_path(
+    *,
+    skills_root: Path,
+    skill_name: str,
+    relative_path: str,
+) -> Path:
+    raw = str(relative_path or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/") or ":" in raw:
+        raise ValueError("skill file path must be relative")
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("skill file path must be normalized")
+    root = skill_files_dir(skills_root, skill_name)
+    target = (root / Path(*parts)).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError("skill file path escapes skill file directory")
+    return target
+
+
 def _dedupe_destination(path: Path) -> Path:
     if not path.exists():
         return path

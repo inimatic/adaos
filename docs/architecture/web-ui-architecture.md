@@ -164,6 +164,7 @@ Representative action kinds:
 - `open_modal`
 - `navigate`
 - `call_host`
+- `open_url`
 - `set_view_state`
 - `patch_y`
 - `invoke_skill_action`

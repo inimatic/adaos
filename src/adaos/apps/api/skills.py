@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from fastapi.responses import FileResponse
 from starlette.requests import ClientDisconnect
 
 from adaos.adapters.db import SqliteSkillRegistry
@@ -15,6 +17,7 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.skill.manager import SkillCoreCompatibilityError, SkillDependencyIsolationError, SkillManager
 from adaos.services.skill.artifacts import (
     request_upload_metadata,
+    resolve_skill_file_path,
     skill_upload_max_bytes,
     store_skill_upload,
 )
@@ -594,6 +597,34 @@ async def upload_skill_file(
         raise HTTPException(status_code=499, detail="upload client disconnected") from exc
     except ValueError as exc:
         raise HTTPException(status_code=413 if "max size" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@router.get("/{name}/files/content/{relative_path:path}")
+async def get_skill_file_content(
+    name: str,
+    relative_path: str,
+    download: bool = False,
+    ctx: AgentContext = Depends(get_ctx),
+):
+    try:
+        target = resolve_skill_file_path(
+            skills_root=Path(ctx.paths.skills_workspace_dir()),
+            skill_name=name,
+            relative_path=relative_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="skill file not found")
+    media_type = guess_type(target.name)[0] or "application/octet-stream"
+    if download:
+        return FileResponse(
+            target,
+            media_type=media_type,
+            filename=target.name,
+            content_disposition_type="attachment",
+        )
+    return FileResponse(target, media_type=media_type)
 
 
 @router.post("/push")

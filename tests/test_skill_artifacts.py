@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 
 from adaos.services.skill.artifacts import (
+    resolve_skill_file_path,
     safe_upload_relative_path,
     skill_upload_max_bytes,
     skill_upload_dir,
     store_skill_upload,
 )
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
 def test_safe_upload_relative_path_removes_traversal() -> None:
@@ -61,6 +63,30 @@ async def test_store_skill_upload_writes_skill_owned_file(tmp_path: Path) -> Non
 def test_skill_upload_dir_rejects_invalid_skill_name(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="invalid skill name"):
         skill_upload_dir(tmp_path / "skills", "../demo", purpose="frames")
+
+
+def test_resolve_skill_file_path_stays_inside_skill_files_dir(tmp_path: Path) -> None:
+    skills_root = tmp_path / "skills"
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="demo_skill")
+
+    target = resolve_skill_file_path(
+        skills_root=skills_root,
+        skill_name="demo_skill",
+        relative_path="uploads/photos/pic.gif",
+    )
+
+    assert target == (env.files_dir() / "uploads" / "photos" / "pic.gif").resolve()
+
+
+def test_resolve_skill_file_path_rejects_unsafe_paths(tmp_path: Path) -> None:
+    skills_root = tmp_path / "skills"
+    for relative_path in ("../pic.gif", "/uploads/pic.gif", "uploads//pic.gif", "C:/tmp/pic.gif"):
+        with pytest.raises(ValueError):
+            resolve_skill_file_path(
+                skills_root=skills_root,
+                skill_name="demo_skill",
+                relative_path=relative_path,
+            )
 
 
 @pytest.mark.anyio
