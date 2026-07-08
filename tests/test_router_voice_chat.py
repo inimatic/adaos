@@ -2432,6 +2432,7 @@ async def test_voice_chat_snapshot_request_recovers_requested_thread_when_cache_
     from adaos.services import conversation_store
 
     bus = LocalEventBus()
+    monkeypatch.setattr(router_service_module, "VOICE_CHAT_VISIBLE_TAIL", 8)
     suffix = uuid4().hex[:8]
     webspace_id = f"builder-history-ws-{suffix}"
     conversation_id = f"conv.skill.builder_skill.default.{webspace_id}"
@@ -2502,10 +2503,90 @@ async def test_voice_chat_snapshot_request_recovers_requested_thread_when_cache_
     assert requested["messages"][-1]["text"] == "requested turn 9"
 
 
+async def test_voice_chat_snapshot_request_uses_builder_workbench_topic_when_thread_missing(monkeypatch) -> None:
+    from adaos.services import conversation_store
+    from adaos.services.builder import workbench as builder_workbench_module
+
+    bus = LocalEventBus()
+    monkeypatch.setattr(router_service_module, "VOICE_CHAT_VISIBLE_TAIL", 8)
+    suffix = uuid4().hex[:8]
+    webspace_id = f"builder-topicless-history-ws-{suffix}"
+    conversation_id = f"conv.skill.builder_skill.default.{webspace_id}"
+    thread_id = f"prompt-project:scenario:prototype_{suffix}"
+
+    class _Workbench:
+        def get_workspace_binding(self, _webspace_id: str) -> dict:
+            return {
+                "dialog": {
+                    "thread_id": thread_id,
+                    "topic_id": thread_id,
+                    "topic": {"thread_id": thread_id, "topic_id": thread_id},
+                }
+            }
+
+    monkeypatch.setattr(builder_workbench_module, "BuilderWorkbenchService", lambda: _Workbench())
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id=webspace_id,
+        owner="skill:builder_skill",
+    )
+    for index in range(10):
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            webspace_id=webspace_id,
+            channel_id="builder",
+            owner="skill:builder_skill",
+            role="hub" if index % 2 else "user",
+            text=f"builder turn {index}",
+            payload={"id": f"builder.{suffix}.{index}", "from": "hub" if index % 2 else "user", "text": f"builder turn {index}"},
+            actor_id="agent:builder_skill:builder" if index % 2 else "",
+            actor_label="РљРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ" if index % 2 else "",
+            route_id="voice_chat",
+            ts=100.0 + index,
+        )
+
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=1.0,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": webspace_id,
+                "conversation_id": conversation_id,
+                "dialog_channel_id": "builder",
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert len(seen_stream) == 1
+    recovered = seen_stream[-1].payload["data"]
+    assert recovered["conversation_id"] == conversation_id
+    assert recovered["conversation_topic_id"] == thread_id
+    assert recovered["message_count"] == 8
+    assert recovered["total_message_count"] == 10
+    assert recovered["has_more_before"] is True
+    assert recovered["messages"][0]["text"] == "builder turn 2"
+    assert recovered["messages"][-1]["text"] == "builder turn 9"
+
+
 async def test_voice_chat_snapshot_request_recovers_stale_same_thread_cache(monkeypatch) -> None:
     from adaos.services import conversation_store
 
     bus = LocalEventBus()
+    monkeypatch.setattr(router_service_module, "VOICE_CHAT_VISIBLE_TAIL", 8)
     suffix = uuid4().hex[:8]
     webspace_id = f"builder-stale-history-ws-{suffix}"
     conversation_id = f"conv.skill.builder_skill.default.{webspace_id}"
@@ -2725,15 +2806,15 @@ async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(m
     assert visible_tail["conversation_id"] == conversation_id
     assert visible_tail["recovery"]["recovered"] is True
     assert visible_tail["recovery"]["reason"] == "empty_projection"
-    assert visible_tail["messages"][0]["text"] == "turn 1"
+    assert visible_tail["messages"][0]["text"] == "turn 0"
     assert seen_stream
     stream = seen_stream[-1].payload["data"]
     assert stream["conversation_id"] == conversation_id
     assert stream["dialog_channel_id"] == "conversational"
-    assert stream["message_count"] == 8
+    assert stream["message_count"] == 9
     assert stream["total_message_count"] == 9
-    assert stream["has_more_before"] is True
-    assert stream["messages"][0]["text"] == "turn 1"
+    assert stream["has_more_before"] is False
+    assert stream["messages"][0]["text"] == "turn 0"
     assert data["voice_chat"]["conversation_id"] == conversation_id
     assert data["voice_chat"]["dialog_channel_id"] == "conversational"
     assert any(call.get("publish_live_room") is True for call in async_get_calls)
@@ -2744,6 +2825,7 @@ async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> No
     bus = LocalEventBus()
     doc = _Doc()
     webspace_id = "history-more-ws"
+    monkeypatch.setattr(router_service_module, "VOICE_CHAT_VISIBLE_TAIL", 8)
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
     monkeypatch.setattr(
         router_service_module,

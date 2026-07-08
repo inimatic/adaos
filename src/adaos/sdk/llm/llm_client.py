@@ -90,7 +90,7 @@ def _root_base_url_for_ctx(ctx: Any | None, cfg: Any | None = None) -> str:
     return base.rstrip("/") or "https://api.inimatic.com"
 
 
-def _root_llm_base_urls(primary: RootHttpClient) -> list[str]:
+def _root_llm_base_urls(primary: RootHttpClient, *, prefer_global: bool = False) -> list[str]:
     urls: list[str] = []
 
     def add(value: str | None) -> None:
@@ -98,19 +98,32 @@ def _root_llm_base_urls(primary: RootHttpClient) -> list[str]:
         if url and url not in urls:
             urls.append(url)
 
-    add(os.getenv("ADAOS_ROOT_LLM_BASE_URL") or os.getenv("ADAOS_LLM_ROOT_BASE_URL"))
-    add(getattr(primary, "base_url", None))
+    explicit_primary = os.getenv("ADAOS_ROOT_LLM_BASE_URL") or os.getenv("ADAOS_LLM_ROOT_BASE_URL")
+    primary_url = _normalize_root_base_url(getattr(primary, "base_url", None))
+    global_url = "https://api.inimatic.com"
+    if explicit_primary:
+        add(explicit_primary)
+        add(primary_url)
+    elif (
+        prefer_global
+        and primary_url
+        and primary_url != global_url
+        and primary_url.endswith(".api.inimatic.com")
+    ):
+        add(global_url)
+        add(primary_url)
+    else:
+        add(primary_url)
     for item in _env_csv(os.getenv("ADAOS_ROOT_LLM_FALLBACK_BASE_URLS")):
         add(item)
 
-    primary_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     if (
         primary_url
-        and primary_url != "https://api.inimatic.com"
+        and primary_url != global_url
         and primary_url.endswith(".api.inimatic.com")
     ):
-        add("https://api.inimatic.com")
-    return urls or ["https://api.inimatic.com"]
+        add(global_url)
+    return urls or [global_url]
 
 
 def _root_llm_health_probe(
@@ -136,7 +149,7 @@ def _root_llm_health_probe(
             return ok, detail
     probe_timeout = timeout if timeout is not None else _env_float(
         "ADAOS_ROOT_LLM_HEALTHCHECK_TIMEOUT_S",
-        2.5,
+        1.0,
         minimum=0.25,
         maximum=10.0,
     )
@@ -149,7 +162,7 @@ def _root_llm_health_probe(
         detail = f"{type(exc).__name__}: {exc}"
     ttl = _env_float(
         "ADAOS_ROOT_LLM_HEALTHCHECK_TTL_S" if ok else "ADAOS_ROOT_LLM_UNHEALTHY_TTL_S",
-        30.0 if ok else 15.0,
+        30.0 if ok else 60.0,
         minimum=1.0,
         maximum=3600.0,
     )
@@ -160,7 +173,7 @@ def _root_llm_health_probe(
 def _mark_root_llm_submit_unhealthy(base_url: str, detail: str) -> None:
     ttl = _env_float(
         "ADAOS_ROOT_LLM_UNHEALTHY_TTL_S",
-        15.0,
+        60.0,
         minimum=1.0,
         maximum=3600.0,
     )
@@ -169,6 +182,26 @@ def _mark_root_llm_submit_unhealthy(base_url: str, detail: str) -> None:
         False,
         str(detail or "submit_failed"),
     )
+
+
+def _root_llm_poll_error_label(exc: Exception) -> str:
+    if isinstance(exc, RootHttpError):
+        status_code = int(getattr(exc, "status_code", 0) or 0)
+        return _root_http_error_code(exc) or (f"http_{status_code}" if status_code else type(exc).__name__)
+    return type(exc).__name__
+
+
+def _retryable_llm_job_poll_error(exc: Exception) -> bool:
+    if not isinstance(exc, RootHttpError):
+        return False
+    status_code = int(getattr(exc, "status_code", 0) or 0)
+    if status_code in {0, 408, 429, 502, 503, 504}:
+        return True
+    code = _root_http_error_code(exc)
+    if code in {"llm_proxy_upstream_failed"}:
+        return True
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text or "bad gateway" in text or "temporarily unavailable" in text
 
 
 def _root_http_client(ctx: Any | None = None) -> tuple[RootHttpClient, Any | None]:
@@ -613,7 +646,10 @@ def submit_response_job(
     ctx = _current_ctx()
     primary, cfg = _root_http_client(ctx)
     headers = _identity_headers(ctx, cfg)
-    base_urls = _root_llm_base_urls(primary)
+    base_urls = _root_llm_base_urls(
+        primary,
+        prefer_global=_env_enabled("ADAOS_ROOT_LLM_PREFER_GLOBAL", True),
+    )
     last_exc: Exception | None = None
     primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     attempts: list[dict[str, Any]] = []
@@ -650,8 +686,16 @@ def submit_response_job(
                         }
                     )
                     continue
-        should_probe_health = index + 1 < len(base_urls) and (
-            index > 0 or _env_enabled("ADAOS_ROOT_LLM_HEALTHCHECK_PRIMARY", True)
+        # Only preflight the configured primary root before falling back away
+        # from it. When ADAOS_ROOT_LLM_PREFER_GLOBAL puts the global root first,
+        # the submit itself is the cheapest and most accurate health probe; a
+        # transient /v1/health timeout must not force a large LLM payload onto a
+        # slower regional relay.
+        should_probe_health = (
+            index + 1 < len(base_urls)
+            and primary_base_url
+            and base_url == primary_base_url
+            and _env_enabled("ADAOS_ROOT_LLM_HEALTHCHECK_PRIMARY", True)
         )
         if should_probe_health:
             health_started = time.perf_counter()
@@ -906,17 +950,89 @@ def wait_response_job(
     timeout_s: float = 240,
     poll_interval_s: float = 2,
     request_timeout: float | None = None,
+    log_interval_s: float = 30,
 ) -> Dict[str, Any]:
-    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    started = time.monotonic()
+    deadline = started + max(0.1, float(timeout_s))
     interval = max(0.25, float(poll_interval_s))
+    log_interval = max(5.0, float(log_interval_s))
     last: Dict[str, Any] = {}
+    last_status = ""
+    last_poll_error = ""
+    next_log_at = started
+    poll_count = 0
+    _LOG.debug(
+        "root LLM job wait start job_id=%s base_url=%s timeout_s=%.1f poll_interval_s=%.1f request_timeout_s=%.1f",
+        job_id,
+        str(base_url or ""),
+        float(timeout_s),
+        interval,
+        float(request_timeout or min(15, interval + 5)),
+    )
     while True:
-        last = get_response_job(job_id, base_url=base_url, timeout=request_timeout or min(15, interval + 5))
+        poll_count += 1
+        try:
+            last = get_response_job(job_id, base_url=base_url, timeout=request_timeout or min(15, interval + 5))
+        except Exception as exc:
+            if not _retryable_llm_job_poll_error(exc):
+                _LOG.warning(
+                    "root LLM job wait failed job_id=%s base_url=%s polls=%d elapsed_ms=%.1f error=%s detail=%s",
+                    job_id,
+                    str(base_url or ""),
+                    poll_count,
+                    (time.monotonic() - started) * 1000.0,
+                    _root_llm_poll_error_label(exc),
+                    exc,
+                )
+                raise
+            now = time.monotonic()
+            last_poll_error = f"{_root_llm_poll_error_label(exc)}: {exc}"
+            if now >= deadline:
+                raise TimeoutError(
+                    f"Root LLM job timed out: {job_id} status={last_status or 'unknown'} "
+                    f"last_poll_error={last_poll_error}"
+                ) from exc
+            _LOG.warning(
+                "root LLM job poll transient failure job_id=%s base_url=%s polls=%d elapsed_ms=%.1f remaining_ms=%.1f error=%s detail=%s",
+                job_id,
+                str(base_url or ""),
+                poll_count,
+                (now - started) * 1000.0,
+                max(0.0, (deadline - now) * 1000.0),
+                _root_llm_poll_error_label(exc),
+                exc,
+            )
+            time.sleep(min(interval, max(0.0, deadline - now)))
+            continue
+        now = time.monotonic()
         status = str(last.get("status") or "").lower()
         if status in {"succeeded", "failed"}:
+            _LOG.debug(
+                "root LLM job wait completed job_id=%s base_url=%s status=%s polls=%d elapsed_ms=%.1f",
+                job_id,
+                str(base_url or ""),
+                status,
+                poll_count,
+                (now - started) * 1000.0,
+            )
             return last
+        if status != last_status or now >= next_log_at:
+            _LOG.debug(
+                "root LLM job wait pending job_id=%s base_url=%s status=%s polls=%d elapsed_ms=%.1f last_poll_error=%s",
+                job_id,
+                str(base_url or ""),
+                status or "unknown",
+                poll_count,
+                (now - started) * 1000.0,
+                last_poll_error,
+            )
+            next_log_at = now + log_interval
+            last_status = status
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"Root LLM job timed out: {job_id} status={status or 'unknown'}")
+            raise TimeoutError(
+                f"Root LLM job timed out: {job_id} status={status or 'unknown'}"
+                + (f" last_poll_error={last_poll_error}" if last_poll_error else "")
+            )
         time.sleep(interval)
 
 

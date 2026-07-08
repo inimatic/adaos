@@ -58,7 +58,10 @@ BUILDER_SKILL_ID = "builder_skill"
 DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
 VOICE_CHAT_USER_EVENT = "voice.chat.user"
 VOICE_CHAT_STREAM_RECEIVER = "voice_chat.messages"
-VOICE_CHAT_VISIBLE_TAIL = 8
+try:
+    VOICE_CHAT_VISIBLE_TAIL = max(8, min(int(str(os.getenv("ADAOS_VOICE_CHAT_VISIBLE_TAIL") or "24").strip()), 100))
+except Exception:
+    VOICE_CHAT_VISIBLE_TAIL = 24
 VOICE_CHAT_HISTORY_LIMIT = 200
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
     {
@@ -2879,6 +2882,74 @@ class RouterService:
                         return nested
             return ""
 
+        def _source_mentions_builder_dialog(webspace_id: str, *sources: Any) -> bool:
+            ws = str(webspace_id or "default").strip() or "default"
+            builder_conversation_id = _skill_conversation_id(BUILDER_SKILL_ID, ws)
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                channel_id = str(
+                    source.get("dialog_channel_id")
+                    or source.get("channel_id")
+                    or source.get("dialogChannelId")
+                    or source.get("channelId")
+                    or ""
+                ).strip()
+                if channel_id == BUILDER_DIALOG_CHANNEL_ID:
+                    return True
+                conversation_id = str(
+                    source.get("conversation_id")
+                    or source.get("conversationId")
+                    or ""
+                ).strip()
+                if conversation_id == builder_conversation_id:
+                    return True
+                owner = str(source.get("owner") or source.get("conversation_owner") or "").strip()
+                if owner == f"skill:{BUILDER_SKILL_ID}":
+                    return True
+                default_tool = str(source.get("default_tool") or source.get("tool") or "").strip()
+                if default_tool.startswith(f"{BUILDER_SKILL_ID}."):
+                    return True
+                meta = source.get("_meta") if isinstance(source.get("_meta"), dict) else {}
+                if meta and _source_mentions_builder_dialog(ws, meta):
+                    return True
+                params = source.get("params") if isinstance(source.get("params"), dict) else {}
+                if params and _source_mentions_builder_dialog(ws, params):
+                    return True
+            return False
+
+        def _builder_workbench_topic_id(webspace_id: str) -> str:
+            try:
+                from adaos.services.builder.workbench import BuilderWorkbenchService
+
+                binding = BuilderWorkbenchService().get_workspace_binding(webspace_id)
+            except Exception:
+                return ""
+            if not isinstance(binding, dict):
+                return ""
+            dialog = binding.get("dialog") if isinstance(binding.get("dialog"), dict) else {}
+            dialog_topic = dialog.get("topic") if isinstance(dialog.get("topic"), dict) else {}
+            topic_id = str(
+                dialog.get("thread_id")
+                or dialog.get("topic_id")
+                or dialog_topic.get("thread_id")
+                or dialog_topic.get("topic_id")
+                or ""
+            ).strip()
+            if topic_id.startswith("prompt-project:scenario:"):
+                return topic_id
+            return ""
+
+        def _normalize_builder_topic_id(webspace_id: str, topic_id: Any, *sources: Any) -> str:
+            token = str(topic_id or "").strip()
+            legacy = token.startswith("thread.builder.") or token.startswith("builder:")
+            if token and not legacy:
+                return token
+            if not legacy and not _source_mentions_builder_dialog(webspace_id, *sources):
+                return token
+            binding_topic = _builder_workbench_topic_id(webspace_id)
+            return binding_topic or token
+
         def _voice_chat_projection_identity(messages: list[dict[str, Any]]) -> tuple[str, str, str]:
             for item in reversed([dict(entry) for entry in messages if isinstance(entry, dict)]):
                 conversation_id = str(item.get("conversation_id") or "").strip()
@@ -3304,9 +3375,19 @@ class RouterService:
             resolved_topic_id = _voice_chat_topic_id_from_sources(
                 {"thread_id": thread_id} if thread_id is not None else {},
                 {"conversation_topic_id": thread_id} if thread_id is not None else {},
+            )
+            resolved_topic_id = _normalize_builder_topic_id(
+                webspace_id,
+                resolved_topic_id,
+                {
+                    "conversation_id": conversation_id,
+                    "dialog_channel_id": dialog_channel_id,
+                },
                 current if isinstance(current, dict) else {},
                 *messages,
             )
+            if not resolved_topic_id:
+                resolved_topic_id = _voice_chat_topic_id_from_sources(current if isinstance(current, dict) else {}, *messages)
             ledger_projection: dict[str, Any] = {}
             ledger_messages: list[dict[str, Any]] = []
             try:
@@ -3502,9 +3583,19 @@ class RouterService:
             )
             resolved_topic_id = _voice_chat_topic_id_from_sources(
                 {"thread_id": thread_id} if thread_id is not None else {},
+            )
+            resolved_topic_id = _normalize_builder_topic_id(
+                webspace_id,
+                resolved_topic_id,
+                {
+                    "conversation_id": conversation_id,
+                    "dialog_channel_id": dialog_channel_id,
+                },
                 cached if isinstance(cached, dict) else {},
                 *cached_messages,
             )
+            if not resolved_topic_id:
+                resolved_topic_id = _voice_chat_topic_id_from_sources(cached if isinstance(cached, dict) else {}, *cached_messages)
             try:
                 projection = conversation_store.list_projection(
                     resolved_conversation_id,
@@ -3547,7 +3638,15 @@ class RouterService:
             meta = clean_msg.get("_meta") if isinstance(clean_msg.get("_meta"), dict) else {}
             channel_id = str(context.get("channel_id") or GENERAL_DIALOG_CHANNEL_ID)
             conversation_id = str(context.get("conversation_id") or "")
-            topic_id = _voice_chat_topic_id_from_sources(clean_msg, meta)
+            worker_webspace_id = str(webspace_id or "default").strip() or "default"
+            topic_id = _normalize_builder_topic_id(
+                worker_webspace_id,
+                _voice_chat_topic_id_from_sources(clean_msg, meta),
+                clean_msg,
+                meta,
+                context.get("channel") if isinstance(context.get("channel"), dict) else {},
+                context,
+            )
             owner = str(context.get("owner") or GENERAL_DIALOG_AGENT_OWNER)
             route_id = str(context.get("route_id") or "voice_chat")
             agent = context.get("agent") if isinstance(context.get("agent"), dict) else {}
@@ -3577,7 +3676,6 @@ class RouterService:
             turn_trace_id = str(meta.get("turn_trace_id") or clean_msg.get("turn_trace_id") or "").strip()
             if turn_trace_id:
                 clean_msg["turn_trace_id"] = turn_trace_id
-            worker_webspace_id = str(webspace_id or "default").strip() or "default"
             worker_msg = dict(clean_msg)
             worker_meta = dict(meta)
             worker_context_channel = dict(context.get("channel") or {})

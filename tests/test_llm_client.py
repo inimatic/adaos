@@ -12,6 +12,7 @@ def _clear_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "ADAOS_ROOT_LLM_BASE_URL",
         "ADAOS_LLM_ROOT_BASE_URL",
         "ADAOS_ROOT_LLM_FALLBACK_BASE_URLS",
+        "ADAOS_ROOT_LLM_PREFER_GLOBAL",
         "ADAOS_ROOT_VERIFY_CA",
         "ADAOS_LLM_ROOT_VERIFY_CA",
         "ADAOS_SUBNET_ID",
@@ -231,6 +232,7 @@ def test_response_jobs_submit_and_poll_same_root(monkeypatch: pytest.MonkeyPatch
 
     _clear_llm_env(monkeypatch)
     llm._ROOT_LLM_HEALTH_CACHE.clear()
+    monkeypatch.setenv("ADAOS_ROOT_LLM_PREFER_GLOBAL", "0")
     fake_ctx = SimpleNamespace(
         settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
         config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
@@ -284,11 +286,103 @@ def test_response_jobs_submit_and_poll_same_root(monkeypatch: pytest.MonkeyPatch
     assert [call["path"] for call in calls] == ["/v1/health", "/v1/llm/jobs", "/v1/llm/jobs/llm_job_test"]
 
 
+def test_response_job_submit_prefers_global_root_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    llm._ROOT_LLM_HEALTH_CACHE.clear()
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if self.base_url == "https://api.inimatic.com" and method == "POST" and path == "/v1/llm/jobs":
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_global",
+                    "request_id": "req.async",
+                    "status": "queued",
+                }
+            if self.base_url == "https://ru.api.inimatic.com":
+                raise AssertionError("regional root should only be a fallback when global submit succeeds")
+            raise AssertionError(f"unexpected request {self.base_url} {method} {path}")
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    submitted = llm.submit_response_job(
+        [{"role": "user", "content": "Return ok."}],
+        request_id="req.async",
+        timeout=15,
+    )
+
+    assert submitted["job_id"] == "llm_job_global"
+    assert submitted["_client"]["base_url"] == "https://api.inimatic.com"
+    assert [f"{call['base_url']} {call['method']} {call['path']}" for call in calls] == [
+        "https://api.inimatic.com POST /v1/llm/jobs",
+    ]
+
+
+def test_response_job_submit_does_not_healthcheck_preferred_global_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    llm._ROOT_LLM_HEALTH_CACHE.clear()
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if self.base_url == "https://api.inimatic.com" and method == "GET" and path == "/v1/health":
+                raise AssertionError("preferred global root submit must not be gated by health preflight")
+            if self.base_url == "https://api.inimatic.com" and method == "POST" and path == "/v1/llm/jobs":
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_global",
+                    "request_id": "req.async",
+                    "status": "queued",
+                }
+            if self.base_url == "https://ru.api.inimatic.com":
+                raise AssertionError("regional root should only be a fallback when global submit fails")
+            raise AssertionError(f"unexpected request {self.base_url} {method} {path}")
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    submitted = llm.submit_response_job(
+        [{"role": "user", "content": "Return ok."}],
+        request_id="req.async",
+        timeout=15,
+    )
+
+    assert submitted["job_id"] == "llm_job_global"
+    assert [f"{call['base_url']} {call['method']} {call['path']}" for call in calls] == [
+        "https://api.inimatic.com POST /v1/llm/jobs",
+    ]
+
+
 def test_response_job_submit_recovers_primary_job_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     from adaos.sdk.llm import llm_client as llm
 
     _clear_llm_env(monkeypatch)
     llm._ROOT_LLM_HEALTH_CACHE.clear()
+    monkeypatch.setenv("ADAOS_ROOT_LLM_PREFER_GLOBAL", "0")
     fake_ctx = SimpleNamespace(
         settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
         config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
@@ -342,11 +436,74 @@ def test_response_job_submit_recovers_primary_job_after_timeout(monkeypatch: pyt
     ]
 
 
+def test_wait_response_job_retries_transient_poll_502(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if method == "GET" and path == "/v1/llm/jobs/llm_job_retry":
+                attempt = sum(1 for call in calls if call["path"] == path)
+                if attempt == 1:
+                    return {
+                        "ok": True,
+                        "schema": "adaos.root.llm.job.v1",
+                        "job_id": "llm_job_retry",
+                        "status": "queued",
+                    }
+                if attempt == 2:
+                    raise llm.RootHttpError(
+                        "<html><body><h1>502 Bad Gateway</h1></body></html>",
+                        status_code=502,
+                        payload="<html><body><h1>502 Bad Gateway</h1></body></html>",
+                    )
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_retry",
+                    "status": "succeeded",
+                    "response": {"output": [{"content": [{"type": "output_text", "text": "done"}]}]},
+                }
+            raise AssertionError(f"unexpected request {method} {path}")
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    result = llm.wait_response_job(
+        "llm_job_retry",
+        base_url="https://api.inimatic.com",
+        timeout_s=2,
+        poll_interval_s=0.01,
+        request_timeout=0.25,
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["output_text"] == "done"
+    assert [call["path"] for call in calls] == [
+        "/v1/llm/jobs/llm_job_retry",
+        "/v1/llm/jobs/llm_job_retry",
+        "/v1/llm/jobs/llm_job_retry",
+    ]
+
+
 def test_response_job_submit_skips_unhealthy_primary_root(monkeypatch: pytest.MonkeyPatch) -> None:
     from adaos.sdk.llm import llm_client as llm
 
     _clear_llm_env(monkeypatch)
     llm._ROOT_LLM_HEALTH_CACHE.clear()
+    monkeypatch.setenv("ADAOS_ROOT_LLM_PREFER_GLOBAL", "0")
     monkeypatch.setenv("ADAOS_ROOT_LLM_HEALTHCHECK_TIMEOUT_S", "0.25")
     fake_ctx = SimpleNamespace(
         settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
@@ -405,3 +562,46 @@ def test_response_job_submit_skips_unhealthy_primary_root(monkeypatch: pytest.Mo
             }
         ],
     }
+
+
+def test_response_job_submit_uses_short_default_health_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    llm._ROOT_LLM_HEALTH_CACHE.clear()
+    monkeypatch.setenv("ADAOS_ROOT_LLM_PREFER_GLOBAL", "0")
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if self.base_url == "https://ru.api.inimatic.com" and method == "GET" and path == "/v1/health":
+                raise llm.RootHttpError("GET /v1/health failed: timed out", status_code=0)
+            if self.base_url == "https://api.inimatic.com" and method == "POST" and path == "/v1/llm/jobs":
+                return {
+                    "ok": True,
+                    "schema": "adaos.root.llm.job.v1",
+                    "job_id": "llm_job_global",
+                    "request_id": "req.async",
+                    "status": "queued",
+                }
+            raise AssertionError(f"unexpected request {self.base_url} {method} {path}")
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    submitted = llm.submit_response_job(
+        [{"role": "user", "content": "Return ok."}],
+        request_id="req.async",
+        timeout=15,
+    )
+
+    assert submitted["job_id"] == "llm_job_global"
+    assert calls[0]["kwargs"]["timeout"] == 1.0
