@@ -2502,6 +2502,100 @@ async def test_voice_chat_snapshot_request_recovers_requested_thread_when_cache_
     assert requested["messages"][-1]["text"] == "requested turn 9"
 
 
+async def test_voice_chat_snapshot_request_recovers_stale_same_thread_cache(monkeypatch) -> None:
+    from adaos.services import conversation_store
+
+    bus = LocalEventBus()
+    suffix = uuid4().hex[:8]
+    webspace_id = f"builder-stale-history-ws-{suffix}"
+    conversation_id = f"conv.skill.builder_skill.default.{webspace_id}"
+    thread_id = f"prompt-project:scenario:prototype_{suffix}"
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id=webspace_id,
+        owner="skill:builder_skill",
+    )
+    conversation_store.append_message(
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        webspace_id=webspace_id,
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="hub",
+        text="initial builder response",
+        payload={"id": f"initial.{suffix}", "from": "hub", "text": "initial builder response"},
+        actor_id="agent:builder_skill:builder",
+        actor_label="Конструктор",
+        route_id="voice_chat",
+        ts=100.0,
+    )
+
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    snapshot_payload = {
+        "receiver": "voice_chat.messages",
+        "webspace_id": webspace_id,
+        "conversation_id": conversation_id,
+        "dialog_channel_id": "builder",
+        "thread_id": thread_id,
+        "params": {
+            "conversation_id": conversation_id,
+            "dialog_channel_id": "builder",
+            "conversation_topic_id": thread_id,
+        },
+    }
+    bus.publish(Event(type="webio.stream.snapshot.requested", source="test", ts=1.0, payload=dict(snapshot_payload)))
+    await bus.wait_for_idle(timeout=1.0)
+    assert len(seen_stream) == 1
+    assert seen_stream[-1].payload["data"]["total_message_count"] == 1
+
+    conversation_store.append_message(
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        webspace_id=webspace_id,
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="user",
+        text="Добавь поля: ФИО и пол",
+        payload={"id": f"user.{suffix}", "from": "user", "text": "Добавь поля: ФИО и пол"},
+        route_id="voice_chat",
+        ts=101.0,
+    )
+    conversation_store.append_message(
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        webspace_id=webspace_id,
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="hub",
+        text="updated prototype",
+        payload={"id": f"hub.{suffix}", "from": "hub", "text": "updated prototype"},
+        actor_id="agent:builder_skill:builder",
+        actor_label="Конструктор",
+        route_id="voice_chat",
+        ts=102.0,
+    )
+
+    bus.publish(Event(type="webio.stream.snapshot.requested", source="test", ts=2.0, payload=dict(snapshot_payload)))
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert len(seen_stream) == 2
+    recovered = seen_stream[-1].payload["data"]
+    assert recovered["conversation_id"] == conversation_id
+    assert recovered["conversation_topic_id"] == thread_id
+    assert recovered["total_message_count"] == 3
+    assert [item["from"] for item in recovered["messages"]] == ["hub", "user", "hub"]
+    assert recovered["messages"][1]["text"] == "Добавь поля: ФИО и пол"
+
+
 async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(monkeypatch) -> None:
     from adaos.services import conversation_store, dialog_runtime
     from adaos.services.agent_context import get_ctx as real_get_ctx

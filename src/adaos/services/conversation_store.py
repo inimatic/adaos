@@ -1999,11 +1999,26 @@ def _projection_recovery_reason(
         return "stale_total"
     if _projection_tail_seq(store_messages) > _projection_tail_seq(current_messages):
         return "stale_tail"
+    if _projection_tail_signature(store_messages) != _projection_tail_signature(current_messages):
+        return "tail_mismatch"
     return ""
 
 
 def _projection_tail_seq(messages: list[dict[str, Any]]) -> int:
     return max((_projection_int(item.get("seq"), 0) for item in messages), default=0)
+
+
+def _projection_tail_signature(messages: list[dict[str, Any]]) -> tuple[tuple[int, str, str, str], ...]:
+    tail = messages[-min(len(messages), 16) :]
+    return tuple(
+        (
+            _projection_int(item.get("seq"), 0),
+            str(item.get("id") or ""),
+            str(item.get("from") or item.get("role") or ""),
+            str(item.get("text") or ""),
+        )
+        for item in tail
+    )
 
 
 def _projection_int(value: Any, fallback: int = 0) -> int:

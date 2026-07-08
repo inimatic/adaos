@@ -3307,6 +3307,67 @@ class RouterService:
                 current if isinstance(current, dict) else {},
                 *messages,
             )
+            ledger_projection: dict[str, Any] = {}
+            ledger_messages: list[dict[str, Any]] = []
+            try:
+                recovered = conversation_store.recover_projection_from_store(
+                    current if isinstance(current, dict) else {},
+                    conversation_id=resolved_conversation_id,
+                    thread_id=resolved_topic_id or None,
+                    limit=VOICE_CHAT_VISIBLE_TAIL,
+                    max_items=VOICE_CHAT_HISTORY_LIMIT,
+                )
+                ledger_projection = dict(recovered) if isinstance(recovered, dict) else {}
+                raw_ledger_messages = ledger_projection.get("messages")
+                if isinstance(raw_ledger_messages, list):
+                    ledger_messages = [dict(item) for item in raw_ledger_messages if isinstance(item, dict)]
+            except Exception:
+                ledger_projection = {}
+                ledger_messages = []
+            if ledger_messages and (
+                not messages
+                or bool(
+                    isinstance(ledger_projection.get("recovery"), dict)
+                    and ledger_projection["recovery"].get("recovered")
+                )
+            ):
+                last_refresh_ts = time.time()
+                try:
+                    recovery = ledger_projection.get("recovery") if isinstance(ledger_projection.get("recovery"), dict) else {}
+                    self._vlog.debug(
+                        "voice_chat.snapshot recovered from store webspace=%s target=%s conversation=%s thread=%s messages=%s total=%s reason=%s",
+                        webspace_id,
+                        str(target_node_id or "").strip(),
+                        resolved_conversation_id,
+                        resolved_topic_id or "",
+                        len(ledger_messages),
+                        int(ledger_projection.get("total_message_count") or len(ledger_messages)),
+                        str(recovery.get("reason") or ""),
+                    )
+                except Exception:
+                    pass
+                published_signature = _publish_voice_chat_stream(
+                    webspace_id,
+                    target_node_id,
+                    ledger_messages,
+                    last_refresh_ts,
+                    before_cursor=str(ledger_projection.get("before_cursor") or ""),
+                    has_more_before=bool(ledger_projection.get("has_more_before")),
+                    total_message_count=int(ledger_projection.get("total_message_count") or len(ledger_messages)),
+                )
+                if suppress_unchanged:
+                    _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
+                if persist:
+                    _schedule_voice_chat_persist(
+                        webspace_id,
+                        target_node_id,
+                        ledger_messages,
+                        last_refresh_ts,
+                        before_cursor=str(ledger_projection.get("before_cursor") or ""),
+                        has_more_before=bool(ledger_projection.get("has_more_before")),
+                        total_message_count=int(ledger_projection.get("total_message_count") or len(ledger_messages)),
+                    )
+                return
             if messages:
                 cached_conversation_id = str(current.get("conversation_id") or "").strip() if isinstance(current, dict) else ""
                 if not cached_conversation_id:
@@ -3361,7 +3422,7 @@ class RouterService:
                         _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
                     return
             try:
-                projection = conversation_store.recover_projection_from_store(
+                projection = ledger_projection or conversation_store.recover_projection_from_store(
                     current if isinstance(current, dict) else {},
                     conversation_id=resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
