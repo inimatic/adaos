@@ -31,6 +31,11 @@ def test_browser_link_list_uses_metadata_draft_name_when_display_name_is_empty(m
 def test_get_browser_link_preserves_user_display_name_over_metadata(monkeypatch) -> None:
     monkeypatch.setattr(
         sdk_access_links._service,
+        "browser_snapshot",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        sdk_access_links._service,
         "get_link",
         lambda kind, device_id: {
             "id": device_id,
@@ -47,3 +52,33 @@ def test_get_browser_link_preserves_user_display_name_over_metadata(monkeypatch)
     assert item["display_name"] == "Dev Browser"
     assert item["effective_name"] == "Dev Browser"
     assert item["display_name_source"] == "policy"
+
+
+def test_get_browser_link_prefers_live_browser_snapshot(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sdk_access_links._service,
+        "browser_snapshot",
+        lambda: [
+            {
+                "id": "dev-browser::tab-1",
+                "kind": "browser",
+                "display_name": "",
+                "access_class": "client",
+                "browser_family": "Chrome",
+                "os_name": "Windows",
+                "online": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sdk_access_links._service,
+        "get_link",
+        lambda _kind, _device_id: None,
+    )
+
+    item = sdk_access_links.get_browser_link("dev-browser::tab-1")
+
+    assert item is not None
+    assert item["display_name"] == "Chrome on Windows"
+    assert item["online"] is True
+    assert item["access_class"] == "client"
