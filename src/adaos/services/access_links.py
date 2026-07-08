@@ -1140,7 +1140,32 @@ def browser_snapshot() -> list[dict[str, Any]]:
             continue
         device_id = str(peer.get("device_id") or peer.get("id") or "").strip()
         client_id = str(peer.get("client_limit_id") or "").strip()
-        if not device_id or not client_id:
+        if not device_id:
+            continue
+        webspace_id = str(peer.get("webspace_id") or "").strip() or None
+        connection_state = str(peer.get("connection_state") or "connected").strip() or "connected"
+        parent = by_id.get(device_id)
+        if parent is not None:
+            parent["online"] = True
+            parent["connection_state"] = connection_state
+            parent["last_seen_at"] = max(float(parent.get("last_seen_at") or 0.0), now)
+            if webspace_id:
+                parent["last_webspace_id"] = webspace_id
+            try:
+                parent["active_session_count"] = int(parent.get("active_session_count") or 0) + int(peer.get("session_count") or 0)
+            except Exception:
+                parent["active_session_count"] = int(parent.get("active_session_count") or 0)
+            if client_id:
+                active_clients = [
+                    str(item or "").strip()
+                    for item in list(parent.get("active_client_limit_ids") or [])
+                    if str(item or "").strip()
+                ]
+                if client_id not in active_clients:
+                    active_clients.append(client_id)
+                parent["active_client_limit_ids"] = active_clients
+            by_id[device_id] = parent
+        if not client_id:
             continue
         entry_id = f"{device_id}::{client_id}"
         if entry_id in by_id:
@@ -1157,9 +1182,9 @@ def browser_snapshot() -> list[dict[str, Any]]:
                 "lifetime_mode": "fixed",
                 "expires_at": None,
                 "online": True,
-                "connection_state": str(peer.get("connection_state") or "connected").strip() or "connected",
+                "connection_state": connection_state,
                 "last_seen_at": now,
-                "last_webspace_id": str(peer.get("webspace_id") or parent.get("last_webspace_id") or "").strip() or None,
+                "last_webspace_id": webspace_id or str(parent.get("last_webspace_id") or "").strip() or None,
                 "browser_client_id": client_id,
                 "parent_browser_device_id": device_id,
                 "session_count": int(peer.get("session_count") or 0),

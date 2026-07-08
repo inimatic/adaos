@@ -96,7 +96,16 @@ def list_redevice_links() -> list[dict[str, Any]]:
 
 
 def get_browser_link(device_id: str) -> dict[str, Any] | None:
-    return _enrich_browser_link(_service.get_link("browser", device_id))
+    token = _text(device_id)
+    if not token:
+        return None
+    try:
+        for entry in _service.browser_snapshot():
+            if _text(entry.get("id")) == token:
+                return _enrich_browser_link(entry)
+    except Exception:
+        pass
+    return _enrich_browser_link(_service.get_link("browser", token))
 
 
 def get_member_link(node_id: str) -> dict[str, Any] | None:
