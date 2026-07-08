@@ -3335,6 +3335,18 @@ class RouterService:
                         now_monotonic = time.monotonic()
                         if last and last[1] == signature and (now_monotonic - float(last[0] or 0.0)) < min_interval:
                             return
+                    try:
+                        self._vlog.debug(
+                            "voice_chat.snapshot publishing cache webspace=%s target=%s conversation=%s thread=%s messages=%s total=%s",
+                            webspace_id,
+                            str(target_node_id or "").strip(),
+                            resolved_conversation_id,
+                            resolved_topic_id or cached_topic_id or "",
+                            len(messages),
+                            total_message_count,
+                        )
+                    except Exception:
+                        pass
                     last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
                     published_signature = _publish_voice_chat_stream(
                         webspace_id,
@@ -3362,6 +3374,18 @@ class RouterService:
             if isinstance(store_messages, list) and store_messages:
                 last_refresh_ts = time.time()
                 stream_messages = [dict(item) for item in store_messages if isinstance(item, dict)]
+                try:
+                    self._vlog.debug(
+                        "voice_chat.snapshot recovered from store webspace=%s target=%s conversation=%s thread=%s messages=%s total=%s",
+                        webspace_id,
+                        str(target_node_id or "").strip(),
+                        resolved_conversation_id,
+                        resolved_topic_id or "",
+                        len(stream_messages),
+                        int(projection.get("total_message_count") or len(stream_messages)),
+                    )
+                except Exception:
+                    pass
                 _publish_voice_chat_stream(
                     webspace_id,
                     target_node_id,

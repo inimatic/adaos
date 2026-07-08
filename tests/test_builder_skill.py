@@ -35,7 +35,7 @@ def test_manifest_declares_builder_dialog_agent() -> None:
     assert manifest["conversation"]["agents"][0]["id"] == "agent:builder_skill:builder"
 
 
-def test_builder_topic_ref_reuses_session_topic_without_store(monkeypatch) -> None:
+def test_builder_topic_ref_normalizes_old_session_topic_without_store(monkeypatch) -> None:
     skill = _load_module()
     calls: list[dict] = []
 
@@ -64,8 +64,8 @@ def test_builder_topic_ref_reuses_session_topic_without_store(monkeypatch) -> No
     )
 
     assert calls == []
-    assert topic["thread_id"] == "thread.builder.desktop.draft.todo"
-    assert topic["topic_id"] == "builder:desktop:draft.todo"
+    assert topic["thread_id"] == "prompt-project:scenario:todo_scenario"
+    assert topic["topic_id"] == "prompt-project:scenario:todo_scenario"
     assert topic["scenario_id"] == "todo_scenario"
     assert topic["active_draft_id"] == "draft.todo"
     assert topic["dev_webspace_id"] == "desktop-dev"

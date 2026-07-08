@@ -51,6 +51,16 @@ def test_actor_id_contract_accepts_canonical_actors_and_rejects_ambiguous_ids() 
         validate_actor_id("conversation_companions")
 
 
+def test_builder_scenario_topic_ref_uses_prompt_project_thread() -> None:
+    from adaos.services.conversation_links import builder_topic_ref
+
+    ref = builder_topic_ref("desktop", scenario_id="prototype_app_4d5758e5")
+
+    assert ref["topic_kind"] == "builder_scenario"
+    assert ref["topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    assert ref["thread_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+
+
 def test_conversation_and_message_contract_round_trip_to_canonical_json() -> None:
     initiator = Initiator(
         actor_id="user:local",

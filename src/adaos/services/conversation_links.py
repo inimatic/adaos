@@ -44,16 +44,25 @@ def builder_topic_ref(
     token = _safe_id(project, "default")
     if draft:
         kind = "builder_draft"
+        topic_id = f"builder:{ws}:{token}"
+        thread_id = f"thread.builder.{ws}.{token}"
     elif scenario:
         kind = "builder_scenario"
+        scenario_token = _safe_id(scenario, token)
+        topic_id = f"prompt-project:scenario:{scenario_token}"
+        thread_id = topic_id
     elif dev_ws:
         kind = "builder_workspace"
+        topic_id = f"builder:{ws}:{token}"
+        thread_id = f"thread.builder.{ws}.{token}"
     else:
         kind = "builder_default"
+        topic_id = f"builder:{ws}:{token}"
+        thread_id = f"thread.builder.{ws}.{token}"
     return {
         "schema": "adaos.conversation.topic_ref.v1",
-        "topic_id": f"builder:{ws}:{token}",
-        "thread_id": f"thread.builder.{ws}.{token}",
+        "topic_id": topic_id,
+        "thread_id": thread_id,
         "topic_kind": kind,
         "webspace_id": ws,
         "source_webspace_id": ws,

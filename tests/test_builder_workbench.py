@@ -68,6 +68,9 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     selected = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
     assert selected["runtime_scenario_id"] == "demo_scenario"
     assert selected["active_draft_id"] is None
+    assert selected["dialog"]["thread_id"] == "prompt-project:scenario:demo_scenario"
+    assert selected["dialog"]["topic_id"] == "prompt-project:scenario:demo_scenario"
+    assert selected["dialog"]["meta"]["conversation_topic_id"] == "prompt-project:scenario:demo_scenario"
     assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
 
     opened = await service.open_dev_webspace_ready("desktop", base_url="http://localhost:8100")

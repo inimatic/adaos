@@ -351,17 +351,28 @@ class BuilderWorkbenchService:
                 dev_webspace_id=dev_id,
             )
         except Exception:
+            runtime_token = str(runtime_scenario_id or "").strip()
+            project_id = str(active_draft_id or runtime_token or dev_id or "default").strip() or "default"
+            if runtime_token and not str(active_draft_id or "").strip():
+                fallback_topic_id = f"prompt-project:scenario:{runtime_token}"
+                fallback_thread_id = fallback_topic_id
+                fallback_kind = "builder_scenario"
+            else:
+                token = project_id
+                fallback_topic_id = f"builder:{source_id}:{token}"
+                fallback_thread_id = f"thread.builder.{source_id}.{token}"
+                fallback_kind = "builder_default"
             topic = {
                 "schema": "adaos.conversation.topic_ref.v1",
-                "topic_id": f"builder:{source_id}:default",
-                "thread_id": f"thread.builder.{source_id}.default",
-                "topic_kind": "builder_default",
+                "topic_id": fallback_topic_id,
+                "thread_id": fallback_thread_id,
+                "topic_kind": fallback_kind,
                 "webspace_id": source_id,
                 "source_webspace_id": source_id,
                 "active_draft_id": str(active_draft_id or "").strip() or None,
                 "scenario_id": str(runtime_scenario_id or "").strip() or None,
                 "dev_webspace_id": dev_id,
-                "project_id": str(active_draft_id or runtime_scenario_id or dev_id or "default").strip() or "default",
+                "project_id": project_id,
                 "conversation_id": f"conv.skill.{BUILDER_SKILL_ID}.default.{source_id}",
                 "channel_id": BUILDER_DIALOG_CHANNEL_ID,
                 "owner": BUILDER_OWNER,
@@ -379,6 +390,8 @@ class BuilderWorkbenchService:
             "conversation_owner": BUILDER_OWNER,
             "thread_id": thread_id,
             "topic_id": topic_id,
+            "conversation_thread_id": thread_id,
+            "conversation_topic_id": thread_id or topic_id,
             "builder_topic": {k: v for k, v in topic.items() if k != "stored"},
             "route_id": "voice_chat",
         }
