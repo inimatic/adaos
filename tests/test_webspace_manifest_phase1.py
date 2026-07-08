@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 import types
 from types import SimpleNamespace
 
 from adaos.services.agent_context import get_ctx
-if "y_py" not in sys.modules:
+if "y_py" not in sys.modules and importlib.util.find_spec("y_py") is None:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
-if "ypy_websocket" not in sys.modules:
+if "ypy_websocket" not in sys.modules and importlib.util.find_spec("ypy_websocket") is None:
     ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
     sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
     sys.modules["ypy_websocket.ystore"] = ystore_mod
@@ -29,6 +30,7 @@ from adaos.services.workspaces import (
     get_workspace_widget_order_overlay,
     get_workspace_hidden_sections_overlay,
     get_workspace_home_scenario_ref_overlay,
+    get_workspace_current_scenario_overlay,
     has_workspace_overlay,
     normalize_workspaces,
     set_workspace_installed_overlay,
@@ -39,6 +41,7 @@ from adaos.services.workspaces import (
     set_workspace_widget_order_overlay,
     set_workspace_hidden_sections_overlay,
     set_workspace_home_scenario_ref_overlay,
+    set_workspace_current_scenario_overlay,
     set_workspace_manifest,
 )
 
@@ -54,6 +57,14 @@ class _FakeTxn:
 class _FakeMap(dict):
     def set(self, txn, key: str, value: object) -> None:  # noqa: ARG002
         self[key] = value
+
+
+class _FakeYJson:
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    def to_json(self) -> object:
+        return self._payload
 
 
 class _FakeDoc:
@@ -260,6 +271,42 @@ def test_workspace_home_scenario_ref_overlay_roundtrip() -> None:
         "node_label": "Infra Node",
     }
     assert get_workspace_overlay("scenario-ref-space")["workspace"]["homeScenarioRef"]["scenario_id"] == "infra_state"
+
+
+def test_workspace_current_scenario_overlay_roundtrip() -> None:
+    ensure_workspace("current-scenario-space")
+
+    set_workspace_current_scenario_overlay("current-scenario-space", "prompt_engineer_scenario")
+
+    assert get_workspace_current_scenario_overlay("current-scenario-space") == "prompt_engineer_scenario"
+    assert get_workspace_overlay("current-scenario-space")["workspace"]["currentScenario"] == "prompt_engineer_scenario"
+
+    set_workspace_current_scenario_overlay("current-scenario-space", None)
+
+    assert get_workspace_current_scenario_overlay("current-scenario-space") is None
+    assert "workspace" not in get_workspace_overlay("current-scenario-space")
+
+
+def test_operational_state_ignores_stale_live_current_when_manifest_home_is_explicit(monkeypatch) -> None:
+    webspace_id = "manifest-home-beats-stale-live-current"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Stable Home",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_try_read_live_current_scenario",
+        lambda _webspace_id: "prompt_engineer_scenario",
+    )
+
+    state = asyncio.run(webspace_runtime_module.describe_webspace_operational_state(webspace_id))
+
+    assert state.current_scenario is None
+    assert state.effective_home_scenario == "web_desktop"
 
 
 def test_webspace_reload_defaults_to_manifest_home_scenario(monkeypatch) -> None:
@@ -813,6 +860,71 @@ def test_web_desktop_service_get_snapshot_returns_overlay_state(monkeypatch) -> 
         "widgetOrder": ["weather"],
         "hiddenSections": [],
     }
+
+
+def test_web_desktop_service_get_snapshot_clones_yjs_map_like_materialized_state(monkeypatch) -> None:
+    webspace_id = "phase5-yjs-map-like-desktop-snapshot"
+    ensure_workspace(webspace_id)
+    fake_state = {
+        "ui": _FakeMap(
+            {
+                "application": _FakeYJson(
+                    {
+                        "desktop": {
+                            "topbar": [{"id": "home", "label": "Home"}],
+                            "pageSchema": {
+                                "id": "todo-list",
+                                "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                                "widgets": [{"id": "prototype-form", "type": "form", "area": "main"}],
+                            },
+                        }
+                    }
+                )
+            }
+        ),
+        "data": _FakeMap(
+            {
+                "catalog": _FakeYJson(
+                    {
+                        "widgets": [
+                            {
+                                "id": "weather",
+                                "type": "visual.metricTile",
+                                "dataSource": {"kind": "y", "path": "data/weather/current"},
+                            }
+                        ]
+                    }
+                ),
+                "installed": _FakeYJson(
+                    {
+                        "apps": ["weather_app"],
+                        "widgets": ["weather"],
+                    }
+                ),
+                "desktop": _FakeYJson(
+                    {
+                        "pinnedWidgets": [{"id": "weather", "type": "legacy"}],
+                        "iconOrder": ["weather_app"],
+                        "widgetOrder": ["weather"],
+                        "hiddenSections": ["node:member-01"],
+                    }
+                ),
+            }
+        ),
+    }
+    monkeypatch.setattr(desktop_module, "get_ydoc", lambda _webspace_id: _FakeSyncDoc(fake_state))
+
+    snapshot = desktop_module.WebDesktopService().get_snapshot(webspace_id)
+
+    assert snapshot.installed.apps == ["weather_app"]
+    assert snapshot.installed.widgets == ["weather"]
+    assert snapshot.page_schema["id"] == "todo-list"
+    assert snapshot.page_schema["widgets"][0]["id"] == "prototype-form"
+    assert snapshot.pinned_widgets[0]["type"] == "visual.metricTile"
+    assert snapshot.pinned_widgets[0]["dataSource"]["path"] == "data/weather/current"
+    assert snapshot.icon_order == ["weather_app"]
+    assert snapshot.widget_order == ["weather"]
+    assert snapshot.hidden_sections == ["node:member-01"]
 
 
 def test_web_desktop_service_refreshes_stale_pinned_widget_runtime_fields(monkeypatch) -> None:

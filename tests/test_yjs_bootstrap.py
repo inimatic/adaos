@@ -128,6 +128,10 @@ def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
 
 def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
     class _PanicAfterPartialApplyStore(_FakeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.discard_calls = 0
+
         async def apply_updates(self, ydoc: Y.YDoc) -> None:
             self.apply_updates_calls += 1
             with ydoc.begin_transaction() as txn:
@@ -137,6 +141,10 @@ def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypat
                 ui_map.set(txn, "application", {"modals": {"apps_catalog": {}, "widgets_catalog": {}}})
                 data_map.set(txn, "catalog", {"apps": [], "widgets": []})
             raise RuntimeError("Couldn't get item's parent")
+
+        async def discard_corrupt_state(self, *, delete_snapshot: bool = True) -> dict[str, object]:
+            self.discard_calls += 1
+            return {"ok": True, "snapshot_deleted": bool(delete_snapshot)}
 
     class _ProjectingManager:
         def project_scenario_to_doc(self, ydoc: Y.YDoc, scenario_id: str, *, space: str = "workspace") -> None:
@@ -171,6 +179,8 @@ def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypat
     assert result["mode"] == "scenario_projection"
     assert result["apply_updates_error"].startswith("RuntimeError:")
     assert result["apply_updates_discarded_partial_state"] is True
+    assert result["apply_updates_corrupt_state_discard"] == {"ok": True, "snapshot_deleted": True}
+    assert store.discard_calls == 1
     assert store.write_calls == 1
     assert dict(provided_doc.get_map("ui").get("application") or {})["desktop"]["pageSchema"]["id"] == "fresh-todo"
     assert dict(provided_doc.get_map("data").get("catalog") or {})["apps"] == [{"id": "fresh-app"}]

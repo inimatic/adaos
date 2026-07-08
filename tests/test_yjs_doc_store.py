@@ -348,8 +348,47 @@ async def test_ystore_backup_to_disk_compacts_runtime_log(monkeypatch) -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_backup_to_disk_records_encode_panic_without_compacting(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
+    webspace_id = _webspace_id("backup-panic")
+    store = get_ystore_for_webspace(webspace_id)
+
+    class _YjsPanic(BaseException):
+        pass
+
+    try:
+        for idx in range(3):
+            async with async_get_ydoc(webspace_id) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    ydoc.get_map("data").set(txn, f"item_{idx}", idx)
+
+        before = store.runtime_snapshot()
+        monkeypatch.setattr(
+            ystore_module,
+            "_encode_snapshot_artifacts",
+            lambda updates: (_ for _ in ()).throw(_YjsPanic("Couldn't get item's parent")),
+        )
+
+        with pytest.raises(RuntimeError, match="yjs_backup_failed:manual"):
+            await store.backup_to_disk(compact_runtime=True, backup_kind="manual")
+
+        after = store.runtime_snapshot()
+        assert after["backup_failed_total"] == 1
+        assert after["backup_failed_by_kind"]["manual"] == 1
+        assert after["last_backup_kind"] == "manual"
+        assert after["last_backup_mode"] == "encoded_runtime_log:failed"
+        assert after["last_backup_skip_reason"] == "error"
+        assert "Couldn't get item's parent" in after["last_backup_error"]
+        assert after["update_log_entries"] == before["update_log_entries"]
+        assert after["update_log_bytes"] == before["update_log_bytes"]
+        assert after["last_compact_reason"] != "backup_compaction"
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_backup_to_disk_releases_allocator_after_compaction(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
+    monkeypatch.setenv("ADAOS_YSTORE_BACKUP_FORCE_GC", "1")
     monkeypatch.setattr(ystore_module.gc, "collect", lambda: 7)
     monkeypatch.setattr(ystore_module, "_trim_allocator_after_backup_compaction", lambda: True)
     webspace_id = _webspace_id("backup-release")

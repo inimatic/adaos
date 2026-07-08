@@ -53,7 +53,24 @@ def _clone_json_like(value: Any) -> Any:
     try:
         return json.loads(json.dumps(value))
     except Exception:
-        return value
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Mapping):
+            return {str(k): _clone_json_like(v) for k, v in value.items() if str(k)}
+        items = getattr(value, "items", None)
+        if callable(items):
+            try:
+                return {str(k): _clone_json_like(v) for k, v in items() if str(k)}
+            except Exception:
+                return {}
+        if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, bytearray)):
+            try:
+                return [_clone_json_like(v) for v in value]
+            except Exception:
+                return []
+        return str(value)
 
 
 def _local_node_id() -> str:
@@ -422,6 +439,23 @@ async def ensure_webspace_seeded_from_scenario(
         result["apply_updates_error"] = f"{type(exc).__name__}: {exc}"
         apply_updates_failed = True
         result["apply_updates_discarded_partial_state"] = True
+        discard = getattr(ystore, "discard_corrupt_state", None)
+        if callable(discard):
+            try:
+                discard_result = discard(delete_snapshot=True)
+                if hasattr(discard_result, "__await__"):
+                    discard_result = await discard_result
+                result["apply_updates_corrupt_state_discard"] = (
+                    dict(discard_result) if isinstance(discard_result, Mapping) else {"ok": True}
+                )
+                _log.warning(
+                    "discarded corrupt YStore state during bootstrap webspace=%s result=%s",
+                    webspace_id,
+                    json.dumps(result["apply_updates_corrupt_state_discard"], ensure_ascii=True, sort_keys=True)[:1000],
+                )
+            except Exception:
+                result["apply_updates_corrupt_state_discard"] = {"ok": False, "error": "discard_failed"}
+                _log.warning("failed to discard corrupt YStore state during bootstrap webspace=%s", webspace_id, exc_info=True)
         if ydoc is None:
             target_doc = Y.YDoc()
     finally:

@@ -1,8 +1,52 @@
 from __future__ import annotations
 
+import asyncio
+import sys
+import threading
+import types
 from typing import Any
 
-from adaos.services.runtime_refresh import refresh_skill_runtime
+from adaos.services.runtime_refresh import rebuild_webspace_projection_sync, refresh_skill_runtime
+
+
+def test_rebuild_webspace_projection_sync_works_inside_running_loop(monkeypatch) -> None:
+    calls: list[tuple[str, str, str, str]] = []
+
+    async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str) -> None:
+        calls.append((webspace_id, action, source_of_truth, threading.current_thread().name))
+
+    module = types.ModuleType("adaos.services.scenario.webspace_runtime")
+    module.rebuild_webspace_from_sources = _fake_rebuild
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.scenario.webspace_runtime",
+        module,
+    )
+
+    async def _call_from_loop() -> dict[str, Any]:
+        return rebuild_webspace_projection_sync(
+            webspace_id="desktop",
+            action="infrastate_adaos_update_sync",
+            source_of_truth="scenario_projection",
+        )
+
+    result = asyncio.run(_call_from_loop())
+
+    assert result == {
+        "ok": True,
+        "accepted": True,
+        "webspace_id": "desktop",
+        "action": "infrastate_adaos_update_sync",
+        "source_of_truth": "scenario_projection",
+    }
+    assert calls == [
+        (
+            "desktop",
+            "infrastate_adaos_update_sync",
+            "scenario_projection",
+            "adaos-webspace-rebuild-sync",
+        )
+    ]
 
 
 def test_refresh_skill_runtime_skips_deactivated_skill() -> None:
@@ -51,6 +95,77 @@ def test_refresh_skill_runtime_skips_deactivated_skill() -> None:
         "converge",
     ]
     assert calls == ["runtime_status:new_face_vision_skill"]
+
+
+def test_refresh_skill_runtime_retries_deactivated_skill_when_requested() -> None:
+    calls: list[str] = []
+
+    class _Runtime:
+        version = "0.2.1"
+        slot = "B"
+        data_migration = {}
+
+    class _Manager:
+        def __init__(self) -> None:
+            self._status_calls = 0
+
+        def runtime_status(self, name: str) -> dict[str, Any]:
+            self._status_calls += 1
+            calls.append(f"runtime_status:{name}:{self._status_calls}")
+            if self._status_calls == 1:
+                return {
+                    "version": "0.2.0",
+                    "active_slot": "A",
+                    "deactivated": True,
+                    "deactivation": {
+                        "deactivated": True,
+                        "transient": False,
+                        "reason": "runtime_migration_failed",
+                    },
+                }
+            return {"version": "0.2.1", "active_slot": "B", "deactivated": False}
+
+        def runtime_update(self, name: str, space: str = "workspace") -> dict[str, Any]:
+            calls.append(f"runtime_update:{name}:{space}")
+            return {"ok": True}
+
+        def install(self, name: str, validate: bool = False) -> None:
+            calls.append(f"install:{name}:{int(validate)}")
+
+        def prepare_runtime(self, name: str, *, run_tests: bool = False, allow_deactivated: bool = False):
+            calls.append(f"prepare_runtime:{name}:{int(run_tests)}:{int(allow_deactivated)}")
+            assert allow_deactivated is True
+            return _Runtime()
+
+        def activate_for_space(self, name: str, *, version=None, slot=None, space="default", webspace_id=None):
+            calls.append(f"activate_for_space:{name}:{version}:{slot}:{space}:{webspace_id}")
+            return slot
+
+    payload = refresh_skill_runtime(
+        _Manager(),
+        "weather_skill",
+        webspace_id="desktop",
+        source_version="0.2.1",
+        migrate_runtime=True,
+        ensure_installed=True,
+        require_active_version=True,
+        retry_deactivated=True,
+    )
+
+    assert payload["ok"] is True
+    assert payload["deactivation_retry"] is True
+    assert payload["runtime_migrated"] is True
+    assert payload["active_converged"] is True
+    assert payload["active_version_after"] == "0.2.1"
+    assert payload["active_slot_after"] == "B"
+    assert calls == [
+        "runtime_status:weather_skill:1",
+        "runtime_update:weather_skill:workspace",
+        "install:weather_skill:0",
+        "prepare_runtime:weather_skill:0:1",
+        "activate_for_space:weather_skill:0.2.1:B:default:desktop",
+        "runtime_status:weather_skill:2",
+    ]
 
 
 def test_refresh_skill_runtime_recovers_transient_migration_deactivation() -> None:

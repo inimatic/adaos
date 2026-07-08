@@ -16,7 +16,8 @@ import time
 import logging
 import threading
 import os
-from typing import TYPE_CHECKING, Dict, Any
+from enum import IntEnum
+from typing import TYPE_CHECKING, Dict, Any, Mapping
 
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
@@ -25,19 +26,35 @@ from fastapi import APIRouter, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 try:
+    from anyio import create_task_group
     from ypy_websocket.websocket import Websocket as YWebsocket
     from ypy_websocket.websocket_server import WebsocketServer
     from ypy_websocket.yroom import YRoom
-    from ypy_websocket.yutils import create_update_message
+    from ypy_websocket import yutils as _ypy_yutils
 except ImportError as exc:  # pragma: no cover - import guard for dev envs
     raise RuntimeError("ypy_websocket is required for AdaOS realtime collaboration. " "Install dependencies via `pip install -e .[dev]` or `pip install ypy-websocket`.") from exc
 
+create_update_message = _ypy_yutils.create_update_message
+process_sync_message = getattr(_ypy_yutils, "process_sync_message", None)
+sync = getattr(_ypy_yutils, "sync", None)
+YMessageType = getattr(_ypy_yutils, "YMessageType", None)
+if YMessageType is None:
+    class YMessageType(IntEnum):
+        SYNC = 0
+        AWARENESS = 1
+
 from adaos.services.workspaces import ensure_workspace, get_workspace
 from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario, write_runtime_bootstrap_state
+from adaos.services.yjs.doc import invalidate_live_map_value_cache
 from adaos.services.yjs.observers import attach_room_observers, forget_room_observers
-from adaos.services.yjs.store import evict_ystore_for_webspace, get_ystore_for_webspace, ystore_write_metadata_sync
+from adaos.services.yjs.store import (
+    current_ystore_write_metadata,
+    evict_ystore_for_webspace,
+    get_ystore_for_webspace,
+    ystore_write_metadata_sync,
+)
 from adaos.services.yjs.store import ystore_write_metadata
-from adaos.services.yjs.update_origin import consume_backend_room_update
+from adaos.services.yjs.update_origin import consume_backend_room_update, mark_backend_room_update
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.scheduler import get_scheduler
 from adaos.services.webio_snapshot_demand import request_snapshot_event, snapshot_demand_snapshot
@@ -47,6 +64,12 @@ from adaos.services.agent_context import get_ctx as get_agent_ctx
 router = APIRouter()
 _log = logging.getLogger("adaos.events_ws")
 _ylog = logging.getLogger("adaos.yjs.gateway")
+
+
+def _is_control_flow_base_exception(exc: BaseException) -> bool:
+    return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
+
+
 _TRANSPORT_LOCK = threading.RLock()
 _ACTIVE_YWS_LOCK = threading.RLock()
 _YWS_STORM_LOCK = threading.RLock()
@@ -351,6 +374,13 @@ _GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC = _env_float(
 )
 _GATEWAY_LIVE_PERSIST_COMPACTION_LOCK = threading.RLock()
 _GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT: dict[str, float] = {}
+_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS = _env_float(
+    "ADAOS_YJS_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS",
+    0.0,
+    minimum=0.0,
+)
+_LIVE_ROOM_REFRESH_DIAG_TTL_SEC = _env_float("ADAOS_YJS_LIVE_ROOM_REFRESH_DIAG_TTL_SEC", 60.0, minimum=1.0)
+_LIVE_ROOM_REFRESH_DIAG_MAX = _env_int("ADAOS_YJS_LIVE_ROOM_REFRESH_DIAG_MAX", 128, minimum=16)
 _YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S", 3.0, minimum=0.25)
 _YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS = _env_int("ADAOS_YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS", 3, minimum=1)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
@@ -386,6 +416,11 @@ _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_
 _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", True)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
+_YJS_ROOM_RESET_FORCE_GC = _env_flag("ADAOS_YJS_ROOM_RESET_FORCE_GC", False)
+_YJS_MATERIALIZED_PAYLOAD_TRUST_APPLY_SUMMARY = _env_flag(
+    "ADAOS_YJS_MATERIALIZED_PAYLOAD_TRUST_APPLY_SUMMARY",
+    True,
+)
 _YROOM_EFFECTIVE_DEFAULT_REQUIRED_BRANCHES = (
     "ui.application",
     "data.catalog",
@@ -445,6 +480,11 @@ def _yws_single_client_reconnect_escalation_limit() -> int:
 def _yws_single_client_short_session_escalation_limit() -> int:
     return max(_YWS_GUARD_SHORT_SESSION_LIMIT + 1, _YWS_GUARD_SHORT_SESSION_LIMIT * 2)
 _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_STRICT_FULL_CHECKS", False)
+_YROOM_EFFECTIVE_GUARD_INITIAL_FULL_CHECK_UPDATES = _env_int(
+    "ADAOS_YJS_EFFECTIVE_GUARD_INITIAL_FULL_CHECK_UPDATES",
+    3,
+    minimum=0,
+)
 _YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES = _env_int(
     "ADAOS_YJS_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES",
     0,
@@ -474,6 +514,12 @@ _YROOM_EFFECTIVE_REPAIR_REPLAY_INTERVAL_SEC = _env_float(
     "ADAOS_YJS_EFFECTIVE_REPAIR_REPLAY_INTERVAL_SEC",
     0.1,
     minimum=0.05,
+)
+_YROOM_EFFECTIVE_INITIAL_REPLAY = _env_flag("ADAOS_YJS_EFFECTIVE_INITIAL_REPLAY", True)
+_YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES = _env_int(
+    "ADAOS_YJS_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES",
+    8 * 1024 * 1024,
+    minimum=1,
 )
 _YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC = _env_float(
     "ADAOS_YJS_AUTHORITATIVE_SELECTOR_LEASE_SEC",
@@ -566,6 +612,365 @@ def _memory_stream_statistics(stream: Any) -> dict[str, Any]:
 
 _YROOM_PRESSURE_STATE: dict[str, dict[str, Any]] = {}
 _AUTHORITATIVE_SCENARIO_LEASES: dict[str, dict[str, Any]] = {}
+_LIVE_ROOM_REFRESH_DIAG_LOCK = threading.RLock()
+_LIVE_ROOM_REFRESH_PENDING: dict[tuple[str, int, str], dict[str, Any]] = {}
+_LIVE_ROOM_REFRESH_RECENT: deque[dict[str, Any]] = deque(maxlen=_LIVE_ROOM_REFRESH_DIAG_MAX)
+
+
+def _elapsed_ms_since(started: float) -> float:
+    return round(max(0.0, time.perf_counter() - float(started or 0.0)) * 1000.0, 3)
+
+
+def _live_refresh_update_key(webspace_id: str, update: bytes | bytearray | memoryview | None) -> tuple[str, int, str] | None:
+    if not update:
+        return None
+    payload = bytes(update or b"")
+    if not payload:
+        return None
+    return (_coerce_gateway_webspace_id(webspace_id), len(payload), hashlib.sha1(payload).hexdigest())
+
+
+def _live_refresh_public_key(key: tuple[str, int, str]) -> dict[str, Any]:
+    return {"webspace_id": key[0], "bytes": key[1], "sha1": key[2]}
+
+
+def _prune_live_refresh_diag_locked(now_mono: float) -> None:
+    cutoff = now_mono - float(_LIVE_ROOM_REFRESH_DIAG_TTL_SEC)
+    stale = [
+        key
+        for key, entry in _LIVE_ROOM_REFRESH_PENDING.items()
+        if float(entry.get("registered_at_mono") or 0.0) < cutoff
+    ]
+    for key in stale:
+        _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+    while len(_LIVE_ROOM_REFRESH_PENDING) > int(_LIVE_ROOM_REFRESH_DIAG_MAX):
+        oldest_key = min(
+            _LIVE_ROOM_REFRESH_PENDING,
+            key=lambda item: float(_LIVE_ROOM_REFRESH_PENDING[item].get("registered_at_mono") or 0.0),
+        )
+        _LIVE_ROOM_REFRESH_PENDING.pop(oldest_key, None)
+
+
+def _snapshot_live_refresh_entry(entry: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        return {}
+    phase_timings = entry.get("phase_timings_ms") if isinstance(entry.get("phase_timings_ms"), Mapping) else {}
+    return {
+        "webspace_id": str(entry.get("webspace_id") or "").strip() or "default",
+        "reason": str(entry.get("reason") or "").strip() or None,
+        "bytes": int(entry.get("bytes") or 0),
+        "sha1": str(entry.get("sha1") or "").strip() or None,
+        "registered_at": float(entry.get("registered_at") or 0.0),
+        "observer_broadcast_seen": bool(entry.get("observer_broadcast_seen")),
+        "observer_exact_update_match": entry.get("observer_exact_update_match"),
+        "observer_update_bytes": entry.get("observer_update_bytes"),
+        "observer_update_sha1": entry.get("observer_update_sha1"),
+        "client_sync_done": bool(entry.get("client_sync_done")),
+        "client_count": int(entry.get("client_count") or 0),
+        "client_send_done_count": int(entry.get("client_send_done_count") or 0),
+        "last_client_send_ms": entry.get("last_client_send_ms"),
+        "client_sync_reason": str(entry.get("client_sync_reason") or "").strip() or None,
+        "phase_timings_ms": {
+            str(key): float(value)
+            for key, value in dict(phase_timings).items()
+            if isinstance(value, (int, float))
+        },
+        "timed_out": bool(entry.get("timed_out")),
+    }
+
+
+def _register_live_refresh_update(
+    webspace_id: str,
+    update: bytes | bytearray | memoryview | None,
+    *,
+    reason: str,
+    phase_timings_ms: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    key = _live_refresh_update_key(webspace_id, update)
+    if key is None:
+        return {}
+    now_mono = time.monotonic()
+    phase_timings = {
+        str(name): float(value)
+        for name, value in dict(phase_timings_ms or {}).items()
+        if isinstance(value, (int, float))
+    }
+    entry: dict[str, Any] = {
+        "webspace_id": key[0],
+        "bytes": key[1],
+        "sha1": key[2],
+        "reason": str(reason or "").strip() or "live_room_refresh",
+        "registered_at_mono": now_mono,
+        "registered_at": time.time(),
+        "phase_timings_ms": phase_timings,
+        "observer_broadcast_seen": False,
+        "client_sync_done": False,
+        "client_count": 0,
+        "client_send_done_count": 0,
+    }
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        _prune_live_refresh_diag_locked(now_mono)
+        _LIVE_ROOM_REFRESH_PENDING[key] = entry
+    marker = _snapshot_live_refresh_entry(entry)
+    marker["key"] = _live_refresh_public_key(key)
+    return marker
+
+
+def _live_refresh_snapshot_by_key(key: tuple[str, int, str] | None) -> dict[str, Any]:
+    if key is None:
+        return {}
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is None:
+            for recent in reversed(_LIVE_ROOM_REFRESH_RECENT):
+                if (
+                    str(recent.get("webspace_id") or "") == key[0]
+                    and int(recent.get("bytes") or 0) == key[1]
+                    and str(recent.get("sha1") or "") == key[2]
+                ):
+                    entry = recent
+                    break
+        snapshot = _snapshot_live_refresh_entry(entry)
+    if snapshot:
+        snapshot["key"] = _live_refresh_public_key(key)
+    return snapshot
+
+
+def _live_refresh_recent_snapshot(webspace_id: str | None = None, *, limit: int = 5) -> list[dict[str, Any]]:
+    key = _coerce_gateway_webspace_id(webspace_id) if webspace_id is not None else None
+    out: list[dict[str, Any]] = []
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        pending = [
+            _snapshot_live_refresh_entry(entry)
+            for entry in _LIVE_ROOM_REFRESH_PENDING.values()
+            if key is None or str(entry.get("webspace_id") or "") == key
+        ]
+        recent = [
+            _snapshot_live_refresh_entry(entry)
+            for entry in _LIVE_ROOM_REFRESH_RECENT
+            if key is None or str(entry.get("webspace_id") or "") == key
+        ]
+    for item in [*pending, *recent]:
+        if item:
+            out.append(item)
+    out.sort(key=lambda item: float(item.get("registered_at") or 0.0), reverse=True)
+    return out[: max(0, int(limit))]
+
+
+def _compact_materialized_payload_for_room_history(payload: Mapping[str, Any]) -> dict[str, Any]:
+    compact = {
+        str(key): value
+        for key, value in dict(payload or {}).items()
+        if str(key) != "skill_decls"
+    }
+    try:
+        return json.loads(json.dumps(compact, ensure_ascii=False))
+    except Exception:
+        return dict(compact)
+
+
+def _compact_materialized_payload_apply_result_for_log(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    apply_summary = source.get("apply_summary") if isinstance(source.get("apply_summary"), Mapping) else {}
+    return {
+        "ok": source.get("ok"),
+        "ready": source.get("ready"),
+        "error": source.get("error"),
+        "broadcast_update_bytes": source.get("broadcast_update_bytes"),
+        "full_state_update_bytes": source.get("full_state_update_bytes"),
+        "force_full_state_update": source.get("force_full_state_update"),
+        "full_state_snapshot_persisted": source.get("full_state_snapshot_persisted"),
+        "phase_timings_ms": {
+            str(key): float(raw)
+            for key, raw in dict(source.get("phase_timings_ms") or {}).items()
+            if isinstance(raw, (int, float))
+        },
+        "apply_summary": {
+            key: apply_summary.get(key)
+            for key in (
+                "changed_branches",
+                "unchanged_branches",
+                "failed_branches",
+                "diff_applied_branches",
+                "patch_applied_branches",
+                "trusted_fingerprint_unchanged_branches",
+                "fingerprint_unchanged_branches",
+                "stale_fingerprint_branches",
+            )
+            if apply_summary.get(key) is not None
+        },
+    }
+
+
+def _record_live_refresh_observer_broadcast_for_key(
+    key: tuple[str, int, str] | None,
+    *,
+    update: bytes | bytearray | memoryview | None,
+    client_count: int,
+    exact_update_match: bool,
+) -> tuple[str, int, str] | None:
+    if key is None:
+        return None
+    observed = bytes(update or b"")
+    now_mono = time.monotonic()
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is None:
+            return None
+        phase_timings = entry.setdefault("phase_timings_ms", {})
+        if isinstance(phase_timings, dict):
+            phase_timings["observer_broadcast"] = round(
+                max(0.0, now_mono - float(entry.get("registered_at_mono") or now_mono)) * 1000.0,
+                3,
+            )
+        entry["observer_broadcast_seen"] = True
+        entry["observer_exact_update_match"] = bool(exact_update_match)
+        entry["observer_update_bytes"] = len(observed)
+        entry["observer_update_sha1"] = hashlib.sha1(observed).hexdigest() if observed else None
+        entry["client_count"] = max(0, int(client_count or 0))
+        if int(client_count or 0) <= 0:
+            entry["client_sync_done"] = True
+            if isinstance(phase_timings, dict):
+                phase_timings["client_sync"] = phase_timings.get("observer_broadcast", 0.0)
+        _LIVE_ROOM_REFRESH_PENDING[key] = entry
+    return key
+
+
+def _record_live_refresh_observer_broadcast(
+    webspace_id: str,
+    update: bytes | bytearray | memoryview | None,
+    *,
+    client_count: int,
+) -> tuple[str, int, str] | None:
+    return _record_live_refresh_observer_broadcast_for_key(
+        _live_refresh_update_key(webspace_id, update),
+        update=update,
+        client_count=client_count,
+        exact_update_match=True,
+    )
+
+
+def _record_live_refresh_message_create(key: tuple[str, int, str] | None, elapsed_ms: float) -> None:
+    if key is None:
+        return
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is None:
+            return
+        phase_timings = entry.setdefault("phase_timings_ms", {})
+        if isinstance(phase_timings, dict):
+            phase_timings["observer_message_create"] = round(max(0.0, float(elapsed_ms or 0.0)), 3)
+
+
+def _record_live_refresh_client_send(
+    key: tuple[str, int, str] | None,
+    *,
+    elapsed_ms: float,
+) -> None:
+    if key is None:
+        return
+    now_mono = time.monotonic()
+    done_snapshot: dict[str, Any] | None = None
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is None:
+            return
+        done = int(entry.get("client_send_done_count") or 0) + 1
+        entry["client_send_done_count"] = done
+        entry["last_client_send_ms"] = round(max(0.0, float(elapsed_ms or 0.0)), 3)
+        client_count = int(entry.get("client_count") or 0)
+        if client_count <= 0 or done >= client_count:
+            phase_timings = entry.setdefault("phase_timings_ms", {})
+            if isinstance(phase_timings, dict):
+                phase_timings["client_sync"] = round(
+                    max(0.0, now_mono - float(entry.get("registered_at_mono") or now_mono)) * 1000.0,
+                    3,
+                )
+            entry["client_sync_done"] = True
+            done_snapshot = _snapshot_live_refresh_entry(entry)
+            _LIVE_ROOM_REFRESH_RECENT.append(done_snapshot)
+            _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+        else:
+            _LIVE_ROOM_REFRESH_PENDING[key] = entry
+
+
+def _mark_live_refresh_wait_timeout(key: tuple[str, int, str] | None) -> dict[str, Any]:
+    if key is None:
+        return {}
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is not None:
+            entry["timed_out"] = True
+            _LIVE_ROOM_REFRESH_PENDING[key] = entry
+        snapshot = _snapshot_live_refresh_entry(entry)
+    if snapshot:
+        snapshot["key"] = _live_refresh_public_key(key)
+    return snapshot
+
+
+def _mark_live_refresh_no_clients(key: tuple[str, int, str] | None) -> dict[str, Any]:
+    if key is None:
+        return {}
+    done_snapshot: dict[str, Any] | None = None
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is None:
+            snapshot = _snapshot_live_refresh_entry(None)
+        else:
+            now_mono = time.monotonic()
+            phase_timings = entry.setdefault("phase_timings_ms", {})
+            if isinstance(phase_timings, dict):
+                phase_timings["client_sync"] = round(
+                    max(0.0, now_mono - float(entry.get("registered_at_mono") or now_mono)) * 1000.0,
+                    3,
+                )
+            entry["client_count"] = 0
+            entry["client_sync_done"] = True
+            entry["client_sync_reason"] = "no_clients"
+            done_snapshot = _snapshot_live_refresh_entry(entry)
+            _LIVE_ROOM_REFRESH_RECENT.append(done_snapshot)
+            _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+            snapshot = done_snapshot
+    if snapshot:
+        snapshot["key"] = _live_refresh_public_key(key)
+    return snapshot
+
+
+def _mark_live_refresh_wait_skipped(
+    key: tuple[str, int, str] | None,
+    *,
+    client_count: int,
+    reason: str,
+) -> dict[str, Any]:
+    if key is None:
+        return {}
+    with _LIVE_ROOM_REFRESH_DIAG_LOCK:
+        entry = _LIVE_ROOM_REFRESH_PENDING.get(key)
+        if entry is not None:
+            entry["client_count"] = max(0, int(client_count or 0))
+            entry["client_sync_reason"] = str(reason or "wait_skipped")
+            _LIVE_ROOM_REFRESH_PENDING[key] = entry
+        snapshot = _snapshot_live_refresh_entry(entry)
+    if snapshot:
+        snapshot["key"] = _live_refresh_public_key(key)
+    return snapshot
+
+
+async def _wait_live_refresh_client_sync(
+    key: tuple[str, int, str] | None,
+    *,
+    timeout_ms: float,
+) -> dict[str, Any]:
+    if key is None:
+        return {}
+    deadline = time.perf_counter() + max(0.0, float(timeout_ms or 0.0)) / 1000.0
+    while True:
+        snapshot = _live_refresh_snapshot_by_key(key)
+        if snapshot.get("client_sync_done"):
+            return snapshot
+        if time.perf_counter() >= deadline:
+            return _mark_live_refresh_wait_timeout(key) or _live_refresh_snapshot_by_key(key)
+        await asyncio.sleep(0.002)
 
 
 def note_authoritative_current_scenario(webspace_id: str, scenario_id: str, *, reason: str = "scenario_switch") -> None:
@@ -579,6 +984,21 @@ def note_authoritative_current_scenario(webspace_id: str, scenario_id: str, *, r
         "expires_mono": time.monotonic() + float(_YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC),
         "updated_at": time.time(),
     }
+
+
+def _clear_authoritative_current_scenario(webspace_id: str, *, reason: str = "stale") -> None:
+    key = _coerce_gateway_webspace_id(webspace_id)
+    if not key:
+        return
+    previous = _AUTHORITATIVE_SCENARIO_LEASES.pop(key, None)
+    if previous:
+        _ylog.info(
+            "cleared authoritative current_scenario lease webspace=%s reason=%s previous=%s previous_reason=%s",
+            key,
+            str(reason or "").strip() or "stale",
+            previous.get("scenario_id"),
+            previous.get("reason"),
+        )
 
 
 def _authoritative_current_scenario(webspace_id: str) -> str | None:
@@ -735,6 +1155,10 @@ class DiagnosticYRoom(YRoom):
         self._diag_inbound_guard_last_reset_reserved = False
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
+        self._diag_effective_initial_replay_total = 0
+        self._diag_effective_initial_replay_bytes = 0
+        self._diag_effective_initial_replay_skip_total = 0
+        self._diag_effective_initial_replay_last_reason = ""
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
         self._diag_effective_last_full_check_mono = time.monotonic()
         self._diag_effective_last_repair_mono = 0.0
@@ -803,6 +1227,10 @@ class DiagnosticYRoom(YRoom):
             "effective_repair_total": int(self._diag_effective_repair_total),
             "effective_repair_bytes": int(self._diag_effective_repair_bytes),
             "effective_repair_replay_pending": len(self._effective_repair_replay_entries()),
+            "effective_initial_replay_total": int(self._diag_effective_initial_replay_total),
+            "effective_initial_replay_bytes": int(self._diag_effective_initial_replay_bytes),
+            "effective_initial_replay_skip_total": int(self._diag_effective_initial_replay_skip_total),
+            "effective_initial_replay_last_reason": str(self._diag_effective_initial_replay_last_reason or ""),
             "peak_buffer_used": int(self._diag_peak_buffer_used),
             "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
             "peak_pending_store_tasks": int(self._diag_peak_pending_store_tasks),
@@ -811,6 +1239,7 @@ class DiagnosticYRoom(YRoom):
             "pressure_age_s": pressure_age_s,
             "pressure_activation_total": int(self._diag_pressure_activation_total),
             "pressure_clear_total": int(self._diag_pressure_clear_total),
+            "live_room_refresh_recent": _live_refresh_recent_snapshot(self._diag_room_id(), limit=5),
             "ystore": self._diag_ystore_snapshot() if include_ystore else {},
         }
 
@@ -1009,8 +1438,15 @@ class DiagnosticYRoom(YRoom):
         self._prune_effective_repair_replay_updates()
         return list(self._diag_effective_repair_replay_updates)
 
-    async def _tracked_client_send(self, client: Any, message: bytes, update_bytes: int) -> None:
+    async def _tracked_client_send(
+        self,
+        client: Any,
+        message: bytes,
+        update_bytes: int,
+        live_refresh_key: tuple[str, int, str] | None = None,
+    ) -> None:
         self._diag_pending_send_tasks += 1
+        started = time.perf_counter()
         try:
             self._diag_log_pressure(
                 "client.send.scheduled",
@@ -1019,6 +1455,8 @@ class DiagnosticYRoom(YRoom):
             )
             await client.send(message)
         finally:
+            if live_refresh_key is not None:
+                _record_live_refresh_client_send(live_refresh_key, elapsed_ms=_elapsed_ms_since(started))
             self._diag_pending_send_tasks = max(0, int(self._diag_pending_send_tasks) - 1)
 
     async def _tracked_ystore_write(self, update: bytes) -> None:
@@ -1028,6 +1466,38 @@ class DiagnosticYRoom(YRoom):
         if _is_empty_y_update(update):
             self._diag_empty_update_skip_total += 1
             self._diag_empty_update_skip_bytes += len(update or b"")
+            return
+        write_meta = current_ystore_write_metadata()
+        meta_source = str(write_meta.get("source") or "").strip()
+        meta_channel = str(write_meta.get("channel") or "").strip()
+        if (
+            meta_source.startswith("yjs.gateway_ws.semantic_rebuild:builder_revision_apply")
+            and meta_channel == "core.yjs.gateway.repair"
+        ):
+            update_len = len(update or b"")
+            self._diag_backend_persist_skip_total += 1
+            self._diag_backend_persist_skip_bytes += update_len
+            self.log.debug(
+                "Skipping builder repair YStore write from captured metadata webspace=%s bytes=%s source=%s",
+                self._diag_room_id(),
+                update_len,
+                meta_source,
+            )
+            return
+        suppress_until = 0.0
+        try:
+            suppress_until = float(getattr(self, "_suppress_backend_ystore_persist_until", 0.0) or 0.0)
+        except Exception:
+            suppress_until = 0.0
+        if int(getattr(self, "_suppress_backend_ystore_persist", 0) or 0) > 0 or suppress_until > time.monotonic():
+            update_len = len(update or b"")
+            self._diag_backend_persist_skip_total += 1
+            self._diag_backend_persist_skip_bytes += update_len
+            self.log.debug(
+                "Skipping backend YStore write while repair persistence is suppressed webspace=%s bytes=%s",
+                self._diag_room_id(),
+                update_len,
+            )
             return
         self._diag_pending_store_tasks += 1
         try:
@@ -1052,6 +1522,17 @@ class DiagnosticYRoom(YRoom):
                 owner = str(persisted.get("owner") or "").strip() or "gateway_ws"
                 channel = str(persisted.get("channel") or "core.yjs.gateway.live_room.persist")
                 self._diag_log_pressure("ystore.write.backend_live_room", update_bytes=update_len)
+                if update_len >= _YROOM_DIAG_UPDATE_WARN_BYTES:
+                    self.log.warning(
+                        "persisting backend-origin large YStore write webspace=%s bytes=%s source=%s owner=%s channel=%s already_persisted=%s root_names=%s",
+                        self._diag_room_id(),
+                        update_len,
+                        source,
+                        owner,
+                        channel,
+                        bool(persisted.get("already_persisted", False)),
+                        list(root_names or [])[:12],
+                    )
                 async with ystore_write_metadata(
                     root_names=[
                         str(item or "").strip()
@@ -1073,6 +1554,54 @@ class DiagnosticYRoom(YRoom):
                 )
                 return
             self._diag_log_pressure("ystore.write.scheduled", update_bytes=len(update))
+            update_len = len(update or b"")
+            check_effective = bool(
+                update_len >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES
+                or not (
+                    isinstance(getattr(self, "_diag_effective_branch_snapshot", None), dict)
+                    and getattr(self, "_diag_effective_branch_snapshot", {}).get("ready")
+                )
+            )
+            if check_effective:
+                try:
+                    current_effective_ready = _room_effective_branches_ready(self.ydoc)
+                except Exception:
+                    current_effective_ready = False
+                if not current_effective_ready:
+                    try:
+                        snapshot = _room_effective_branch_snapshot(self.ydoc)
+                    except Exception as exc:
+                        snapshot = {"ready": False, "error": f"{type(exc).__name__}: {exc}"}
+                    self._diag_backend_persist_skip_total += 1
+                    self._diag_backend_persist_skip_bytes += update_len
+                    self.log.warning(
+                        "skipping browser-origin YStore write that would persist ineffective room webspace=%s bytes=%s snapshot=%s",
+                        self._diag_room_id(),
+                        update_len,
+                        json.dumps(snapshot, ensure_ascii=True, sort_keys=True)[:1000],
+                    )
+                    await self._repair_effective_branches_after_client_update(
+                        update_bytes=update_len,
+                        reason="client_update_persist_contract_guard",
+                    )
+                    return
+            if update_len >= _YROOM_DIAG_UPDATE_WARN_BYTES:
+                self.log.warning(
+                    "persisting browser-origin large YStore write webspace=%s bytes=%s effective_ready=%s snapshot=%s",
+                    self._diag_room_id(),
+                    update_len,
+                    bool(
+                        isinstance(getattr(self, "_diag_effective_branch_snapshot", None), dict)
+                        and getattr(self, "_diag_effective_branch_snapshot", {}).get("ready")
+                    ),
+                    json.dumps(
+                        getattr(self, "_diag_effective_branch_snapshot", None)
+                        if isinstance(getattr(self, "_diag_effective_branch_snapshot", None), dict)
+                        else {},
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    )[:1000],
+                )
             async with ystore_write_metadata(
                 source="yjs.gateway_ws",
                 owner="gateway_ws",
@@ -1154,6 +1683,109 @@ class DiagnosticYRoom(YRoom):
             )
         return repair_update
 
+    async def _send_initial_effective_state_replay(self, websocket: YWebsocket) -> None:
+        if not _YROOM_EFFECTIVE_INITIAL_REPLAY:
+            self._diag_effective_initial_replay_skip_total += 1
+            self._diag_effective_initial_replay_last_reason = "disabled"
+            return
+        try:
+            if not _room_effective_top_level_ready(self.ydoc):
+                self._diag_effective_initial_replay_skip_total += 1
+                self._diag_effective_initial_replay_last_reason = "room_not_effective_ready"
+                return
+        except Exception as exc:
+            self._diag_effective_initial_replay_skip_total += 1
+            self._diag_effective_initial_replay_last_reason = f"ready_check_failed:{type(exc).__name__}"
+            return
+        try:
+            import y_py as Y  # pylint: disable=import-outside-toplevel
+
+            encode_started = time.perf_counter()
+            update = Y.encode_state_as_update(self.ydoc)  # type: ignore[arg-type]
+            encode_ms = _elapsed_ms_since(encode_started)
+        except Exception as exc:
+            self._diag_effective_initial_replay_skip_total += 1
+            self._diag_effective_initial_replay_last_reason = f"encode_failed:{type(exc).__name__}"
+            self.log.warning(
+                "failed to encode initial Y effective state replay webspace=%s reason=%s",
+                self._diag_room_id(),
+                exc,
+                exc_info=True,
+            )
+            return
+        update_len = len(update or b"")
+        if update_len <= 0:
+            self._diag_effective_initial_replay_skip_total += 1
+            self._diag_effective_initial_replay_last_reason = "empty_update"
+            return
+        if update_len > _YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES:
+            self._diag_effective_initial_replay_skip_total += 1
+            self._diag_effective_initial_replay_last_reason = "update_too_large"
+            self.log.warning(
+                "skipping oversized initial Y effective state replay webspace=%s bytes=%s max_bytes=%s",
+                self._diag_room_id(),
+                update_len,
+                _YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES,
+            )
+            return
+        send_started = time.perf_counter()
+        await websocket.send(create_update_message(update))
+        send_ms = _elapsed_ms_since(send_started)
+        self._diag_effective_initial_replay_total += 1
+        self._diag_effective_initial_replay_bytes += update_len
+        self._diag_effective_initial_replay_last_reason = "sent"
+        self.log.warning(
+            "sent initial Y effective state replay webspace=%s endpoint=%s bytes=%s encode_ms=%.3f send_ms=%.3f total=%s",
+            self._diag_room_id(),
+            getattr(websocket, "path", None),
+            update_len,
+            encode_ms,
+            send_ms,
+            int(self._diag_effective_initial_replay_total),
+        )
+
+    async def serve(self, websocket: YWebsocket):
+        if sync is None or process_sync_message is None:
+            raise RuntimeError("ypy_websocket.yutils sync helpers are unavailable")
+        async with create_task_group() as tg:
+            self.clients.append(websocket)
+            await sync(self.ydoc, websocket, self.log)
+            await self._send_initial_effective_state_replay(websocket)
+            try:
+                async for message in websocket:
+                    skip = False
+                    if self.on_message:
+                        maybe_skip = self.on_message(message)
+                        skip = await maybe_skip if inspect.isawaitable(maybe_skip) else maybe_skip
+                    if skip:
+                        continue
+                    message_type = message[0]
+                    if message_type == YMessageType.SYNC:
+                        tg.start_soon(
+                            process_sync_message,
+                            message[1:],
+                            self.ydoc,
+                            websocket,
+                            self.log,
+                        )
+                    elif message_type == YMessageType.AWARENESS:
+                        self.log.debug(
+                            "Received %s message from endpoint: %s",
+                            YMessageType.AWARENESS.name,
+                            websocket.path,
+                        )
+                        for client in self.clients:
+                            self.log.debug(
+                                "Sending Y awareness from client with endpoint %s to client with endpoint: %s",
+                                websocket.path,
+                                client.path,
+                            )
+                            tg.start_soon(client.send, message)
+            except Exception as exc:
+                self.log.debug("Error serving endpoint: %s", websocket.path, exc_info=exc)
+
+            self.clients = [client for client in self.clients if client != websocket]
+
     async def _broadcast_updates(self):
         if self.ystore is not None and not self.ystore.started.is_set():
             self._task_group.start_soon(self.ystore.start)
@@ -1216,7 +1848,13 @@ class DiagnosticYRoom(YRoom):
                             and check_age >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC
                         )
                     )
-                    force_initial_check = not previous_effective_ready and self._diag_update_total <= 1
+                    force_initial_check = bool(
+                        self._diag_update_total <= 1
+                        or (
+                            _YROOM_EFFECTIVE_GUARD_INITIAL_FULL_CHECK_UPDATES > 0
+                            and self._diag_update_total <= _YROOM_EFFECTIVE_GUARD_INITIAL_FULL_CHECK_UPDATES
+                        )
+                    )
                     checked_effective = False
                     if previous_effective_ready and not full_check_due:
                         # Keep the steady-state broadcast path free of live
@@ -1224,8 +1862,17 @@ class DiagnosticYRoom(YRoom):
                         # long enough to starve the websocket fanout under
                         # load; periodic/initial checks still validate the
                         # effective branch contract.
-                        effective_ready = True
-                        effective_snapshot = {"ready": True, "mode": "cached"}
+                        if force_initial_check:
+                            self._diag_effective_last_full_check_mono = now_mono
+                            checked_effective = True
+                            effective_ready = _room_effective_top_level_ready(self.ydoc)
+                            effective_snapshot = {
+                                "ready": effective_ready,
+                                "mode": "top_level_initial",
+                            }
+                        else:
+                            effective_ready = True
+                            effective_snapshot = {"ready": True, "mode": "cached"}
                     elif full_check_due or force_initial_check:
                         self._diag_effective_last_full_check_mono = now_mono
                         checked_effective = True
@@ -1306,13 +1953,59 @@ class DiagnosticYRoom(YRoom):
                                 len(repair_update),
                             )
                     continue
-                for client in self.clients:
-                    self.log.debug("Sending Y update to client with endpoint: %s", client.path)
+                clients = list(getattr(self, "clients", []) or [])
+                live_refresh_key = _record_live_refresh_observer_broadcast(
+                    self._diag_room_id(),
+                    update,
+                    client_count=len(clients),
+                )
+                if live_refresh_key is None:
+                    pending_key = getattr(self, "_diag_live_refresh_pending_key", None)
+                    if isinstance(pending_key, tuple) and len(pending_key) == 3:
+                        live_refresh_key = _record_live_refresh_observer_broadcast_for_key(
+                            pending_key,  # type: ignore[arg-type]
+                            update=update,
+                            client_count=len(clients),
+                            exact_update_match=False,
+                        )
+                if live_refresh_key is not None and getattr(self, "_diag_live_refresh_pending_key", None) == live_refresh_key:
+                    try:
+                        delattr(self, "_diag_live_refresh_pending_key")
+                    except Exception:
+                        pass
+                message = b""
+                if clients:
+                    message_started = time.perf_counter()
                     message = create_update_message(update)
-                    self._task_group.start_soon(self._tracked_client_send, client, message, update_len)
+                    _record_live_refresh_message_create(live_refresh_key, _elapsed_ms_since(message_started))
+                for client in clients:
+                    self.log.debug("Sending Y update to client with endpoint: %s", client.path)
+                    self._task_group.start_soon(
+                        self._tracked_client_send,
+                        client,
+                        message,
+                        update_len,
+                        live_refresh_key,
+                    )
                 if self.ystore:
                     self.log.debug("Writing Y update to YStore")
-                    self._task_group.start_soon(self._tracked_ystore_write, update)
+                    write_meta = current_ystore_write_metadata()
+                    meta_source = str(write_meta.get("source") or "").strip()
+                    meta_channel = str(write_meta.get("channel") or "").strip()
+                    if (
+                        meta_source.startswith("yjs.gateway_ws.semantic_rebuild:builder_revision_apply")
+                        and meta_channel == "core.yjs.gateway.repair"
+                    ):
+                        self._diag_backend_persist_skip_total += 1
+                        self._diag_backend_persist_skip_bytes += update_len
+                        self.log.debug(
+                            "Skipping builder repair YStore write scheduling webspace=%s bytes=%s source=%s",
+                            self._diag_room_id(),
+                            update_len,
+                            meta_source,
+                        )
+                    else:
+                        self._task_group.start_soon(self._tracked_ystore_write, update)
 
 
 def _command_payload_fingerprint(kind: str, payload: Any) -> str:
@@ -1719,6 +2412,9 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
             send_stream = dict(raw_diag.get("send_stream") or {}) if isinstance(raw_diag.get("send_stream"), dict) else {}
             receive_stream = dict(raw_diag.get("receive_stream") or {}) if isinstance(raw_diag.get("receive_stream"), dict) else {}
             diag_ystore = dict(raw_diag.get("ystore") or {}) if isinstance(raw_diag.get("ystore"), dict) else {}
+            live_room_refresh_recent = raw_diag.get("live_room_refresh_recent")
+            if not isinstance(live_room_refresh_recent, list):
+                live_room_refresh_recent = []
             room_diagnostic = {
                 "pending_send_tasks": int(raw_diag.get("pending_send_tasks") or 0),
                 "pending_store_tasks": int(raw_diag.get("pending_store_tasks") or 0),
@@ -1753,6 +2449,7 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
                     "replay_window_bytes": int(diag_ystore.get("replay_window_bytes") or 0),
                     "last_update_bytes": int(diag_ystore.get("last_update_bytes") or 0),
                 },
+                "live_room_refresh_recent": live_room_refresh_recent[:5],
             }
 
     return {
@@ -2001,6 +2698,17 @@ def _trim_allocator_after_yjs_room_reset() -> bool:
         return bool(trim(0))
     except Exception:
         return False
+
+
+def _collect_gc_after_yjs_room_reset() -> tuple[int, str]:
+    if not _env_flag("ADAOS_YJS_ROOM_RESET_FORCE_GC", _YJS_ROOM_RESET_FORCE_GC):
+        return 0, "disabled:ADAOS_YJS_ROOM_RESET_FORCE_GC"
+    try:
+        return int(gc.collect() or 0), ""
+    except BaseException as exc:
+        if _is_control_flow_base_exception(exc):
+            raise
+        return 0, f"error:{type(exc).__name__}:{exc}"[:500]
 
 
 def _active_webrtc_peer_total_for_webspace(webspace_id: str) -> int:
@@ -4490,6 +5198,7 @@ async def reset_live_webspace_room(
     runtime_compaction_requested = False
     room_refs_released = False
     gc_collected = 0
+    gc_skipped = ""
     malloc_trimmed = False
     room_prewarmed = False
     room_prewarm_error = ""
@@ -4543,10 +5252,7 @@ async def reset_live_webspace_room(
             )
         room_refs_released = await _release_room_refs(key, room)
         if room_refs_released:
-            try:
-                gc_collected = int(gc.collect() or 0)
-            except Exception:
-                gc_collected = 0
+            gc_collected, gc_skipped = _collect_gc_after_yjs_room_reset()
     else:
         try:
             eviction = await evict_ystore_for_webspace(
@@ -4574,10 +5280,7 @@ async def reset_live_webspace_room(
         runtime_compaction_requested = bool(
             ystore_snapshot_persisted or eviction.get("backup_skipped")
         )
-        try:
-            gc_collected = int(gc.collect() or 0)
-        except Exception:
-            gc_collected = 0
+        gc_collected, gc_skipped = _collect_gc_after_yjs_room_reset()
 
     malloc_trimmed = _trim_allocator_after_yjs_room_reset()
 
@@ -4601,6 +5304,22 @@ async def reset_live_webspace_room(
                 exc_info=True,
             )
 
+    _ylog.info(
+        "reset live Yjs room webspace=%s reason=%s room_dropped=%s closed_yws=%s closed_webrtc=%s "
+        "ystore_evicted=%s snapshot_persisted=%s gc_collected=%s gc_skipped=%s malloc_trimmed=%s prewarmed=%s",
+        key,
+        close_reason,
+        bool(room is not None),
+        closed_connections,
+        closed_webrtc_peers,
+        ystore_evicted,
+        ystore_snapshot_persisted,
+        gc_collected,
+        gc_skipped,
+        malloc_trimmed,
+        room_prewarmed,
+    )
+
     return {
         "webspace_id": key,
         "route_reset": route_reset,
@@ -4617,6 +5336,7 @@ async def reset_live_webspace_room(
         "runtime_compaction_requested": runtime_compaction_requested,
         "room_refs_released": room_refs_released,
         "gc_collected": gc_collected,
+        "gc_skipped": gc_skipped or None,
         "malloc_trimmed": malloc_trimmed,
         "prewarm_after_reset": should_prewarm_after_reset,
         "room_prewarmed": room_prewarmed,
@@ -4890,15 +5610,18 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         ystore = get_ystore_for_webspace(webspace_id)
                         row = get_workspace(webspace_id)
                         space = _space_mode(webspace_id)
-                        target_scenario_id = row.effective_home_scenario if row and row.home_scenario else "web_desktop"
+                        row_current_scenario = (
+                            str(getattr(row, "current_scenario_overlay", "") or "").strip()
+                            if row and getattr(row, "has_current_scenario_overlay", False)
+                            else ""
+                        )
+                        target_scenario_id = (
+                            row_current_scenario
+                            or (row.effective_home_scenario if row and row.home_scenario else "web_desktop")
+                        )
                         prefer_manifest_home = bool(
                             row
-                            and row.home_scenario
-                            and (
-                                row.is_dev
-                                or row.effective_source_mode == "dev"
-                                or str(webspace_id or "").strip().endswith("-dev")
-                            )
+                            and (row_current_scenario or row.home_scenario)
                         )
                         room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
                         room._webspace_id = webspace_id
@@ -5000,6 +5723,14 @@ class WorkspaceWebsocketServer(WebsocketServer):
                     webspace_id,
                     len(repair_update),
                 )
+        else:
+            try:
+                cached_snapshot = getattr(room, "_diag_effective_branch_snapshot", None)
+                if not (isinstance(cached_snapshot, dict) and cached_snapshot.get("ready")):
+                    room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(room.ydoc)
+                    room._diag_effective_last_full_check_mono = time.monotonic()
+            except Exception:
+                pass
         room._webspace_id = webspace_id
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
         room._loop = getattr(room, "_loop", asyncio.get_running_loop())
@@ -5104,6 +5835,36 @@ def _room_branch_get(value: Any, key: str) -> Any:
     return None
 
 
+def _room_branch_is_mapping(value: Any) -> bool:
+    if isinstance(value, dict):
+        return True
+    return callable(getattr(value, "get", None)) and callable(getattr(value, "keys", None))
+
+
+def _room_branch_keys(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        return [str(key) for key in value.keys()]
+    keys = getattr(value, "keys", None)
+    if not callable(keys):
+        return []
+    try:
+        return [str(key) for key in keys()]
+    except Exception:
+        return []
+
+
+def _room_branch_items(value: Any) -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        return [(str(key), item) for key, item in value.items()]
+    items = getattr(value, "items", None)
+    if callable(items):
+        try:
+            return [(str(key), item) for key, item in items()]
+        except Exception:
+            return []
+    return []
+
+
 def _room_optional_token(value: Any) -> str | None:
     if value is None:
         return None
@@ -5132,6 +5893,8 @@ def _room_materialized_scenario(ydoc: Any) -> str | None:
 def _room_materialization_mismatch(ydoc: Any) -> bool:
     current = _room_current_scenario(ydoc)
     materialized = _room_materialized_scenario(ydoc)
+    if current and not materialized:
+        return True
     return bool(current and materialized and current != materialized)
 
 
@@ -5143,49 +5906,52 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
 
 
 def _room_effective_application_ready(application: Any) -> bool:
-    if not isinstance(application, dict) or not application:
+    if not _room_branch_is_mapping(application) or not _room_branch_keys(application):
         return False
-    desktop = application.get("desktop")
-    modals = application.get("modals")
-    if not isinstance(desktop, dict) or not desktop:
+    desktop = _room_branch_get(application, "desktop")
+    modals = _room_branch_get(application, "modals")
+    if not _room_branch_is_mapping(desktop) or not _room_branch_keys(desktop):
         return False
-    if not isinstance(desktop.get("pageSchema"), dict):
+    if not _room_branch_is_mapping(_room_branch_get(desktop, "pageSchema")):
         return False
-    if not isinstance(modals, dict) or "apps_catalog" not in modals or "widgets_catalog" not in modals:
+    if (
+        not _room_branch_is_mapping(modals)
+        or _room_branch_get(modals, "apps_catalog") is None
+        or _room_branch_get(modals, "widgets_catalog") is None
+    ):
         return False
     return True
 
 
 def _room_effective_catalog_ready(catalog: Any) -> bool:
     return (
-        isinstance(catalog, dict)
-        and isinstance(catalog.get("apps"), list)
-        and isinstance(catalog.get("widgets"), list)
+        _room_branch_is_mapping(catalog)
+        and isinstance(_room_branch_get(catalog, "apps"), list)
+        and isinstance(_room_branch_get(catalog, "widgets"), list)
     )
 
 
 def _room_effective_installed_ready(installed: Any) -> bool:
     return (
-        isinstance(installed, dict)
-        and isinstance(installed.get("apps"), list)
-        and isinstance(installed.get("widgets"), list)
+        _room_branch_is_mapping(installed)
+        and isinstance(_room_branch_get(installed, "apps"), list)
+        and isinstance(_room_branch_get(installed, "widgets"), list)
     )
 
 
 def _room_effective_data_desktop_ready(desktop: Any) -> bool:
-    return isinstance(desktop, dict)
+    return _room_branch_is_mapping(desktop)
 
 
 def _room_effective_required_branches(ydoc: Any) -> tuple[str, ...]:
     try:
         runtime_map = ydoc.get_map("runtime")
         environment = runtime_map.get("environment")
-        if isinstance(environment, dict):
-            materialization = environment.get("materialization")
-            if isinstance(materialization, dict):
-                required = _normalize_required_branch_list(materialization.get("required_branches"))
-                if required:
-                    return required
+        materialization = _room_branch_get(environment, "materialization")
+        if _room_branch_is_mapping(materialization):
+            required = _normalize_required_branch_list(_room_branch_get(materialization, "required_branches"))
+            if required:
+                return required
     except Exception:
         pass
     return _yroom_effective_env_required_branches()
@@ -5201,10 +5967,7 @@ def _room_effective_branch_value(ydoc: Any, path: str) -> Any:
         return None
     for part in parts[1:]:
         try:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                current = current.get(part)
+            current = _room_branch_get(current, part)
         except Exception:
             return None
         if current is None:
@@ -5268,6 +6031,8 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
 def _branch_collection_count(value: Any) -> int:
     if isinstance(value, (dict, list, tuple, set)):
         return len(value)
+    if _room_branch_is_mapping(value):
+        return len(_room_branch_keys(value))
     return 0
 
 
@@ -5280,6 +6045,11 @@ def _branch_json_safe(value: Any, *, depth: int = 0) -> Any:
         return {
             str(key): _branch_json_safe(item, depth=depth + 1)
             for key, item in sorted(value.items(), key=lambda item: str(item[0]))[:80]
+        }
+    if _room_branch_is_mapping(value):
+        return {
+            str(key): _branch_json_safe(item, depth=depth + 1)
+            for key, item in sorted(_room_branch_items(value), key=lambda item: str(item[0]))[:80]
         }
     if isinstance(value, (list, tuple)):
         return [_branch_json_safe(item, depth=depth + 1) for item in list(value)[:80]]
@@ -5313,11 +6083,7 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
             missing_required_branches = []
         current_scenario = _room_current_scenario(ydoc)
         materialized_scenario = _room_materialized_scenario(ydoc)
-        materialization_mismatch = bool(
-            current_scenario
-            and materialized_scenario
-            and current_scenario != materialized_scenario
-        )
+        materialization_mismatch = _room_materialization_mismatch(ydoc)
         return {
             "ready": _room_effective_top_level_ready(ydoc),
             "mode": "top_level_snapshot",
@@ -5336,8 +6102,8 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         data_keys = [str(key) for key in list(data_map.keys())[:80]]
         registry_keys = [str(key) for key in list(registry_map.keys())[:40]]
         application = ui_map.get("application")
-        application_desktop = application.get("desktop") if isinstance(application, dict) else None
-        modals = application.get("modals") if isinstance(application, dict) else None
+        application_desktop = _room_branch_get(application, "desktop")
+        modals = _room_branch_get(application, "modals")
         catalog = data_map.get("catalog")
         installed = data_map.get("installed")
         desktop = data_map.get("desktop")
@@ -5345,11 +6111,7 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         missing_required_branches = _room_effective_missing_required_branches(ydoc)
         current_scenario = _room_current_scenario(ydoc)
         materialized_scenario = _room_materialized_scenario(ydoc)
-        materialization_mismatch = bool(
-            current_scenario
-            and materialized_scenario
-            and current_scenario != materialized_scenario
-        )
+        materialization_mismatch = _room_materialization_mismatch(ydoc)
         snapshot = {
             "ready": _room_effective_branches_ready(ydoc),
             "ui_keys": ui_keys,
@@ -5360,25 +6122,27 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
             "current_scenario": current_scenario,
             "materialized_scenario": materialized_scenario,
             "materialization_mismatch": materialization_mismatch,
-            "has_application": isinstance(application, dict) and bool(application),
-            "has_application_desktop": isinstance(application_desktop, dict) and bool(application_desktop),
-            "has_application_page_schema": isinstance(application_desktop, dict)
-            and isinstance(application_desktop.get("pageSchema"), dict),
+            "has_application": _room_branch_is_mapping(application) and bool(_room_branch_keys(application)),
+            "has_application_desktop": _room_branch_is_mapping(application_desktop)
+            and bool(_room_branch_keys(application_desktop)),
+            "has_application_page_schema": _room_branch_is_mapping(_room_branch_get(application_desktop, "pageSchema")),
             "modal_count": _branch_collection_count(modals),
-            "has_apps_catalog_modal": isinstance(modals, dict) and "apps_catalog" in modals,
-            "has_widgets_catalog_modal": isinstance(modals, dict) and "widgets_catalog" in modals,
-            "has_catalog_apps": isinstance(catalog, dict) and isinstance(catalog.get("apps"), list),
-            "has_catalog_widgets": isinstance(catalog, dict) and isinstance(catalog.get("widgets"), list),
-            "has_installed_apps": isinstance(installed, dict) and isinstance(installed.get("apps"), list),
-            "has_installed_widgets": isinstance(installed, dict) and isinstance(installed.get("widgets"), list),
-            "has_data_desktop": isinstance(desktop, dict),
-            "catalog_app_count": _branch_collection_count(catalog.get("apps") if isinstance(catalog, dict) else None),
-            "catalog_widget_count": _branch_collection_count(catalog.get("widgets") if isinstance(catalog, dict) else None),
+            "has_apps_catalog_modal": _room_branch_is_mapping(modals)
+            and _room_branch_get(modals, "apps_catalog") is not None,
+            "has_widgets_catalog_modal": _room_branch_is_mapping(modals)
+            and _room_branch_get(modals, "widgets_catalog") is not None,
+            "has_catalog_apps": isinstance(_room_branch_get(catalog, "apps"), list),
+            "has_catalog_widgets": isinstance(_room_branch_get(catalog, "widgets"), list),
+            "has_installed_apps": isinstance(_room_branch_get(installed, "apps"), list),
+            "has_installed_widgets": isinstance(_room_branch_get(installed, "widgets"), list),
+            "has_data_desktop": _room_branch_is_mapping(desktop),
+            "catalog_app_count": _branch_collection_count(_room_branch_get(catalog, "apps")),
+            "catalog_widget_count": _branch_collection_count(_room_branch_get(catalog, "widgets")),
             "installed_key_count": _branch_collection_count(installed),
-            "installed_app_count": _branch_collection_count(installed.get("apps") if isinstance(installed, dict) else None),
-            "installed_widget_count": _branch_collection_count(installed.get("widgets") if isinstance(installed, dict) else None),
+            "installed_app_count": _branch_collection_count(_room_branch_get(installed, "apps")),
+            "installed_widget_count": _branch_collection_count(_room_branch_get(installed, "widgets")),
             "desktop_key_count": _branch_collection_count(desktop),
-            "desktop_widget_count": _branch_collection_count(desktop.get("widgets") if isinstance(desktop, dict) else None),
+            "desktop_widget_count": _branch_collection_count(_room_branch_get(desktop, "widgets")),
         }
         if _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES:
             snapshot.update(
@@ -5397,10 +6161,386 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         }
 
 
+def _materialized_payload_apply_ready_snapshot(
+    payload: Mapping[str, Any],
+    apply_summary: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not _YJS_MATERIALIZED_PAYLOAD_TRUST_APPLY_SUMMARY or _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS:
+        return None
+    summary = apply_summary if isinstance(apply_summary, Mapping) else {}
+    try:
+        failed_count = int(summary.get("failed_branches") or 0)
+    except Exception:
+        failed_count = 0
+    failed_paths = summary.get("failed_paths") if isinstance(summary.get("failed_paths"), list) else []
+    if failed_count > 0 or failed_paths:
+        return None
+    try:
+        trusted_skip_count = int(summary.get("trusted_fingerprint_unchanged_branches") or 0)
+    except Exception:
+        trusted_skip_count = 0
+    try:
+        stale_fingerprint_count = int(summary.get("stale_fingerprint_branches") or 0)
+    except Exception:
+        stale_fingerprint_count = 0
+    if trusted_skip_count > 0 or stale_fingerprint_count > 0:
+        return None
+    scenario_id = str(payload.get("scenario_id") or "").strip()
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), Mapping) else {}
+    materialization = (
+        metadata.get("materialization")
+        if isinstance(metadata, Mapping) and isinstance(metadata.get("materialization"), Mapping)
+        else {}
+    )
+    required = _normalize_required_branch_list(
+        materialization.get("required_branches") if isinstance(materialization, Mapping) else None
+    )
+    if not required:
+        required = _yroom_effective_env_required_branches()
+    return {
+        "ready": True,
+        "mode": "materialized_payload_apply_summary",
+        "details": "trusted_apply_summary",
+        "required_branches": list(required),
+        "missing_required_branches": [],
+        "current_scenario": scenario_id or None,
+        "materialized_scenario": scenario_id or None,
+        "materialization_mismatch": False,
+    }
+
+
+async def _apply_room_materialized_payload_on_owner_loop(
+    webspace_id: str,
+    ystore: Any,
+    room: Any,
+    payload: Mapping[str, Any],
+    *,
+    reason: str,
+    persist_repair: bool = True,
+    force_full_state_update: bool = False,
+    materialization_identity: Mapping[str, Any] | None = None,
+) -> tuple[bytes, str, dict[str, Any]]:
+    handoff_started = time.perf_counter()
+    owner_thread = getattr(room, "_thread_id", None)
+    owner_loop = getattr(room, "_loop", None)
+    current_thread = threading.get_ident()
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if owner_thread is not None and owner_thread != current_thread:
+        if owner_loop is None or not owner_loop.is_running():
+            handoff_ms = _elapsed_ms_since(handoff_started)
+            return b"", "skipped_no_owner_loop", {
+                "ok": False,
+                "ready": False,
+                "error": "owner_loop_not_running",
+                "owner_handoff_mode": "skipped_no_owner_loop",
+                "phase_timings_ms": {"owner_handoff": handoff_ms, "total": handoff_ms},
+            }
+        future = asyncio.run_coroutine_threadsafe(
+            _apply_room_materialized_payload(
+                webspace_id,
+                ystore,
+                room,
+                payload,
+                reason=reason,
+                persist_repair=bool(persist_repair),
+                force_full_state_update=bool(force_full_state_update),
+                materialization_identity=materialization_identity,
+            ),
+            owner_loop,
+        )
+        update, result = await asyncio.wrap_future(future)
+        result = dict(result or {})
+        phase_timings = dict(result.get("phase_timings_ms") or {})
+        phase_timings["owner_handoff"] = _elapsed_ms_since(handoff_started)
+        result["phase_timings_ms"] = phase_timings
+        result["owner_handoff_mode"] = "threadsafe_owner_loop"
+        return update, "threadsafe_owner_loop", result
+
+    if (
+        owner_loop is not None
+        and current_loop is not None
+        and owner_loop is not current_loop
+        and owner_loop.is_running()
+    ):
+        future = asyncio.run_coroutine_threadsafe(
+            _apply_room_materialized_payload(
+                webspace_id,
+                ystore,
+                room,
+                payload,
+                reason=reason,
+                persist_repair=bool(persist_repair),
+                force_full_state_update=bool(force_full_state_update),
+                materialization_identity=materialization_identity,
+            ),
+            owner_loop,
+        )
+        update, result = await asyncio.wrap_future(future)
+        result = dict(result or {})
+        phase_timings = dict(result.get("phase_timings_ms") or {})
+        phase_timings["owner_handoff"] = _elapsed_ms_since(handoff_started)
+        result["phase_timings_ms"] = phase_timings
+        result["owner_handoff_mode"] = "loop_owner_loop"
+        return update, "loop_owner_loop", result
+
+    update, result = await _apply_room_materialized_payload(
+        webspace_id,
+        ystore,
+        room,
+        payload,
+        reason=reason,
+        persist_repair=bool(persist_repair),
+        force_full_state_update=bool(force_full_state_update),
+        materialization_identity=materialization_identity,
+    )
+    result = dict(result or {})
+    phase_timings = dict(result.get("phase_timings_ms") or {})
+    phase_timings["owner_handoff"] = 0.0
+    result["phase_timings_ms"] = phase_timings
+    result["owner_handoff_mode"] = "direct_owner_context"
+    return update, "direct_owner_context", result
+
+
+async def _apply_room_materialized_payload(
+    webspace_id: str,
+    ystore: Any,
+    room: Any,
+    payload: Mapping[str, Any],
+    *,
+    reason: str,
+    persist_repair: bool = True,
+    force_full_state_update: bool = False,
+    materialization_identity: Mapping[str, Any] | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    total_started = time.perf_counter()
+    phase_timings_ms: dict[str, float] = {}
+    ydoc = getattr(room, "ydoc", None)
+    if ydoc is None:
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        return b"", {"ok": False, "ready": False, "error": "missing_ydoc", "phase_timings_ms": phase_timings_ms}
+    if not isinstance(payload, Mapping):
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        return b"", {"ok": False, "ready": False, "error": "missing_materialized_payload", "phase_timings_ms": phase_timings_ms}
+    try:
+        import y_py as Y  # pylint: disable=import-outside-toplevel
+        from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
+
+        stage_started = time.perf_counter()
+        before = Y.encode_state_vector(ydoc)
+        phase_timings_ms["encode_state_vector"] = _elapsed_ms_since(stage_started)
+        runtime = WebspaceScenarioRuntime()
+        suppress_attr = "_suppress_backend_ystore_persist"
+        previous_suppress = int(getattr(room, suppress_attr, 0) or 0)
+        stage_started = time.perf_counter()
+        if not persist_repair:
+            setattr(room, suppress_attr, previous_suppress + 1)
+            deadline_attr = "_suppress_backend_ystore_persist_until"
+            try:
+                current_deadline = float(getattr(room, deadline_attr, 0.0) or 0.0)
+            except Exception:
+                current_deadline = 0.0
+            setattr(room, deadline_attr, max(current_deadline, time.monotonic() + 5.0))
+        phase_timings_ms["persist_suppression_setup"] = _elapsed_ms_since(stage_started)
+        try:
+            stage_started = time.perf_counter()
+            previous_payload = getattr(room, "_last_materialized_payload", None)
+            if not isinstance(previous_payload, Mapping):
+                previous_payload = None
+            try:
+                with ystore_write_metadata_sync(
+                    root_names=["ui", "data", "registry", "runtime"],
+                    source=f"yjs.gateway_ws.{reason}.materialized_payload",
+                    owner="core:yjs_gateway",
+                    channel="core.yjs.gateway.materialized_payload",
+                    governed=True,
+                ):
+                    runtime.apply_materialized_payload_in_doc(
+                        ydoc,
+                        webspace_id,
+                        payload,
+                        materialization_identity=materialization_identity,
+                        previous_payload=previous_payload,
+                    )
+            finally:
+                phase_timings_ms["branch_apply"] = _elapsed_ms_since(stage_started)
+            try:
+                invalidate_live_map_value_cache(webspace_id)
+            except Exception:
+                pass
+        finally:
+            stage_started = time.perf_counter()
+            if not persist_repair:
+                setattr(room, suppress_attr, previous_suppress)
+            phase_timings_ms["persist_suppression_restore"] = _elapsed_ms_since(stage_started)
+
+        stage_started = time.perf_counter()
+        apply_summary = getattr(runtime, "_last_apply_summary", None)
+        snapshot = _materialized_payload_apply_ready_snapshot(payload, apply_summary)
+        if snapshot is None:
+            snapshot = _room_effective_branch_snapshot(ydoc)
+        else:
+            phase_timings_ms["effective_snapshot_trusted"] = 0.0
+        phase_timings_ms["effective_snapshot"] = _elapsed_ms_since(stage_started)
+        ready = bool(snapshot.get("ready"))
+        if not ready:
+            phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+            return b"", {
+                "ok": False,
+                "ready": False,
+                "snapshot": snapshot,
+                "semantic_timings_ms": getattr(runtime, "_last_rebuild_timings_ms", None),
+                "apply_summary": apply_summary,
+                "phase_timings_ms": phase_timings_ms,
+            }
+        stage_started = time.perf_counter()
+        state_vector: bytes | None = None
+        full_state_update = b""
+        if force_full_state_update:
+            update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
+            phase_timings_ms["encode_update"] = _elapsed_ms_since(stage_started)
+            stage_started = time.perf_counter()
+            full_state_update = Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+            state_vector = Y.encode_state_vector(ydoc)  # type: ignore[arg-type]
+            phase_timings_ms["encode_full_state_update"] = _elapsed_ms_since(stage_started)
+        else:
+            update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
+            phase_timings_ms["encode_update"] = _elapsed_ms_since(stage_started)
+            phase_timings_ms["encode_full_state_update"] = 0.0
+        full_state_snapshot_result: dict[str, Any] | None = None
+        full_state_snapshot_persisted = False
+        snapshot_update = full_state_update if force_full_state_update else b""
+        if snapshot_update and force_full_state_update and ystore is not None and persist_repair:
+            stage_started = time.perf_counter()
+            try:
+                async with ystore_write_metadata(
+                    root_names=["ui", "data", "registry", "runtime"],
+                    source=f"yjs.gateway_ws.{reason}.materialized_payload_full_state",
+                    owner="core:yjs_gateway",
+                    channel="core.yjs.gateway.materialized_payload_full_state",
+                    governed=True,
+                ):
+                    replace_snapshot = getattr(ystore, "replace_snapshot_update", None)
+                    if callable(replace_snapshot):
+                        replace_result = await replace_snapshot(
+                            snapshot_update,
+                            state_vector=state_vector,
+                            backup_kind=f"{reason}.materialized_payload_full_state",
+                            persist_snapshot=True,
+                            notify=False,
+                        )
+                        if isinstance(replace_result, Mapping):
+                            full_state_snapshot_result = dict(replace_result)
+                            full_state_snapshot_persisted = bool(replace_result.get("ok"))
+                        else:
+                            full_state_snapshot_result = {"ok": replace_result is not None}
+                            full_state_snapshot_persisted = replace_result is not None
+                    else:
+                        write_update = getattr(ystore, "write_update", None)
+                        if callable(write_update):
+                            write_result = await write_update(
+                                snapshot_update,
+                                update_kind="snapshot",
+                                state_vector=state_vector,
+                                notify=False,
+                            )
+                            full_state_snapshot_result = {"ok": bool(write_result), "mode": "write_update_snapshot"}
+                            full_state_snapshot_persisted = bool(write_result)
+            except Exception as exc:
+                full_state_snapshot_result = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                _ylog.warning(
+                    "failed to persist full materialized Yjs snapshot webspace=%s reason=%s",
+                    webspace_id,
+                    reason,
+                    exc_info=True,
+                )
+            phase_timings_ms["persist_full_state_snapshot"] = _elapsed_ms_since(stage_started)
+        else:
+            phase_timings_ms["persist_full_state_snapshot"] = 0.0
+        if force_full_state_update and persist_repair and ystore is not None and not full_state_snapshot_persisted:
+            update = snapshot_update or update
+            phase_timings_ms["broadcast_full_state_fallback"] = 1.0
+        else:
+            phase_timings_ms["broadcast_full_state_fallback"] = 0.0
+        broadcast_marker: dict[str, Any] = {}
+        if update:
+            stage_started = time.perf_counter()
+            mark_backend_room_update(
+                webspace_id,
+                update,
+                source=f"yjs.gateway_ws.{reason}.materialized_payload",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.materialized_payload",
+                root_names=["ui", "data", "registry", "runtime"],
+                already_persisted=bool((not persist_repair) or full_state_snapshot_persisted),
+                governed=True,
+            )
+            phase_timings_ms["mark_backend_update"] = _elapsed_ms_since(stage_started)
+            phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+            broadcast_marker = _register_live_refresh_update(
+                webspace_id,
+                update,
+                reason=f"{reason}.materialized_payload",
+                phase_timings_ms=phase_timings_ms,
+            )
+            marker_key = _live_refresh_update_key(webspace_id, update)
+            if marker_key is not None:
+                try:
+                    setattr(room, "_diag_live_refresh_pending_key", marker_key)
+                except Exception:
+                    pass
+        else:
+            phase_timings_ms["mark_backend_update"] = 0.0
+            phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        try:
+            setattr(room, "_last_materialized_payload", _compact_materialized_payload_for_room_history(payload))
+        except Exception:
+            try:
+                setattr(room, "_last_materialized_payload", dict(payload))
+            except Exception:
+                pass
+        return bytes(update or b""), {
+            "ok": True,
+            "ready": True,
+            "snapshot": snapshot,
+            "semantic_timings_ms": getattr(runtime, "_last_rebuild_timings_ms", None),
+            "apply_summary": apply_summary,
+            "phase_timings_ms": phase_timings_ms,
+            "broadcast_diagnostics": broadcast_marker,
+            "force_full_state_update": bool(force_full_state_update),
+            "full_state_snapshot_persisted": bool(full_state_snapshot_persisted),
+            "full_state_snapshot_result": full_state_snapshot_result,
+            "broadcast_update_bytes": len(update or b""),
+            "full_state_update_bytes": len(full_state_update or b""),
+        }
+    except BaseException as exc:
+        if _is_control_flow_base_exception(exc):
+            raise
+        _ylog.warning(
+            "YRoom materialized payload apply failed webspace=%s reason=%s: %s",
+            webspace_id,
+            reason,
+            exc,
+            exc_info=True,
+        )
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        return b"", {"ok": False, "ready": False, "error": f"{type(exc).__name__}: {exc}", "phase_timings_ms": phase_timings_ms}
+
+
 async def refresh_live_webspace_effective_branches(
     webspace_id: str,
     *,
     reason: str = "live_room_refresh",
+    persist_repair: bool = True,
+    force_full_state_update: bool = False,
+    materialized_payload: Mapping[str, Any] | None = None,
+    materialization_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Refresh effective scenario branches without tearing down live transports.
 
@@ -5409,14 +6549,22 @@ async def refresh_live_webspace_effective_branches(
     available for explicit recovery paths.
     """
 
+    total_started = time.perf_counter()
+    phase_timings_ms: dict[str, float] = {}
     key = str(webspace_id or "").strip() or "default"
     room_created = False
+    stage_started = time.perf_counter()
     room = y_server.rooms.get(key)
+    phase_timings_ms["room_lookup"] = _elapsed_ms_since(stage_started)
     if room is None:
         try:
+            stage_started = time.perf_counter()
             room = await y_server.get_room(key)
+            phase_timings_ms["room_create"] = _elapsed_ms_since(stage_started)
             room_created = True
         except Exception as exc:
+            phase_timings_ms["room_create"] = _elapsed_ms_since(stage_started)
+            phase_timings_ms["total"] = _elapsed_ms_since(total_started)
             _ylog.warning(
                 "failed to refresh live Yjs room effective branches webspace=%s reason=%s",
                 key,
@@ -5434,22 +6582,131 @@ async def refresh_live_webspace_effective_branches(
                 "closed_connections": 0,
                 "closed_webrtc_peers": 0,
                 "reset_route_runtime": False,
+                "phase_timings_ms": phase_timings_ms,
             }
+    else:
+        phase_timings_ms["room_create"] = 0.0
 
-    update, handoff = await _repair_room_effective_branches_on_owner_loop(
-        key,
-        getattr(room, "ystore", None),
-        room,
-        reason=reason,
-    )
+    direct_result: dict[str, Any] | None = None
+    direct_update_size = 0
+    handoff = "not_attempted"
+    update: bytes = b""
+    broadcast_diagnostics: dict[str, Any] = {}
+    if isinstance(materialized_payload, Mapping) and materialized_payload:
+        stage_started = time.perf_counter()
+        try:
+            update, handoff, direct_result = await _apply_room_materialized_payload_on_owner_loop(
+                key,
+                getattr(room, "ystore", None),
+                room,
+                materialized_payload,
+                reason=reason,
+                persist_repair=bool(persist_repair),
+                force_full_state_update=bool(force_full_state_update),
+                materialization_identity=materialization_identity,
+            )
+        except BaseException as exc:
+            if _is_control_flow_base_exception(exc):
+                raise
+            update = b""
+            direct_result = {
+                "ok": False,
+                "ready": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "phase_timings_ms": {"total": _elapsed_ms_since(stage_started)},
+            }
+        phase_timings_ms["materialized_owner_apply"] = _elapsed_ms_since(stage_started)
+        direct_update_size = len(update or b"")
+        if bool((direct_result or {}).get("ready")):
+            marker_key = _live_refresh_update_key(key, update)
+            stage_started = time.perf_counter()
+            broadcast_diagnostics = _live_refresh_snapshot_by_key(marker_key)
+            if not bool(broadcast_diagnostics.get("client_sync_done")):
+                try:
+                    client_count = len(list(getattr(room, "clients", []) or []))
+                except Exception:
+                    client_count = 0
+                if client_count <= 0:
+                    broadcast_diagnostics = _mark_live_refresh_no_clients(marker_key)
+                elif float(_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS) <= 0.0:
+                    broadcast_diagnostics = _mark_live_refresh_wait_skipped(
+                        marker_key,
+                        client_count=client_count,
+                        reason="wait_disabled",
+                    )
+                else:
+                    broadcast_diagnostics = await _wait_live_refresh_client_sync(
+                        marker_key,
+                        timeout_ms=float(_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS),
+                    )
+            phase_timings_ms["client_sync_wait"] = _elapsed_ms_since(stage_started)
+            if broadcast_diagnostics:
+                direct_result = dict(direct_result or {})
+                direct_result["broadcast_diagnostics"] = broadcast_diagnostics
+                broadcast_phases = broadcast_diagnostics.get("phase_timings_ms")
+                if isinstance(broadcast_phases, Mapping):
+                    for phase_name in ("observer_broadcast", "observer_message_create", "client_sync"):
+                        phase_value = broadcast_phases.get(phase_name)
+                        if isinstance(phase_value, (int, float)):
+                            phase_timings_ms[phase_name] = float(phase_value)
+            try:
+                if hasattr(room, "_diag_effective_branch_snapshot"):
+                    room._diag_effective_branch_snapshot = dict((direct_result or {}).get("snapshot") or {"ready": True})
+            except Exception:
+                pass
+        else:
+            phase_timings_ms["client_sync_wait"] = 0.0
+            _ylog.warning(
+                "materialized payload did not refresh live Yjs room; falling back to semantic repair webspace=%s reason=%s result=%s",
+                key,
+                reason,
+                json.dumps(
+                    _compact_materialized_payload_apply_result_for_log(direct_result),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+            )
+            update = b""
+    else:
+        phase_timings_ms["materialized_owner_apply"] = 0.0
+        phase_timings_ms["client_sync_wait"] = 0.0
+
+    semantic_repair = not bool((direct_result or {}).get("ready"))
+    fallback_repair = bool(direct_result) and bool(semantic_repair)
+    if semantic_repair:
+        stage_started = time.perf_counter()
+        try:
+            update, handoff = await _repair_room_effective_branches_on_owner_loop(
+                key,
+                getattr(room, "ystore", None),
+                room,
+                reason=reason,
+                persist_repair=bool(persist_repair),
+            )
+        except BaseException as exc:
+            if _is_control_flow_base_exception(exc):
+                raise
+            update = b""
+            handoff = "failed"
+            direct_result = dict(direct_result or {})
+            direct_result.setdefault("ok", False)
+            direct_result.setdefault("ready", False)
+            direct_result["fallback_repair_error"] = f"{type(exc).__name__}: {exc}"
+        phase_timings_ms["fallback_repair"] = _elapsed_ms_since(stage_started)
+    else:
+        phase_timings_ms["fallback_repair"] = 0.0
     update_size = len(update or b"")
+    phase_timings_ms["total"] = _elapsed_ms_since(total_started)
     _ylog.info(
-        "refreshed live Yjs room effective branches webspace=%s reason=%s room_created=%s update_bytes=%s thread_handoff=%s",
+        "refreshed live Yjs room effective branches webspace=%s reason=%s room_created=%s update_bytes=%s thread_handoff=%s materialized_payload=%s fallback_repair=%s phases=%s",
         key,
         reason,
         room_created,
         update_size,
         handoff,
+        bool(direct_result),
+        bool(fallback_repair),
+        json.dumps(phase_timings_ms, ensure_ascii=True, sort_keys=True),
     )
     return {
         "ok": True,
@@ -5460,10 +6717,19 @@ async def refresh_live_webspace_effective_branches(
         "room_dropped": False,
         "room_repaired": update_size > 0,
         "repair_bytes": update_size,
+        "repair_persisted": bool(persist_repair and update_size > 0),
+        "force_full_state_update": bool(force_full_state_update),
+        "materialized_payload_applied": bool(direct_result and direct_result.get("ready")),
+        "materialized_payload_update_bytes": direct_update_size,
+        "materialized_payload": direct_result,
+        "broadcast_diagnostics": broadcast_diagnostics,
+        "fallback_repair": bool(fallback_repair),
+        "semantic_repair": bool(semantic_repair),
         "thread_handoff": handoff,
         "closed_connections": 0,
         "closed_webrtc_peers": 0,
         "reset_route_runtime": False,
+        "phase_timings_ms": phase_timings_ms,
     }
 
 
@@ -5473,6 +6739,7 @@ async def _repair_room_effective_branches_on_owner_loop(
     room: Any,
     *,
     reason: str,
+    persist_repair: bool = True,
 ) -> tuple[bytes, str]:
     owner_thread = getattr(room, "_thread_id", None)
     owner_loop = getattr(room, "_loop", None)
@@ -5481,6 +6748,15 @@ async def _repair_room_effective_branches_on_owner_loop(
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
         current_loop = None
+
+    def _repair_coro() -> Any:
+        kwargs: dict[str, Any] = {"reason": reason}
+        try:
+            if "persist_repair" in inspect.signature(_repair_room_effective_branches).parameters:
+                kwargs["persist_repair"] = bool(persist_repair)
+        except Exception:
+            kwargs["persist_repair"] = bool(persist_repair)
+        return _repair_room_effective_branches(webspace_id, ystore, room, **kwargs)
 
     if (
         owner_thread is not None
@@ -5495,10 +6771,7 @@ async def _repair_room_effective_branches_on_owner_loop(
                 current_thread,
             )
             return b"", "skipped_no_owner_loop"
-        future = asyncio.run_coroutine_threadsafe(
-            _repair_room_effective_branches(webspace_id, ystore, room, reason=reason),
-            owner_loop,
-        )
+        future = asyncio.run_coroutine_threadsafe(_repair_coro(), owner_loop)
         wrapped = asyncio.wrap_future(future)
         return await wrapped, "threadsafe_owner_loop"
 
@@ -5508,14 +6781,11 @@ async def _repair_room_effective_branches_on_owner_loop(
         and owner_loop is not current_loop
         and owner_loop.is_running()
     ):
-        future = asyncio.run_coroutine_threadsafe(
-            _repair_room_effective_branches(webspace_id, ystore, room, reason=reason),
-            owner_loop,
-        )
+        future = asyncio.run_coroutine_threadsafe(_repair_coro(), owner_loop)
         wrapped = asyncio.wrap_future(future)
         return await wrapped, "loop_owner_loop"
 
-    return await _repair_room_effective_branches(webspace_id, ystore, room, reason=reason), "direct_owner_context"
+    return await _repair_coro(), "direct_owner_context"
 
 
 async def _repair_room_effective_branches(
@@ -5524,6 +6794,7 @@ async def _repair_room_effective_branches(
     room: Any,
     *,
     reason: str,
+    persist_repair: bool = True,
 ) -> bytes:
     ydoc = getattr(room, "ydoc", None)
     if ydoc is None:
@@ -5534,19 +6805,33 @@ async def _repair_room_effective_branches(
 
         before = Y.encode_state_vector(ydoc)
         runtime = WebspaceScenarioRuntime()
-        with ystore_write_metadata_sync(
-            root_names=["ui", "data", "registry", "runtime"],
-            source=f"yjs.gateway_ws.{reason}",
-            owner="core:yjs_gateway",
-            channel="core.yjs.gateway.repair",
-            governed=True,
-        ):
-            authoritative_scenario = _authoritative_current_scenario(webspace_id)
-            if authoritative_scenario:
-                ui_map = ydoc.get_map("ui")
-                with ydoc.begin_transaction() as txn:
-                    ui_map.set(txn, "current_scenario", authoritative_scenario)
-            runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - invariant repair needs in-doc materialization
+        suppress_attr = "_suppress_backend_ystore_persist"
+        previous_suppress = int(getattr(room, suppress_attr, 0) or 0)
+        if not persist_repair:
+            setattr(room, suppress_attr, previous_suppress + 1)
+            deadline_attr = "_suppress_backend_ystore_persist_until"
+            try:
+                current_deadline = float(getattr(room, deadline_attr, 0.0) or 0.0)
+            except Exception:
+                current_deadline = 0.0
+            setattr(room, deadline_attr, max(current_deadline, time.monotonic() + 5.0))
+        try:
+            with ystore_write_metadata_sync(
+                root_names=["ui", "data", "registry", "runtime"],
+                source=f"yjs.gateway_ws.{reason}",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.repair",
+                governed=True,
+            ):
+                authoritative_scenario = _authoritative_current_scenario(webspace_id)
+                if authoritative_scenario:
+                    ui_map = ydoc.get_map("ui")
+                    with ydoc.begin_transaction() as txn:
+                        ui_map.set(txn, "current_scenario", authoritative_scenario)
+                runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - invariant repair needs in-doc materialization
+        finally:
+            if not persist_repair:
+                setattr(room, suppress_attr, previous_suppress)
         if not _room_effective_branches_ready(ydoc):
             _ylog.warning(
                 "YRoom effective branch repair did not restore required branches webspace=%s reason=%s snapshot=%s",
@@ -5556,7 +6841,7 @@ async def _repair_room_effective_branches(
             )
             return b""
         update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
-        if update and ystore is not None:
+        if update and ystore is not None and persist_repair:
             async with ystore_write_metadata(
                 root_names=["ui", "data", "registry", "runtime"],
                 source=f"yjs.gateway_ws.{reason}",
@@ -5570,7 +6855,7 @@ async def _repair_room_effective_branches(
             webspace_id,
             reason,
             len(update or b""),
-            bool(update and ystore is not None),
+            bool(update and ystore is not None and persist_repair),
         )
         return bytes(update or b"")
     except Exception as exc:
@@ -5605,7 +6890,23 @@ async def _ensure_room_effective_materialized(
     authoritative_scenario = _authoritative_current_scenario(webspace_id)
     if ydoc is None:
         return False
-    if _room_effective_branches_ready(ydoc) and not authoritative_scenario:
+    seed_scenario = str((seed_result or {}).get("scenario_id") or "").strip()
+    seed_overrode_current = bool((seed_result or {}).get("current_scenario_overridden"))
+    current_scenario = _room_current_scenario(ydoc)
+    if (
+        seed_scenario
+        and authoritative_scenario
+        and authoritative_scenario != seed_scenario
+        and seed_overrode_current
+    ):
+        _clear_authoritative_current_scenario(
+            webspace_id,
+            reason="room_bootstrap_seed_overrode_current",
+        )
+        authoritative_scenario = seed_scenario
+    seed_requires_rebuild = bool(seed_scenario and seed_overrode_current)
+    materialize_current_scenario = authoritative_scenario or (seed_scenario if seed_requires_rebuild else "")
+    if _room_effective_branches_ready(ydoc) and not materialize_current_scenario and not seed_requires_rebuild:
         return False
 
     try:
@@ -5621,10 +6922,10 @@ async def _ensure_room_effective_materialized(
             channel="core.yjs.gateway.bootstrap",
             governed=True,
         ):
-            if authoritative_scenario:
+            if materialize_current_scenario:
                 ui_map = ydoc.get_map("ui")
                 with ydoc.begin_transaction() as txn:
-                    ui_map.set(txn, "current_scenario", authoritative_scenario)
+                    ui_map.set(txn, "current_scenario", materialize_current_scenario)
             runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - room bootstrap needs in-doc materialization
 
         if not _room_effective_branches_ready(ydoc):
@@ -5682,6 +6983,11 @@ async def _ensure_room_effective_materialized(
             seed_result["room_effective_materialized"] = True
             seed_result["room_effective_materialized_persisted"] = bool(persisted)
             seed_result["room_effective_materialized_bytes"] = len(update or b"")
+        try:
+            room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(ydoc)
+            room._diag_effective_last_full_check_mono = time.monotonic()
+        except Exception:
+            pass
         _ylog.info(
             "YRoom effective branches materialized before open webspace=%s persisted=%s bytes=%d",
             webspace_id,
@@ -7088,6 +8394,8 @@ async def process_events_command(
                     str(target),
                     set_home=set_home,
                     wait_for_rebuild=wait_for_rebuild,
+                    request_source="gateway_ws.desktop.scenario.set",
+                    request_client=str(client_label or "").strip() or None,
                 )
                 await _ack(bool(result.get("accepted", result.get("ok", True))), data=result)
             except Exception as exc:

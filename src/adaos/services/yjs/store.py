@@ -57,8 +57,13 @@ _YSTORE_APPLY_YIELD_BYTES = _env_int("ADAOS_YSTORE_APPLY_YIELD_BYTES", 512 * 102
 _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum=0.0)
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
 _YSTORE_BACKUP_MALLOC_TRIM = _env_flag("ADAOS_YSTORE_BACKUP_MALLOC_TRIM", True)
+_YSTORE_BACKUP_FORCE_GC = _env_flag("ADAOS_YSTORE_BACKUP_FORCE_GC", False)
 _YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
 _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
+
+
+def _is_fatal_base_exception(exc: BaseException) -> bool:
+    return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
 
 
 def _trim_allocator_after_backup_compaction() -> bool:
@@ -236,7 +241,9 @@ def _encode_snapshot_update(updates: List[Tuple[bytes, bytes, float]]) -> bytes:
         for update, _meta, _ts in updates:
             Y.apply_update(ydoc, update)  # type: ignore[arg-type]
         return Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
-    except Exception as exc:
+    except BaseException as exc:
+        if _is_fatal_base_exception(exc):
+            raise
         raise RuntimeError(f"yjs_snapshot_encode_failed:{type(exc).__name__}:{exc}") from None
     finally:
         ydoc = None
@@ -257,7 +264,9 @@ def _encode_snapshot_artifacts(updates: List[Tuple[bytes, bytes, float]]) -> tup
             Y.encode_state_as_update(ydoc),  # type: ignore[arg-type]
             Y.encode_state_vector(ydoc),  # type: ignore[arg-type]
         )
-    except Exception as exc:
+    except BaseException as exc:
+        if _is_fatal_base_exception(exc):
+            raise
         raise RuntimeError(f"yjs_snapshot_artifacts_failed:{type(exc).__name__}:{exc}") from None
     finally:
         ydoc = None
@@ -274,7 +283,9 @@ def _decode_state_vector_from_snapshot(snapshot: bytes) -> bytes:
         ydoc = Y.YDoc()
         Y.apply_update(ydoc, snapshot)  # type: ignore[arg-type]
         return Y.encode_state_vector(ydoc)  # type: ignore[arg-type]
-    except Exception as exc:
+    except BaseException as exc:
+        if _is_fatal_base_exception(exc):
+            raise
         raise RuntimeError(f"yjs_state_vector_decode_failed:{type(exc).__name__}:{exc}") from None
     finally:
         ydoc = None
@@ -444,11 +455,14 @@ class AdaosMemoryYStore(BaseYStore):
         self._backup_total = 0
         self._backup_fast_path_total = 0
         self._backup_skipped_total = 0
+        self._backup_failed_total = 0
         self._backup_gc_total = 0
+        self._backup_gc_skipped_total = 0
         self._backup_malloc_trim_total = 0
         self._backup_by_kind: dict[str, int] = {}
         self._backup_written_by_kind: dict[str, int] = {}
         self._backup_skipped_by_kind: dict[str, int] = {}
+        self._backup_failed_by_kind: dict[str, int] = {}
         self._auto_backup_total = 0
         self._diff_write_total = 0
         self._snapshot_write_total = 0
@@ -466,7 +480,10 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_backup_mode = ""
         self._last_backup_skip_reason = ""
         self._last_backup_written_bytes = 0
+        self._last_backup_error = ""
+        self._last_backup_failed_at = 0.0
         self._last_backup_gc_collected = 0
+        self._last_backup_gc_skip_reason = ""
         self._last_backup_malloc_trimmed = False
         self._last_apply_at = 0.0
         self._last_loaded_from_disk_at = 0.0
@@ -548,6 +565,7 @@ class AdaosMemoryYStore(BaseYStore):
             self._last_backup_mode = "replace_snapshot" if persist_snapshot else "replace_snapshot:deferred_disk"
             self._last_backup_skip_reason = "" if written_bytes else ("deferred_disk" if not persist_snapshot else "empty_snapshot")
             self._last_backup_written_bytes = int(written_bytes)
+            self._last_backup_error = ""
             self._last_backup_at = now
             self._last_disk_load_mode = "replace_snapshot"
             if persist_snapshot:
@@ -1107,37 +1125,70 @@ class AdaosMemoryYStore(BaseYStore):
         snapshot_state_vector: bytes | None = None
         backup_mode = "empty"
         used_fast_path = False
-        if updates:
-            if len(updates) == 1 and bool(self._base_snapshot_present):
-                snapshot = self._base_snapshot_bytes_locked(updates)
-                snapshot_state_vector = cached_state_vector
-                backup_mode = "runtime_base_snapshot"
-                used_fast_path = True
-                if snapshot and snapshot_state_vector is None:
-                    snapshot_state_vector = await anyio.to_thread.run_sync(_decode_state_vector_from_snapshot, snapshot)
-            else:
-                snapshot, snapshot_state_vector = await anyio.to_thread.run_sync(_encode_snapshot_artifacts, updates)
-                backup_mode = "encoded_runtime_log"
-
-        skip_write = bool(not snapshot and not snapshot_exists)
-        skip_reason = "empty_no_snapshot" if skip_write else ""
         written_bytes = 0
-        if not skip_write:
+        try:
+            if updates:
+                if len(updates) == 1 and bool(self._base_snapshot_present):
+                    snapshot = self._base_snapshot_bytes_locked(updates)
+                    snapshot_state_vector = cached_state_vector
+                    backup_mode = "runtime_base_snapshot"
+                    used_fast_path = True
+                    if snapshot and snapshot_state_vector is None:
+                        snapshot_state_vector = await anyio.to_thread.run_sync(_decode_state_vector_from_snapshot, snapshot)
+                else:
+                    backup_mode = "encoded_runtime_log"
+                    snapshot, snapshot_state_vector = await anyio.to_thread.run_sync(_encode_snapshot_artifacts, updates)
+
+            skip_write = bool(not snapshot and not snapshot_exists)
+            skip_reason = "empty_no_snapshot" if skip_write else ""
+            if not skip_write:
+                with self._lock:
+                    persisted_generation = int(self._persisted_generation)
+                    persisted_snapshot_bytes = int(self._persisted_snapshot_bytes)
+                up_to_date = bool(
+                    snapshot
+                    and snapshot_exists
+                    and generation >= 0
+                    and generation == persisted_generation
+                    and len(snapshot) == persisted_snapshot_bytes
+                )
+                if up_to_date:
+                    skip_write = True
+                    skip_reason = "persisted_generation_current"
+                else:
+                    written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
+        except BaseException as exc:
+            if _is_fatal_base_exception(exc):
+                raise
+            now = time.time()
+            error = f"{type(exc).__name__}: {exc}"
             with self._lock:
-                persisted_generation = int(self._persisted_generation)
-                persisted_snapshot_bytes = int(self._persisted_snapshot_bytes)
-            up_to_date = bool(
-                snapshot
-                and snapshot_exists
-                and generation >= 0
-                and generation == persisted_generation
-                and len(snapshot) == persisted_snapshot_bytes
+                self._backup_total += 1
+                self._backup_failed_total += 1
+                self._backup_by_kind[backup_kind_token] = int(self._backup_by_kind.get(backup_kind_token) or 0) + 1
+                self._backup_failed_by_kind[backup_kind_token] = (
+                    int(self._backup_failed_by_kind.get(backup_kind_token) or 0) + 1
+                )
+                self._last_backup_kind = backup_kind_token
+                self._last_backup_mode = f"{backup_mode}:failed"
+                self._last_backup_skip_reason = "error"
+                self._last_backup_written_bytes = 0
+                self._last_backup_error = error[:1000]
+                self._last_backup_failed_at = now
+                self._last_backup_at = now
+                if backup_kind_token.startswith("auto_after_compact:"):
+                    self._last_auto_backup_reason = str(backup_kind_token.partition(":")[2] or "").strip()
+            _log.warning(
+                "YStore backup failed webspace=%s kind=%s mode=%s generation=%d updates=%d error=%s",
+                self.path,
+                backup_kind_token,
+                backup_mode,
+                generation,
+                len(updates),
+                error,
+                exc_info=True,
             )
-            if up_to_date:
-                skip_write = True
-                skip_reason = "persisted_generation_current"
-            else:
-                written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
+            raise RuntimeError(f"yjs_backup_failed:{backup_kind_token}:{error}") from None
         now = time.time()
         with self._lock:
             self._backup_total += 1
@@ -1157,6 +1208,7 @@ class AdaosMemoryYStore(BaseYStore):
             self._last_backup_mode = f"{backup_mode}:skipped" if skip_write else backup_mode
             self._last_backup_skip_reason = skip_reason
             self._last_backup_written_bytes = int(written_bytes)
+            self._last_backup_error = ""
             self._last_backup_at = now
             if written_bytes:
                 self._last_snapshot_bytes = int(written_bytes)
@@ -1207,14 +1259,30 @@ class AdaosMemoryYStore(BaseYStore):
                 # writes made runtime-side collapse unsafe for this round.
                 self._last_auto_backup_reason = self._last_auto_backup_reason
         if compacted_runtime:
+            gc_collected = 0
+            gc_skip_reason = ""
+            gc_attempted = bool(_env_flag("ADAOS_YSTORE_BACKUP_FORCE_GC", _YSTORE_BACKUP_FORCE_GC))
+            if gc_attempted:
+                try:
+                    gc_collected = int(gc.collect() or 0)
+                except BaseException as exc:
+                    if _is_fatal_base_exception(exc):
+                        raise
+                    gc_collected = 0
+                    gc_skip_reason = f"error:{type(exc).__name__}:{exc}"[:500]
+            else:
+                gc_skip_reason = "disabled:ADAOS_YSTORE_BACKUP_FORCE_GC"
             try:
-                gc_collected = int(gc.collect() or 0)
+                malloc_trimmed = _trim_allocator_after_backup_compaction()
             except Exception:
-                gc_collected = 0
-            malloc_trimmed = _trim_allocator_after_backup_compaction()
+                malloc_trimmed = False
             with self._lock:
-                self._backup_gc_total += 1
+                if gc_attempted:
+                    self._backup_gc_total += 1
+                else:
+                    self._backup_gc_skipped_total += 1
                 self._last_backup_gc_collected = int(gc_collected)
+                self._last_backup_gc_skip_reason = gc_skip_reason
                 self._last_backup_malloc_trimmed = bool(malloc_trimmed)
                 if malloc_trimmed:
                     self._backup_malloc_trim_total += 1
@@ -1275,11 +1343,14 @@ class AdaosMemoryYStore(BaseYStore):
             "backup_total": int(self._backup_total),
             "backup_fast_path_total": int(self._backup_fast_path_total),
             "backup_skipped_total": int(self._backup_skipped_total),
+            "backup_failed_total": int(self._backup_failed_total),
             "backup_gc_total": int(self._backup_gc_total),
+            "backup_gc_skipped_total": int(self._backup_gc_skipped_total),
             "backup_malloc_trim_total": int(self._backup_malloc_trim_total),
             "backup_by_kind": _top_counts(dict(self._backup_by_kind)),
             "backup_written_by_kind": _top_counts(dict(self._backup_written_by_kind)),
             "backup_skipped_by_kind": _top_counts(dict(self._backup_skipped_by_kind)),
+            "backup_failed_by_kind": _top_counts(dict(self._backup_failed_by_kind)),
             "auto_backup_total": int(self._auto_backup_total),
             "diff_write_total": int(self._diff_write_total),
             "snapshot_write_total": int(self._snapshot_write_total),
@@ -1313,7 +1384,13 @@ class AdaosMemoryYStore(BaseYStore):
             "last_backup_mode": self._last_backup_mode or None,
             "last_backup_skip_reason": self._last_backup_skip_reason or None,
             "last_backup_written_bytes": int(self._last_backup_written_bytes),
+            "last_backup_error": self._last_backup_error or None,
+            "last_backup_failed_at": self._last_backup_failed_at or None,
+            "last_backup_failed_ago_s": round(max(0.0, now - self._last_backup_failed_at), 3)
+            if self._last_backup_failed_at
+            else None,
             "last_backup_gc_collected": int(self._last_backup_gc_collected),
+            "last_backup_gc_skip_reason": self._last_backup_gc_skip_reason or None,
             "last_backup_malloc_trimmed": bool(self._last_backup_malloc_trimmed),
             "last_apply_update_total": int(self._last_apply_update_total),
             "last_apply_bytes": int(self._last_apply_bytes),

@@ -110,6 +110,26 @@ def test_set_map_value_if_changed_diff_deletes_missing_nested_keys() -> None:
     assert current.get("path") == "/settings"
 
 
+def test_set_map_value_if_changed_promotes_equal_plain_mapping() -> None:
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("data").set(txn, "webio", {"receivers": {}})
+
+    with ydoc.begin_transaction() as txn:
+        changed, mode = webspace_runtime_module._set_map_value_if_changed(
+            ydoc.get_map("data"),
+            txn,
+            "webio",
+            {"receivers": {}},
+        )
+
+    assert changed is True
+    assert mode == "diff"
+    webio = ydoc.get_map("data").get("webio")
+    assert isinstance(webio, Y.YMap)
+    assert isinstance(webio.get("receivers"), Y.YMap)
+
+
 def test_set_map_value_if_changed_unchanged_diff_avoids_cloning_current_containers(monkeypatch) -> None:
     ydoc = Y.YDoc()
     payload = {
@@ -158,3 +178,112 @@ def test_set_map_value_if_changed_unchanged_diff_avoids_cloning_current_containe
 
     assert changed is False
     assert mode == "diff"
+
+
+def test_patch_map_value_from_previous_updates_only_changed_nested_keys() -> None:
+    previous = {
+        "pageSchema": {
+            "id": "desktop",
+            "title": "Before",
+            "widgets": [
+                {"id": "editor"},
+                {"id": "cards", "inputs": {"previewKey": "status"}},
+            ],
+        },
+        "topbar": [{"id": "home"}],
+    }
+    next_value = {
+        "pageSchema": {
+            "id": "desktop",
+            "title": "After",
+            "widgets": [
+                {"id": "editor"},
+                {"id": "cards", "inputs": {"previewKey": "card_preview"}},
+            ],
+        },
+        "topbar": [{"id": "home"}],
+    }
+
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        changed, mode = webspace_runtime_module._set_map_value_if_changed(
+            ydoc.get_map("data"),
+            txn,
+            "desktop",
+            previous,
+        )
+    assert changed is True
+    assert mode == "diff"
+    before_vector = Y.encode_state_vector(ydoc)
+
+    with ydoc.begin_transaction() as txn:
+        changed, mode = webspace_runtime_module._patch_map_value_from_previous(
+            ydoc.get_map("data"),
+            txn,
+            "desktop",
+            next_value,
+            previous,
+        )
+
+    assert changed is True
+    assert mode == "patch"
+    update = Y.encode_state_as_update(ydoc, before_vector)
+    assert update
+    desktop = ydoc.get_map("data").get("desktop")
+    assert isinstance(desktop, Y.YMap)
+    assert desktop.get("topbar") == [{"id": "home"}]
+    page_schema = desktop.get("pageSchema")
+    assert isinstance(page_schema, Y.YMap)
+    assert page_schema.get("title") == "After"
+    assert page_schema.get("widgets")[1]["inputs"]["previewKey"] == "card_preview"
+
+    with ydoc.begin_transaction() as txn:
+        changed, mode = webspace_runtime_module._patch_map_value_from_previous(
+            ydoc.get_map("data"),
+            txn,
+            "desktop",
+            next_value,
+            next_value,
+        )
+    assert changed is False
+    assert mode == "patch"
+
+
+def test_ydoc_defaults_preserve_attached_y_map_branch() -> None:
+    ydoc = Y.YDoc()
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime()
+
+    with ydoc.begin_transaction() as txn:
+        changed, mode = webspace_runtime_module._set_map_value_if_changed(
+            ydoc.get_map("data"),
+            txn,
+            "desktop",
+            {
+                "pageSchema": {"id": "desktop"},
+                "topbar": [{"id": "home"}],
+            },
+        )
+    assert changed is True
+    assert mode == "diff"
+
+    with ydoc.begin_transaction() as txn:
+        runtime._apply_ydoc_defaults_in_txn(
+            ydoc,
+            txn,
+            [
+                {
+                    "skill": "notebook_skill",
+                    "ydoc_defaults": {
+                        "data/desktop/notebook": {
+                            "notes": [],
+                        }
+                    },
+                }
+            ],
+        )
+
+    desktop = ydoc.get_map("data").get("desktop")
+    assert isinstance(desktop, Y.YMap)
+    assert isinstance(desktop.get("pageSchema"), Y.YMap)
+    assert isinstance(desktop.get("notebook"), Y.YMap)
+    assert desktop.get("topbar") == [{"id": "home"}]

@@ -99,7 +99,7 @@ if existing_ypy_websocket is None or not hasattr(existing_ypy_websocket, "__path
     sys.modules["ypy_websocket.yroom"] = yroom_mod
     sys.modules["ypy_websocket.yutils"] = yutils_mod
 
-from adaos.services.workspaces import ensure_workspace, set_workspace_manifest
+from adaos.services.workspaces import ensure_workspace, set_workspace_current_scenario_overlay, set_workspace_manifest
 from adaos.services.yjs import gateway_ws as gateway_module
 from adaos.services.yjs.update_origin import mark_backend_room_update, reset_backend_room_update_markers
 
@@ -370,6 +370,65 @@ def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
     assert snapshot["has_installed_widgets"] is False
 
 
+def test_gateway_effective_guard_accepts_y_map_effective_branches(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
+
+    doc = y_py.YDoc()
+    with doc.begin_transaction() as txn:
+        ui = doc.get_map("ui")
+        data = doc.get_map("data")
+        registry = doc.get_map("registry")
+        runtime = doc.get_map("runtime")
+
+        application = y_py.YMap({})
+        desktop = y_py.YMap({})
+        page_schema = y_py.YMap({})
+        page_schema.set(txn, "widgets", [])
+        desktop.set(txn, "pageSchema", page_schema)
+        modals = y_py.YMap({})
+        modals.set(txn, "apps_catalog", {})
+        modals.set(txn, "widgets_catalog", {})
+        application.set(txn, "desktop", desktop)
+        application.set(txn, "modals", modals)
+        ui.set(txn, "application", application)
+        ui.set(txn, "current_scenario", "todo")
+
+        catalog = y_py.YMap({})
+        catalog.set(txn, "apps", [])
+        catalog.set(txn, "widgets", [])
+        data.set(txn, "catalog", catalog)
+        installed = y_py.YMap({})
+        installed.set(txn, "apps", [])
+        installed.set(txn, "widgets", [])
+        data.set(txn, "installed", installed)
+        data.set(txn, "desktop", y_py.YMap({}))
+        data.set(txn, "webio", y_py.YMap({}))
+        data.set(txn, "routing", y_py.YMap({}))
+        registry.set(txn, "merged", y_py.YMap({}))
+
+        materialization = y_py.YMap({})
+        materialization.set(txn, "scenario_id", "todo")
+        materialization.set(
+            txn,
+            "required_branches",
+            ["ui.application", "data.catalog", "data.installed", "data.desktop", "data.webio", "data.routing"],
+        )
+        environment = y_py.YMap({})
+        environment.set(txn, "materialization", materialization)
+        runtime.set(txn, "environment", environment)
+
+    assert gateway_module._room_effective_branches_ready(doc) is True
+    assert gateway_module._room_effective_top_level_ready(doc) is True
+    snapshot = gateway_module._room_effective_branch_snapshot(doc)
+    assert snapshot["ready"] is True
+    assert snapshot["has_application"] is True
+    assert snapshot["has_application_page_schema"] is True
+    assert snapshot["has_catalog_apps"] is True
+    assert snapshot["has_installed_widgets"] is True
+    assert snapshot["current_scenario"] == "todo"
+    assert snapshot["materialized_scenario"] == "todo"
+
+
 def test_gateway_effective_guard_rejects_materialization_scenario_mismatch(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
 
@@ -424,6 +483,46 @@ def test_gateway_effective_guard_rejects_materialization_scenario_mismatch(monke
     doc.get_map("runtime")["environment"]["materialization"]["scenario_id"] = "web_desktop"
     assert gateway_module._room_effective_branches_ready(doc) is True
     assert gateway_module._room_effective_top_level_ready(doc) is True
+
+
+def test_gateway_effective_guard_rejects_missing_materialization_marker(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
+
+    class _Doc:
+        def __init__(self, state: dict[str, dict[str, object]]) -> None:
+            self._state = state
+
+        def get_map(self, name: str) -> dict[str, object]:
+            return self._state.setdefault(name, {})
+
+    doc = _Doc(
+        {
+            "ui": {
+                "current_scenario": "prompt_engineer_scenario",
+                "application": {
+                    "desktop": {"pageSchema": {"id": "todo_list_5b9319fa", "widgets": []}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                },
+            },
+            "data": {
+                "catalog": {"apps": [], "widgets": []},
+                "installed": {"apps": [], "widgets": []},
+                "desktop": {},
+                "webio": {},
+                "routing": {},
+            },
+            "registry": {"merged": {}},
+            "runtime": {"environment": {}},
+        }
+    )
+
+    assert gateway_module._room_effective_branches_ready(doc) is False
+    assert gateway_module._room_effective_top_level_ready(doc) is False
+    snapshot = gateway_module._room_effective_branch_snapshot(doc)
+    assert snapshot["ready"] is False
+    assert snapshot["current_scenario"] == "prompt_engineer_scenario"
+    assert snapshot["materialized_scenario"] is None
+    assert snapshot["materialization_mismatch"] is True
 
 
 def test_gateway_effective_guard_uses_declarative_runtime_required_branches(monkeypatch) -> None:
@@ -1310,6 +1409,73 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
+def test_get_room_uses_workspace_current_overlay_before_home(monkeypatch) -> None:
+    webspace_id = "gateway-room-current-overlay"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Room Space",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+    set_workspace_current_scenario_overlay(webspace_id, "prompt_engineer_scenario")
+
+    captured: list[dict[str, object]] = []
+    fake_store = _FakeYStore()
+
+    async def _fake_seed(
+        ystore,
+        *,
+        webspace_id: str,
+        default_scenario_id: str,
+        space: str,
+        ydoc=None,
+        prefer_default_scenario: bool = False,
+    ) -> dict[str, object]:  # noqa: ANN001
+        captured.append(
+            {
+                "ystore": ystore,
+                "webspace_id": webspace_id,
+                "default_scenario_id": default_scenario_id,
+                "space": space,
+                "ydoc": ydoc,
+                "prefer_default_scenario": prefer_default_scenario,
+            }
+        )
+        return {
+            "scenario_id": default_scenario_id,
+            "used_provided_ydoc": bool(ydoc is not None),
+            "mode": "scenario_projection",
+            "persisted_via": "diff",
+            "apply_updates_ms": 1.25,
+            "total_ms": 2.5,
+        }
+
+    class _Scheduler:
+        async def ensure_every(self, **kwargs) -> None:  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
+    monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+    monkeypatch.setattr(gateway_module, "get_scheduler", lambda: _Scheduler())
+    monkeypatch.setattr(gateway_module, "attach_room_observers", lambda _webspace_id, _ydoc: None)
+
+    server = gateway_module.WorkspaceWebsocketServer(auto_clean_rooms=False)
+    monkeypatch.setattr(server, "start_room", lambda _room: asyncio.sleep(0))
+    gateway_module._YROOM_LIFECYCLE.clear()
+    try:
+        room = asyncio.run(server.get_room(webspace_id))
+    finally:
+        gateway_module.y_server.rooms.pop(webspace_id, None)
+
+    assert room is server.rooms[webspace_id]
+    assert captured[0]["default_scenario_id"] == "prompt_engineer_scenario"
+    assert captured[0]["space"] == "workspace"
+    assert captured[0]["prefer_default_scenario"] is True
+    gateway_module._YROOM_LIFECYCLE.clear()
+
+
 def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypatch) -> None:
     class _FakeRoom:
         def __init__(self) -> None:
@@ -1566,8 +1732,484 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert transport["room_bootstrap_success_total"] >= 1
     assert transport["update_stream_buffer_used_total"] >= 5
 
+
+def test_refresh_live_room_reports_gateway_phase_timings(monkeypatch) -> None:
+    key = "gateway-phase-timings"
+    update = b"phase-update"
+    gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[])
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+    async def _fake_apply(webspace_id, _ystore, _room, _payload, **_kwargs):
+        marker = gateway_module._register_live_refresh_update(
+            webspace_id,
+            update,
+            reason="test.materialized_payload",
+            phase_timings_ms={"branch_apply": 2.5},
+        )
+        gateway_module._record_live_refresh_observer_broadcast_for_key(
+            gateway_module._live_refresh_update_key(webspace_id, update),
+            update=b"observer-delta",
+            client_count=1,
+            exact_update_match=False,
+        )
+        gateway_module._record_live_refresh_client_send(
+            gateway_module._live_refresh_update_key(webspace_id, update),
+            elapsed_ms=0.5,
+        )
+        return update, "direct_owner_context", {
+            "ok": True,
+            "ready": True,
+            "snapshot": {"ready": True},
+            "phase_timings_ms": {"branch_apply": 2.5, "owner_handoff": 0.0},
+            "broadcast_diagnostics": marker,
+        }
+
+    monkeypatch.setattr(gateway_module, "_apply_room_materialized_payload_on_owner_loop", _fake_apply)
+    monkeypatch.setattr(gateway_module, "_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS", 5.0)
+
+    result = asyncio.run(
+        gateway_module.refresh_live_webspace_effective_branches(
+            key,
+            reason="test_refresh",
+            materialized_payload={"ui": {"application": {}}},
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["materialized_payload_applied"] is True
+    assert result["phase_timings_ms"]["room_lookup"] >= 0.0
+    assert result["phase_timings_ms"]["materialized_owner_apply"] >= 0.0
+    assert result["phase_timings_ms"]["client_sync_wait"] >= 0.0
+    assert "observer_broadcast" in result["phase_timings_ms"]
+    assert "client_sync" in result["phase_timings_ms"]
+    assert result["broadcast_diagnostics"]["client_sync_done"] is True
+    assert result["broadcast_diagnostics"]["observer_exact_update_match"] is False
+    assert result["broadcast_diagnostics"]["observer_update_bytes"] == len(b"observer-delta")
+
     gateway_module.y_server.rooms.pop(key, None)
     gateway_module._YROOM_LIFECYCLE.clear()
+
+
+def test_refresh_live_room_does_not_wait_for_client_sync_when_room_has_no_clients(monkeypatch) -> None:
+    key = "gateway-no-client-sync-wait"
+    update = b"no-client-update"
+    gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[])
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+    async def _fake_apply(webspace_id, _ystore, _room, _payload, **_kwargs):
+        marker = gateway_module._register_live_refresh_update(
+            webspace_id,
+            update,
+            reason="test.materialized_payload",
+            phase_timings_ms={"branch_apply": 1.0},
+        )
+        return update, "direct_owner_context", {
+            "ok": True,
+            "ready": True,
+            "snapshot": {"ready": True},
+            "phase_timings_ms": {"branch_apply": 1.0},
+            "broadcast_diagnostics": marker,
+        }
+
+    monkeypatch.setattr(gateway_module, "_apply_room_materialized_payload_on_owner_loop", _fake_apply)
+    monkeypatch.setattr(gateway_module, "_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS", 1000.0)
+
+    started = time.perf_counter()
+    result = asyncio.run(
+        gateway_module.refresh_live_webspace_effective_branches(
+            key,
+            reason="test_refresh",
+            materialized_payload={"ui": {"application": {}}},
+        )
+    )
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+    assert result["ok"] is True
+    assert elapsed_ms < 200.0
+    assert result["phase_timings_ms"]["client_sync_wait"] < 50.0
+    assert result["broadcast_diagnostics"]["client_sync_done"] is True
+    assert result["broadcast_diagnostics"]["client_sync_reason"] == "no_clients"
+    assert result["broadcast_diagnostics"]["timed_out"] is False
+
+    gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+
+def test_refresh_live_room_client_sync_wait_is_opt_in(monkeypatch) -> None:
+    key = "gateway-client-sync-wait-disabled"
+    update = b"wait-disabled-update"
+    gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[object()])
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+    async def _fake_apply(webspace_id, _ystore, _room, _payload, **_kwargs):
+        marker = gateway_module._register_live_refresh_update(
+            webspace_id,
+            update,
+            reason="test.materialized_payload",
+            phase_timings_ms={"branch_apply": 1.0},
+        )
+        return update, "direct_owner_context", {
+            "ok": True,
+            "ready": True,
+            "snapshot": {"ready": True},
+            "phase_timings_ms": {"branch_apply": 1.0},
+            "broadcast_diagnostics": marker,
+        }
+
+    monkeypatch.setattr(gateway_module, "_apply_room_materialized_payload_on_owner_loop", _fake_apply)
+    monkeypatch.setattr(gateway_module, "_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS", 0.0)
+
+    result = asyncio.run(
+        gateway_module.refresh_live_webspace_effective_branches(
+            key,
+            reason="test_refresh",
+            materialized_payload={"ui": {"application": {}}},
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["phase_timings_ms"]["client_sync_wait"] < 50.0
+    assert result["broadcast_diagnostics"]["client_sync_done"] is False
+    assert result["broadcast_diagnostics"]["client_count"] == 1
+    assert result["broadcast_diagnostics"]["client_sync_reason"] == "wait_disabled"
+    assert result["broadcast_diagnostics"]["timed_out"] is False
+
+    gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+
+def test_materialized_payload_room_history_omits_skill_decls() -> None:
+    payload = {
+        "schema": "adaos.webspace.materialized_payload.v1",
+        "webspace_id": "desktop-dev",
+        "scenario_id": "prompt_engineer_scenario",
+        "application": {"desktop": {"pageSchema": {"id": "prompt"}}},
+        "catalog": {"apps": [], "widgets": []},
+        "registry": {"modals": [], "widgets": []},
+        "installed": {"apps": [], "widgets": []},
+        "desktop": {"installed": {"apps": [], "widgets": []}},
+        "webio": {"receivers": {}},
+        "routing": {"routes": {}},
+        "skill_decls": [{"skill": "heavy", "apps": [{"id": "app"} for _ in range(50)]}],
+        "skill_decls_fingerprint": "skills-fp",
+        "branch_fingerprints": {"data.webio": "webio-fp"},
+    }
+
+    compact = gateway_module._compact_materialized_payload_for_room_history(payload)
+
+    assert "skill_decls" not in compact
+    assert compact["skill_decls_fingerprint"] == "skills-fp"
+    assert compact["webio"] == {"receivers": {}}
+    assert compact["branch_fingerprints"] == {"data.webio": "webio-fp"}
+
+
+def test_materialized_payload_apply_ready_snapshot_trusts_successful_summary() -> None:
+    payload = {
+        "scenario_id": "prompt_engineer_scenario",
+        "metadata": {
+            "materialization": {
+                "required_branches": ["ui.application", "data.catalog"],
+            },
+        },
+    }
+
+    snapshot = gateway_module._materialized_payload_apply_ready_snapshot(
+        payload,
+        {"failed_branches": 0, "changed_branches": 2},
+    )
+
+    assert snapshot is not None
+    assert snapshot["ready"] is True
+    assert snapshot["mode"] == "materialized_payload_apply_summary"
+    assert snapshot["current_scenario"] == "prompt_engineer_scenario"
+    assert snapshot["materialized_scenario"] == "prompt_engineer_scenario"
+    assert snapshot["required_branches"] == ["ui.application", "data.catalog"]
+    assert gateway_module._materialized_payload_apply_ready_snapshot(
+        payload,
+        {"failed_branches": 1, "failed_paths": ["data.desktop"]},
+    ) is None
+    assert gateway_module._materialized_payload_apply_ready_snapshot(
+        payload,
+        {"failed_branches": 0, "trusted_fingerprint_unchanged_branches": 1},
+    ) is None
+    assert gateway_module._materialized_payload_apply_ready_snapshot(
+        payload,
+        {"failed_branches": 0, "stale_fingerprint_branches": 1},
+    ) is None
+
+
+def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    reset_backend_room_update_markers()
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("runtime").set(txn, "old_snapshot_only", "x" * 512)
+    room = SimpleNamespace(ydoc=ydoc, clients=[])
+
+    class _FakeStore:
+        def __init__(self) -> None:
+            self.replace_calls: list[dict[str, object]] = []
+
+        async def replace_snapshot_update(self, snapshot: bytes, **kwargs) -> dict[str, object]:
+            self.replace_calls.append({"snapshot": snapshot, **kwargs})
+            return {"ok": True, "snapshot_bytes": len(snapshot)}
+
+    store = _FakeStore()
+
+    def _fake_apply(
+        self,
+        target_ydoc,
+        _webspace_id,
+        _payload,
+        *,
+        materialization_identity=None,  # noqa: ARG001
+        previous_payload=None,  # noqa: ARG001
+    ) -> None:
+        with target_ydoc.begin_transaction() as txn:
+            target_ydoc.get_map("ui").set(
+                txn,
+                "application",
+                {
+                    "desktop": {"pageSchema": {"id": "desktop"}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                },
+            )
+            target_ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+            target_ydoc.get_map("data").set(txn, "desktop", {"installed": {"apps": [], "widgets": []}})
+            target_ydoc.get_map("data").set(txn, "installed", {"apps": [], "widgets": []})
+        self._last_apply_summary = {"failed_branches": 0, "changed_branches": 4}
+        self._last_rebuild_timings_ms = {"total": 1.0}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "apply_materialized_payload_in_doc",
+        _fake_apply,
+    )
+
+    update, result = asyncio.run(
+        gateway_module._apply_room_materialized_payload(
+            "force-full-snapshot",
+            store,
+            room,
+            {
+                "schema": "adaos.webspace.materialized_payload.v1",
+                "scenario_id": "web_desktop",
+                "metadata": {
+                    "materialization": {
+                        "required_branches": ["ui.application", "data.catalog", "data.installed"],
+                    }
+                },
+            },
+            reason="unit",
+            force_full_state_update=True,
+        )
+    )
+
+    assert update
+    assert result["ready"] is True
+    assert result["force_full_state_update"] is True
+    assert result["full_state_snapshot_persisted"] is True
+    assert store.replace_calls
+    assert result["broadcast_update_bytes"] == len(update)
+    assert result["full_state_update_bytes"] == len(store.replace_calls[-1]["snapshot"])
+    assert store.replace_calls[-1]["snapshot"] != update
+    assert len(store.replace_calls[-1]["snapshot"]) > len(update)
+    assert store.replace_calls[-1]["persist_snapshot"] is True
+    marker = gateway_module.consume_backend_room_update("force-full-snapshot", update)
+    assert marker is not None
+    assert marker["already_persisted"] is True
+    reset_backend_room_update_markers()
+
+
+def test_room_bootstrap_seed_override_beats_stale_authoritative_lease(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    gateway_module.note_authoritative_current_scenario(
+        "bootstrap-lease-ws",
+        "old_prompt_scenario",
+        reason="unit_stale_switch",
+    )
+
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "old_prompt_scenario")
+        ydoc.get_map("ui").set(
+            txn,
+            "application",
+            {
+                "desktop": {"pageSchema": {"id": "desktop"}},
+                "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+            },
+        )
+        ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "installed", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "desktop", {"installed": {"apps": [], "widgets": []}})
+        ydoc.get_map("data").set(txn, "webio", {})
+        ydoc.get_map("data").set(txn, "routing", {})
+        ydoc.get_map("registry").set(txn, "merged", {"widgets": {}, "modals": {}})
+        ydoc.get_map("runtime").set(
+            txn,
+            "environment",
+            {"materialization": {"scenario_id": "old_prompt_scenario"}},
+        )
+
+    class _FakeStore:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        async def write_update(self, update: bytes, **_kwargs) -> bool:
+            self.writes.append(bytes(update))
+            return True
+
+    seen_current: list[str] = []
+
+    def _fake_rebuild_in_doc(self, target_ydoc, _webspace_id) -> None:
+        ui_map = target_ydoc.get_map("ui")
+        current = str(ui_map.get("current_scenario") or "")
+        seen_current.append(current)
+        with target_ydoc.begin_transaction() as txn:
+            target_ydoc.get_map("runtime").set(
+                txn,
+                "environment",
+                {"materialization": {"scenario_id": current}},
+            )
+        self._last_rebuild_timings_ms = {"total": 1.0}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "_rebuild_in_doc",
+        _fake_rebuild_in_doc,
+    )
+
+    room = SimpleNamespace(ydoc=ydoc)
+    store = _FakeStore()
+
+    result = asyncio.run(
+        gateway_module._ensure_room_effective_materialized(
+            "bootstrap-lease-ws",
+            store,
+            room,
+            seed_result={
+                "scenario_id": "todo_list_5b9319fa",
+                "current_scenario_overridden": True,
+                "mode": "projected_seed_reuse",
+                "space": "dev",
+            },
+        )
+    )
+
+    assert result is True
+    assert seen_current == ["todo_list_5b9319fa"]
+    assert gateway_module._authoritative_current_scenario("bootstrap-lease-ws") is None
+    assert room._diag_effective_branch_snapshot["ready"] is True
+    assert store.writes
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+
+
+def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+        ydoc.get_map("ui").set(
+            txn,
+            "application",
+            {
+                "desktop": {"pageSchema": {"id": "prompt_ide"}},
+                "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+            },
+        )
+        ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "installed", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "desktop", {"installed": {"apps": [], "widgets": []}})
+        ydoc.get_map("data").set(txn, "webio", {})
+        ydoc.get_map("data").set(txn, "routing", {})
+        ydoc.get_map("registry").set(txn, "merged", {"widgets": {}, "modals": {}})
+
+    class _FakeStore:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        async def write_update(self, update: bytes, **_kwargs) -> bool:
+            self.writes.append(bytes(update))
+            return True
+
+    seen_current: list[str] = []
+
+    def _fake_rebuild_in_doc(self, target_ydoc, _webspace_id) -> None:
+        current = str(target_ydoc.get_map("ui").get("current_scenario") or "")
+        seen_current.append(current)
+        with target_ydoc.begin_transaction() as txn:
+            target_ydoc.get_map("ui").set(
+                txn,
+                "application",
+                {
+                    "desktop": {"pageSchema": {"id": current}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                },
+            )
+            target_ydoc.get_map("runtime").set(
+                txn,
+                "environment",
+                {
+                    "materialization": {
+                        "scenario_id": current,
+                        "required_branches": [
+                            "ui.application",
+                            "data.catalog",
+                            "data.installed",
+                            "data.desktop",
+                            "data.webio",
+                            "data.routing",
+                            "registry.merged",
+                        ],
+                    }
+                },
+            )
+        self._last_rebuild_timings_ms = {"total": 1.0}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "_rebuild_in_doc",
+        _fake_rebuild_in_doc,
+    )
+
+    room = SimpleNamespace(ydoc=ydoc)
+    store = _FakeStore()
+
+    result = asyncio.run(
+        gateway_module._ensure_room_effective_materialized(
+            "bootstrap-seed-override-ready",
+            store,
+            room,
+            seed_result={
+                "scenario_id": "web_desktop",
+                "current_scenario_overridden": True,
+                "mode": "projected_seed_reuse",
+                "space": "workspace",
+            },
+        )
+    )
+
+    assert result is True
+    assert seen_current == ["web_desktop"]
+    assert dict(ydoc.get_map("ui").get("application") or {})["desktop"]["pageSchema"]["id"] == "web_desktop"
+    assert store.writes
 
 
 def test_room_bootstrap_stuck_incident_is_sticky_until_ready() -> None:

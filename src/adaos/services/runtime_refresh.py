@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 
@@ -47,13 +48,39 @@ def rebuild_webspace_projection_sync(
     action: str,
     source_of_truth: str,
 ) -> dict[str, Any]:
-    return asyncio.run(
-        rebuild_webspace_projection(
+    async def _runner() -> dict[str, Any]:
+        return await rebuild_webspace_projection(
             webspace_id=webspace_id,
             action=action,
             source_of_truth=source_of_truth,
         )
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_runner())
+
+    result: dict[str, Any] | None = None
+    error: BaseException | None = None
+
+    def _thread_main() -> None:
+        nonlocal result
+        nonlocal error
+        try:
+            result = asyncio.run(_runner())
+        except BaseException as exc:
+            error = exc
+
+    thread = threading.Thread(
+        target=_thread_main,
+        name="adaos-webspace-rebuild-sync",
+        daemon=True,
     )
+    thread.start()
+    thread.join()
+    if error is not None:
+        raise error
+    return result if isinstance(result, dict) else {}
 
 
 def _record_stage(payload: dict[str, Any], stage: str, *, ok: bool, **fields: Any) -> None:
@@ -83,6 +110,7 @@ def refresh_skill_runtime(
     require_active_version: bool = False,
     disable_during_migration: bool = False,
     operation_id: str | None = None,
+    retry_deactivated: bool = False,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
     expected_version = str(source_version or "").strip()
@@ -115,7 +143,12 @@ def refresh_skill_runtime(
         else {}
     )
     recover_transient_deactivation = _is_runtime_migration_transient(deactivation_before)
-    if bool(runtime_status_before.get("deactivated")) and not recover_transient_deactivation:
+    retry_deactivated_prepare = (
+        bool(runtime_status_before.get("deactivated"))
+        and not recover_transient_deactivation
+        and bool(retry_deactivated)
+    )
+    if bool(runtime_status_before.get("deactivated")) and not recover_transient_deactivation and not retry_deactivated_prepare:
         payload["ok"] = True
         payload["skipped"] = True
         payload["deactivated"] = True
@@ -134,9 +167,11 @@ def refresh_skill_runtime(
         _record_stage(payload, "activate", ok=True, skipped=True, reason="deactivated")
         _record_stage(payload, "converge", ok=True, skipped=True, active_version=runtime_version_before)
         return payload
-    if recover_transient_deactivation:
+    if recover_transient_deactivation or retry_deactivated_prepare:
         payload["deactivation_recovery"] = True
         payload["deactivation"] = deactivation_before
+    if retry_deactivated_prepare:
+        payload["deactivation_retry"] = True
     try:
         runtime_result = mgr.runtime_update(skill_name, space="workspace")
         payload["runtime_updated"] = True
@@ -153,8 +188,10 @@ def refresh_skill_runtime(
         should_prepare = True
     if recover_transient_deactivation:
         should_prepare = True
+    if retry_deactivated_prepare:
+        should_prepare = True
     if migrate_runtime and should_prepare:
-        allow_deactivated_prepare = bool(recover_transient_deactivation)
+        allow_deactivated_prepare = bool(recover_transient_deactivation or retry_deactivated_prepare)
         if disable_during_migration:
             try:
                 payload["deactivation"] = mgr.deactivate_runtime(

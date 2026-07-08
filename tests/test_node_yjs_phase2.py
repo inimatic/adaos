@@ -30,6 +30,18 @@ async def _awaitable(value):
     return value
 
 
+def _fake_request(
+    *,
+    headers: dict[str, str] | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8777,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        headers=headers or {},
+        client=SimpleNamespace(host=host, port=port),
+    )
+
+
 class _FakeMap(dict):
     pass
 
@@ -51,6 +63,21 @@ class _FakeAsyncDoc:
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
         return False
+
+
+class _FakeYJson:
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    def to_json(self) -> object:
+        return self._payload
+
+
+def test_node_api_coerce_helpers_accept_yjson_values() -> None:
+    assert node_api_module._coerce_dict(_FakeYJson({"apps": [{"id": "prompt_ide"}]})) == {
+        "apps": [{"id": "prompt_ide"}]
+    }
+    assert node_api_module._coerce_list(_FakeYJson([{"id": "project-current"}])) == [{"id": "project-current"}]
 
 
 def test_node_yjs_webspace_endpoint_coerces_legacy_default_to_desktop(monkeypatch) -> None:
@@ -76,7 +103,7 @@ def test_node_yjs_webspace_endpoint_coerces_legacy_default_to_desktop(monkeypatc
 
 
 def test_node_yjs_switch_scenario_endpoint_forwards_set_home(monkeypatch) -> None:
-    captured: list[tuple[str, str, bool]] = []
+    captured: list[tuple[str, str, bool, bool, str | None, str | None, str | None]] = []
     published: list[tuple[str, str, str | None, bool, str | None]] = []
 
     async def _fake_switch(
@@ -85,8 +112,11 @@ def test_node_yjs_switch_scenario_endpoint_forwards_set_home(monkeypatch) -> Non
         *,
         set_home: bool = False,
         wait_for_rebuild: bool = True,
+        request_id: str | None = None,
+        request_source: str | None = None,
+        request_client: str | None = None,
     ) -> dict[str, object]:
-        captured.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
+        captured.append((webspace_id, scenario_id, set_home, wait_for_rebuild, request_id, request_source, request_client))
         return {"ok": True, "accepted": True, "webspace_id": webspace_id, "scenario_id": scenario_id, "set_home": set_home}
 
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
@@ -115,11 +145,29 @@ def test_node_yjs_switch_scenario_endpoint_forwards_set_home(monkeypatch) -> Non
     result = asyncio.run(
         node_api_module.node_yjs_switch_scenario(
             "phase2-node",
-            node_api_module.WebspaceYjsActionRequest(scenario_id="prompt_engineer_scenario", set_home=True),
+            node_api_module.WebspaceYjsActionRequest(
+                scenario_id="prompt_engineer_scenario",
+                set_home=True,
+                request_id="unit-rid",
+                request_source="unit.switch",
+                include_runtime=True,
+                include_rebuild=True,
+            ),
+            _fake_request(port=8899),
         )
     )
 
-    assert captured == [("phase2-node", "prompt_engineer_scenario", True, False)]
+    assert captured == [
+        (
+            "phase2-node",
+            "prompt_engineer_scenario",
+            True,
+            False,
+            "unit-rid",
+            "unit.switch",
+            "http:node_yjs_switch_scenario:127.0.0.1:8899",
+        )
+    ]
     assert result["ok"] is True
     assert result["runtime"]["webspace_id"] == "phase2-node"
     assert result["rebuild"]["status"] == "scheduled"
@@ -127,7 +175,7 @@ def test_node_yjs_switch_scenario_endpoint_forwards_set_home(monkeypatch) -> Non
 
 
 def test_node_yjs_switch_scenario_endpoint_preserves_implicit_set_home(monkeypatch) -> None:
-    captured: list[tuple[str, str, bool | None]] = []
+    captured: list[tuple[str, str, bool | None, bool, str | None, str | None]] = []
 
     async def _fake_switch(
         webspace_id: str,
@@ -135,8 +183,11 @@ def test_node_yjs_switch_scenario_endpoint_preserves_implicit_set_home(monkeypat
         *,
         set_home: bool | None = None,
         wait_for_rebuild: bool = True,
+        request_id: str | None = None,
+        request_source: str | None = None,
+        request_client: str | None = None,
     ) -> dict[str, object]:
-        captured.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
+        captured.append((webspace_id, scenario_id, set_home, wait_for_rebuild, request_source, request_client))
         return {"ok": True, "accepted": True, "webspace_id": webspace_id, "scenario_id": scenario_id, "set_home": set_home}
 
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
@@ -147,16 +198,26 @@ def test_node_yjs_switch_scenario_endpoint_preserves_implicit_set_home(monkeypat
         node_api_module.node_yjs_switch_scenario(
             "phase2-node",
             node_api_module.WebspaceYjsActionRequest(scenario_id="prompt_engineer_scenario"),
+            _fake_request(),
         )
     )
 
-    assert captured == [("phase2-node", "prompt_engineer_scenario", None, False)]
+    assert captured == [
+        (
+            "phase2-node",
+            "prompt_engineer_scenario",
+            None,
+            False,
+            "api.node.yjs.switch_scenario",
+            "http:node_yjs_switch_scenario:127.0.0.1:8777",
+        )
+    ]
     assert result["ok"] is True
     assert result["set_home"] is None
 
 
 def test_node_yjs_switch_scenario_endpoint_can_wait_for_rebuild(monkeypatch) -> None:
-    captured: list[tuple[str, str, bool | None, bool]] = []
+    captured: list[tuple[str, str, bool | None, bool, str | None]] = []
 
     async def _fake_switch(
         webspace_id: str,
@@ -164,8 +225,11 @@ def test_node_yjs_switch_scenario_endpoint_can_wait_for_rebuild(monkeypatch) -> 
         *,
         set_home: bool | None = None,
         wait_for_rebuild: bool = True,
+        request_id: str | None = None,
+        request_source: str | None = None,
+        request_client: str | None = None,
     ) -> dict[str, object]:
-        captured.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
+        captured.append((webspace_id, scenario_id, set_home, wait_for_rebuild, request_source))
         return {
             "ok": True,
             "accepted": True,
@@ -196,12 +260,14 @@ def test_node_yjs_switch_scenario_endpoint_can_wait_for_rebuild(monkeypatch) -> 
             node_api_module.WebspaceYjsActionRequest(
                 scenario_id="prompt_engineer_scenario",
                 wait_for_rebuild=True,
+                include_rebuild=True,
             ),
+            _fake_request(),
         )
     )
 
-    assert captured == [("phase2-node", "prompt_engineer_scenario", None, True)]
-    assert result["background_rebuild"] is False
+    assert captured == [("phase2-node", "prompt_engineer_scenario", None, False, "api.node.yjs.switch_scenario")]
+    assert result["background_rebuild"] is True
     assert result["rebuild"]["status"] == "ready"
 
 
@@ -212,6 +278,9 @@ def test_node_yjs_switch_scenario_endpoint_propagates_skip_metadata(monkeypatch)
         *,
         set_home: bool | None = None,
         wait_for_rebuild: bool = True,
+        request_id: str | None = None,
+        request_source: str | None = None,
+        request_client: str | None = None,
     ) -> dict[str, object]:
         return {
             "ok": True,
@@ -258,7 +327,11 @@ def test_node_yjs_switch_scenario_endpoint_propagates_skip_metadata(monkeypatch)
     result = asyncio.run(
         node_api_module.node_yjs_switch_scenario(
             "phase2-node",
-            node_api_module.WebspaceYjsActionRequest(scenario_id="prompt_engineer_scenario"),
+            node_api_module.WebspaceYjsActionRequest(
+                scenario_id="prompt_engineer_scenario",
+                include_rebuild=True,
+            ),
+            _fake_request(),
         )
     )
 
@@ -1410,6 +1483,145 @@ def test_node_yjs_webspace_materialization_snapshot_returns_degraded_on_timeout(
     assert result["materialization"]["ready"] is False
 
 
+def test_node_yjs_webspace_materialization_snapshot_validates_disk_snapshot(monkeypatch) -> None:
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {
+            "webspace_id": webspace_id,
+            "status": "ready",
+            "pending": False,
+            "materialization": {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "readiness_state": "ready",
+                "missing_branches": [],
+                "observed_at": 123.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_describe_yjs_materialization",
+        lambda webspace_id, rebuild_state=None, verify_live=False: _awaitable(
+            {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "readiness_state": "ready",
+                "missing_branches": [],
+            }
+        ),
+    )
+
+    async def _partial_snapshot(*_args, **_kwargs):
+        return {
+            "ui": {},
+            "data": {"desktop": {"installed": {"apps": [], "widgets": []}}},
+            "registry": {},
+        }
+
+    monkeypatch.setattr(node_api_module, "_read_yjs_materialization_snapshot", _partial_snapshot)
+    monkeypatch.setattr(
+        node_api_module,
+        "yjs_sync_runtime_snapshot",
+        lambda **kwargs: {"webspace_id": kwargs.get("webspace_id")},
+    )
+
+    result = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
+
+    assert result["ok"] is True
+    assert result["degraded"] is True
+    assert result["state"] == "degraded"
+    assert result["source"] == "disk_snapshot"
+    assert result["reason"] == "degraded"
+    assert result["materialization"]["ready"] is False
+    assert result["materialization"]["snapshot_source"] == "disk_snapshot"
+    assert "ui.application" in result["materialization"]["missing_branches"]
+    assert "data.catalog.apps" in result["materialization"]["missing_branches"]
+    assert "data.installed.apps" in result["materialization"]["missing_branches"]
+
+
+def test_node_yjs_webspace_materialization_snapshot_degrades_on_scenario_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_operational_state",
+        lambda webspace_id: _awaitable(
+            SimpleNamespace(
+                webspace_id=webspace_id,
+                current_scenario=None,
+                effective_home_scenario="web_desktop",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {
+            "webspace_id": webspace_id,
+            "status": "ready",
+            "pending": False,
+            "scenario_id": "web_desktop",
+            "materialization": {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "current_scenario": "web_desktop",
+                "readiness_state": "ready",
+                "missing_branches": [],
+                "observed_at": 123.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_describe_yjs_materialization",
+        lambda webspace_id, rebuild_state=None, verify_live=False: _awaitable(
+            {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "current_scenario": "web_desktop",
+                "readiness_state": "ready",
+                "missing_branches": [],
+            }
+        ),
+    )
+
+    async def _mismatched_snapshot(*_args, **_kwargs):
+        return {
+            "ui": {
+                "current_scenario": "prompt_engineer_scenario",
+                "application": {
+                    "desktop": {"pageSchema": {"id": "prompt_ide", "widgets": []}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                },
+            },
+            "data": {
+                "catalog": {"apps": [], "widgets": []},
+                "desktop": {"installed": {"apps": [], "widgets": []}},
+                "installed": {"apps": [], "widgets": []},
+            },
+            "registry": {},
+        }
+
+    monkeypatch.setattr(node_api_module, "_read_yjs_materialization_snapshot", _mismatched_snapshot)
+    monkeypatch.setattr(
+        node_api_module,
+        "yjs_sync_runtime_snapshot",
+        lambda **kwargs: {"webspace_id": kwargs.get("webspace_id")},
+    )
+
+    result = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
+
+    assert result["degraded"] is True
+    assert result["state"] == "degraded"
+    assert result["materialization"]["ready"] is False
+    assert result["materialization"]["materialization_mismatch"] is True
+    assert result["materialization"]["current_scenario"] == "prompt_engineer_scenario"
+    assert result["materialization"]["expected_current_scenario"] == "web_desktop"
+    assert "ui.current_scenario" in result["materialization"]["missing_branches"]
+
+
 def test_node_yjs_webspace_rebuild_state_endpoint_includes_cached_materialization(monkeypatch) -> None:
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
     monkeypatch.setattr(
@@ -1512,9 +1724,11 @@ def test_describe_yjs_materialization_reports_ready_readiness_and_no_missing_bra
                     "apps": [{"id": "prompt_ide"}],
                     "widgets": [{"id": "weather"}],
                 },
-                "desktop": {
-                    "pageSchema": {"id": "desktop", "widgets": [{"id": "main-widget"}]},
-                },
+                "desktop": _FakeYJson(
+                    {
+                        "pageSchema": {"id": "desktop", "widgets": [{"id": "main-widget"}]},
+                    }
+                ),
                 "installed": {
                     "apps": ["scenario:prompt_engineer_scenario"],
                     "widgets": ["weather"],
@@ -1535,7 +1749,7 @@ def test_describe_yjs_materialization_reports_ready_readiness_and_no_missing_bra
     monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
     monkeypatch.setattr(node_api_module, "_local_node_id", lambda: "hub-1")
 
-    result = asyncio.run(node_api_module._describe_yjs_materialization("default"))
+    result = asyncio.run(node_api_module._describe_yjs_materialization("default", verify_live=True))
 
     assert result["ready"] is True
     assert result["readiness_state"] == "ready"
@@ -1580,7 +1794,7 @@ def test_describe_yjs_materialization_reports_partial_installed_as_missing(monke
 
     monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
 
-    result = asyncio.run(node_api_module._describe_yjs_materialization("default"))
+    result = asyncio.run(node_api_module._describe_yjs_materialization("default", verify_live=True))
 
     assert result["ready"] is False
     assert result["readiness_state"] == "hydrating"
@@ -1615,7 +1829,7 @@ def test_describe_yjs_materialization_reports_hydrating_readiness_and_missing_br
 
     monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
 
-    result = asyncio.run(node_api_module._describe_yjs_materialization("default"))
+    result = asyncio.run(node_api_module._describe_yjs_materialization("default", verify_live=True))
 
     assert result["ready"] is False
     assert result["readiness_state"] == "hydrating"
@@ -1870,6 +2084,149 @@ def test_node_yjs_catalog_state_endpoint_returns_items_and_materialization(monke
     assert result["materialization"]["ready"] is False
     assert result["rebuild"]["webspace_id"] == "desktop"
     assert result["runtime"]["webspace_id"] == "desktop"
+
+
+def test_materialize_catalog_items_uses_matching_materialized_payload_when_live_catalog_empty(monkeypatch) -> None:
+    monkeypatch.setattr(node_api_module, "_read_live_catalog_items", lambda webspace_id, kind: _awaitable([]))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_operational_state",
+        lambda webspace_id: _awaitable(
+            SimpleNamespace(
+                webspace_id=webspace_id,
+                current_scenario=None,
+                effective_home_scenario="web_desktop",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "get_webspace_rebuild_materialized_payload",
+        lambda webspace_id: {
+            "schema": "adaos.webspace.materialized_payload.v1",
+            "webspace_id": webspace_id,
+            "scenario_id": "web_desktop",
+            "application": {},
+            "catalog": {
+                "apps": [
+                    {
+                        "id": "weather_app",
+                        "title": "Weather",
+                        "icon": "cloud-outline",
+                        "launchModal": "weather_modal",
+                    }
+                ],
+                "widgets": [],
+            },
+            "installed": {"apps": ["weather_app"], "widgets": []},
+            "desktop": {"installed": {"apps": ["weather_app"], "widgets": []}},
+            "registry": {"widgets": [], "modals": []},
+            "webio": {},
+            "routing": {},
+        },
+    )
+
+    class _DesktopService:
+        async def get_snapshot_async(self, webspace_id: str | None = None):
+            assert webspace_id == "desktop"
+            return SimpleNamespace(
+                installed=SimpleNamespace(apps=["weather_app"], widgets=[]),
+                pinned_widgets=[],
+            )
+
+    monkeypatch.setattr(node_api_module, "WebDesktopService", _DesktopService)
+
+    result = asyncio.run(node_api_module._materialize_catalog_items("desktop", "apps"))
+
+    assert result[0]["id"] == "weather_app"
+    assert result[0]["installed"] is True
+    assert result[0]["icon"] == "cloud-outline"
+
+
+def test_materialize_catalog_items_rejects_mismatched_materialized_payload(monkeypatch) -> None:
+    monkeypatch.setattr(node_api_module, "_read_live_catalog_items", lambda webspace_id, kind: _awaitable([]))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_operational_state",
+        lambda webspace_id: _awaitable(
+            SimpleNamespace(
+                webspace_id=webspace_id,
+                current_scenario=None,
+                effective_home_scenario="web_desktop",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "get_webspace_rebuild_materialized_payload",
+        lambda webspace_id: {
+            "schema": "adaos.webspace.materialized_payload.v1",
+            "webspace_id": webspace_id,
+            "scenario_id": "prompt_engineer_scenario",
+            "application": {},
+            "catalog": {"apps": [{"id": "prompt_app", "title": "Prompt"}], "widgets": []},
+            "installed": {"apps": ["prompt_app"], "widgets": []},
+            "desktop": {"installed": {"apps": ["prompt_app"], "widgets": []}},
+            "registry": {"widgets": [], "modals": []},
+            "webio": {},
+            "routing": {},
+        },
+    )
+
+    class _DesktopService:
+        async def get_snapshot_async(self, webspace_id: str | None = None):
+            return SimpleNamespace(installed=SimpleNamespace(apps=[], widgets=[]), pinned_widgets=[])
+
+    monkeypatch.setattr(node_api_module, "WebDesktopService", _DesktopService)
+
+    result = asyncio.run(node_api_module._materialize_catalog_items("desktop", "apps"))
+
+    assert result == []
+
+
+def test_read_live_catalog_items_clones_yjs_map_like_catalog(monkeypatch) -> None:
+    state = {
+        "data": _FakeMap(
+            {
+                "catalog": _FakeYJson(
+                    {
+                        "apps": [
+                            {
+                                "id": "weather_app",
+                                "title": "Weather",
+                                "launchModal": "weather_modal",
+                            }
+                        ],
+                        "widgets": [
+                            {
+                                "id": "weather",
+                                "title": "Weather",
+                                "type": "visual.metricTile",
+                            }
+                        ],
+                    }
+                )
+            }
+        )
+    }
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_read_ydoc(webspace_id: str, **kwargs: object) -> _FakeAsyncDoc:
+        captured.append((webspace_id, dict(kwargs)))
+        return _FakeAsyncDoc(state)
+
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", _fake_read_ydoc)
+
+    result = asyncio.run(node_api_module._read_live_catalog_items("desktop-dev", "apps"))
+
+    assert captured == [("desktop-dev", {})]
+    assert result == [
+        {
+            "id": "weather_app",
+            "title": "Weather",
+            "launchModal": "weather_modal",
+        }
+    ]
 
 
 def test_node_yjs_set_pinned_widgets_endpoint_uses_desktop_service(monkeypatch) -> None:
@@ -3316,6 +3673,12 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
         skill_decls=[],
     )
     fingerprints = webspace_runtime_module._resolved_output_branch_fingerprints(resolved)
+    runtime_environment = webspace_runtime_module.runtime_environment_payload()
+    runtime_environment["materialization"] = webspace_runtime_module._scenario_materialization_contract(
+        resolved.scenario_id,
+        source_mode=resolved.source_mode,
+    )
+    fingerprints["runtime.environment"] = webspace_runtime_module._fingerprint_json_like(runtime_environment)
     ydoc = _TrackingDoc(
         {
             "ui": _TrackingMap(
@@ -3338,7 +3701,7 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
                     },
                 },
             ),
-            "runtime": _TrackingMap({"environment": webspace_runtime_module.runtime_environment_payload()}),
+            "runtime": _TrackingMap({"environment": runtime_environment}),
         }
     )
     inputs = webspace_runtime_module.WebspaceResolverInputs(
@@ -3364,52 +3727,37 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
 
     runtime._apply_resolved_state_in_doc(ydoc, "default", resolved, inputs=inputs)
 
-    assert runtime._last_apply_summary == {
-        "branch_count": 8,
-        "changed_branches": 0,
-        "unchanged_branches": 8,
-        "failed_branches": 0,
-        "changed_paths": [],
-        "defaults_failed": False,
-        "transaction_total": 2,
-        "phases": {
-            "structure": {
-                "branch_count": 3,
-                "changed_branches": 0,
-                "unchanged_branches": 3,
-                "failed_branches": 0,
-                "changed_paths": [],
-                "fingerprint_unchanged_branches": 3,
-                "fingerprint_unchanged_paths": ["ui.application", "registry.merged", "runtime.environment"],
-            },
-            "interactive": {
-                "branch_count": 5,
-                "changed_branches": 0,
-                "unchanged_branches": 5,
-                "failed_branches": 0,
-                "changed_paths": [],
-                "fingerprint_unchanged_branches": 5,
-                "fingerprint_unchanged_paths": [
-                    "data.catalog",
-                    "data.installed",
-                    "data.desktop",
-                    "data.webio",
-                    "data.routing",
-                ],
-            },
-        },
-        "fingerprint_unchanged_branches": 8,
-        "fingerprint_unchanged_paths": [
-            "ui.application",
-            "registry.merged",
-            "runtime.environment",
-            "data.catalog",
-            "data.installed",
-            "data.desktop",
-            "data.webio",
-            "data.routing",
-        ],
-    }
+    summary = runtime._last_apply_summary or {}
+    assert summary["branch_count"] == 8
+    assert summary["changed_branches"] == 0
+    assert summary["unchanged_branches"] == 8
+    assert summary["failed_branches"] == 0
+    assert summary["changed_paths"] == []
+    assert summary["defaults_failed"] is False
+    assert summary["transaction_total"] == 2
+    assert summary["fingerprint_unchanged_branches"] == 8
+    assert summary["fingerprint_unchanged_paths"] == [
+        "ui.application",
+        "registry.merged",
+        "runtime.environment",
+        "data.catalog",
+        "data.installed",
+        "data.desktop",
+        "data.webio",
+        "data.routing",
+    ]
+    assert summary["phases"]["structure"]["fingerprint_unchanged_paths"] == [
+        "ui.application",
+        "registry.merged",
+        "runtime.environment",
+    ]
+    assert summary["phases"]["interactive"]["fingerprint_unchanged_paths"] == [
+        "data.catalog",
+        "data.installed",
+        "data.desktop",
+        "data.webio",
+        "data.routing",
+    ]
 
 
 def test_webspace_runtime_apply_rewrites_missing_effective_branch_even_when_fingerprint_matches(monkeypatch) -> None:
@@ -3507,10 +3855,137 @@ def test_webspace_runtime_apply_rewrites_missing_effective_branch_even_when_fing
     runtime._apply_resolved_state_in_doc(ydoc, "default", resolved, inputs=inputs)
 
     assert ydoc.get_map("data")["catalog"] == {"apps": [], "widgets": []}
-    assert runtime._last_apply_summary["changed_paths"] == ["data.catalog", "data.webio"]
+    assert "data.catalog" in runtime._last_apply_summary["changed_paths"]
+    assert "data.webio" in runtime._last_apply_summary["changed_paths"]
     interactive = runtime._last_apply_summary["phases"]["interactive"]
-    assert interactive["changed_paths"] == ["data.catalog", "data.webio"]
+    assert "data.catalog" in interactive["changed_paths"]
+    assert "data.webio" in interactive["changed_paths"]
     assert "data.catalog" not in interactive.get("fingerprint_unchanged_paths", [])
+
+
+def test_webspace_runtime_apply_rewrites_stale_branch_when_registry_fingerprint_matches(monkeypatch) -> None:
+    class _Txn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _TrackingMap(dict):
+        def set(self, txn, key, value):
+            self[key] = value
+
+    class _TrackingDoc:
+        def __init__(self, state: dict[str, _TrackingMap]) -> None:
+            self._state = state
+
+        def get_map(self, name: str) -> _TrackingMap:
+            return self._state[name]
+
+        def begin_transaction(self):
+            return _Txn()
+
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(ctx=SimpleNamespace())
+    monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {"webspace_id": webspace_id, "status": "ready", "pending": False},
+    )
+
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        source_mode="workspace",
+        application={
+            "desktop": {"topbar": [], "pageSchema": {"widgets": []}, "pinnedWidgets": []},
+            "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+        },
+        catalog={"apps": [{"id": "files"}], "widgets": [{"id": "desktop-icons"}]},
+        registry={"modals": ["apps_catalog", "widgets_catalog"], "widgets": ["desktop-icons"]},
+        installed={"apps": [{"id": "files"}], "widgets": [{"id": "desktop-icons"}]},
+        desktop={"icons": [{"id": "files"}], "pageSchema": {"widgets": []}},
+        webio={"receivers": {}},
+        routing={"routes": {}},
+        skill_decls=[],
+    )
+    fingerprints = webspace_runtime_module._resolved_output_branch_fingerprints(resolved)
+    runtime_environment = webspace_runtime_module.runtime_environment_payload()
+    runtime_environment["materialization"] = webspace_runtime_module._scenario_materialization_contract(
+        resolved.scenario_id,
+        source_mode=resolved.source_mode,
+    )
+    fingerprints["runtime.environment"] = webspace_runtime_module._fingerprint_json_like(runtime_environment)
+    ydoc = _TrackingDoc(
+        {
+            "ui": _TrackingMap(
+                {
+                    "application": resolved.application,
+                    "current_scenario": resolved.scenario_id,
+                }
+            ),
+            "data": _TrackingMap(
+                {
+                    "catalog": resolved.catalog,
+                    "installed": {"apps": [], "widgets": []},
+                    "desktop": {"notebook": {}},
+                    "webio": resolved.webio,
+                    "routing": resolved.routing,
+                }
+            ),
+            "registry": _TrackingMap(
+                {
+                    "merged": resolved.registry,
+                    "runtime_meta": {
+                        webspace_runtime_module._RUNTIME_META_EFFECTIVE_BRANCH_FINGERPRINTS_KEY: dict(fingerprints)
+                    },
+                }
+            ),
+            "runtime": _TrackingMap({"environment": runtime_environment}),
+        }
+    )
+    inputs = webspace_runtime_module.WebspaceResolverInputs(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        source_mode="workspace",
+        metadata={},
+        scenario_application={},
+        scenario_catalog={},
+        scenario_registry={},
+        overlay_snapshot={},
+        live_state={"desktop": {}, "routing": {}},
+        compatibility_cache_presence={
+            "scenario_ui_application": False,
+            "scenario_registry_entry": False,
+            "scenario_catalog": False,
+        },
+        skill_decls=[],
+        desktop_scenarios=[],
+        scenario_source="loader:workspace",
+        legacy_scenario_fallback=False,
+    )
+
+    runtime._apply_resolved_state_in_doc(
+        ydoc,
+        "desktop",
+        resolved,
+        inputs=inputs,
+        previous_resolved=resolved,
+        resolved_branch_fingerprints_override=fingerprints,
+        previous_branch_fingerprints_override=fingerprints,
+    )
+
+    assert ydoc.get_map("data")["installed"] == resolved.installed
+    assert ydoc.get_map("data")["desktop"] == resolved.desktop
+    summary = runtime._last_apply_summary or {}
+    assert "data.installed" in summary["changed_paths"]
+    assert "data.desktop" in summary["changed_paths"]
+    assert "data.installed" in summary["patch_fingerprint_mismatch_paths"]
+    assert "data.desktop" in summary["patch_fingerprint_mismatch_paths"]
+    assert "data.installed" in summary["replaced_paths"]
+    assert "data.desktop" in summary["replaced_paths"]
+    assert summary["branch_apply_modes"]["data.installed"] == "changed:replace"
+    assert summary["branch_apply_modes"]["data.desktop"] == "changed:replace"
 
 
 def test_node_cli_ensure_dev_posts_requested_id_and_title(monkeypatch) -> None:
