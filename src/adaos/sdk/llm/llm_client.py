@@ -651,7 +651,7 @@ def submit_response_job(
                     )
                     continue
         should_probe_health = index + 1 < len(base_urls) and (
-            index > 0 or _env_enabled("ADAOS_ROOT_LLM_HEALTHCHECK_PRIMARY", False)
+            index > 0 or _env_enabled("ADAOS_ROOT_LLM_HEALTHCHECK_PRIMARY", True)
         )
         if should_probe_health:
             health_started = time.perf_counter()
@@ -763,6 +763,78 @@ def submit_response_job(
                 exc,
             )
             if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
+                if request_id:
+                    recovery_started = time.perf_counter()
+                    recovery_timeout = max(1.0, min(float(timeout or 15), 10.0))
+                    try:
+                        raw_recovered = http.request(
+                            "POST",
+                            "/v1/llm/jobs/lookup",
+                            json=root_payload,
+                            headers=headers or None,
+                            timeout=recovery_timeout,
+                        )
+                        recovery_ms = (time.perf_counter() - recovery_started) * 1000.0
+                        data = dict(raw_recovered) if isinstance(raw_recovered, Mapping) else {"result": raw_recovered}
+                        _llm_proxy_protocol(data, base_url=base_url, fallback=index > 0, attempts=attempts)
+                        client_meta = data.setdefault("_client", {})
+                        client_meta["base_url"] = base_url
+                        client_meta["fallback"] = index > 0
+                        client_meta["payload_bytes"] = payload_bytes
+                        client_meta["attempt_ms"] = round(attempt_ms, 1)
+                        client_meta["recovery_ms"] = round(recovery_ms, 1)
+                        client_meta["total_ms"] = round((time.perf_counter() - submit_started) * 1000.0, 1)
+                        client_meta["attempts"] = list(attempts)
+                        client_meta["recovered_after_submit_error"] = True
+                        client_meta["trace_attempts"] = list(trace_attempts) + [
+                            {
+                                "base_url": base_url,
+                                "phase": "submit_recovery",
+                                "ok": True,
+                                "duration_ms": round(recovery_ms, 1),
+                                "status": str(data.get("status") or ""),
+                                "job_id": str(data.get("job_id") or ""),
+                            }
+                        ]
+                        data["output_text"] = _extract_job_output_text(data)
+                        _LOG.warning(
+                            "root LLM job submit recovered request_id=%s base_url=%s fallback=%s recovery_ms=%.1f total_ms=%.1f status=%s job_id=%s",
+                            str(request_id or ""),
+                            base_url,
+                            index > 0,
+                            recovery_ms,
+                            (time.perf_counter() - submit_started) * 1000.0,
+                            str(data.get("status") or ""),
+                            str(data.get("job_id") or ""),
+                        )
+                        return data
+                    except Exception as recovery_exc:
+                        recovery_ms = (time.perf_counter() - recovery_started) * 1000.0
+                        if isinstance(recovery_exc, RootHttpError):
+                            recovery_status = int(getattr(recovery_exc, "status_code", 0) or 0)
+                            recovery_label = _root_http_error_code(recovery_exc) or (
+                                f"http_{recovery_status}" if recovery_status else type(recovery_exc).__name__
+                            )
+                        else:
+                            recovery_label = type(recovery_exc).__name__
+                        trace_attempts.append(
+                            {
+                                "base_url": base_url,
+                                "phase": "submit_recovery",
+                                "ok": False,
+                                "duration_ms": round(recovery_ms, 1),
+                                "error": recovery_label,
+                                "detail": str(recovery_exc),
+                            }
+                        )
+                        _LOG.warning(
+                            "root LLM job submit recovery failed request_id=%s base_url=%s recovery_ms=%.1f error=%s detail=%s",
+                            str(request_id or ""),
+                            base_url,
+                            recovery_ms,
+                            recovery_label,
+                            recovery_exc,
+                        )
                 _LOG.warning("root LLM job submit failed base_url=%s; trying fallback error=%s", base_url, exc)
                 continue
             raise
