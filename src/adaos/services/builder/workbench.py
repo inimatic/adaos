@@ -52,6 +52,19 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _binding_semantic_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    keys = (
+        "source_webspace_id",
+        "dev_webspace_id",
+        "scenario_id",
+        "runtime_scenario_id",
+        "purpose",
+        "active_draft_id",
+        "dialog",
+    )
+    return all(left.get(key) == right.get(key) for key in keys)
+
+
 def _info_to_dict(info: Any) -> dict[str, Any]:
     if info is None:
         return {}
@@ -285,6 +298,8 @@ class BuilderWorkbenchService:
             "created_at": existing.get("created_at") or now,
             "updated_at": now,
         }
+        if existing and not persist_projection and _binding_semantic_equal(existing, binding):
+            return existing
         _write_json(self.binding_path(source_id), binding)
         if persist_projection:
             self.publish_projection_sync(source_id)

@@ -35,6 +35,62 @@ def test_manifest_declares_builder_dialog_agent() -> None:
     assert manifest["conversation"]["agents"][0]["id"] == "agent:builder_skill:builder"
 
 
+def test_builder_topic_ref_reuses_session_topic_without_store(monkeypatch) -> None:
+    skill = _load_module()
+    calls: list[dict] = []
+
+    import adaos.services.conversation_links as conversation_links
+
+    def _ensure_builder_topic(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return {"thread_id": "unexpected", "topic_id": "unexpected"}
+
+    monkeypatch.setattr(conversation_links, "ensure_builder_topic", _ensure_builder_topic)
+
+    topic = skill._builder_topic_ref(
+        "desktop",
+        session={
+            "id": "builder_session",
+            "draft_id": "draft.todo",
+            "scenario_id": "todo_scenario",
+            "topic_ref": {
+                "schema": "adaos.conversation.topic_ref.v1",
+                "thread_id": "thread.builder.desktop.draft.todo",
+                "topic_id": "builder:desktop:draft.todo",
+                "conversation_id": "conv.skill.builder_skill.default.desktop",
+            },
+        },
+        binding={"dev_webspace_id": "desktop-dev"},
+    )
+
+    assert calls == []
+    assert topic["thread_id"] == "thread.builder.desktop.draft.todo"
+    assert topic["topic_id"] == "builder:desktop:draft.todo"
+    assert topic["scenario_id"] == "todo_scenario"
+    assert topic["active_draft_id"] == "draft.todo"
+    assert topic["dev_webspace_id"] == "desktop-dev"
+
+
+def test_save_session_batches_sessions_and_current_pointer(monkeypatch) -> None:
+    skill = _load_module()
+    calls: list[dict] = []
+
+    monkeypatch.setattr(skill, "_sessions", lambda webspace_id: {})
+    monkeypatch.setattr(skill, "_mem_set_many", lambda values: calls.append(dict(values)))
+
+    session = {"id": "builder_session", "scenario_id": "todo_scenario"}
+    result = skill._save_session("desktop", session)
+
+    assert result is session
+    assert len(calls) == 1
+    payload = calls[0]
+    sessions_key = skill._scoped_key(skill.SESSIONS_KEY, "desktop")
+    current_key = skill._scoped_key(skill.CURRENT_KEY, "desktop")
+    assert set(payload) == {sessions_key, current_key}
+    assert payload[current_key] == "builder_session"
+    assert payload[sessions_key]["builder_session"]["scenario_id"] == "todo_scenario"
+
+
 def test_create_shopping_list_scenario_draft_writes_declarative_webui(tmp_path, monkeypatch) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "shopping_list"
@@ -944,6 +1000,51 @@ def test_legacy_page_schema_from_preview_preserves_select_options_from_current_u
     ]
 
 
+def test_page_schema_from_preview_derives_composite_card_preview() -> None:
+    skill = _load_module()
+    preview = {
+        "title": "Todo",
+        "current_ui": {
+            "id": "todo",
+            "type": "page",
+            "children": [
+                {"id": "editor", "type": "section", "children": []},
+                {
+                    "id": "items_cards",
+                    "type": "card_list",
+                    "title": "{{title}}",
+                    "subtitle": "{{notes}}",
+                    "preview": "{{status}} - {{date}}",
+                },
+            ],
+        },
+        "datasources": [
+            {
+                "id": "prototype_items",
+                "fields": [
+                    {"id": "title", "type": "string", "label": "Title"},
+                    {"id": "notes", "type": "string", "label": "Notes"},
+                    {"id": "status", "type": "string", "label": "Status"},
+                    {"id": "date", "type": "date", "label": "Date"},
+                ],
+            }
+        ],
+        "mock_data": {
+            "prototype_items": [
+                {"title": "Talk", "notes": "CFP", "status": "Pending", "date": "2026-07-02"}
+            ]
+        },
+        "layout_order": "cards_first",
+    }
+
+    derived = skill._page_schema_from_preview(preview)
+    cards = next(item for item in derived["widgets"] if item["id"] == "prototype-cards")
+
+    assert cards["inputs"]["previewKey"] == "card_preview"
+    assert cards["dataSource"]["value"][0]["card_preview"] == "Pending - 2026-07-02"
+    assert cards["dataSource"]["value"][0]["status"] == "Pending"
+
+
 def test_repair_mojibake_text_handles_common_cyrillic_and_keeps_other_languages() -> None:
     skill = _load_module()
 
@@ -1063,12 +1164,11 @@ def test_update_current_scenario_sample_data_uses_llm_payload_and_refreshes_file
     assert revision["preview_state"]["mock_data"]["prototype_items"][0]["title"] == "Book venue"
 
 
-def test_schedule_dev_runtime_reload_prefers_direct_runtime_reload(monkeypatch) -> None:
+def test_schedule_dev_runtime_reload_publishes_materialization_event_without_running_loop(monkeypatch) -> None:
     skill = _load_module()
     monkeypatch.setenv("ADAOS_BUILDER_DEV_RUNTIME_REFRESH_IN_TESTS", "1")
     published: list[dict] = []
     reload_calls: list[dict] = []
-    reload_done = threading.Event()
 
     import adaos.sdk.data.events as events
     import adaos.services.scenario.webspace_runtime as webspace_runtime
@@ -1104,16 +1204,58 @@ def test_schedule_dev_runtime_reload_prefers_direct_runtime_reload(monkeypatch) 
 
     assert result["ok"] is True
     assert result["scheduled"] is True
-    assert result["mode"] == "thread"
+    assert result["mode"] == "materialization_event_bus"
     assert result["webspace_id"] == "desktop-dev"
-    assert reload_done.wait(1.0)
-    assert reload_calls[-1]["webspace_id"] == "desktop-dev"
-    assert reload_calls[-1]["scenario_id"] == "todo_list"
-    assert reload_calls[-1]["action"] == "reload"
-    assert reload_calls[-1]["event_payload"]["webspace_id"] == "desktop-dev"
-    assert reload_calls[-1]["event_payload"]["scenario_id"] == "todo_list"
-    assert reload_calls[-1]["event_payload"]["_meta"]["cmd_id"] == "builder.ui.todo_list.016"
-    assert published == []
+    assert reload_calls == []
+    assert published[-1]["topic"] == "builder.ui_revision.materialize"
+    assert published[-1]["source"] == "builder_skill"
+    assert published[-1]["payload"]["webspace_id"] == "desktop-dev"
+    assert published[-1]["payload"]["scenario_id"] == "todo_list"
+    assert published[-1]["payload"]["revision"] == "016"
+    assert published[-1]["payload"]["_meta"]["cmd_id"] == "builder.ui.todo_list.016"
+    assert published[-1]["payload"]["delay_s"] == 0.0
+    assert result["delay_s"] == 0.0
+
+
+def test_schedule_dev_runtime_materialization_uses_running_event_loop(monkeypatch) -> None:
+    skill = _load_module()
+    monkeypatch.setenv("ADAOS_BUILDER_DEV_RUNTIME_REFRESH_IN_TESTS", "1")
+    monkeypatch.setenv("ADAOS_BUILDER_REVISION_MATERIALIZATION_DELAY_S", "0")
+    calls: list[dict] = []
+
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    async def _apply(webspace_id, **kwargs):
+        calls.append({"webspace_id": webspace_id, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime, "apply_builder_revision_materialization", _apply)
+
+    async def _run() -> dict:
+        result = skill._schedule_dev_runtime_reload_after_revision(
+            "desktop",
+            session={"scenario_id": "todo_list", "draft_id": "draft.todo", "ui_revision": "019"},
+            binding={"dev_webspace_id": "desktop-dev"},
+            revision="019",
+            source_fingerprint="fp-019",
+            user_id="guest",
+            roles=[],
+        )
+        await asyncio.sleep(0)
+        return result
+
+    result = asyncio.run(_run())
+
+    assert result["ok"] is True
+    assert result["scheduled"] is True
+    assert result["mode"] == "materialization_event_loop_task"
+    assert result["webspace_id"] == "desktop-dev"
+    assert result["revision"] == "019"
+    assert calls[-1]["webspace_id"] == "desktop-dev"
+    assert calls[-1]["scenario_id"] == "todo_list"
+    assert calls[-1]["revision"] == "019"
+    assert calls[-1]["source_fingerprint"] == "fp-019"
+    assert calls[-1]["user_id"] == "guest"
 
 
 def test_update_current_scenario_does_not_generate_domain_mock_data_without_llm(monkeypatch, tmp_path) -> None:
@@ -1302,11 +1444,22 @@ def test_set_ui_revision_current_restores_stored_webui(monkeypatch, tmp_path) ->
     assert updated_revision["after_webui"]["preview_state"]["version"] == "002"
     assert updated_revision["prompt_files"]["tz/base_tz.md"]["content"] == "spec revision 002"
     assert any(item["type"] == "card_list" for item in updated["preview_state"]["current_ui"]["children"])
+    emitted: list[dict[str, object]] = []
+
+    def _unexpected_revision_chat_emit(*args, **kwargs):
+        emitted.append({"args": args, "kwargs": kwargs})
+        raise AssertionError("successful Set current must not append a persistent chat message")
+
+    monkeypatch.setattr(skill, "_schedule_safe_emit_chat", _unexpected_revision_chat_emit)
 
     restored = skill.set_ui_revision_current("001", webspace_id="builder-revision")
 
     assert restored["ok"] is True
     assert restored["revision"] == "001"
+    assert emitted == []
+    assert restored["chat_emit"]["mode"] == "receipt_only"
+    assert restored["chat_emit"]["persisted"] is False
+    assert restored["timings_ms"]["emit_chat"] == 0.0
     assert restored["dev_runtime_refresh"]["scheduled"] is True
     assert refresh_calls[-1]["webspace_id"] == "builder-revision"
     assert refresh_calls[-1]["revision"] == "001"
@@ -1898,17 +2051,55 @@ def test_chat_requires_selected_builder_target(monkeypatch) -> None:
     assert "demo_scenario" in result["message"]
 
 
+def test_chat_does_not_create_project_for_edit_like_request_without_target(monkeypatch) -> None:
+    skill = _load_module()
+    created: list[dict] = []
+
+    class _Workbench:
+        def get_workspace_binding(self, webspace_id):
+            return {
+                "source_webspace_id": webspace_id,
+                "dev_webspace_id": f"{webspace_id}-dev",
+                "active_draft_id": None,
+                "runtime_scenario_id": "todo_list_5b9319fa",
+            }
+
+    def _fake_create(*args, **kwargs):
+        created.append({"args": args, "kwargs": kwargs})
+        return {"ok": True, "scenario_id": "unexpected"}
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+    monkeypatch.setattr(skill, "create_scenario_draft", _fake_create)
+    monkeypatch.setattr(skill, "_safe_emit_chat", lambda *args, **kwargs: None)
+
+    result = skill.chat(
+        "\u0414\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435 \u041f\u0440\u043e\u0435\u043a\u0442 \u0438 \u0441\u0433\u0440\u0443\u043f\u043f\u0438\u0440\u0443\u0439 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0438 \u043f\u043e \u043f\u0440\u043e\u0435\u043a\u0442\u0430\u043c. "
+        "\u0421\u043e\u0437\u0434\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445 \u0434\u043b\u044f \u0434\u0432\u0443\u0445 \u043f\u0440\u043e\u0435\u043a\u0442\u043e\u0432 \u0434\u043b\u044f \u043d\u0430\u0433\u043b\u044f\u0434\u043d\u043e\u0441\u0442\u0438.",
+        webspace_id="desktop",
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "target_required"
+    assert result["needs_selection"] is True
+    assert not created
+
+
 def test_builder_command_parser_prioritises_project_commands() -> None:
     skill = _load_module()
 
     switch = skill._parse_builder_command("\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c, \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u0441\u044c \u043d\u0430 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439 demo_scenario", has_session=True)
     delete_field = skill._parse_builder_command("\u0443\u0434\u0430\u043b\u0438 \u043f\u043e\u043b\u0435 \u0446\u0435\u043d\u0430", has_session=True)
     create = skill._parse_builder_command("\u0441\u043e\u0437\u0434\u0430\u0439 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043a\u0443\u043f\u043e\u043a", has_session=True)
+    edit_like_without_session = skill._parse_builder_command(
+        "\u0434\u043e\u0431\u0430\u0432\u044c \u043f\u043e\u043b\u0435 \u043f\u0440\u043e\u0435\u043a\u0442 \u0438 \u0441\u043e\u0437\u0434\u0430\u0439 \u043f\u0440\u0438\u043c\u0435\u0440 \u0434\u0430\u043d\u043d\u044b\u0445",
+        has_session=False,
+    )
 
     assert switch["intent"] == "project.switch"
     assert switch["project_ref"] == "demo_scenario"
     assert delete_field["intent"] == "none"
     assert create["intent"] == "project.create"
+    assert edit_like_without_session["intent"] == "none"
 
 
 def test_prompt_project_selection_defers_heavy_events(monkeypatch) -> None:
@@ -2281,7 +2472,8 @@ def test_create_scenario_draft_updates_builder_workbench(monkeypatch, tmp_path) 
     }
     assert calls[1]["method"] == "snapshot"
     assert calls[1]["preview_state"]["current_ui"]["type"] == "page"
-    assert [item["method"] for item in calls] == ["set_active_draft", "snapshot"]
+    assert [item["method"] for item in calls[:2]] == ["set_active_draft", "snapshot"]
+    assert {item["method"] for item in calls}.issubset({"set_active_draft", "snapshot", "ensure_dev_webspace"})
     assert result["dev_runtime_refresh"]["scheduled"] is True
     assert refresh_calls[-1]["webspace_id"] == "desktop"
     assert refresh_calls[-1]["revision"] == "001"
@@ -2400,6 +2592,47 @@ def test_ensure_workbench_can_defer_runtime_switch_for_ui_revision_updates(monke
     assert result["projection"]["direct"]["skipped"] == "runtime_refresh_deferred_to_dev_reload"
     assert result["projection"]["event"]["skipped"] == "runtime_refresh_deferred_to_dev_reload"
     assert [item["method"] for item in calls] == ["set_active_draft", "snapshot"]
+
+
+def test_ensure_workbench_can_defer_snapshot_projection_for_pointer_switches(monkeypatch) -> None:
+    skill = _load_module()
+    calls: list[dict] = []
+
+    class _Workbench:
+        def set_active_draft(self, *, source_webspace_id=None, active_draft_id=None, runtime_scenario_id=None, persist_projection=True):
+            calls.append({
+                "method": "set_active_draft",
+                "source_webspace_id": source_webspace_id,
+                "active_draft_id": active_draft_id,
+                "runtime_scenario_id": runtime_scenario_id,
+                "persist_projection": persist_projection,
+            })
+            return {
+                "source_webspace_id": source_webspace_id,
+                "dev_webspace_id": f"{source_webspace_id}-dev",
+                "active_draft_id": active_draft_id,
+                "runtime_scenario_id": runtime_scenario_id,
+            }
+
+        def snapshot(self, webspace_id, *, preview_state=None):
+            calls.append({"method": "snapshot", "webspace_id": webspace_id, "preview_state": preview_state})
+            return {"source_webspace_id": webspace_id, "preview_state": preview_state or {}}
+
+    monkeypatch.setattr(skill, "_workbench_service", lambda: _Workbench())
+
+    result = skill._ensure_workbench(
+        "desktop",
+        active_draft_id="draft.todo",
+        runtime_scenario_id="todo_scenario",
+        preview_state={"title": "Todo"},
+        refresh_runtime=False,
+        snapshot_projection=False,
+    )
+
+    assert result["ok"] is True
+    assert result["projection"]["snapshot"]["skipped"] == "snapshot_projection_deferred"
+    assert result["projection"]["snapshot_deferred"] is True
+    assert [item["method"] for item in calls] == ["set_active_draft"]
 
 
 def test_ensure_workbench_schedules_async_direct_runtime_switch(monkeypatch) -> None:

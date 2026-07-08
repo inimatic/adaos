@@ -233,6 +233,45 @@ def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> 
     assert service.get_workspace_binding("desktop")["active_draft_id"] is None
 
 
+def test_set_active_draft_skips_unchanged_deferred_binding_write(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.builder.workbench as workbench_module
+
+    writes: list[Path] = []
+    original_write_json = workbench_module._write_json
+
+    def _tracked_write_json(path: Path, payload):
+        writes.append(path)
+        original_write_json(path, payload)
+
+    monkeypatch.setattr(workbench_module, "_write_json", _tracked_write_json)
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    first = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id="draft.shopping",
+        runtime_scenario_id="shopping",
+        persist_projection=False,
+    )
+    second = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id="draft.shopping",
+        runtime_scenario_id="shopping",
+        persist_projection=False,
+    )
+
+    assert first == second
+    assert len(writes) == 1
+
+    changed = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id="draft.todo",
+        runtime_scenario_id="shopping",
+        persist_projection=False,
+    )
+    assert changed["active_draft_id"] == "draft.todo"
+    assert len(writes) == 2
+
+
 def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     class _Webspaces:
         def __init__(self) -> None:

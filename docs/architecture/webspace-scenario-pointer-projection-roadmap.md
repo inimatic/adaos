@@ -91,6 +91,37 @@ ownership model, see:
   For the current desktop/subnet migration scope, client readers are being
   moved off direct `ui.scenarios.*` fallback access and onto effective
   runtime branches plus explicit API/stream contracts.
+- Builder materialization PoC checkpoint as of 2026-07-04:
+  Prompt IDE `Set current` no longer uses the recovery-grade
+  `desktop.webspace.reload` path for `desktop-dev`. It applies
+  `builder_revision_apply` through a detached semantic materialization pass,
+  skips scenario projection-rule refresh by default, persists the rebuilt
+  effective branches, and then repairs the active YRoom via the live-room
+  effective-branch refresh path. The materialization identity key is scoped by
+  `webspace_id`, `scenario_id`, revision/source fingerprint, `user_id`
+  (`guest` for unauthenticated guests), roles hash, and optional policy
+  fingerprint so cached views cannot cross access boundaries.
+- Builder materialization measurement as of 2026-07-04:
+  repeatable `021 -> 019` benchmark output is stored in
+  `.adaos/diagnostics/builder_materialization_poc_after_detached_refresh_019_021.json`.
+  The final experimental slice produced ready disk snapshots for both
+  revisions, `semantic_rebuild_total_ms` about 0.46-0.57s, total rebuild about
+  1.51-1.56s including live-room repair, and visible view signatures changed
+  between `To-Do List` (`card_preview`) and `Conference Preparation Tasks`
+  (`status`). Remaining latency is outside the semantic core: benchmark polling
+  observed the finished rebuild about 4.25s after `finished_at`, and
+  `prompt_list_project_objects` still took about 5.2s in the same run.
+- YStore recovery checkpoint as of 2026-07-04:
+  Yjs apply-update panics such as `index out of bounds` are no longer treated as
+  merely "empty document" while leaving the corrupt base in the replay log.
+  Async YDoc access and YRoom bootstrap now discard the corrupt runtime/snapshot
+  state before writing a fresh materialization, preventing repeated restart-time
+  corruption and empty disk snapshots.
+- Current/home separation checkpoint as of 2026-07-05:
+  scenario switch treats `ui.current_scenario` as the cheap live pointer and
+  does not auto-persist `home_scenario` for dev webspaces. Persisting home is an
+  explicit `set_home=true` operation, so repeated preview/browse switches do
+  not pay workspace-listing sync cost or mutate restart defaults by accident.
 
 ## Implementation Anchors
 
@@ -245,7 +276,8 @@ following:
 
 1. Validate that the requested scenario exists in the relevant source space.
 2. Update `ui.current_scenario`.
-3. Optionally update `home_scenario` when policy requires it.
+3. Optionally update `home_scenario` only when the caller explicitly requests
+   a persisted home change (`set_home=true` / equivalent control surface).
 4. Persist or update `home_scenario_ref` when the selection is node-specific.
 5. Schedule or trigger semantic rebuild.
 6. Return quickly with rebuild state metadata.
@@ -289,6 +321,121 @@ Transport recovery and semantic recovery should also stay distinct here:
 - websocket/provider autoreconnect remains a transport concern
 - frontend recovery controls may request semantic reload, but should debounce
   transient disconnects instead of recreating sync providers aggressively
+
+## Access-Scoped Materialization Keys
+
+Resolved runtime materialization is not keyed only by scenario identity. The
+same `scenario_id` and revision may produce different effective views for
+different users, roles, grants, feature flags, or device policies. The cache key
+must therefore include the access context that can affect projection output.
+
+The canonical materialization identity is:
+
+- `webspace_id`: the workspace/runtime container that owns the pointer and
+  overlay state
+- `scenario_id`: the canonical scenario being resolved
+- `revision` or `source_fingerprint`: the source version used to build the
+  effective view
+- `user_id`: the current user identity, with unauthenticated guests normalized
+  to `guest`
+- `roles`: a stable, sorted, de-duplicated role list, usually represented in
+  the compact key through a deterministic role hash
+- optional `policy_fingerprint`: added when grants, feature gates, or other
+  access-policy inputs can change without changing the role list
+
+The compact key should be deterministic and safe to log, for example:
+
+```text
+<webspace_id>:<scenario_id>:<revision-or-source-hash>:<user_id>:<roles-hash>
+```
+
+The key is a correctness boundary, not only a performance cache key. Reusing a
+materialization built for another user or role set is an access-control bug even
+when the visible UI payload appears similar.
+
+Guest handling is deliberately explicit: guests share `user_id=guest` unless a
+later product requirement introduces per-guest personalization that affects
+projection output. If that happens, the guest session or invite identity must
+become part of the key instead of being hidden in runtime state.
+
+## Workspace Pointer and Materialization Storage
+
+The workspace document should act as the control plane for the active scenario:
+it stores the current pointer, global workspace state, and lightweight
+materialization metadata. It should not grow into an unbounded archive of every
+effective scenario payload ever viewed.
+
+The target split is:
+
+- workspace/control state: current scenario pointer, selected materialization
+  key, shell state, layout, installed apps, overlays, and readiness metadata
+- materialized/effective view: the resolved projection for one
+  `scenario@revision@user@roles` identity
+- scenario state: domain data that belongs to the scenario and should not be
+  confused with workspace chrome or runtime streams
+- runtime streams: ephemeral data that can be resubscribed or replayed by the
+  owning service
+
+For the near-term compatibility slice, the active effective view may still be
+mirrored into the existing top-level branches such as `ui.application`,
+`data.catalog`, `data.desktop`, and `registry.merged`. That mirror is a
+compatibility cache for the current renderer, not the long-term source of truth.
+
+The first implementation should keep this conservative:
+
+- keep only current, previous, and explicitly pinned/hot materializations in
+  the workspace document
+- use TTL/LRU cleanup before Yjs update history and memory grow too quickly
+- record materialization size, update count, apply timings, and branch
+  fingerprints as operator diagnostics
+- defer a separate materialization document/room until measurements show the
+  single-document compatibility slice cannot stay bounded
+
+A future two-document design can use a small workspace document as the control
+plane and a separate materialization document or room as the content plane. That
+is not a Docker-layer model: the runtime must still define explicit join points
+between workspace overlay, scenario state, effective projection, and streams.
+The main risk in the two-document design is cross-document consistency; pointer
+and materialization readiness are not atomically updated by one Yjs transaction.
+
+## Builder Dev-Webspace Experimental Slice
+
+Prompt IDE edits run in the `desktop` workspace and drive a paired
+`desktop-dev` preview/runtime webspace. The current performance issue is not a
+normal end-user scenario switch. It is the Builder `Set current` workflow using
+a recovery-grade `desktop.webspace.reload` path for an interactive revision
+selection.
+
+The experimental slice should prove whether a materialization pointer path can
+remove the dominant cost before the renderer is fully migrated:
+
+1. Capture a repeatable baseline through public local API calls:
+   prompt object listing, project file tree, project file read, and alternating
+   Builder `Set current` revisions.
+2. Add access-scoped materialization identity metadata for the dev-webspace
+   effective view, including `user_id=guest` fallback and canonical roles.
+3. Add a Builder/dev-webspace fast path that applies the selected revision as a
+   materialization refresh instead of running recovery reload, while preserving
+   the existing top-level effective branches as the compatibility mirror.
+4. Keep recovery actions (`reload`, `reset`, `restore`) semantically separate
+   from interactive revision selection.
+5. Re-run the same measurement loop and compare client-observed latency,
+   rebuild timings, live-room refresh behavior, loop-lag dumps, and Yjs update
+   pressure.
+
+Expected outcome:
+
+- If the long tail is dominated by recovery reload, room refresh fan-out, or
+  redundant semantic rebuild side effects, this slice should produce a
+  multiplicative improvement for `Set current` after the first materialization.
+- If the long tail is inside the prompt tool/eventbus/HTTP execution envelope
+  or in live-room/Yjs apply pressure that the compatibility mirror still has to
+  pay, this slice will produce only an incremental improvement and the next
+  cut should target the shared tool pipeline or a separate materialization room.
+
+The proof-of-concept is considered useful only if it reports both outcomes:
+the speedup for repeated revision switches and the remaining largest measured
+cost center after the recovery path is removed.
 
 ## Focus and Staging Model
 
@@ -755,6 +902,136 @@ Use this checklist as the authoritative progress tracker for the migration.
 - [x] Remove obsolete switch-time materialize-and-copy code paths.
 - [x] Update architecture and operator docs to describe the new ownership
   model.
+
+## Builder Materialization PoC: First Iteration
+
+Date: 2026-07-04.
+
+The first experimental slice used a repeatable local API benchmark:
+
+- Prompt IDE read path:
+  `prompt_list_project_objects`, `prompt_list_project_file_tree`,
+  `prompt_read_project_file`
+- Builder switch path:
+  `builder_skill:set_ui_revision_current` alternating revisions `020` and `021`
+  for scenario `todo_list_5b9319fa`
+- Source webspace: `desktop`
+- Dev/materialized webspace: `desktop-dev`
+- Access identity: `user_id=guest`, roles `[]`
+
+Reports:
+
+- Baseline:
+  `.adaos/diagnostics/builder_materialization_poc_baseline_pre_poc_v2.json`
+- Fast-path semantic materialization without recovery reload:
+  `.adaos/diagnostics/builder_materialization_poc_after_poc_installed_sync.json`
+- Threaded materialization:
+  `.adaos/diagnostics/builder_materialization_poc_after_poc_thread.json`
+- Deferred chat + deferred materialization:
+  `.adaos/diagnostics/builder_materialization_poc_after_poc_chat_delay.json`
+
+Measured `Set current` p50:
+
+| slice | `020` p50 | `021` p50 | observation |
+| --- | ---: | ---: | --- |
+| baseline recovery path | 5830 ms | 4527 ms | duplicate recovery reload path still blocks user-visible API time |
+| semantic materialization fast path | 6479 ms | 3284 ms | recovery work is removed, but early background work still stalls `/api/tools/call` |
+| threaded materialization | 5540 ms | 4069 ms | moving rebuild to a thread is not enough because chat/webio projection still runs in the request window |
+| deferred chat + deferred materialization | 1000 ms | 630 ms | user-visible switch becomes sub-second to ~1 second while materialization catches up asynchronously |
+
+Key conclusion: the pointer/materialization approach is worth continuing, but
+the biggest interactive win in this slice came from separating the user command
+from recovery/chat/webio fanout, not merely from replacing
+`desktop.webspace.reload`. Semantic rebuild itself is still expensive:
+post-response materialization p50 remains about 1.6-1.7 s and has outliers near
+5.9 s in this small scenario. The next iteration should therefore keep the
+command path pointer-first and asynchronous, while reducing
+`collect_inputs`, YDoc apply/writeback, and chat/webio projection pressure.
+
+## Builder Materialization PoC: View Switch Check
+
+Date: 2026-07-04.
+
+Follow-up reports:
+
+- Active runtime view check:
+  `.adaos/diagnostics/builder_materialization_poc_active8777_view_fix.json`
+- Active runtime rebuild observation breakdown:
+  `.adaos/diagnostics/builder_materialization_poc_active8777_view_fix_lag_breakdown.json`
+
+The active `desktop-dev` materialization now changes when Prompt IDE switches
+Builder revisions:
+
+| revision | cards `previewKey` | first preview value |
+| --- | --- | --- |
+| `020` | `status` | `Pending` |
+| `021` | `card_preview` | `Pending - 2026-07-01` |
+
+The visible regression was not only a transport or rebuild issue. Builder was
+compiling composite card preview templates such as `{{status}} - {{date}}` into
+a schema that only referenced a single key. The compatibility compiler now
+derives a synthetic `card_preview` field in static preview rows and points the
+card widget at it.
+
+The active runtime measurement on port `8777` still shows a separate timing
+problem. In the lag-breakdown run, the semantic rebuild finished about
+3.0-3.6 s after the Set-current action started, but the polling/status endpoint
+observed the completed rebuild 3.6-5.9 s later. One poll GET took 5.5-6.1 s in
+each switch. This means the next optimization step must measure event-loop or
+status-endpoint starvation separately from semantic rebuild cost.
+
+The source tree also now invalidates `scenarios_loader` cache for
+`builder_revision_apply` and `source_of_truth=builder_revision` even when the
+fast path deliberately avoids reseed. The active `8777` process used for the
+report had not been restarted after this core change, so its report still shows
+`resolver.cache_hit=true`; the contract is covered by unit tests and should be
+confirmed on a restarted runtime before treating cache-hit behavior as final.
+
+## Builder Materialization PoC: Route Yield And Trusted Snapshot
+
+Date: 2026-07-05.
+
+Additional repeatable reports:
+
+- Builder `021 <-> 019` after trusted materialized snapshot:
+  `.adaos/diagnostics/builder_materialization_after_trusted_snapshot_021_019.json`
+- Prompt IDE `<->` web desktop control after trusted materialized snapshot:
+  `.adaos/diagnostics/scenario_switch_promptide_webdesktop_after_trusted_snapshot_warm.json`
+
+Reusable local control script:
+
+```bash
+python tools/scenario_switch_benchmark.py \
+  --sequence web_desktop prompt_engineer_scenario web_desktop prompt_engineer_scenario \
+  --out .adaos/diagnostics/scenario_switch_promptide_webdesktop_after_trusted_snapshot_warm.json
+```
+
+Changes validated in this slice:
+
+- Scenario switch background rebuild now yields briefly before heavy work via
+  `ADAOS_WEBSPACE_SCENARIO_SWITCH_BACKGROUND_ROUTE_YIELD_S` (default runtime
+  value: `0.02`). This lets the API response leave the route before the
+  background rebuild monopolizes the event loop.
+- Live materialized payload apply now uses one Yjs transaction for the payload
+  path while regular rebuild keeps the older two-phase behavior.
+- Successful materialized payload apply can use a synthetic ready snapshot via
+  `ADAOS_YJS_MATERIALIZED_PAYLOAD_TRUST_APPLY_SUMMARY=1`; strict full checks or
+  failed branch summaries still fall back to reading the live YDoc.
+
+Measured control results after warm-up:
+
+| control | POST | server rebuild | memory |
+| --- | ---: | ---: | ---: |
+| Prompt IDE -> web desktop sequence | 99-169 ms typical | 277-566 ms | +0.004 MB private over 4 switches |
+| Builder `021 <-> 019` sequence | tool-visible outliers remain | rebuild avg 429 ms | ~1 MB private avg per measured action |
+
+The trusted snapshot change removed the `effective_snapshot` hot-path cost
+from tens of milliseconds to about `0.05 ms`. Remaining live-room cost is now
+mostly `ui.application` patching and Yjs update encoding. The remaining
+Builder-specific latency is different: `Set current` sometimes starts its
+materialization 1.8-1.9 s after the tool action, even though the live rebuild
+itself is sub-second. That points to tool bridge/event-loop backlog or
+Builder event dispatch rather than the materialized Yjs apply path.
 
 ## Success Criteria
 

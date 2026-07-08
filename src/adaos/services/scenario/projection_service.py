@@ -100,6 +100,14 @@ _YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM = str(
     "yes",
     "on",
 }
+_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC = str(
+    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC") or "0"
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC = max(
     0.0,
     float(os.getenv("ADAOS_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC") or "120.0"),
@@ -551,12 +559,17 @@ async def _compact_projection_amplification_store(
         after_entries = max(0, _int_or_zero(after.get("update_log_entries")))
         result["compacted"] = bool(after_entries < before_entries or after_replay_bytes < before_replay_bytes)
         result["released_replay_bytes"] = max(0, before_replay_bytes - after_replay_bytes)
-        try:
-            import gc  # pylint: disable=import-outside-toplevel
+        if _YJS_PROJECTION_AUTOCOMPACT_FORCE_GC:
+            try:
+                import gc  # pylint: disable=import-outside-toplevel
 
-            result["gc_collected"] = int(gc.collect() or 0)
-        except Exception:
+                result["gc_collected"] = int(gc.collect() or 0)
+            except Exception as exc:
+                result["gc_collected"] = 0
+                result["gc_error"] = f"{type(exc).__name__}: {exc}"
+        else:
             result["gc_collected"] = 0
+            result["gc_skipped"] = "disabled:ADAOS_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC"
         result["malloc_trimmed"] = _trim_allocator_after_projection_compaction()
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
@@ -894,13 +907,13 @@ def _clone_json_like(value: Any) -> Any:
             try:
                 return {str(k): _clone_json_like(v) for k, v in items()}
             except Exception:
-                return value
+                return {}
         if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, bytearray)):
             try:
                 return [_clone_json_like(v) for v in list(value)]
             except Exception:
-                return value
-        return value
+                return []
+        return str(value)
 
 
 def _mapping_items(value: Any) -> list[tuple[str, Any]] | None:
