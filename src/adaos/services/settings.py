@@ -48,6 +48,7 @@ class Settings:
     subnet_id: Optional[str] = None
     api_base: str = "https://api.inimatic.com"
     app_base: str = "https://inimatic.com"
+    root_token: Optional[str] = None
 
     # имена каталогов для PathProvider (dev/workspace)
     dev_skills_dirname: str = "skills"
@@ -179,6 +180,7 @@ class Settings:
         root_cfg = node_cfg.get("root") or {}
         api_base = root_cfg.get("base_url") or root_cfg.get("api_base") or "https://api.inimatic.com"
         app_base = root_cfg.get("app_base") or "https://inimatic.com"
+        root_token = str(root_cfg.get("root_token") or root_cfg.get("token") or "").strip() or None
         owner_cfg = root_cfg.get("owner") or {}
         owner_id = owner_cfg.get("owner_id") or None
         dev_cfg = node_cfg.get("dev") or {}
@@ -188,6 +190,7 @@ class Settings:
         # --- ENV/.env имеют приоритет над node.yaml ---
         api_base = pick_env("ADAOS_API_BASE", api_base) or api_base
         app_base = pick_env("ADAOS_APP_BASE", app_base) or app_base
+        root_token = str(pick_env("ROOT_TOKEN", root_token) or "").strip() or None
         dev_skills_dirname = pick_env("ADAOS_DEV_SKILLS_DIRNAME", dev_skills_dirname) or dev_skills_dirname
         dev_scenarios_dirname = pick_env("ADAOS_DEV_SCENARIOS_DIRNAME", dev_scenarios_dirname) or dev_scenarios_dirname
         return Settings(
@@ -203,6 +206,7 @@ class Settings:
             subnet_id=subnet_id,
             api_base=api_base,
             app_base=app_base,
+            root_token=root_token,
             dev_skills_dirname=dev_skills_dirname,
             dev_scenarios_dirname=dev_scenarios_dirname,
             # IO/Telegram specific (from env/.env only)

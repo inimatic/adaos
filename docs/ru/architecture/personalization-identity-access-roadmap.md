@@ -52,6 +52,12 @@ Connect или Join Browser, пока не закрыта соответству
   personalized chrome state, current-user chip показывает initials, AdaOS
   Connect рендерит invite QR, admin panel показывает audit drill-down preview,
   а `adaos switch lang <en|ru>` пишет `ADAOS_LANG` из набора core locales.
+- [x] 2026-07-08: Phase 5 invite transport исправлен как расширение AdaOS
+  Connect code+zone sessions вместо длинных parameterized guest URLs. Root
+  хранит invite parameters во временной `purpose=personalization_invite`
+  code session, joining clients делают resolve через
+  `/v1/connect/sessions/{user_code}`, а local hub API больше не откатывается
+  к длинным links, если root session registration недоступна.
 
 ## Правила выполнения
 

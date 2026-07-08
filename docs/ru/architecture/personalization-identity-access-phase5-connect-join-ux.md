@@ -10,7 +10,10 @@ Code anchors:
 
 - `src/adaos/services/personalization_runtime.py`
 - `src/adaos/apps/api/personalization.py`
+- `src/adaos/services/settings.py`
 - `src/adaos/services/access_links.py`
+- `src/adaos/integrations/adaos-backend/backend/io/bus/hubRouteProxy.ts`
+- `src/adaos/integrations/adaos-backend/backend/webauthn.ts`
 - `src/adaos/integrations/adaos-client/src/app/app.component.ts`
 - `src/adaos/integrations/adaos-client/src/app/app.component.html`
 - `src/adaos/integrations/adaos-client/src/app/app.component.scss`
@@ -38,10 +41,27 @@ Phase 5 делает Phase 3 join/invite semantics доступными из bro
 могут использовать один и тот же link material как copyable link или scanable
 code.
 
-Invite URLs генерируются от configured public app base, обычно
-`https://inimatic.com`, и несут target subnet вместе с root hub endpoint
-parameters. Joining browser использует эти параметры для preview/claim requests
-к целевому hub, а не предполагает локальный `127.0.0.1` API.
+Invite URLs теперь используют AdaOS Connect code flow, а не переносят target
+subnet и root hub endpoint прямо в URL. Видимая браузеру ссылка:
+
+```text
+https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru
+```
+
+Root хранит invite payload в том же temporary `device_code:*` session space,
+который используется для owner registration, с `purpose = personalization_invite`.
+В URL остаются только user-facing code и zone. Joining browser делает
+`GET /v1/connect/sessions/{user_code}` в этой zone, получает invite id, target
+subnet и root hub base, затем делает preview/claim через target hub.
+`?adaos_invite=<id>` остается compatibility path, но новые guest/targeted links
+должны быть code+zone AdaOS Connect links.
+
+Local hub API не должен молча откатываться к длинным parameterized links. Если
+root session не создана, `claim_url` пустой, а `claim_url_error` возвращает
+`root_invite_session_unavailable`. Единственный source для token в этом
+registration path - `Settings.root_token`, который читается из
+`node.yaml root.root_token` или `ROOT_TOKEN`; этот flow не должен подбирать
+токен из нескольких env aliases.
 
 ## Access boundary
 

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from adaos.apps.api import personalization
+from adaos.services.agent_context import get_ctx
 from adaos.services import access_links
 
 
@@ -90,7 +91,23 @@ def test_phase4_personalization_options_and_current_device_status() -> None:
     assert settings["device_trust_status"] == "Masha phone | device-phase45"
 
 
-def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission() -> None:
+def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(get_ctx().settings, "root_token", "root-token")
+
+    class _FakeRootResponse:
+        def __enter__(self) -> "_FakeRootResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return (
+                b'{"ok":true,"claim_url":"https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru",'
+                b'"invite":{"claim_url":"https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru"}}'
+            )
+
+    monkeypatch.setattr(personalization, "urlopen", lambda *args, **kwargs: _FakeRootResponse())
     client = _client()
 
     created = client.post(
@@ -102,10 +119,10 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission() -
     invite = created.json()["invite"]
     invite_id = invite["invite_id"]
     assert invite["kind"] == "guest_join_link"
-    assert "adaos_invite=" in invite["claim_url"]
-    assert invite["claim_url"].startswith("https://inimatic.com/?")
-    assert "target_subnet=" in invite["claim_url"]
-    assert "adaos_hub_base=" in invite["claim_url"]
+    assert invite["claim_url"] == "https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru"
+    assert "adaos_invite=" not in invite["claim_url"]
+    assert "target_subnet=" not in invite["claim_url"]
+    assert "adaos_hub_base=" not in invite["claim_url"]
     assert "127.0.0.1" not in invite["claim_url"]
 
     preview = client.get(f"/api/personalization/invites/{invite_id}/preview")

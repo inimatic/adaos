@@ -57,6 +57,12 @@ checked.
   state, the current-user chip shows stable initials, AdaOS Connect renders
   invite QR codes, the admin panel exposes an audit drill-down preview, and
   `adaos switch lang <en|ru>` writes `ADAOS_LANG` from the core locale set.
+- [x] 2026-07-08: Phase 5 invite transport corrected to extend AdaOS Connect
+  code+zone sessions instead of generating long parameterized guest URLs. Root
+  stores invite parameters in a temporary `purpose=personalization_invite`
+  code session, joining clients resolve `/v1/connect/sessions/{user_code}`,
+  and local hub APIs stop falling back to long links when root session
+  registration is unavailable.
 
 ## Execution rules
 

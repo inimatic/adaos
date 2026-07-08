@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -219,13 +218,16 @@ def _base_join_url(request: Request, ctx: AgentContext, invite_id: str) -> str:
     return f"{app_base}/?{urlencode(params)}"
 
 
-def _root_invite_registration_token() -> str:
-    return str(
-        os.getenv("HUB_ROOT_TOKEN")
-        or os.getenv("ADAOS_ROOT_TOKEN")
-        or os.getenv("ROOT_TOKEN")
-        or ""
-    ).strip()
+def _root_invite_registration_token(ctx: AgentContext) -> str:
+    return str(getattr(ctx.settings, "root_token", None) or "").strip()
+
+
+def _current_zone_id(ctx: AgentContext) -> str:
+    for source in (getattr(ctx, "config", None), getattr(ctx, "settings", None)):
+        value = str(getattr(source, "zone_id", "") or "").strip().lower()
+        if value:
+            return value
+    return ""
 
 
 def _register_root_invite_session(
@@ -234,7 +236,7 @@ def _register_root_invite_session(
     ctx: AgentContext,
     fallback_claim_url: str,
 ) -> str | None:
-    token = _root_invite_registration_token()
+    token = _root_invite_registration_token(ctx)
     if not token:
         return None
     invite_id = str(invite.get("invite_id") or "").strip()
@@ -256,6 +258,10 @@ def _register_root_invite_session(
         "expires_at": invite.get("expires_at"),
         "claim_url": fallback_claim_url,
     }
+    zone_id = _current_zone_id(ctx)
+    if zone_id:
+        body["zone"] = zone_id
+        body["zone_id"] = zone_id
     try:
         req = UrlRequest(
             f"{api_base}/v1/personalization/invites/register",
@@ -275,7 +281,7 @@ def _register_root_invite_session(
             or (invite_payload.get("claim_url") if isinstance(invite_payload, Mapping) else "")
             or ""
         ).strip()
-        if "adaos_invite=" in claim_url:
+        if "mode=registration" in claim_url and "user_code=" in claim_url and "zone=" in claim_url:
             return claim_url
     except Exception:
         return None
@@ -286,7 +292,10 @@ def _public_invite_view(invite: Mapping[str, Any], request: Request, ctx: AgentC
     invite_id = str(invite.get("invite_id") or "").strip()
     result = dict(invite)
     fallback_claim_url = _base_join_url(request, ctx, invite_id)
-    result["claim_url"] = _register_root_invite_session(invite, request, ctx, fallback_claim_url) or fallback_claim_url
+    claim_url = _register_root_invite_session(invite, request, ctx, fallback_claim_url)
+    result["claim_url"] = claim_url or ""
+    if not claim_url:
+        result["claim_url_error"] = "root_invite_session_unavailable"
     return result
 
 

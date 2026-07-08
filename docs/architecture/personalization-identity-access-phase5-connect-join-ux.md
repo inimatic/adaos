@@ -10,7 +10,10 @@ Code anchors:
 
 - `src/adaos/services/personalization_runtime.py`
 - `src/adaos/apps/api/personalization.py`
+- `src/adaos/services/settings.py`
 - `src/adaos/services/access_links.py`
+- `src/adaos/integrations/adaos-backend/backend/io/bus/hubRouteProxy.ts`
+- `src/adaos/integrations/adaos-backend/backend/webauthn.ts`
 - `src/adaos/integrations/adaos-client/src/app/app.component.ts`
 - `src/adaos/integrations/adaos-client/src/app/app.component.html`
 - `src/adaos/integrations/adaos-client/src/app/app.component.scss`
@@ -37,10 +40,26 @@ acceptance action. Created links are listed with QR rendering when `claim_url`
 is present, so classroom, museum, and device-to-device flows can use either
 copyable links or scanable codes from the same source material.
 
-Invite URLs are generated from the configured public app base, normally
-`https://inimatic.com`, and carry the target subnet plus root hub endpoint
-parameters. A joining browser uses those parameters to route preview/claim
-requests to the target hub instead of assuming the local `127.0.0.1` API.
+Invite URLs now reuse the AdaOS Connect code flow instead of carrying target
+subnet and hub endpoint parameters in the URL. The browser-visible URL shape is:
+
+```text
+https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru
+```
+
+Root stores the invite payload in the same temporary `device_code:*` session
+space used by owner registration, with `purpose = personalization_invite`.
+The URL keeps only the user-facing code and zone. The joining browser resolves
+`GET /v1/connect/sessions/{user_code}` in that zone, learns the invite id,
+target subnet, and root hub base from the root session, then previews/claims
+through the target hub. `?adaos_invite=<id>` remains a compatibility path, but
+new guest/targeted links should be code+zone AdaOS Connect links.
+
+Local hub APIs must not silently fall back to long parameterized links. If a
+root session cannot be created, `claim_url` is empty and `claim_url_error`
+reports `root_invite_session_unavailable`. The canonical token source for this
+registration path is `Settings.root_token`, read from `node.yaml root.root_token`
+or `ROOT_TOKEN`; this flow must not guess between multiple token env aliases.
 
 ## Access Boundary
 

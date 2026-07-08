@@ -458,8 +458,11 @@ Role не должен быть profile field. Role и membership принадл
 Текущая реализация: browser header/settings panel уже используют current-user
 settings API для profile, locale, timezone, theme, membership и device context.
 AdaOS Connect также показывает owner/admin surface для join, device pairing,
-recovery, grants и revoke. Более глубокое privacy-zone enforcement и skill/tool
-SDK enforcement остаются отдельными фазами roadmap.
+recovery, grants и revoke. Guest/targeted links расширяют AdaOS Connect flow
+`mode=registration&user_code=...&zone=...`: root хранит invite parameters во
+временной purpose-tagged code session, а URL несет только code и zone. Более
+глубокое privacy-zone enforcement и skill/tool SDK enforcement остаются
+отдельными фазами roadmap.
 
 ## User management skill
 
