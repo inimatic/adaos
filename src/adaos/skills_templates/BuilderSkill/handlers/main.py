@@ -386,27 +386,28 @@ def _builder_topic_ref(
     binding = binding if isinstance(binding, Mapping) else {}
     prompt_topic_id = _prompt_project_topic_id(session=session, binding=binding)
     if prompt_topic_id and (
-        thread_id.startswith("thread.builder.")
-        or thread_id.startswith("builder:")
-        or topic_id.startswith("builder:")
+        thread_id != prompt_topic_id
+        or (topic_id and topic_id != prompt_topic_id)
     ):
         thread_id = prompt_topic_id
         topic_id = prompt_topic_id
         existing_topic = {}
     if thread_id:
         topic = {k: v for k, v in dict(existing_topic or {}).items() if v is not None}
-        topic.setdefault("schema", "adaos.conversation.topic_ref.v1")
-        topic.setdefault("thread_id", thread_id)
-        topic.setdefault("topic_id", topic_id or thread_id)
-        topic.setdefault("topic_kind", "builder_runtime")
-        topic.setdefault("webspace_id", webspace_id)
-        topic.setdefault("source_webspace_id", webspace_id)
-        topic.setdefault("active_draft_id", str(session.get("draft_id") or binding.get("active_draft_id") or "").strip() or None)
-        topic.setdefault("scenario_id", str(session.get("scenario_id") or binding.get("runtime_scenario_id") or "").strip() or None)
-        topic.setdefault("dev_webspace_id", str(binding.get("dev_webspace_id") or _paired_dev_webspace_id(webspace_id) or "").strip() or None)
-        topic.setdefault("conversation_id", _conversation_id(webspace_id))
-        topic.setdefault("channel_id", DIALOG_CHANNEL_ID)
-        topic.setdefault("owner", f"skill:{SKILL_ID}")
+        scenario_id = str(session.get("scenario_id") or binding.get("runtime_scenario_id") or "").strip() or None
+        topic["schema"] = "adaos.conversation.topic_ref.v1"
+        topic["thread_id"] = thread_id
+        topic["topic_id"] = topic_id or thread_id
+        topic["topic_kind"] = "builder_scenario" if prompt_topic_id else "builder_runtime"
+        topic["webspace_id"] = webspace_id
+        topic["source_webspace_id"] = webspace_id
+        topic["active_draft_id"] = str(session.get("draft_id") or binding.get("active_draft_id") or "").strip() or None
+        topic["scenario_id"] = scenario_id
+        topic["project_id"] = scenario_id or topic.get("active_draft_id")
+        topic["dev_webspace_id"] = str(binding.get("dev_webspace_id") or _paired_dev_webspace_id(webspace_id) or "").strip() or None
+        topic["conversation_id"] = _conversation_id(webspace_id)
+        topic["channel_id"] = DIALOG_CHANNEL_ID
+        topic["owner"] = f"skill:{SKILL_ID}"
         return topic
     session_topic = session.get("topic_ref") if isinstance(session.get("topic_ref"), Mapping) else {}
     if session_topic and str(session_topic.get("thread_id") or session_topic.get("topic_id") or "").strip():
@@ -415,21 +416,22 @@ def _builder_topic_ref(
         topic.setdefault("topic_id", str(session_topic.get("topic_id") or session_topic.get("thread_id") or "").strip())
         topic.setdefault("thread_id", str(session_topic.get("thread_id") or session_topic.get("topic_id") or "").strip())
         if prompt_topic_id and (
-            str(topic.get("thread_id") or "").startswith("thread.builder.")
-            or str(topic.get("thread_id") or "").startswith("builder:")
-            or str(topic.get("topic_id") or "").startswith("builder:")
+            str(topic.get("thread_id") or "").strip() != prompt_topic_id
+            or str(topic.get("topic_id") or "").strip() != prompt_topic_id
         ):
             topic["thread_id"] = prompt_topic_id
             topic["topic_id"] = prompt_topic_id
-        topic.setdefault("topic_kind", "builder_runtime")
-        topic.setdefault("webspace_id", webspace_id)
-        topic.setdefault("source_webspace_id", webspace_id)
-        topic.setdefault("active_draft_id", str(session.get("draft_id") or binding.get("active_draft_id") or "").strip() or None)
-        topic.setdefault("scenario_id", str(session.get("scenario_id") or binding.get("runtime_scenario_id") or "").strip() or None)
-        topic.setdefault("dev_webspace_id", str(binding.get("dev_webspace_id") or _paired_dev_webspace_id(webspace_id) or "").strip() or None)
-        topic.setdefault("conversation_id", _conversation_id(webspace_id))
-        topic.setdefault("channel_id", DIALOG_CHANNEL_ID)
-        topic.setdefault("owner", f"skill:{SKILL_ID}")
+        scenario_id = str(session.get("scenario_id") or binding.get("runtime_scenario_id") or "").strip() or None
+        topic["topic_kind"] = "builder_scenario" if prompt_topic_id else str(topic.get("topic_kind") or "builder_runtime")
+        topic["webspace_id"] = webspace_id
+        topic["source_webspace_id"] = webspace_id
+        topic["active_draft_id"] = str(session.get("draft_id") or binding.get("active_draft_id") or "").strip() or None
+        topic["scenario_id"] = scenario_id
+        topic["project_id"] = scenario_id or topic.get("active_draft_id")
+        topic["dev_webspace_id"] = str(binding.get("dev_webspace_id") or _paired_dev_webspace_id(webspace_id) or "").strip() or None
+        topic["conversation_id"] = _conversation_id(webspace_id)
+        topic["channel_id"] = DIALOG_CHANNEL_ID
+        topic["owner"] = f"skill:{SKILL_ID}"
         topic.setdefault("stored", bool(session_topic.get("stored")))
         return topic
     try:
@@ -3312,10 +3314,10 @@ def _builder_llm_async_enabled(_meta: Mapping[str, Any] | None = None) -> bool:
 def _builder_llm_job_submit_timeout_s() -> float:
     raw = os.getenv("ADAOS_BUILDER_LLM_JOB_SUBMIT_TIMEOUT_S")
     try:
-        value = float(raw) if raw else 3.0
+        value = float(raw) if raw else 15.0
     except (TypeError, ValueError):
-        value = 3.0
-    return max(0.75, min(value, 60.0))
+        value = 15.0
+    return max(3.0, min(value, 60.0))
 
 
 def _builder_llm_job_submit_warn_ms() -> float:
@@ -3339,9 +3341,9 @@ def _builder_llm_job_timeout_s() -> float:
 def _builder_llm_job_poll_interval_s() -> float:
     raw = os.getenv("ADAOS_BUILDER_LLM_JOB_POLL_INTERVAL_S")
     try:
-        value = float(raw) if raw else 2.0
+        value = float(raw) if raw else 1.0
     except (TypeError, ValueError):
-        value = 2.0
+        value = 1.0
     return max(0.5, min(value, 15.0))
 
 
@@ -3471,13 +3473,6 @@ def _builder_llm_webui_transform_request(
     if project_system_prompt and project_system_prompt != _default_builder_system_prompt_text().strip():
         system_prompt += "\n\nProject-specific Builder system prompt:\n" + project_system_prompt[:8000]
     base_request = {
-        "instruction": instruction,
-        "scenario_id": session.get("scenario_id"),
-        "title": session.get("title"),
-        "current_webui_json": current_payload,
-        "runtime_context": _builder_runtime_context(session, current_payload),
-        "project_memory": project_memory,
-        "recent_patch_history": history,
         "webui_v1_abi": _builder_webui_abi_summary(),
         "runtime_component_contracts": _builder_runtime_component_contracts(),
         "webui_v1_schema": "see webui_v1_abi.schema_contract; validated by src/adaos/abi/webui.v1.schema.json",
@@ -3493,6 +3488,13 @@ def _builder_llm_webui_transform_request(
             "comment": "short user-facing text about what changed or why it could not be changed",
             "unable_reason": "short optional diagnostic if request cannot be implemented",
         },
+        "scenario_id": session.get("scenario_id"),
+        "title": session.get("title"),
+        "project_memory": project_memory,
+        "runtime_context": _builder_runtime_context(session, current_payload),
+        "recent_patch_history": history,
+        "current_webui_json": current_payload,
+        "instruction": instruction,
     }
     return {
         "current_payload": current_payload,
@@ -3660,6 +3662,12 @@ def _normalise_llm_webui_payload(
     previous_preview: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     data = copy.deepcopy(dict(payload))
+    if len(data) == 1:
+        for wrapper_key in ("adaos.webui.v1", "webui", "manifest"):
+            wrapped = data.get(wrapper_key)
+            if isinstance(wrapped, Mapping):
+                data = copy.deepcopy(dict(wrapped))
+                break
     legacy_preview = data.get("preview_state") if isinstance(data.get("preview_state"), Mapping) else {}
     page_schema = _extract_webui_page_schema(data)
     if not page_schema:
@@ -4323,6 +4331,106 @@ def _ensure_session_artifact_root(session: dict[str, Any], binding: Mapping[str,
     return False
 
 
+def _sync_session_from_artifacts(session: dict[str, Any], binding: Mapping[str, Any] | None = None) -> bool:
+    changed = False
+    if binding is not None:
+        changed = _ensure_session_artifact_root(session, binding) or changed
+    root = _project_artifact_root(session)
+    if root is None:
+        return changed
+
+    revision = ""
+    current_revision = root / "ui_revisions" / "current.txt"
+    try:
+        revision = current_revision.read_text(encoding="utf-8").strip()
+    except Exception:
+        revision = ""
+    if revision:
+        if str(session.get("ui_revision") or "").strip() != revision:
+            session["ui_revision"] = revision
+            changed = True
+        if str(session.get("version") or "").strip() != revision:
+            session["version"] = revision
+            changed = True
+        revision_path = root / "ui_revisions" / f"{revision}.json"
+        if revision_path.exists():
+            revisions = [dict(item) for item in session.get("ui_revisions", []) if isinstance(item, Mapping)]
+            if not any(str(item.get("revision") or "").strip() == revision for item in revisions):
+                revisions.append({"revision": revision, "path": str(revision_path)})
+                session["ui_revisions"] = revisions[-20:]
+                changed = True
+
+    webui = _read_json_file(root / "webui.json")
+    if webui:
+        if session.get("webui_payload") != webui:
+            session["webui_payload"] = copy.deepcopy(webui)
+            changed = True
+        page_schema = _extract_webui_page_schema(webui)
+        if page_schema:
+            title = str(page_schema.get("title") or session.get("title") or "").strip()
+            if title and str(session.get("title") or "").strip() != title:
+                session["title"] = title
+                changed = True
+            preview = session.get("preview_state") if isinstance(session.get("preview_state"), Mapping) else {}
+            next_preview = dict(preview)
+            next_preview.update(
+                {
+                    "session_id": session.get("id"),
+                    "scenario_id": session.get("scenario_id"),
+                    "title": session.get("title"),
+                    "page_schema": page_schema,
+                    "version": str(session.get("ui_revision") or session.get("version") or ""),
+                }
+            )
+            if preview != next_preview:
+                session["preview_state"] = next_preview
+                changed = True
+    return changed
+
+
+def _session_from_binding(webspace_id: str, binding: Mapping[str, Any]) -> dict[str, Any] | None:
+    scenario_id = str(binding.get("runtime_scenario_id") or "").strip()
+    draft_id = str(binding.get("active_draft_id") or "").strip()
+    if not scenario_id and not draft_id:
+        return None
+    session: dict[str, Any] = {
+        "id": draft_id or f"scenario.{scenario_id}",
+        "draft_id": draft_id or None,
+        "scenario_id": scenario_id or None,
+        "title": scenario_id.replace("_", " ").title() if scenario_id else "Builder Prototype",
+        "fields": [],
+        "patches": [],
+        "ui_revisions": [],
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    if not _ensure_session_artifact_root(session, binding):
+        return None
+    root = _project_artifact_root(session)
+    if root is not None:
+        draft_payload = _read_json_file(root / "builder.draft.json")
+        artifact = draft_payload.get("artifact") if isinstance(draft_payload.get("artifact"), Mapping) else {}
+        metadata = draft_payload.get("metadata") if isinstance(draft_payload.get("metadata"), Mapping) else {}
+        if not str(session.get("draft_id") or "").strip():
+            session["draft_id"] = str(draft_payload.get("draft_id") or "").strip() or session.get("draft_id")
+        if not str(session.get("scenario_id") or "").strip():
+            session["scenario_id"] = str(artifact.get("id") or "").strip() or session.get("scenario_id")
+        source = draft_payload.get("source") if isinstance(draft_payload.get("source"), Mapping) else {}
+        session["source_idea"] = str(
+            source.get("utterance")
+            or metadata.get("source_idea")
+            or session.get("source_idea")
+            or ""
+        )
+        _sync_session_from_artifacts(session)
+    key = str(session.get("id") or session.get("draft_id") or session.get("scenario_id") or "").strip()
+    if not key:
+        return None
+    session["id"] = key
+    _save_session(webspace_id, session)
+    return session
+
+
 def _session_matches_binding(session: Mapping[str, Any], binding: Mapping[str, Any]) -> bool:
     draft_id = str(binding.get("active_draft_id") or "").strip()
     scenario_id = str(binding.get("runtime_scenario_id") or "").strip()
@@ -4340,7 +4448,8 @@ def _target_session(webspace_id: str) -> tuple[dict[str, Any] | None, dict[str, 
     sessions = _sessions(webspace_id)
     def resolved(session: Mapping[str, Any]) -> dict[str, Any]:
         item = copy.deepcopy(dict(session))
-        if _ensure_session_artifact_root(item, binding) and item.get("id"):
+        changed = _sync_session_from_artifacts(item, binding)
+        if changed and item.get("id"):
             sessions[str(item["id"])] = item
             _save_sessions(webspace_id, sessions)
         return item
@@ -4351,10 +4460,10 @@ def _target_session(webspace_id: str) -> tuple[dict[str, Any] | None, dict[str, 
                 return resolved(session), binding
             if scenario_id and str(session.get("scenario_id") or "").strip() == scenario_id:
                 return resolved(session), binding
-        return None, binding
+        return _session_from_binding(webspace_id, binding), binding
     session = _load_session(webspace_id)
     if session and _session_matches_binding(session, binding):
-        if _ensure_session_artifact_root(session, binding):
+        if _sync_session_from_artifacts(session, binding):
             _save_session(webspace_id, session)
         return session, binding
     return None, binding
@@ -6095,15 +6204,7 @@ def _mark_llm_job_failed(
     topic_ref: Mapping[str, Any] | None = None,
     _meta: Mapping[str, Any] | None = None,
 ) -> None:
-    pending = session.get("pending_llm_jobs") if isinstance(session.get("pending_llm_jobs"), dict) else {}
-    if job_id and isinstance(pending, dict) and isinstance(pending.get(job_id), Mapping):
-        updated = dict(pending)
-        item = dict(updated.get(job_id) or {})
-        item["status"] = "failed"
-        item["finished_at"] = _now()
-        item["detail"] = detail
-        updated[job_id] = item
-        session["pending_llm_jobs"] = updated
+    _update_llm_job_status(session, job_id, "failed", detail=detail)
     _save_session(ws, session)
     topic = topic_ref if isinstance(topic_ref, Mapping) else _builder_topic_ref(ws, session=session, binding=binding or {}, _meta=_meta)
     message = (
@@ -6111,6 +6212,90 @@ def _mark_llm_job_failed(
         f"\u0434\u043b\u044f {session.get('scenario_id')} \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0430\u0441\u044c. {detail}"
     ).strip()
     _safe_emit_chat(message, webspace_id=ws, _meta=_meta, session=session, binding=binding or {}, topic_ref=topic)
+
+
+_ACTIVE_LLM_JOB_STATUSES = frozenset({"submitting", "submitted", "queued", "running"})
+
+
+def _update_llm_job_status(
+    session: dict[str, Any],
+    job_id: str,
+    status: str,
+    *,
+    detail: str | None = None,
+) -> None:
+    token = str(job_id or "").strip()
+    if not token:
+        return
+    pending = session.get("pending_llm_jobs") if isinstance(session.get("pending_llm_jobs"), dict) else {}
+    if not isinstance(pending, dict):
+        return
+    updated = dict(pending)
+    related_ids: set[str] = {token}
+    current = updated.get(token)
+    if isinstance(current, Mapping):
+        for key in ("local_job_id", "root_job_id"):
+            value = str(current.get(key) or "").strip()
+            if value:
+                related_ids.add(value)
+    for key, value in list(updated.items()):
+        if not isinstance(value, Mapping):
+            continue
+        value_job_id = str(value.get("job_id") or key or "").strip()
+        local_job_id = str(value.get("local_job_id") or "").strip()
+        root_job_id = str(value.get("root_job_id") or "").strip()
+        if token in {value_job_id, local_job_id, root_job_id}:
+            related_ids.add(str(key))
+            if value_job_id:
+                related_ids.add(value_job_id)
+            if local_job_id:
+                related_ids.add(local_job_id)
+            if root_job_id:
+                related_ids.add(root_job_id)
+    now = _now()
+    for related_id in related_ids:
+        if not related_id or not isinstance(updated.get(related_id), Mapping):
+            continue
+        item = dict(updated.get(related_id) or {})
+        item["status"] = status
+        item["finished_at"] = now
+        if detail:
+            item["detail"] = detail
+        updated[related_id] = item
+    session["pending_llm_jobs"] = updated
+
+
+def _active_llm_job(session: Mapping[str, Any]) -> dict[str, Any] | None:
+    pending = session.get("pending_llm_jobs") if isinstance(session.get("pending_llm_jobs"), Mapping) else {}
+    if not isinstance(pending, Mapping):
+        return None
+    try:
+        stale_after_s = max(float(_builder_llm_job_timeout_s()) + 60.0, 300.0)
+    except Exception:
+        stale_after_s = 300.0
+    now = _now()
+    candidates: list[dict[str, Any]] = []
+    for key, value in pending.items():
+        if not isinstance(value, Mapping):
+            continue
+        status = str(value.get("status") or "").strip().lower()
+        if status not in _ACTIVE_LLM_JOB_STATUSES:
+            continue
+        ts = value.get("submitted_at") or value.get("created_at") or value.get("started_at")
+        try:
+            age_s = max(0.0, now - float(ts))
+        except Exception:
+            age_s = 0.0
+        if age_s > stale_after_s:
+            continue
+        item = dict(value)
+        item.setdefault("job_id", str(key))
+        item["age_s"] = age_s
+        candidates.append(item)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: float(item.get("created_at") or item.get("submitted_at") or 0.0))
+    return candidates[0]
 
 
 def _complete_llm_webui_job(
@@ -6131,16 +6316,37 @@ def _complete_llm_webui_job(
     if not session:
         return
     topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+    started_at = _now()
+    timeout_s = _builder_llm_job_timeout_s()
+    poll_interval_s = _builder_llm_job_poll_interval_s()
+    _LOG.debug(
+        "builder LLM job wait start scenario=%s job_id=%s request_id=%s base_url=%s timeout_s=%.1f poll_interval_s=%.1f",
+        str(session.get("scenario_id") or ""),
+        job_id,
+        request_id,
+        base_url,
+        timeout_s,
+        poll_interval_s,
+    )
     try:
         from adaos.sdk.llm.llm_client import wait_response_job
 
         job = wait_response_job(
             job_id,
             base_url=base_url or None,
-            timeout_s=_builder_llm_job_timeout_s(),
-            poll_interval_s=_builder_llm_job_poll_interval_s(),
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
         )
     except Exception as exc:
+        _LOG.warning(
+            "builder LLM job wait failed scenario=%s job_id=%s request_id=%s base_url=%s elapsed_ms=%d detail=%s",
+            str(session.get("scenario_id") or ""),
+            job_id,
+            request_id,
+            base_url,
+            int((_now() - started_at) * 1000),
+            f"{type(exc).__name__}: {exc}",
+        )
         _mark_llm_job_failed(
             ws=ws,
             session=session,
@@ -6152,7 +6358,24 @@ def _complete_llm_webui_job(
         )
         return
     status = str(job.get("status") or "").strip().lower()
+    _LOG.debug(
+        "builder LLM job wait completed scenario=%s job_id=%s request_id=%s base_url=%s status=%s elapsed_ms=%d",
+        str(session.get("scenario_id") or ""),
+        job_id,
+        request_id,
+        base_url,
+        status,
+        int((_now() - started_at) * 1000),
+    )
     if status != "succeeded":
+        _LOG.warning(
+            "builder LLM job returned non-success scenario=%s job_id=%s request_id=%s status=%s error=%s",
+            str(session.get("scenario_id") or ""),
+            job_id,
+            request_id,
+            status,
+            str(job.get("error") or ""),
+        )
         _mark_llm_job_failed(
             ws=ws,
             session=session,
@@ -6215,14 +6438,7 @@ def _complete_llm_webui_job(
             )
             return
     llm_result["job"] = job
-    pending = session.get("pending_llm_jobs") if isinstance(session.get("pending_llm_jobs"), dict) else {}
-    if isinstance(pending, dict) and job_id in pending:
-        updated = dict(pending)
-        item = dict(updated.get(job_id) or {})
-        item["status"] = "succeeded"
-        item["finished_at"] = _now()
-        updated[job_id] = item
-        session["pending_llm_jobs"] = updated
+    _update_llm_job_status(session, job_id, "succeeded")
     result = _finalize_llm_webui_transform_result(
         ws=ws,
         session=session,
@@ -6233,6 +6449,14 @@ def _complete_llm_webui_job(
         llm_result=llm_result,
         auto_apply=auto_apply,
         _meta=_meta,
+    )
+    _LOG.debug(
+        "builder LLM job applied scenario=%s job_id=%s request_id=%s elapsed_ms=%d ok=%s",
+        str(session.get("scenario_id") or ""),
+        job_id,
+        request_id,
+        int((_now() - started_at) * 1000),
+        bool(result.get("ok", True)) if isinstance(result, Mapping) else True,
     )
     _safe_emit_chat(
         str(result.get("message") or ""),
@@ -6388,9 +6612,13 @@ def update_current_scenario(
     auto_apply: bool = True,
     _meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     ws = _source_webspace_id(webspace_id, _meta)
+    source_done_at = time.perf_counter()
     session, binding = _target_session(ws)
+    target_done_at = time.perf_counter()
     topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
+    topic_done_at = time.perf_counter()
     if not session:
         return {
             "ok": True,
@@ -6416,11 +6644,40 @@ def update_current_scenario(
     fields = [dict(item) for item in session.get("fields", []) if isinstance(item, Mapping)]
     filters = [dict(item) for item in session.get("filters", []) if isinstance(item, Mapping)]
     base_preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
+    preview_done_at = time.perf_counter()
     before_webui = _current_webui_payload(session, base_preview)
+    before_webui_done_at = time.perf_counter()
     llm_result: dict[str, Any] | None = None
     llm_owned_content_change = _wants_llm_owned_content_change(text)
     if text and _builder_llm_primary_enabled(_meta):
         if _builder_llm_async_enabled(_meta):
+            active_job = _active_llm_job(session)
+            if active_job:
+                active_job_id = (
+                    str(active_job.get("root_job_id") or "").strip()
+                    or str(active_job.get("job_id") or "").strip()
+                    or str(active_job.get("local_job_id") or "").strip()
+                )
+                status = str(active_job.get("status") or "").strip() or "running"
+                message = (
+                    f"{AGENT_LABEL}: LLM-задача для {session.get('scenario_id')} еще выполняется"
+                    f"{f' ({active_job_id})' if active_job_id else ''}. "
+                    "Дождитесь результата и повторите запрос."
+                )
+                return {
+                    "ok": True,
+                    "status": "llm_busy",
+                    "session_id": session.get("id"),
+                    "scenario_id": session.get("scenario_id"),
+                    "active_llm_job": {
+                        "job_id": active_job_id,
+                        "status": status,
+                        "age_s": active_job.get("age_s"),
+                    },
+                    "message": message,
+                    "topic": {k: v for k, v in topic.items() if k != "stored"},
+                    "dialog": _dialog_state(ws, topic_ref=topic),
+                }
             local_job_id = _local_llm_job_id(session, text)
             pending_jobs = dict(session.get("pending_llm_jobs") or {}) if isinstance(session.get("pending_llm_jobs"), Mapping) else {}
             pending_jobs[local_job_id] = {
@@ -6433,6 +6690,7 @@ def update_current_scenario(
             }
             session["pending_llm_jobs"] = pending_jobs
             _save_session(ws, session)
+            save_done_at = time.perf_counter()
             _start_llm_webui_submit_worker(
                 ws=ws,
                 session=session,
@@ -6444,6 +6702,24 @@ def update_current_scenario(
                 auto_apply=auto_apply,
                 _meta=_meta,
             )
+            worker_done_at = time.perf_counter()
+            dialog = _dialog_state(ws, topic_ref=topic)
+            dialog_done_at = time.perf_counter()
+            total_ms = (dialog_done_at - started_at) * 1000.0
+            if total_ms >= 1000:
+                _LOG.warning(
+                    "builder update async prepare slow scenario=%s total_ms=%.1f source_ms=%.1f target_ms=%.1f topic_ms=%.1f preview_ms=%.1f before_webui_ms=%.1f save_ms=%.1f worker_ms=%.1f dialog_ms=%.1f",
+                    str(session.get("scenario_id") or ""),
+                    total_ms,
+                    (source_done_at - started_at) * 1000.0,
+                    (target_done_at - source_done_at) * 1000.0,
+                    (topic_done_at - target_done_at) * 1000.0,
+                    (preview_done_at - topic_done_at) * 1000.0,
+                    (before_webui_done_at - preview_done_at) * 1000.0,
+                    (save_done_at - before_webui_done_at) * 1000.0,
+                    (worker_done_at - save_done_at) * 1000.0,
+                    (dialog_done_at - worker_done_at) * 1000.0,
+                )
             return {
                 "ok": True,
                 "status": "llm_submitting",
@@ -6464,7 +6740,7 @@ def update_current_scenario(
                     f"{AGENT_LABEL}: \u043f\u0440\u0438\u043d\u044f\u043b \u0437\u0430\u043f\u0440\u043e\u0441 \u0434\u043b\u044f {session.get('scenario_id')} "
                     f"\u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u044e LLM-\u0437\u0430\u0434\u0430\u0447\u0443. Job: {local_job_id}."
                 ),
-                "dialog": _dialog_state(ws, topic_ref=topic),
+                "dialog": dialog,
             }
         else:
             llm_result = _apply_llm_webui_transform(session=session, instruction=text, preview_state=base_preview, _meta=_meta)
@@ -6723,6 +6999,9 @@ def get_session(
     preview = (session or {}).get("preview_state") if isinstance(session, dict) else None
     workbench = _ensure_workbench(ws, session=session, preview_state=preview, refresh_runtime=False)
     binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
+    if isinstance(session, dict) and _sync_session_from_artifacts(session, binding):
+        _save_session(ws, session)
+        preview = session.get("preview_state") if isinstance(session.get("preview_state"), Mapping) else preview
     topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
     return {
         "ok": bool(session),
@@ -6753,6 +7032,9 @@ def get_preview_state(
     preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else _preview_state(session=session)
     workbench = _ensure_workbench(ws, session=session, preview_state=preview)
     binding = workbench.get("binding") if isinstance(workbench.get("binding"), Mapping) else {}
+    if _sync_session_from_artifacts(session, binding):
+        _save_session(ws, session)
+        preview = session.get("preview_state") if isinstance(session.get("preview_state"), dict) else preview
     topic = _builder_topic_ref(ws, session=session, binding=binding, _meta=_meta)
     return {
         "ok": True,

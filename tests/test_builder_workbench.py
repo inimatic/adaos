@@ -325,9 +325,76 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["widget"]["widget"] == "voice_chat"
     assert response.json()["widget"]["dialog_channel_id"] == "builder"
-    assert response.json()["widget"]["thread_id"] == "thread.builder.desktop.draft.one"
+    assert response.json()["widget"]["thread_id"] == "prompt-project:scenario:demo_scenario"
+    assert response.json()["widget"]["topic_id"] == "prompt-project:scenario:demo_scenario"
     assert response.json()["binding"]["active_draft_id"] == "draft.one"
 
     response = client.get("/api/builder/workbench/development-skills", params={"webspace_id": "desktop"})
     assert response.status_code == 200
     assert response.json()["items"] == []
+
+
+def test_get_workspace_binding_migrates_runtime_dialog_topic(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    stale = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id="draft.prototype",
+        runtime_scenario_id="prototype_app",
+        persist_projection=False,
+    )
+    path = service.binding_path("desktop")
+    stale = dict(stale)
+    stale["dialog"] = {
+        **dict(stale.get("dialog") or {}),
+        "thread_id": "thread.builder.desktop.draft.prototype",
+        "topic_id": "builder:desktop:draft.prototype",
+    }
+    path.write_text(json.dumps(stale), encoding="utf-8")
+
+    migrated = service.get_workspace_binding("desktop")
+
+    assert migrated["active_draft_id"] == "draft.prototype"
+    assert migrated["runtime_scenario_id"] == "prototype_app"
+    assert migrated["dialog"]["thread_id"] == "prompt-project:scenario:prototype_app"
+    assert migrated["dialog"]["topic_id"] == "prompt-project:scenario:prototype_app"
+
+
+@pytest.mark.asyncio
+async def test_builder_project_changed_does_not_trigger_duplicate_preview_reload(monkeypatch) -> None:
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    calls: list[tuple[str, str, str | None]] = []
+
+    async def _reload_preview_webspaces_for_project(object_type: str, object_id: str, *, reason: str | None = None):
+        calls.append((object_type, object_id, reason))
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        webspace_runtime,
+        "reload_preview_webspaces_for_project",
+        _reload_preview_webspaces_for_project,
+    )
+
+    await webspace_runtime._on_prompt_project_changed(
+        {
+            "object_type": "scenario",
+            "object_id": "prototype_app",
+            "reason": "builder_ui_revision_written",
+        }
+    )
+    await webspace_runtime._on_prompt_project_changed(
+        {
+            "object_type": "scenario",
+            "object_id": "prototype_app",
+            "reason": "builder_project_updated",
+        }
+    )
+    await webspace_runtime._on_prompt_project_changed(
+        {
+            "object_type": "scenario",
+            "object_id": "prototype_app",
+            "reason": "manual_project_file_save",
+        }
+    )
+
+    assert calls == [("scenario", "prototype_app", "manual_project_file_save")]

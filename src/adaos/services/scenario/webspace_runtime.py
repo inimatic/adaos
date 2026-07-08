@@ -10802,10 +10802,22 @@ async def _on_prompt_project_changed(evt: Dict[str, Any]) -> None:
     object_id = str(payload.get("object_id") or "").strip()
     if object_type not in {"scenario", "skill"} or not object_id:
         return
+    reason = str(payload.get("reason") or "").strip()
+    if reason in {
+        "builder_project_updated",
+        "builder_ui_revision_written",
+    }:
+        _log.debug(
+            "prompt project change uses builder-managed preview refresh; skipping runtime reload object=%s:%s reason=%s",
+            object_type,
+            object_id,
+            reason,
+        )
+        return
     await reload_preview_webspaces_for_project(
         object_type,
         object_id,
-        reason=str(payload.get("reason") or "").strip() or None,
+        reason=reason or None,
     )
 
 

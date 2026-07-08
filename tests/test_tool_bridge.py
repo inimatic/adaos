@@ -229,6 +229,28 @@ def test_runtime_action_risk_ignores_local_write_freeform_content() -> None:
     assert risk["approval_required"] is False
 
 
+def test_runtime_action_risk_allows_builder_email_field_request() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="builder_skill:update_current_scenario",
+        arguments={
+            "instruction": "Добавь поле email для связи.",
+            "webspace_id": "desktop",
+            "auto_apply": True,
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="builder_skill",
+        public_tool="update_current_scenario",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
 def test_runtime_action_risk_allows_notebook_upload_attachment_paths() -> None:
     body = tool_bridge_module.ToolCall(
         tool="notebook_skill:attach_note_upload",

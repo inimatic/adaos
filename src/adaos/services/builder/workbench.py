@@ -244,7 +244,23 @@ class BuilderWorkbenchService:
         source_id = safe_source_webspace_id(source_webspace_id)
         existing = _read_json(self.binding_path(source_id))
         if existing:
-            return existing
+            normalized = dict(existing)
+            dev_id = str(normalized.get("dev_webspace_id") or dev_webspace_id_for_source(source_id)).strip()
+            active_draft_id = str(normalized.get("active_draft_id") or "").strip() or None
+            runtime_scenario_id = str(normalized.get("runtime_scenario_id") or "").strip() or None
+            refreshed_dialog = self.dialog_widget_config(
+                source_id,
+                active_draft_id=active_draft_id,
+                runtime_scenario_id=runtime_scenario_id,
+                dev_webspace_id=dev_id,
+            )
+            if normalized.get("dialog") != refreshed_dialog:
+                normalized["source_webspace_id"] = source_id
+                normalized["dev_webspace_id"] = dev_id
+                normalized["dialog"] = refreshed_dialog
+                normalized["updated_at"] = _now()
+                _write_json(self.binding_path(source_id), normalized)
+            return normalized
         return {
             "source_webspace_id": source_id,
             "dev_webspace_id": dev_webspace_id_for_source(source_id),
@@ -378,6 +394,22 @@ class BuilderWorkbenchService:
                 "owner": BUILDER_OWNER,
                 "stored": False,
             }
+        runtime_token = str(runtime_scenario_id or "").strip()
+        if runtime_token and runtime_token != BUILDER_RUNTIME_FALLBACK_SCENARIO_ID:
+            scenario_topic_id = f"prompt-project:scenario:{runtime_token}"
+            topic = {k: v for k, v in dict(topic).items() if v is not None}
+            topic["topic_id"] = scenario_topic_id
+            topic["thread_id"] = scenario_topic_id
+            topic["topic_kind"] = "builder_scenario"
+            topic["scenario_id"] = runtime_token
+            topic["project_id"] = runtime_token
+            topic.setdefault("schema", "adaos.conversation.topic_ref.v1")
+            topic.setdefault("webspace_id", source_id)
+            topic.setdefault("source_webspace_id", source_id)
+            topic.setdefault("dev_webspace_id", dev_id)
+            topic.setdefault("conversation_id", f"conv.skill.{BUILDER_SKILL_ID}.default.{source_id}")
+            topic.setdefault("channel_id", BUILDER_DIALOG_CHANNEL_ID)
+            topic.setdefault("owner", BUILDER_OWNER)
         conversation_id = str(topic.get("conversation_id") or f"conv.skill.{BUILDER_SKILL_ID}.default.{source_id}").strip()
         thread_id = str(topic.get("thread_id") or "").strip()
         topic_id = str(topic.get("topic_id") or "").strip()

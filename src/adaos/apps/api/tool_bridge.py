@@ -72,6 +72,12 @@ _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_save_project_file",
     "prompt_engineer_skill:prompt_set_workflow_state",
     "prompt_engineer_skill:prompt_create_dev_project",
+    "builder_skill:chat",
+    "builder_skill:create_scenario_draft",
+    "builder_skill:update_current_scenario",
+    "builder_skill:set_ui_revision_current",
+    "builder_skill:set_active_draft",
+    "builder_skill:delete_development_skill",
 )
 _RUNTIME_ACTION_APPROVAL_KIND = "runtime.action_approval"
 _RUNTIME_ACTION_APPROVAL_RESPONSE_TOPIC = "runtime.action_approval.response"
