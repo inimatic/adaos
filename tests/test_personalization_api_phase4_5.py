@@ -131,10 +131,13 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission(mon
 
     claim = client.post(
         f"/api/personalization/invites/{invite_id}/claim",
-        json={"session_id": "browser-a"},
+        json={"session_id": "browser-a", "device_id": "dev-browser-a", "device_name": "Guest browser"},
     )
     assert claim.status_code == 200
-    assert access_links.authorize_link("browser", "browser-a") == (True, None)
+    assert claim.json()["session_id"] == "browser-a"
+    assert claim.json()["device_id"] == "dev-browser-a"
+    assert access_links.authorize_link("browser", "dev-browser-a") == (True, None)
+    assert access_links.get_link("browser", "dev-browser-a")["admission_session_id"] == "browser-a"
 
     listed = client.get("/api/personalization/invites", headers=TOKEN_HEADERS)
     assert listed.status_code == 200
@@ -148,6 +151,7 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission(mon
     assert revoked.status_code == 200
     assert revoked.json()["invite"]["status"] == "revoked"
     assert access_links.authorize_link("browser", "browser-a") == (False, "denied")
+    assert access_links.authorize_link("browser", "dev-browser-a") == (False, "denied")
 
 
 def test_phase5_targeted_invite_is_public_preview_and_single_use_claim() -> None:

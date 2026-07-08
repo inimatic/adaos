@@ -265,10 +265,13 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
     elif kind == "browser":
         browser_client_id = str(data.get("browser_client_id") or "").strip()
         parent_browser_device_id = str(data.get("parent_browser_device_id") or "").strip()
+        admission_session_id = str(data.get("admission_session_id") or "").strip()
         if browser_client_id:
             entry["browser_client_id"] = browser_client_id
         if parent_browser_device_id:
             entry["parent_browser_device_id"] = parent_browser_device_id
+        if admission_session_id:
+            entry["admission_session_id"] = admission_session_id
         try:
             session_count = int(data.get("session_count") or 0)
         except Exception:

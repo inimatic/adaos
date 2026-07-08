@@ -176,6 +176,37 @@ def _sync_browser_device_link(device_id: str, *, display_name: str | None = None
         pass
 
 
+def _sync_guest_browser_link(
+    device_id: str,
+    *,
+    session_id: str | None = None,
+    display_name: str | None = None,
+    expires_at: float | None = None,
+) -> None:
+    token = str(device_id or session_id or "").strip()
+    if not token:
+        return
+    try:
+        from adaos.services import access_links
+
+        patch: dict[str, Any] = {
+            "access_class": "client",
+            "admission_policy": "allow",
+            "lifetime_mode": "fixed",
+        }
+        clean_session_id = str(session_id or "").strip()
+        if clean_session_id:
+            patch["admission_session_id"] = clean_session_id
+        if expires_at is not None:
+            patch["expires_at"] = float(expires_at)
+        name = str(display_name or "").strip()
+        if name:
+            patch["device_display_name"] = name
+        access_links.upsert_link("browser", token, patch)
+    except Exception:
+        pass
+
+
 def _deny_browser_link(device_id: str) -> None:
     token = str(device_id or "").strip()
     if not token:
@@ -184,6 +215,12 @@ def _deny_browser_link(device_id: str) -> None:
         from adaos.services import access_links
 
         access_links.deny_link("browser", token)
+        for entry in access_links.list_links("browser"):
+            entry_id = str(entry.get("id") or "").strip()
+            if not entry_id or entry_id == token:
+                continue
+            if str(entry.get("admission_session_id") or "").strip() == token:
+                access_links.deny_link("browser", entry_id)
     except Exception:
         pass
 
@@ -746,6 +783,7 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
         session_id = str(body.session_id or body.subject_id or f"join-{uuid4().hex}").strip()
         if kind == "guest_join_link":
             subject = SubjectRef("session", _safe_id(session_id, fallback=f"join-{uuid4().hex}"))
+            device_id = str(body.device_id or session_id or "").strip()
         elif kind == "device_pairing_link":
             subject_id = str(body.subject_id or preview.get("subject_id") or preview.get("profile_hint") or "").strip()
             if not subject_id:
@@ -796,7 +834,14 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
             expected_scope=_scope(body.expected_scope, ctx) if body.expected_scope else None,
             session_id=_safe_id(session_id, fallback=subject.id) if session_id else None,
         )
-        return {"ok": True, "invite": data}
+        if kind == "guest_join_link":
+            _sync_guest_browser_link(
+                device_id,
+                session_id=session_id,
+                display_name=body.device_name,
+                expires_at=preview.get("expires_at"),
+            )
+        return {"ok": True, "invite": data, "session_id": session_id, "device_id": device_id if kind == "guest_join_link" else None}
     except Exception as exc:
         raise _http_error(exc) from exc
 

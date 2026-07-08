@@ -46,7 +46,14 @@ def deny_browser_session(session_id: str) -> dict[str, Any] | None:
         return None
     from adaos.services import access_links
 
-    return access_links.deny_link("browser", token)
+    result = access_links.deny_link("browser", token)
+    for entry in access_links.list_links("browser"):
+        entry_id = str(entry.get("id") or "").strip()
+        if not entry_id or entry_id == token:
+            continue
+        if str(entry.get("admission_session_id") or "").strip() == token:
+            access_links.deny_link("browser", entry_id)
+    return result
 
 
 def personalization_access_service(ctx: AgentContext | None = None) -> PersonalizationAccessService:
