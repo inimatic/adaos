@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -8,6 +9,13 @@ from adaos.services import access_links
 
 
 TOKEN_HEADERS = {"X-AdaOS-Token": "dev-local-token"}
+
+
+@pytest.fixture(autouse=True)
+def _disable_root_invite_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ROOT_TOKEN", raising=False)
+    monkeypatch.delenv("ADAOS_ROOT_TOKEN", raising=False)
+    monkeypatch.delenv("HUB_ROOT_TOKEN", raising=False)
 
 
 def _client() -> TestClient:

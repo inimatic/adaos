@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -216,10 +219,74 @@ def _base_join_url(request: Request, ctx: AgentContext, invite_id: str) -> str:
     return f"{app_base}/?{urlencode(params)}"
 
 
+def _root_invite_registration_token() -> str:
+    return str(
+        os.getenv("HUB_ROOT_TOKEN")
+        or os.getenv("ADAOS_ROOT_TOKEN")
+        or os.getenv("ROOT_TOKEN")
+        or ""
+    ).strip()
+
+
+def _register_root_invite_session(
+    invite: Mapping[str, Any],
+    request: Request,
+    ctx: AgentContext,
+    fallback_claim_url: str,
+) -> str | None:
+    token = _root_invite_registration_token()
+    if not token:
+        return None
+    invite_id = str(invite.get("invite_id") or "").strip()
+    subnet_id = personalization_runtime.current_subnet_id(ctx)
+    if not invite_id or not subnet_id:
+        return None
+    api_base = _setting_text(ctx, "api_base", "").rstrip("/")
+    if not api_base:
+        return None
+    app_base = _setting_text(ctx, "app_base", str(request.base_url)).rstrip("/") or str(request.base_url).rstrip("/")
+    body = {
+        "invite_id": invite_id,
+        "subnet_id": subnet_id,
+        "hub_base": _root_hub_base(ctx),
+        "app_base": app_base,
+        "kind": str(invite.get("kind") or ""),
+        "role": str(invite.get("role") or ""),
+        "status": str(invite.get("status") or ""),
+        "expires_at": invite.get("expires_at"),
+        "claim_url": fallback_claim_url,
+    }
+    try:
+        req = UrlRequest(
+            f"{api_base}/v1/personalization/invites/register",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Root-Token": token,
+            },
+            method="POST",
+        )
+        with urlopen(req, timeout=1.5) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+        invite_payload = payload.get("invite") if isinstance(payload, Mapping) else None
+        claim_url = str(
+            (payload.get("claim_url") if isinstance(payload, Mapping) else "")
+            or (invite_payload.get("claim_url") if isinstance(invite_payload, Mapping) else "")
+            or ""
+        ).strip()
+        if "adaos_invite=" in claim_url:
+            return claim_url
+    except Exception:
+        return None
+    return None
+
+
 def _public_invite_view(invite: Mapping[str, Any], request: Request, ctx: AgentContext) -> dict[str, Any]:
     invite_id = str(invite.get("invite_id") or "").strip()
     result = dict(invite)
-    result["claim_url"] = _base_join_url(request, ctx, invite_id)
+    fallback_claim_url = _base_join_url(request, ctx, invite_id)
+    result["claim_url"] = _register_root_invite_session(invite, request, ctx, fallback_claim_url) or fallback_claim_url
     return result
 
 
