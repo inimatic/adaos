@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from adaos.services.scenario import workflow_runtime as workflow_runtime_module
 from adaos.services.scenario.workflow_runtime import ScenarioWorkflowRuntime
 
 
@@ -81,3 +84,68 @@ def test_prompt_project_snapshots_include_files_and_tz_state(tmp_path: Path) -> 
 
     assert section["tz_state"]["base_tz"] == "Base"  # type: ignore[index]
     assert [item["path"] for item in section["files"]["list"]] == ["scenario.json", "tz/base_tz.md"]  # type: ignore[index]
+
+
+@pytest.mark.anyio
+async def test_refresh_prompt_project_snapshots_updates_selected_topic(monkeypatch, tmp_path: Path) -> None:
+    runtime, paths = _runtime(tmp_path)
+    root = paths.dev_scenarios_dir() / "prototype_app_4d5758e5"
+    (root / "tz").mkdir(parents=True)
+    (root / "scenario.json").write_text("{}", encoding="utf-8")
+    (root / "tz" / "base_tz.md").write_text("Prototype TZ", encoding="utf-8")
+
+    data = {
+        "prompt": {
+            "workflow": {
+                "state": "tz",
+                "object_type": "scenario",
+                "object_id": "shopping_list_222d3f0c",
+                "topic_id": "prompt-project:scenario:shopping_list_222d3f0c",
+                "conversation_id": "conv.skill.builder_skill.default.desktop",
+            }
+        }
+    }
+
+    class _Txn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _DataMap:
+        def get(self, key):
+            return data.get(key)
+
+        def set(self, txn, key, value):
+            data[key] = value
+
+    class _Doc:
+        def get_map(self, name):
+            assert name == "data"
+            return _DataMap()
+
+        def begin_transaction(self):
+            return _Txn()
+
+    class _DocContext:
+        async def __aenter__(self):
+            return _Doc()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(workflow_runtime_module, "async_get_ydoc", lambda webspace_id: _DocContext())
+
+    await runtime.refresh_prompt_project_snapshots(
+        "desktop",
+        object_type="scenario",
+        object_id="prototype_app_4d5758e5",
+    )
+
+    workflow = data["prompt"]["workflow"]
+    assert workflow["object_id"] == "prototype_app_4d5758e5"
+    assert workflow["topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    selection = json.loads((paths.state_dir() / "prompt_ide" / "selection" / "desktop.json").read_text(encoding="utf-8"))
+    assert selection["object_id"] == "prototype_app_4d5758e5"
+    assert selection["topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"

@@ -493,6 +493,7 @@ class ScenarioWorkflowRuntime:
         item_id = str(object_id or "").strip()
         if kind not in {"skill", "scenario"} or not item_id:
             return
+        saved_state_id = "tz"
         async with _workflow_write_meta():
             async with async_get_ydoc(webspace_id) as ydoc:
                 data_map = ydoc.get_map("data")
@@ -500,14 +501,27 @@ class ScenarioWorkflowRuntime:
                     prompt_section = data_map.get("prompt")
                     if not isinstance(prompt_section, dict):
                         prompt_section = {}
-                    wf_obj = prompt_section.get("workflow")
-                    if isinstance(wf_obj, dict):
-                        current_kind = str(wf_obj.get("object_type") or "").strip().lower()
-                        current_id = str(wf_obj.get("object_id") or "").strip()
-                        if current_kind and current_id and (current_kind != kind or current_id != item_id):
-                            return
+                    wf_obj = dict(prompt_section.get("workflow") or {})
+                    saved_state_id = str(
+                        wf_obj.get("state") or self._load_prompt_selection(webspace_id).get("state") or "tz"
+                    ).strip() or "tz"
+                    wf_obj["state"] = saved_state_id
+                    self._apply_prompt_project_context(
+                        wf_obj,
+                        webspace_id,
+                        object_type=kind,
+                        object_id=item_id,
+                        selection=self._load_prompt_selection(webspace_id),
+                    )
+                    prompt_section["workflow"] = wf_obj
                     self._sync_prompt_project_snapshots(prompt_section, kind, item_id)
                     data_map.set(txn, "prompt", json.loads(json.dumps(prompt_section)))
+        self._save_prompt_selection(
+            webspace_id,
+            object_type=kind,
+            object_id=item_id,
+            state_id=saved_state_id,
+        )
 
     def _resolve_next_state(self, states: Dict[str, Any], current_state: str, action_id: str) -> Optional[str]:
         state = states.get(current_state) or {}

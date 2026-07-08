@@ -1524,6 +1524,32 @@ def test_chat_meta_uses_prompt_project_topic_for_selected_scenario() -> None:
     assert meta["conversation_topic_id"] == "prompt-project:scenario:todo_list_5b9319fa"
 
 
+def test_chat_meta_replaces_stale_client_topic_with_selected_scenario() -> None:
+    skill = _load_module()
+
+    meta = skill._chat_meta(
+        {
+            "conversation_topic_id": "prompt-project:scenario:todo_list_5b9319fa",
+            "conversation_thread_id": "prompt-project:scenario:todo_list_5b9319fa",
+            "thread_id": "prompt-project:scenario:todo_list_5b9319fa",
+            "topic_id": "prompt-project:scenario:todo_list_5b9319fa",
+            "builder_topic": {
+                "thread_id": "prompt-project:scenario:todo_list_5b9319fa",
+                "topic_id": "prompt-project:scenario:todo_list_5b9319fa",
+            },
+        },
+        webspace_id="desktop",
+        session={"scenario_id": "prototype_app_4d5758e5"},
+        binding={"runtime_scenario_id": "prototype_app_4d5758e5"},
+    )
+
+    assert meta["conversation_topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    assert meta["conversation_thread_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    assert meta["thread_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    assert meta["topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    assert meta["builder_topic"]["thread_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+
+
 def test_chat_first_idea_creates_preview_and_accepts_correction(monkeypatch, tmp_path) -> None:
     skill = _load_module()
     artifact_root = tmp_path / "first_idea"
