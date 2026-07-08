@@ -190,9 +190,13 @@ runtime uses Root-managed asynchronous LLM jobs:
    model, status, attempts, and a TTL.
 3. Root executes the upstream model request in the background and stores either
    the raw response or a structured error.
-4. Builder polls `GET /v1/llm/jobs/{job_id}` on the same root base URL that
+4. If the submit response times out, the SDK first calls
+   `POST /v1/llm/jobs/lookup` on the same root with the same payload. Root
+   returns the existing job only when the request fingerprint matches; otherwise
+   it reports `llm_request_id_conflict` with diagnostic fingerprint tags.
+5. Builder polls `GET /v1/llm/jobs/{job_id}` on the same root base URL that
    accepted the job.
-5. Builder validates the returned JSON against the Builder/webui contracts
+6. Builder validates the returned JSON against the Builder/webui contracts
    before writing `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
    dev-webspace refresh events.
 
