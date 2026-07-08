@@ -261,6 +261,32 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
                 "endpoint_assignment": endpoint_assignment,
             }
         )
+    elif kind == "browser":
+        browser_client_id = str(data.get("browser_client_id") or "").strip()
+        parent_browser_device_id = str(data.get("parent_browser_device_id") or "").strip()
+        if browser_client_id:
+            entry["browser_client_id"] = browser_client_id
+        if parent_browser_device_id:
+            entry["parent_browser_device_id"] = parent_browser_device_id
+        try:
+            session_count = int(data.get("session_count") or 0)
+        except Exception:
+            session_count = 0
+        if session_count > 0:
+            entry["session_count"] = session_count
+        try:
+            active_session_count = int(data.get("active_session_count") or 0)
+        except Exception:
+            active_session_count = 0
+        if active_session_count > 0:
+            entry["active_session_count"] = active_session_count
+        active_clients = [
+            str(item or "").strip()
+            for item in list(data.get("active_client_limit_ids") or [])
+            if str(item or "").strip()
+        ]
+        if active_clients:
+            entry["active_client_limit_ids"] = active_clients
     return entry
 
 
