@@ -734,7 +734,7 @@ class DeviceInventoryService:
     def _list_browser_devices(self, *, now: float) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         try:
-            policy_entries = list(_access_links.list_links("browser") or [])
+            policy_entries = list(_access_links.browser_snapshot() or [])
         except Exception:
             policy_entries = []
         for raw in policy_entries:
