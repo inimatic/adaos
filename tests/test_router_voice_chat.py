@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import types
+from uuid import uuid4
 
 import pytest
 
@@ -2425,6 +2426,80 @@ async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_histo
     await bus.wait_for_idle(timeout=1.0)
 
     assert seen_stream == []
+
+
+async def test_voice_chat_snapshot_request_recovers_requested_thread_when_cache_has_another_thread(monkeypatch) -> None:
+    from adaos.services import conversation_store
+
+    bus = LocalEventBus()
+    suffix = uuid4().hex[:8]
+    webspace_id = f"builder-history-ws-{suffix}"
+    conversation_id = f"conv.skill.builder_skill.default.{webspace_id}"
+    thread_a = f"prompt-project:scenario:cached_{suffix}"
+    thread_b = f"prompt-project:scenario:requested_{suffix}"
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id=webspace_id,
+        owner="skill:builder_skill",
+    )
+    for thread_id, prefix in ((thread_a, "cached"), (thread_b, "requested")):
+        for index in range(10):
+            conversation_store.append_message(
+                conversation_id=conversation_id,
+                thread_id=thread_id,
+                webspace_id=webspace_id,
+                channel_id="builder",
+                owner="skill:builder_skill",
+                role="hub",
+                text=f"{prefix} turn {index}",
+                payload={"id": f"{prefix}.{suffix}.{index}", "from": "hub", "text": f"{prefix} turn {index}"},
+                actor_id="agent:builder_skill:builder",
+                actor_label="Конструктор",
+                route_id="voice_chat",
+                ts=100.0 + index,
+            )
+
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    for thread_id in (thread_a, thread_b):
+        bus.publish(
+            Event(
+                type="webio.stream.snapshot.requested",
+                source="test",
+                ts=1.0,
+                payload={
+                    "receiver": "voice_chat.messages",
+                    "webspace_id": webspace_id,
+                    "conversation_id": conversation_id,
+                    "dialog_channel_id": "builder",
+                    "thread_id": thread_id,
+                    "params": {
+                        "conversation_id": conversation_id,
+                        "dialog_channel_id": "builder",
+                        "conversation_topic_id": thread_id,
+                    },
+                },
+            )
+        )
+        await bus.wait_for_idle(timeout=1.0)
+
+    assert len(seen_stream) == 2
+    requested = seen_stream[-1].payload["data"]
+    assert requested["conversation_id"] == conversation_id
+    assert requested["conversation_topic_id"] == thread_b
+    assert requested["message_count"] == 8
+    assert requested["total_message_count"] == 10
+    assert requested["has_more_before"] is True
+    assert requested["messages"][0]["text"] == "requested turn 2"
+    assert requested["messages"][-1]["text"] == "requested turn 9"
 
 
 async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(monkeypatch) -> None:

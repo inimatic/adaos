@@ -3311,41 +3311,43 @@ class RouterService:
                 cached_conversation_id = str(current.get("conversation_id") or "").strip() if isinstance(current, dict) else ""
                 if not cached_conversation_id:
                     cached_conversation_id, _channel_id, _topic_id = _voice_chat_projection_identity(messages)
+                cache_matches_request = True
                 if cached_conversation_id and cached_conversation_id != resolved_conversation_id:
-                    return
+                    cache_matches_request = False
                 cached_topic_id = _voice_chat_topic_id_from_sources(current if isinstance(current, dict) else {}, *messages)
                 if resolved_topic_id and cached_topic_id and cached_topic_id != resolved_topic_id:
-                    return
-                before_cursor = str(current.get("before_cursor") or "") if isinstance(current, dict) else ""
-                has_more_before = bool(current.get("has_more_before")) if isinstance(current, dict) else False
-                total_message_count = int(current.get("total_message_count") or len(messages)) if isinstance(current, dict) else len(messages)
-                signature = str(current.get("stream_signature") or "") if isinstance(current, dict) else ""
-                if not signature:
-                    signature = _voice_chat_persist_signature(
+                    cache_matches_request = False
+                if cache_matches_request:
+                    before_cursor = str(current.get("before_cursor") or "") if isinstance(current, dict) else ""
+                    has_more_before = bool(current.get("has_more_before")) if isinstance(current, dict) else False
+                    total_message_count = int(current.get("total_message_count") or len(messages)) if isinstance(current, dict) else len(messages)
+                    signature = str(current.get("stream_signature") or "") if isinstance(current, dict) else ""
+                    if not signature:
+                        signature = _voice_chat_persist_signature(
+                            messages,
+                            before_cursor=before_cursor,
+                            has_more_before=has_more_before,
+                            total_message_count=total_message_count,
+                        )
+                    if suppress_unchanged:
+                        last = _voice_chat_snapshot_published.get(cache_key)
+                        min_interval = _voice_chat_snapshot_republish_interval_s()
+                        now_monotonic = time.monotonic()
+                        if last and last[1] == signature and (now_monotonic - float(last[0] or 0.0)) < min_interval:
+                            return
+                    last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
+                    published_signature = _publish_voice_chat_stream(
+                        webspace_id,
+                        target_node_id,
                         messages,
+                        last_refresh_ts,
                         before_cursor=before_cursor,
                         has_more_before=has_more_before,
                         total_message_count=total_message_count,
                     )
-                if suppress_unchanged:
-                    last = _voice_chat_snapshot_published.get(cache_key)
-                    min_interval = _voice_chat_snapshot_republish_interval_s()
-                    now_monotonic = time.monotonic()
-                    if last and last[1] == signature and (now_monotonic - float(last[0] or 0.0)) < min_interval:
-                        return
-                last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
-                published_signature = _publish_voice_chat_stream(
-                    webspace_id,
-                    target_node_id,
-                    messages,
-                    last_refresh_ts,
-                    before_cursor=before_cursor,
-                    has_more_before=has_more_before,
-                    total_message_count=total_message_count,
-                )
-                if suppress_unchanged:
-                    _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
-                return
+                    if suppress_unchanged:
+                        _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
+                    return
             try:
                 projection = conversation_store.recover_projection_from_store(
                     current if isinstance(current, dict) else {},
