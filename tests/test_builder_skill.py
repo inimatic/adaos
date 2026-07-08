@@ -1526,6 +1526,12 @@ def test_chat_meta_uses_prompt_project_topic_for_selected_scenario() -> None:
 
 def test_chat_meta_replaces_stale_client_topic_with_selected_scenario() -> None:
     skill = _load_module()
+    stale_topic = {
+        "thread_id": "prompt-project:scenario:todo_list_5b9319fa",
+        "topic_id": "prompt-project:scenario:todo_list_5b9319fa",
+        "scenario_id": "todo_list_5b9319fa",
+        "conversation_id": "conv.skill.builder_skill.default.desktop",
+    }
 
     meta = skill._chat_meta(
         {
@@ -1533,14 +1539,12 @@ def test_chat_meta_replaces_stale_client_topic_with_selected_scenario() -> None:
             "conversation_thread_id": "prompt-project:scenario:todo_list_5b9319fa",
             "thread_id": "prompt-project:scenario:todo_list_5b9319fa",
             "topic_id": "prompt-project:scenario:todo_list_5b9319fa",
-            "builder_topic": {
-                "thread_id": "prompt-project:scenario:todo_list_5b9319fa",
-                "topic_id": "prompt-project:scenario:todo_list_5b9319fa",
-            },
+            "builder_topic": stale_topic,
         },
         webspace_id="desktop",
         session={"scenario_id": "prototype_app_4d5758e5"},
         binding={"runtime_scenario_id": "prototype_app_4d5758e5"},
+        topic_ref=stale_topic,
     )
 
     assert meta["conversation_topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
@@ -1548,6 +1552,7 @@ def test_chat_meta_replaces_stale_client_topic_with_selected_scenario() -> None:
     assert meta["thread_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
     assert meta["topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
     assert meta["builder_topic"]["thread_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+    assert meta["builder_topic"]["scenario_id"] == "prototype_app_4d5758e5"
 
 
 def test_chat_first_idea_creates_preview_and_accepts_correction(monkeypatch, tmp_path) -> None:
