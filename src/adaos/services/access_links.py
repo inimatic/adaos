@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping
@@ -10,10 +11,22 @@ LinkKind = Literal["browser", "member", "redevice"]
 
 _NS = "access_links"
 _KEY = "registry"
+_DEFAULT_BROWSER_SESSION_ONLINE_STALE_S = 300.0
 
 
 def _now_ts() -> float:
     return float(time.time())
+
+
+def _browser_session_online_stale_s() -> float:
+    raw = str(os.getenv("ADAOS_BROWSER_SESSION_ONLINE_STALE_S") or "").strip()
+    if not raw:
+        return _DEFAULT_BROWSER_SESSION_ONLINE_STALE_S
+    try:
+        value = float(raw)
+    except Exception:
+        return _DEFAULT_BROWSER_SESSION_ONLINE_STALE_S
+    return max(0.0, value)
 
 
 def _iso_from_ts(value: float | int | None) -> str | None:
@@ -1218,6 +1231,33 @@ def _runtime_peer_online(peer: Mapping[str, Any]) -> bool:
     return bool(peer.get("online"))
 
 
+def _browser_session_online_is_fresh(entry: Mapping[str, Any], *, now: float) -> bool:
+    if not bool(entry.get("online")):
+        return False
+    stale_s = _browser_session_online_stale_s()
+    if stale_s <= 0:
+        return True
+    try:
+        last_seen_at = float(entry.get("last_seen_at") or 0.0)
+    except Exception:
+        last_seen_at = 0.0
+    if last_seen_at <= 0:
+        return False
+    return (now - last_seen_at) <= stale_s
+
+
+def _normalize_browser_session_freshness(entry: Mapping[str, Any], *, now: float) -> dict[str, Any]:
+    normalized = dict(entry)
+    if _browser_session_online_is_fresh(normalized, now=now):
+        return normalized
+    if bool(normalized.get("online")):
+        normalized["online"] = False
+        state = str(normalized.get("connection_state") or "").strip().lower()
+        if state in {"connected", "open", "ready", "online", ""}:
+            normalized["connection_state"] = "stale"
+    return normalized
+
+
 def _active_browser_runtime_peers() -> list[dict[str, Any]]:
     peers: list[dict[str, Any]] = []
     try:
@@ -1260,13 +1300,13 @@ def _active_browser_runtime_peers() -> list[dict[str, Any]]:
 
 
 def browser_snapshot() -> list[dict[str, Any]]:
+    now = _now_ts()
     entries = [entry for entry in list_links("browser") if entry.get("last_seen_at")]
     by_id = {
-        str(entry.get("id") or "").strip(): dict(entry)
+        str(entry.get("id") or "").strip(): _normalize_browser_session_freshness(entry, now=now)
         for entry in entries
         if str(entry.get("id") or "").strip()
     }
-    now = _now_ts()
     for peer in _active_browser_runtime_peers():
         device_id = str(peer.get("device_id") or peer.get("id") or "").strip()
         if not device_id:

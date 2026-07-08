@@ -390,6 +390,125 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
     }
 
 
+def test_browser_device_settings_schema_separates_device_and_endpoint_names(monkeypatch) -> None:
+    device = {
+        "ref": "browser:dev-phone::webrtc",
+        "kind": "browser",
+        "identity": {
+            "browser_device_id": "dev-phone::webrtc",
+            "parent_browser_device_id": "dev-phone",
+            "device_display_name": "My phone",
+            "endpoint_display_name": "Chrome",
+        },
+        "policy": {
+            "present": True,
+            "managed_state": "managed",
+            "display_name": "Chrome",
+            "device_display_name": "My phone",
+            "endpoint_display_name": "Chrome",
+            "effective_name": "Chrome",
+            "access_class": "client",
+            "lifetime_mode": "fixed",
+            "expires_at": None,
+            "revoked": False,
+        },
+        "observation": {
+            "online": True,
+            "connection_state": "connected",
+            "source": "browser_session",
+            "last_seen_at": 100.0,
+            "last_webspace_id": "desktop",
+        },
+        "runtime": {"connected_to_subnet": True},
+    }
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("browser", str(device_ref).split(":", 1)[1]),
+    )
+    monkeypatch.setattr(
+        device_access,
+        "list_registered_device_names",
+        lambda kind=None: [
+            {
+                "value": "My phone",
+                "label": "My phone",
+                "subtitle": "1/1 online | browser",
+                "device_refs": ["browser:dev-phone"],
+                "kinds": ["browser"],
+                "online_count": 1,
+            }
+        ],
+    )
+
+    settings = device_access.get_device_settings("browser:dev-phone::webrtc")
+
+    assert settings is not None
+    assert settings["name"]["label"] == "Endpoint name"
+    assert settings["name"]["value"] == "Chrome"
+    assert settings["name"]["save"]["params"] == {"device_ref": "browser:dev-phone"}
+    assert settings["device_name"]["label"] == "Device name"
+    assert settings["device_name"]["value"] == "My phone"
+    assert settings["device_name"]["save"] == {
+        "enabled": True,
+        "target": "browsers_skill.rename_browser_device_name",
+        "params": {"device_ref": "browser:dev-phone"},
+    }
+    assert settings["device_name"]["suggestions"][0]["value"] == "My phone"
+    assert settings["identify"] == {
+        "enabled": True,
+        "target": "browsers_skill.identify_device",
+        "params": {"device_ref": "browser:dev-phone"},
+    }
+
+
+def test_identify_browser_device_publishes_parent_target(monkeypatch) -> None:
+    device = {
+        "ref": "browser:dev-phone::webrtc",
+        "kind": "browser",
+        "identity": {
+            "browser_device_id": "dev-phone::webrtc",
+            "parent_browser_device_id": "dev-phone",
+            "device_display_name": "My phone",
+            "endpoint_display_name": "Chrome",
+        },
+        "policy": {
+            "effective_name": "Chrome",
+            "display_name": "Chrome",
+            "device_display_name": "My phone",
+        },
+        "observation": {"online": True, "last_webspace_id": "desktop"},
+    }
+    published: list[tuple[str, dict, str]] = []
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("browser", str(device_ref).split(":", 1)[1]),
+    )
+
+    class _Ctx:
+        bus = object()
+
+    def _fake_emit(bus, topic, payload, source=""):
+        published.append((topic, dict(payload), source))
+
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: _Ctx())
+    monkeypatch.setattr("adaos.services.eventbus.emit", _fake_emit)
+
+    result = device_access.identify_device("browser:dev-phone::webrtc", request_id="identify-test")
+
+    assert result["ok"] is True
+    assert result["device_ref"] == "browser:dev-phone"
+    assert published[0][0] == "browser.identify.requested"
+    assert published[0][1]["request_id"] == "identify-test"
+    assert published[0][1]["target_browser_device_id"] == "dev-phone"
+    assert published[0][1]["requested_ref"] == "browser:dev-phone::webrtc"
+
+
 def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",

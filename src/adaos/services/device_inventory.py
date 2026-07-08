@@ -766,6 +766,8 @@ class DeviceInventoryService:
                     "identity": {
                         "link_id": device_id,
                         "browser_device_id": device_id,
+                        "parent_browser_device_id": _text_or_none(entry.get("parent_browser_device_id")),
+                        "browser_client_id": _text_or_none(entry.get("browser_client_id")),
                         "node_id": None,
                         "hostname": hostname,
                         "device_display_name": _text_or_none(entry.get("device_display_name")),

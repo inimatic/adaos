@@ -148,6 +148,28 @@ def test_browser_snapshot_marks_parent_online_from_active_yws_peer(monkeypatch) 
     assert by_id["dev-browser"]["last_seen_at"] == 2000.0
 
 
+def test_browser_snapshot_does_not_trust_stale_persisted_browser_online(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gateway_ws, "active_browser_session_snapshot", lambda: {"peers": []})
+
+    monkeypatch.setattr(access_links, "_now_ts", lambda: 1000.0)
+    access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="desktop",
+        connection_state="connected",
+        online=True,
+        browser_family="Chrome",
+    )
+
+    monkeypatch.setattr(access_links, "_now_ts", lambda: 1401.0)
+    by_id = {item["id"]: item for item in access_links.browser_snapshot()}
+
+    assert by_id["dev-browser"]["online"] is False
+    assert by_id["dev-browser"]["connection_state"] == "stale"
+    assert by_id["dev-browser"]["last_seen_at"] == 1000.0
+
+
 def test_browser_snapshot_marks_parent_and_session_online_from_webrtc_peer(monkeypatch) -> None:
     _patch_registry_store(monkeypatch)
     monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)

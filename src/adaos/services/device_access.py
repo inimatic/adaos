@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import socket
+import time
+import uuid
 from typing import Any, Mapping
 
 from adaos.services import access_links as _access_links
@@ -49,6 +51,195 @@ def _policy_name_list(policy: Mapping[str, Any], identity: Mapping[str, Any], fa
     if not names:
         names = _name_list(fallback)
     return names
+
+
+def _max_float(*values: Any) -> float | None:
+    out: float | None = None
+    for value in values:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if out is None or number > out:
+            out = number
+    return out
+
+
+def _browser_parent_device_id(device_ref: str, identity: Mapping[str, Any] | None = None) -> str:
+    parsed = _device_inventory.parse_device_ref(_text(device_ref))
+    if parsed is None:
+        return ""
+    kind, link_id = parsed
+    if kind != "browser":
+        return ""
+    identity_map = _mapping(identity)
+    parent = _text(identity_map.get("parent_browser_device_id"))
+    if parent:
+        return parent
+    if "::" in link_id:
+        return _text(link_id.split("::", 1)[0])
+    return link_id
+
+
+def _browser_parent_device_ref(device_ref: str, identity: Mapping[str, Any] | None = None) -> str:
+    parent_id = _browser_parent_device_id(device_ref, identity)
+    return f"browser:{parent_id}" if parent_id else _text(device_ref)
+
+
+def _registered_option_subtitle(kinds: list[str], refs: list[str], online_count: int) -> str:
+    kind_label = ", ".join(kinds[:3])
+    if len(kinds) > 3:
+        kind_label = f"{kind_label}, +{len(kinds) - 3}"
+    parts = [
+        f"{online_count}/{len(refs)} online" if refs else "",
+        kind_label,
+    ]
+    return " | ".join([part for part in parts if part])
+
+
+def _append_registered_name_option(
+    by_key: dict[str, dict[str, Any]],
+    *,
+    name: str,
+    device_ref: str,
+    kind: str,
+    online: bool,
+    last_seen_at: Any = None,
+    source: str = "device_inventory",
+) -> None:
+    value = _text(name)
+    if not value:
+        return
+    key = " ".join(value.split()).casefold()
+    entry = by_key.setdefault(
+        key,
+        {
+            "value": value,
+            "label": value,
+            "device_refs": [],
+            "kinds": [],
+            "online_count": 0,
+            "last_seen_at": None,
+            "source": source,
+        },
+    )
+    refs = entry.setdefault("device_refs", [])
+    if device_ref and device_ref not in refs:
+        refs.append(device_ref)
+    kinds = entry.setdefault("kinds", [])
+    if kind and kind not in kinds:
+        kinds.append(kind)
+    if online:
+        entry["online_count"] = int(entry.get("online_count") or 0) + 1
+    entry["last_seen_at"] = _max_float(entry.get("last_seen_at"), last_seen_at)
+
+
+def _finalize_registered_name_options(by_key: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    for raw in by_key.values():
+        item = dict(raw)
+        refs = [_text(ref) for ref in list(item.get("device_refs") or []) if _text(ref)]
+        kinds = [_text(kind) for kind in list(item.get("kinds") or []) if _text(kind)]
+        item["device_refs"] = sorted(dict.fromkeys(refs))
+        item["kinds"] = sorted(dict.fromkeys(kinds))
+        item["online_count"] = int(item.get("online_count") or 0)
+        item["device_count"] = len(item["device_refs"])
+        item["subtitle"] = _registered_option_subtitle(item["kinds"], item["device_refs"], item["online_count"])
+        options.append(item)
+    options.sort(
+        key=lambda item: (
+            0 if int(item.get("online_count") or 0) > 0 else 1,
+            -float(item.get("last_seen_at") or 0.0),
+            _text(item.get("value")).casefold(),
+        )
+    )
+    return options
+
+
+def list_registered_device_names(kind: str | None = None) -> list[dict[str, Any]]:
+    """Return finite, human device-name candidates from the core device registry."""
+
+    normalized_kind = _text(kind).lower() or None
+    if normalized_kind not in {None, "browser", "member", "redevice"}:
+        normalized_kind = None
+    by_key: dict[str, dict[str, Any]] = {}
+
+    if normalized_kind in {None, "member"}:
+        try:
+            conf = _load_node_config()
+            subnet_id = _text(getattr(conf, "subnet_id_value", None) or getattr(conf, "subnet_id", None))
+            for name in _hub_display_names(conf):
+                _append_registered_name_option(
+                    by_key,
+                    name=name,
+                    device_ref=f"hub:{subnet_id or 'local'}",
+                    kind="hub",
+                    online=True,
+                    source="node_config",
+                )
+        except Exception:
+            pass
+
+    try:
+        devices = list(_device_inventory.list_devices(kind=normalized_kind) or [])
+    except Exception:
+        devices = []
+    for raw in devices:
+        device = _mapping(raw)
+        ref = _text(device.get("ref"))
+        kind_token = _text(device.get("kind"))
+        identity = _mapping(device.get("identity"))
+        policy = _mapping(device.get("policy"))
+        observation = _mapping(device.get("observation"))
+        online = bool(observation.get("online"))
+        last_seen = observation.get("last_seen_at")
+        if kind_token == "browser":
+            names = [
+                identity.get("device_display_name"),
+                policy.get("device_display_name"),
+            ]
+            for name in names:
+                _append_registered_name_option(
+                    by_key,
+                    name=_text(name),
+                    device_ref=_browser_parent_device_ref(ref, identity),
+                    kind="browser",
+                    online=online,
+                    last_seen_at=last_seen,
+                )
+            continue
+        names = []
+        names.extend(_name_list(identity.get("node_names")))
+        names.extend(_name_list(policy.get("display_name")))
+        names.extend(_name_list(policy.get("effective_name")))
+        for name in names:
+            _append_registered_name_option(
+                by_key,
+                name=name,
+                device_ref=ref,
+                kind=kind_token,
+                online=online,
+                last_seen_at=last_seen,
+            )
+    return _finalize_registered_name_options(by_key)
+
+
+def _registered_device_name_suggestions(current_names: list[str] | None = None) -> list[dict[str, Any]]:
+    by_key = {
+        " ".join(_text(item.get("value")).split()).casefold(): dict(item)
+        for item in list_registered_device_names()
+        if _text(item.get("value"))
+    }
+    for name in current_names or []:
+        _append_registered_name_option(
+            by_key,
+            name=name,
+            device_ref="",
+            kind="current",
+            online=False,
+            source="current_settings",
+        )
+    return _finalize_registered_name_options(by_key)
 
 
 def _toggle(
@@ -259,7 +450,9 @@ def _hub_device_settings(device_ref: str) -> dict[str, Any] | None:
             "value": ", ".join(names),
             "primary": primary,
             "names": names,
+            "label": "Device name",
             "placeholder": "Main hub, Workstation",
+            "suggestions": _registered_device_name_suggestions(names),
             "save": _toggle(
                 True,
                 target="browsers_skill.rename_device",
@@ -397,10 +590,25 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     adopt_meta = _mapping(reconcile.get("actions")).get("adopt_device")
     adopt_payload = _mapping(adopt_meta)
     device_ref_token = _text(device_ref)
-    command_params = {"device_ref": device_ref_token}
     effective_name = _text(policy.get("effective_name")) or _text(device.get("ref"))
     current_names = _policy_name_list(policy, identity, effective_name)
     current_name = current_names[0] if current_names else effective_name
+    kind_token = _text(device.get("kind"))
+    browser_parent_ref = _browser_parent_device_ref(device_ref_token, identity) if kind_token == "browser" else device_ref_token
+    action_device_ref = browser_parent_ref if kind_token == "browser" else device_ref_token
+    command_params = {"device_ref": action_device_ref}
+    browser_device_name = (
+        _text(identity.get("device_display_name"))
+        or _text(policy.get("device_display_name"))
+        or (_text(policy.get("effective_name")) if _text(policy.get("access_class")) != "client" else "")
+    )
+    browser_device_names = _name_list(browser_device_name)
+    browser_endpoint_name = (
+        _text(identity.get("endpoint_display_name"))
+        or _text(policy.get("endpoint_display_name"))
+        or _text(policy.get("display_name"))
+        or current_name
+    )
     rename_enabled = bool(name_meta.get("enabled"))
     adopt_enabled = bool(adopt_payload.get("enabled"))
     save_action = (
@@ -428,7 +636,7 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     policy_mode = "rename" if rename_enabled else "adopt" if adopt_enabled else "disabled"
     return {
         "device_ref": device_ref_token,
-        "kind": _text(device.get("kind")),
+        "kind": kind_token,
         "title": effective_name,
         "endpoint_title": _text(policy.get("endpoint_display_name")) or _text(policy.get("display_name")) or None,
         "id": {
@@ -449,7 +657,9 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "value": ", ".join(current_names),
             "primary": current_name,
             "names": current_names,
+            "label": "Endpoint name" if kind_token == "browser" else "Device name",
             "placeholder": "Living room TV, Kitchen display",
+            "suggestions": [] if kind_token == "browser" else _registered_device_name_suggestions(current_names),
             "save": save_action,
             "policy": {
                 "can_edit": bool(save_action.get("enabled")),
@@ -465,6 +675,46 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
                 f"status={policy_status} storage={policy_storage}"
             ),
         },
+        "device_name": {
+            "value": ", ".join(browser_device_names),
+            "primary": browser_device_names[0] if browser_device_names else browser_device_name,
+            "names": browser_device_names,
+            "label": "Device name",
+            "placeholder": "My laptop, Kitchen tablet",
+            "suggestions": _registered_device_name_suggestions(browser_device_names),
+            "save": _toggle(
+                kind_token == "browser",
+                reason=None if kind_token == "browser" else "device_name_field_browser_only",
+                target="browsers_skill.rename_browser_device_name",
+                params={"device_ref": browser_parent_ref} if browser_parent_ref else command_params,
+            ),
+            "policy": {
+                "can_edit": kind_token == "browser",
+                "status": policy_status,
+                "storage": "access_links.device_display_name",
+                "field": "device_display_name",
+                "mode": "rename" if kind_token == "browser" else "disabled",
+                "reason": None if kind_token == "browser" else "device_name_field_browser_only",
+            },
+            "helper": "Stored in the hub device registry as the physical device name.",
+        } if kind_token == "browser" else None,
+        "endpoint_name": {
+            "value": browser_endpoint_name,
+            "primary": browser_endpoint_name,
+            "names": [browser_endpoint_name] if browser_endpoint_name else [],
+            "label": "Endpoint name",
+            "placeholder": "Chrome, Work profile",
+            "save": save_action,
+            "policy": {
+                "can_edit": bool(save_action.get("enabled")),
+                "status": policy_status,
+                "storage": "access_links.display_name",
+                "field": "display_name",
+                "mode": policy_mode,
+                "reason": _text(save_action.get("reason")) or None,
+            },
+            "helper": "Stored in the hub device registry as the browser endpoint name.",
+        } if kind_token == "browser" else None,
         "aliases": {
             "labels": list(policy.get("labels") or []),
             "add": _toggle(
@@ -515,6 +765,12 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "open_apps": _mapping(profile.get("open_apps")),
             "open_marketplace": _mapping(profile.get("open_marketplace")),
         },
+        "identify": _toggle(
+            kind_token == "browser" and bool(observation.get("online")),
+            reason=None if kind_token == "browser" and bool(observation.get("online")) else "browser_offline" if kind_token == "browser" else "identify_browser_only",
+            target="browsers_skill.identify_device",
+            params={"device_ref": browser_parent_ref} if kind_token == "browser" else command_params,
+        ),
         "reconcile": reconcile,
         "adopt": {
             "enabled": bool(adopt_payload.get("enabled")),
@@ -570,10 +826,12 @@ def rename_browser_device_name(device_ref: str, device_display_name: str) -> dic
     name = _text(device_display_name)
     if not name:
         return {"ok": False, "error": "name_required", "device_ref": _text(device_ref)}
+    if "::" in link_id:
+        link_id = _text(link_id.split("::", 1)[0])
     entry = _access_links.rename_browser_device_name(link_id, name)
     return {
         "ok": True,
-        "device_ref": _text(device_ref),
+        "device_ref": f"browser:{link_id}",
         "entry": entry,
         "device": _device_inventory.get_device(_text(device_ref)),
         "runtime_update": {"attempted": False, "applied": True},
@@ -708,6 +966,64 @@ def adopt_device(device_ref: str, display_name: str | None = None, preset: str =
     )
 
 
+def identify_device(
+    device_ref: str,
+    *,
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    ttl_s: float = 12.0,
+) -> dict[str, Any]:
+    token = _text(device_ref)
+    parsed = _device_inventory.parse_device_ref(token)
+    if parsed is None:
+        return {"ok": False, "error": "invalid_device_ref", "device_ref": token}
+    kind, _link_id = parsed
+    if kind != "browser":
+        return {"ok": False, "error": "identify_browser_only", "device_ref": token, "kind": kind}
+    device = _device_inventory.get_device(token)
+    if device is None:
+        return {"ok": False, "error": "device_not_found", "device_ref": token}
+    identity = _mapping(device.get("identity"))
+    policy = _mapping(device.get("policy"))
+    observation = _mapping(device.get("observation"))
+    parent_ref = _browser_parent_device_ref(token, identity)
+    parent_id = _browser_parent_device_id(token, identity)
+    issued_at = time.time()
+    rid = _text(request_id) or f"identify-{uuid.uuid4().hex[:12]}"
+    payload = {
+        "schema": "adaos.browser.identify.request.v1",
+        "request_id": rid,
+        "device_ref": parent_ref,
+        "target_device_ref": parent_ref,
+        "target_browser_device_id": parent_id,
+        "browser_device_id": parent_id,
+        "requested_ref": token,
+        "webspace_id": _text(webspace_id) or _text(observation.get("last_webspace_id")) or None,
+        "title": _text(policy.get("effective_name")) or parent_id,
+        "device_display_name": _text(identity.get("device_display_name")) or _text(policy.get("device_display_name")) or None,
+        "endpoint_display_name": _text(identity.get("endpoint_display_name")) or _text(policy.get("endpoint_display_name")) or _text(policy.get("display_name")) or None,
+        "issued_at": issued_at,
+        "expires_at": issued_at + max(1.0, float(ttl_s or 12.0)),
+    }
+    emitted = False
+    try:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit as bus_emit
+
+        bus_emit(get_ctx().bus, "browser.identify.requested", payload, source="device_access")
+        emitted = True
+    except Exception:
+        emitted = False
+    return {
+        "ok": True,
+        "request_id": rid,
+        "event": "browser.identify.requested",
+        "emitted": emitted,
+        "payload": payload,
+        "device_ref": parent_ref,
+    }
+
+
 __all__ = [
     "adopt_device",
     "add_device_alias",
@@ -716,6 +1032,8 @@ __all__ = [
     "detach_device",
     "get_device_settings",
     "get_command_profile",
+    "identify_device",
+    "list_registered_device_names",
     "remove_device_alias",
     "rename_browser_device_name",
     "rename_device",

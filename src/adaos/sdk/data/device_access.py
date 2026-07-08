@@ -309,6 +309,25 @@ def rename_browser_device_name(device_ref: str, device_display_name: str) -> dic
     return _service.rename_browser_device_name(str(device_ref or ""), str(device_display_name or ""))
 
 
+def list_registered_device_names(kind: str | None = None) -> list[dict[str, Any]]:
+    return _service.list_registered_device_names(str(kind or "") or None)
+
+
+def identify_device(
+    device_ref: str,
+    *,
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    ttl_s: float = 12.0,
+) -> dict[str, Any]:
+    return _service.identify_device(
+        str(device_ref or ""),
+        request_id=request_id,
+        webspace_id=webspace_id,
+        ttl_s=ttl_s,
+    )
+
+
 def add_device_alias(
     device_ref: str,
     alias: str,
@@ -420,9 +439,9 @@ def list_endpoint_devices(kind: str | None = None, *, sync_registry: bool = True
                 seen.add(key)
             merged.append(dict(item))
 
-        for item in inventory_devices:
-            add(item)
         for item in root_devices:
+            add(item)
+        for item in inventory_devices:
             add(item)
         return merged
     try:
