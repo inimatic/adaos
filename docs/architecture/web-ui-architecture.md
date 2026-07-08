@@ -418,6 +418,108 @@ than through Taiga directives.
 This is a distinct semantic type for field-centric grid layouts where the table
 is a layout container, not only a collection view.
 
+### Forms
+
+Forms are a first-class semantic surface, not a collection of renderer-specific
+Ionic or Taiga controls.
+
+The target browser form model should support Google-Forms-like composition:
+a skill, scenario, or Builder workflow declares a stable form contract and the
+browser chooses the best renderer profile for the current surface. Taiga UI is
+the preferred rich desktop renderer; Ionic remains valuable for mobile-friendly
+shell behavior and compact controls. Neither toolkit is the ABI.
+
+Current compatibility status:
+
+- `ui.form` exists as a `webui.v1` widget type.
+- The current browser implementation handles only simple field inputs:
+  text, textarea, number, date, toggle, and select.
+- `webui.v1` validates the widget type but does not yet validate the shape of
+  `ui.form.inputs.fields`.
+- `webui.v1.types.d.ts` currently exposes widgets with `type: string` and
+  generic `inputs`, so authoring tools cannot rely on typed form fields yet.
+
+Target contract:
+
+- `form` is the semantic view kind for survey, editor, settings, review, and
+  quiz-like forms.
+- `form_matrix` is reserved for grid-shaped questions and field matrices where
+  rows and columns are part of the answer contract.
+- `ui.form` remains the compatibility renderer container while the typed field
+  ABI is added under `webui.v1`.
+- Form definitions use stable field ids and answer keys. Render labels,
+  descriptions, help text, localization, and layout hints are presentation
+  metadata, not storage keys.
+- Field definitions describe intent: answer type, cardinality, allowed options,
+  validation, default value, conditional visibility, and branching behavior.
+- Renderer-specific details are optional hints. The canonical manifest should
+  say `singleChoice`, not `ion-radio` or `tui-radio`.
+
+Required field families:
+
+- text: short text, long text, email, URL, phone, password/PIN where needed
+- numeric: number, integer, range, slider/scale
+- choice: single choice, multiple choice, dropdown, searchable combobox,
+  chips/tags, boolean/toggle
+- date and time: date, time, date-time, date range, time range
+- file and media: file upload, image attachment, capture reference, artifact
+  reference
+- structured: object group, repeated group, address/contact-like composite
+  groups
+- matrix: single-choice grid, checkbox grid, rating grid
+- survey and quiz: linear scale, rating, correct answer, points, feedback
+- static content: section title, description, markdown, image, video/embed,
+  separator, page break
+
+Validation must be declarative:
+
+- required and optional state
+- min/max for numeric values, lengths, dates, times, file counts, and file sizes
+- regex and format validators
+- enum and option-set validators
+- cross-field validators for dependent answers
+- localized error messages and remediation hints
+
+Form lifecycle:
+
+- `draft` state is browser-local or selectively synchronized view state while a
+  user is editing.
+- `domain` state belongs to the skill or scenario after validation and submit.
+- `response` payloads are immutable submission records unless a form explicitly
+  declares edit semantics.
+- File answers store artifact refs, not local filesystem paths or inline large
+  payloads.
+- Aggregates and live response summaries use projections or streams, not the
+  form draft branch.
+
+Actions:
+
+- `validate` checks the draft without committing domain state.
+- `submit` validates and dispatches the declared typed action.
+- `save_draft` persists a draft through an explicit ownership contract.
+- `reset` restores defaults for the current form or section.
+- `next_section` and `previous_section` are navigation actions for paged forms.
+- Branching is declared as data on fields/options and should resolve to a
+  section id or terminal state, not to renderer callbacks.
+
+Accessibility and interaction rules:
+
+- Every answerable field needs a stable label, even when the visual renderer
+  chooses a compact presentation.
+- Help text, validation errors, required markers, and async submit feedback
+  must be accessible through the same semantic contract.
+- `interaction.initialFocus` and `interaction.submit.defaultAction` remain the
+  page/modal-level behavior contracts for form focus and Enter handling.
+- Dirty state, pending submit state, optimistic submit policy, and cancel
+  behavior should be explicit, not inferred from button order.
+
+Analytics:
+
+- Forms may expose response summaries through separate semantic views such as
+  `metric_chart`, future `bar_chart`, `pie_chart`, or `response_summary`.
+- Chart renderer APIs from Taiga should inform implementation, but chart
+  selection remains a semantic view concern outside the form draft contract.
+
 ### Event log
 
 This is the canonical semantic type for append-heavy runtime tails, logs,
@@ -640,6 +742,8 @@ Status note:
   the semantic adapter
 - `metric_chart` now has a Taiga-specific semantic renderer path, while the
   earlier temporary widget remains available as a compatibility renderer
+- `form` and `form_matrix` are target semantic contracts; the implemented
+  compatibility path is still `ui.form` with a small untyped field subset
 - the first Taiga-specific renderer slice is now live for `collection_grid`
 - the second Taiga-specific renderer slice is now live for `metric_chart`
 - the browser widget host now resolves semantic renderers through a dedicated
@@ -728,6 +832,50 @@ Recommended identifiers:
 
 - skill: `demo_metrics_skill`
 - scenario: `taiga_ui_demo_scenario`
+
+### 3b. Forms Architecture Slice
+
+- [x] document forms as a semantic browser surface separate from Ionic/Taiga
+  implementation details
+- [ ] add typed `formField` definitions to `webui.v1.schema.json`
+- [ ] add TypeScript helpers for form widgets, form fields, options,
+  validation, branching, and submit payloads in `webui.v1.types.d.ts`
+- [ ] keep `ui.form` backward compatible while validating
+  `ui.form.inputs.fields` when present
+- [ ] add contract fixtures for a survey form, an editor/settings form, a
+  multi-section form, and a quiz-like form
+- [ ] extend `skill validate` and Builder validation diagnostics so unsupported
+  field types, broken branch targets, invalid option values, and missing answer
+  keys fail before runtime
+
+### 3c. Forms Renderer Slice
+
+- [ ] render the existing field subset through the typed field adapter:
+  short text, long text, number, date, toggle, and select
+- [ ] add choice controls: radio/single choice, checkbox/multiple choice,
+  dropdown, searchable combobox, and chips/tags
+- [ ] add scale controls: linear scale, rating, slider/range, and numeric range
+- [ ] add date/time controls: time, date-time, date range, and time range
+- [ ] add file answers using artifact refs and the existing browser upload
+  path, not inline payloads
+- [ ] add matrix questions: single-choice grid, checkbox grid, and rating grid
+- [ ] support sections, page breaks, static content, markdown descriptions,
+  and media/help blocks
+- [ ] define desktop-rich and mobile-compact renderer mappings for the same
+  field contract
+
+### 3d. Forms State and Submission Slice
+
+- [ ] define draft answer ownership separately from submitted domain state
+- [ ] support declarative validation with localized error messages
+- [ ] support dirty state, reset, save draft, validate, submit, and pending
+  submit feedback
+- [ ] support conditional visibility and section branching by field/option
+  values
+- [ ] support immutable response records and explicit edit semantics for forms
+  that allow response updates
+- [ ] expose response summaries through projections/streams and separate chart
+  semantic views rather than through the draft form branch
 
 ### 4. Renderer Registry
 

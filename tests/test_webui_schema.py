@@ -421,6 +421,105 @@ def test_webui_schema_validates_open_url_actions() -> None:
         Draft202012Validator(schema).validate(broken)
 
 
+def test_webui_schema_accepts_google_forms_like_form_fields() -> None:
+    schema = _load_schema()
+    payload = {
+        "registry": {
+            "modals": {
+                "survey_modal": {
+                    "schema": {
+                        "id": "survey_modal",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "survey",
+                                "type": "ui.form",
+                                "area": "main",
+                                "inputs": {
+                                    "submitLabel": "Send",
+                                    "fields": [
+                                        {"id": "intro", "type": "section", "title": "Feedback"},
+                                        {
+                                            "id": "name",
+                                            "type": "shortText",
+                                            "label": "Name",
+                                            "required": True,
+                                            "validation": {"minLength": 2},
+                                        },
+                                        {"id": "comment", "type": "paragraph", "label": "Comment"},
+                                        {
+                                            "id": "segment",
+                                            "type": "multipleChoice",
+                                            "label": "Segment",
+                                            "options": [
+                                                {"label": "Builder", "value": "builder", "gotoSection": "builder_details"},
+                                                {"label": "Operator", "value": "operator"},
+                                            ],
+                                        },
+                                        {
+                                            "id": "features",
+                                            "type": "checkboxes",
+                                            "label": "Features",
+                                            "options": ["Forms", "Charts", "Tables"],
+                                        },
+                                        {"id": "priority", "type": "dropdown", "options": ["Low", "Medium", "High"]},
+                                        {"id": "score", "type": "linearScale", "min": 1, "max": 5},
+                                        {"id": "rating", "type": "rating", "ratingMax": 5},
+                                        {
+                                            "id": "matrix_single",
+                                            "type": "singleChoiceGrid",
+                                            "rows": ["UX", "Runtime"],
+                                            "columns": ["Bad", "OK", "Good"],
+                                        },
+                                        {
+                                            "id": "matrix_multi",
+                                            "type": "checkboxGrid",
+                                            "rows": ["Prompt IDE", "Builder"],
+                                            "columns": ["Fast", "Useful"],
+                                        },
+                                        {"id": "day", "type": "date"},
+                                        {"id": "time", "type": "time"},
+                                        {"id": "window", "type": "dateRange"},
+                                        {"id": "time_window", "type": "time_range"},
+                                        {"id": "attachment", "type": "fileUpload", "accept": ".json", "maxFiles": 2},
+                                        {"id": "note", "type": "staticContent", "markdown": "Thanks."},
+                                    ],
+                                },
+                                "actions": [
+                                    {"on": "submit", "type": "callHost", "target": "survey.submit"},
+                                    {"on": "save_draft", "type": "callHost", "target": "survey.save_draft"},
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_rejects_unknown_form_field_type() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "broken_form",
+                "type": "ui.form",
+                "inputs": {
+                    "fields": [
+                        {"id": "unknown", "type": "planetScale"},
+                    ]
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_frame_viewer_media_surface_contract() -> None:
     schema = _load_schema()
     payload = {

@@ -82,15 +82,263 @@ export interface WebUiPageSchema {
   [key: string]: unknown
 }
 
+export type WebUiWidgetType =
+  | 'collection.grid'
+  | 'collection.tree'
+  | 'visual.taigaCollectionGrid'
+  | 'visual.taigaMetricChart'
+  | 'visual.taigaTree'
+  | 'visual.frameViewer'
+  | 'visual.image'
+  | 'visual.metricTile'
+  | 'visual.metricChart'
+  | 'visual.timeseriesChart'
+  | 'visual.qrCode'
+  | 'feedback.log'
+  | 'feedback.statusBar'
+  | 'ui.chat'
+  | 'ui.voiceInput'
+  | 'ui.voiceDebug'
+  | 'ui.list'
+  | 'ui.table'
+  | 'ui.form'
+  | 'ui.actions'
+  | 'ui.jsonViewer'
+  | 'item.textEditor'
+  | 'item.codeViewer'
+  | 'item.details'
+  | 'input.commandBar'
+  | 'input.fileUpload'
+  | 'input.frameSlider'
+  | 'input.text'
+  | 'input.selector'
+  | 'desktop.widgets'
+  | 'media.videoBrowser'
+  | 'media.cvCamera'
+  | 'host.cvRuntime'
+  | 'host.webspaceControls'
+
+export type WebUiFormFieldType =
+  | 'shortText'
+  | 'short_text'
+  | 'shortAnswer'
+  | 'short_answer'
+  | 'text'
+  | 'longText'
+  | 'long_text'
+  | 'longAnswer'
+  | 'long_answer'
+  | 'paragraph'
+  | 'textarea'
+  | 'number'
+  | 'integer'
+  | 'email'
+  | 'url'
+  | 'phone'
+  | 'password'
+  | 'pin'
+  | 'date'
+  | 'time'
+  | 'dateTime'
+  | 'date_time'
+  | 'datetime'
+  | 'dateRange'
+  | 'date_range'
+  | 'timeRange'
+  | 'time_range'
+  | 'toggle'
+  | 'boolean'
+  | 'switch'
+  | 'singleChoice'
+  | 'single_choice'
+  | 'multipleChoice'
+  | 'multiple_choice'
+  | 'radio'
+  | 'radioGroup'
+  | 'radio_group'
+  | 'multiChoice'
+  | 'multi_choice'
+  | 'checkboxes'
+  | 'checkboxGroup'
+  | 'checkbox_group'
+  | 'dropdown'
+  | 'select'
+  | 'combobox'
+  | 'searchableSelect'
+  | 'searchable_select'
+  | 'chips'
+  | 'tags'
+  | 'linearScale'
+  | 'linear_scale'
+  | 'scale'
+  | 'slider'
+  | 'range'
+  | 'rating'
+  | 'fileUpload'
+  | 'file_upload'
+  | 'file'
+  | 'singleChoiceGrid'
+  | 'single_choice_grid'
+  | 'multipleChoiceGrid'
+  | 'multiple_choice_grid'
+  | 'radioGrid'
+  | 'checkboxGrid'
+  | 'checkbox_grid'
+  | 'multiChoiceGrid'
+  | 'multi_choice_grid'
+  | 'ratingGrid'
+  | 'rating_grid'
+  | 'section'
+  | 'pageBreak'
+  | 'staticContent'
+  | 'static_content'
+  | 'content'
+  | 'description'
+  | 'markdown'
+  | 'image'
+  | 'video'
+
+export type WebUiFormOptionPrimitive = string | number | boolean
+
+export interface WebUiFormOptionObject {
+  id?: string
+  key?: string
+  value?: unknown
+  label?: string
+  title?: string
+  name?: string
+  description?: string
+  hint?: string
+  score?: number
+  correct?: boolean
+  gotoSection?: string
+  goToSection?: string
+  terminal?: boolean
+  [key: string]: unknown
+}
+
+export type WebUiFormOption = WebUiFormOptionPrimitive | WebUiFormOptionObject
+
+export interface WebUiFormValidation {
+  required?: boolean
+  min?: number
+  max?: number
+  minLength?: number
+  min_length?: number
+  maxLength?: number
+  max_length?: number
+  pattern?: string
+  format?: 'email' | 'url' | 'phone' | 'number' | 'integer' | 'date' | 'time' | 'date-time' | 'custom' | string
+  message?: string
+  messages?: Record<string, string>
+  [key: string]: unknown
+}
+
+export interface WebUiFormBranchRule {
+  when?: unknown
+  value?: unknown
+  gotoSection?: string
+  goToSection?: string
+  terminal?: boolean
+  [key: string]: unknown
+}
+
+export interface WebUiFormBranching {
+  defaultSection?: string
+  default_section?: string
+  rules?: readonly WebUiFormBranchRule[]
+  [key: string]: unknown
+}
+
+export interface WebUiFormQuiz {
+  points?: number
+  correctAnswer?: unknown
+  correctAnswers?: readonly unknown[]
+  feedback?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface WebUiFormField {
+  id: string
+  type: WebUiFormFieldType | string
+  label?: string
+  title?: string
+  question?: string
+  description?: string
+  helpText?: string
+  hint?: string
+  placeholder?: string
+  content?: string
+  text?: string
+  body?: string
+  markdown?: string
+  stateKey?: string
+  state_key?: string
+  answerKey?: string
+  answer_key?: string
+  name?: string
+  required?: boolean
+  disabled?: boolean
+  readonly?: boolean
+  visibleIf?: string
+  visible_if?: string
+  default?: unknown
+  defaultValue?: unknown
+  value?: unknown
+  options?: readonly WebUiFormOption[]
+  choices?: readonly WebUiFormOption[]
+  items?: readonly WebUiFormOption[]
+  rows?: readonly WebUiFormOption[]
+  columns?: readonly WebUiFormOption[]
+  cols?: readonly WebUiFormOption[]
+  min?: number
+  max?: number
+  step?: number
+  scaleStart?: number
+  scaleEnd?: number
+  from?: number
+  to?: number
+  ratingMax?: number
+  minLabel?: string
+  maxLabel?: string
+  fromLabel?: string
+  toLabel?: string
+  accept?: string
+  multiple?: boolean
+  maxFiles?: number
+  max_files?: number
+  validation?: WebUiFormValidation
+  branching?: WebUiFormBranching
+  quiz?: WebUiFormQuiz
+  [key: string]: unknown
+}
+
+export interface WebUiFormInputs {
+  fields?: readonly WebUiFormField[]
+  questions?: readonly WebUiFormField[]
+  submitLabel?: string
+  submitPlacement?: 'top' | 'bottom' | 'before' | 'above' | 'after' | 'below' | string
+  actionPlacement?: 'top' | 'bottom' | 'before' | 'above' | 'after' | 'below' | string
+  autoCommit?: boolean
+  commitOnChange?: boolean
+  showSubmit?: boolean
+  [key: string]: unknown
+}
+
 export interface WebUiWidgetConfig {
   id: string
-  type: string
+  type: WebUiWidgetType | string
   area?: string
   title?: string
   dataSource?: Record<string, unknown>
-  inputs?: Record<string, unknown>
+  inputs?: WebUiFormInputs | Record<string, unknown>
   actions?: readonly unknown[]
   [key: string]: unknown
+}
+
+export interface WebUiFormWidgetConfig extends WebUiWidgetConfig {
+  type: 'ui.form'
+  inputs?: WebUiFormInputs
 }
 
 export interface WebUiModalAddress {

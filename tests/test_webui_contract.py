@@ -113,6 +113,10 @@ def test_webui_diagnostic_catalog_exposes_modal_domain_codes() -> None:
 def test_webui_typescript_contract_artifact_covers_modal_domain_and_diagnostics() -> None:
     text = (REPO_ROOT / "src" / "adaos" / "abi" / "webui.v1.types.d.ts").read_text(encoding="utf-8")
 
+    assert "type WebUiFormFieldType" in text
+    assert "interface WebUiFormField" in text
+    assert "interface WebUiFormInputs" in text
+    assert "interface WebUiFormWidgetConfig" in text
     assert "interface WebUiModalDomainContract" in text
     assert "interface WebUiOwnershipContract" in text
     assert "interface WebUiModalHistoryContract" in text

@@ -764,6 +764,14 @@
               "inputs": { "$ref": "#/$defs/frameViewerInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ui.form" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/formInputs" }
+            }
+          }
         }
       ]
     },
@@ -953,6 +961,14 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/frameViewerInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ui.form" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/formInputs" }
             }
           }
         }
@@ -1157,6 +1173,287 @@
       "type": "string",
       "minLength": 1,
       "description": "Dot-separated path read from the current widget payload or page state."
+    },
+
+    "formInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Inputs for ui.form. This is the compatibility container for typed Google-Forms-like field declarations.",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formField" }
+        },
+        "questions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formField" },
+          "description": "Alias for fields used by survey/prototyping authoring tools."
+        },
+        "submitLabel": { "type": "string" },
+        "submitPlacement": {
+          "type": "string",
+          "enum": ["top", "bottom", "before", "above", "after", "below"]
+        },
+        "actionPlacement": {
+          "type": "string",
+          "enum": ["top", "bottom", "before", "above", "after", "below"]
+        },
+        "autoCommit": { "type": "boolean" },
+        "commitOnChange": { "type": "boolean" },
+        "showSubmit": { "type": "boolean" }
+      }
+    },
+
+    "formFieldType": {
+      "type": "string",
+      "enum": [
+        "shortText",
+        "short_text",
+        "shortAnswer",
+        "short_answer",
+        "text",
+        "longText",
+        "long_text",
+        "longAnswer",
+        "long_answer",
+        "paragraph",
+        "textarea",
+        "number",
+        "integer",
+        "email",
+        "url",
+        "phone",
+        "password",
+        "pin",
+        "date",
+        "time",
+        "dateTime",
+        "date_time",
+        "datetime",
+        "dateRange",
+        "date_range",
+        "timeRange",
+        "time_range",
+        "toggle",
+        "boolean",
+        "switch",
+        "singleChoice",
+        "single_choice",
+        "multipleChoice",
+        "multiple_choice",
+        "radio",
+        "radioGroup",
+        "radio_group",
+        "multiChoice",
+        "multi_choice",
+        "checkboxes",
+        "checkboxGroup",
+        "checkbox_group",
+        "dropdown",
+        "select",
+        "combobox",
+        "searchableSelect",
+        "searchable_select",
+        "chips",
+        "tags",
+        "linearScale",
+        "linear_scale",
+        "scale",
+        "slider",
+        "range",
+        "rating",
+        "fileUpload",
+        "file_upload",
+        "file",
+        "singleChoiceGrid",
+        "single_choice_grid",
+        "multipleChoiceGrid",
+        "multiple_choice_grid",
+        "radioGrid",
+        "checkboxGrid",
+        "checkbox_grid",
+        "multiChoiceGrid",
+        "multi_choice_grid",
+        "ratingGrid",
+        "rating_grid",
+        "section",
+        "pageBreak",
+        "staticContent",
+        "static_content",
+        "content",
+        "description",
+        "markdown",
+        "image",
+        "video"
+      ]
+    },
+
+    "formField": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/formFieldType" },
+        "label": { "type": "string" },
+        "title": { "type": "string" },
+        "question": { "type": "string" },
+        "description": { "type": "string" },
+        "helpText": { "type": "string" },
+        "hint": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "content": { "type": "string" },
+        "text": { "type": "string" },
+        "body": { "type": "string" },
+        "markdown": { "type": "string" },
+        "stateKey": { "type": "string", "minLength": 1 },
+        "state_key": { "type": "string", "minLength": 1 },
+        "answerKey": { "type": "string", "minLength": 1 },
+        "answer_key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "disabled": { "type": "boolean" },
+        "readonly": { "type": "boolean" },
+        "visibleIf": { "type": "string" },
+        "visible_if": { "type": "string" },
+        "default": {},
+        "defaultValue": {},
+        "value": {},
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formOption" }
+        },
+        "choices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formOption" }
+        },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formOption" }
+        },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formOption" }
+        },
+        "columns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formOption" }
+        },
+        "cols": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formOption" }
+        },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number" },
+        "scaleStart": { "type": "number" },
+        "scaleEnd": { "type": "number" },
+        "from": { "type": "number" },
+        "to": { "type": "number" },
+        "ratingMax": { "type": "number" },
+        "minLabel": { "type": "string" },
+        "maxLabel": { "type": "string" },
+        "fromLabel": { "type": "string" },
+        "toLabel": { "type": "string" },
+        "accept": { "type": "string" },
+        "multiple": { "type": "boolean" },
+        "maxFiles": { "type": "integer", "minimum": 1 },
+        "max_files": { "type": "integer", "minimum": 1 },
+        "validation": { "$ref": "#/$defs/formValidation" },
+        "branching": { "$ref": "#/$defs/formBranching" },
+        "quiz": { "$ref": "#/$defs/formQuiz" }
+      }
+    },
+
+    "formOption": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "id": { "type": "string" },
+            "key": { "type": "string" },
+            "value": {},
+            "label": { "type": "string" },
+            "title": { "type": "string" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "hint": { "type": "string" },
+            "score": { "type": "number" },
+            "correct": { "type": "boolean" },
+            "gotoSection": { "$ref": "#/$defs/id" },
+            "goToSection": { "$ref": "#/$defs/id" },
+            "terminal": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+
+    "formValidation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "required": { "type": "boolean" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "minLength": { "type": "integer", "minimum": 0 },
+        "min_length": { "type": "integer", "minimum": 0 },
+        "maxLength": { "type": "integer", "minimum": 0 },
+        "max_length": { "type": "integer", "minimum": 0 },
+        "pattern": { "type": "string" },
+        "format": {
+          "type": "string",
+          "enum": ["email", "url", "phone", "number", "integer", "date", "time", "date-time", "custom"]
+        },
+        "message": { "type": "string" },
+        "messages": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+
+    "formBranching": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "defaultSection": { "$ref": "#/$defs/id" },
+        "default_section": { "$ref": "#/$defs/id" },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "when": {},
+              "value": {},
+              "gotoSection": { "$ref": "#/$defs/id" },
+              "goToSection": { "$ref": "#/$defs/id" },
+              "terminal": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+
+    "formQuiz": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "points": { "type": "number" },
+        "correctAnswer": {},
+        "correctAnswers": {
+          "type": "array",
+          "items": {}
+        },
+        "feedback": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
     },
 
     "frameViewerInputs": {
