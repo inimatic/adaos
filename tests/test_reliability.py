@@ -14,10 +14,28 @@ except Exception:
     sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
-if "ypy_websocket" not in sys.modules:
-    ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
-    sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
+if "ypy_websocket" not in sys.modules and importlib.util.find_spec("ypy_websocket") is None:
+    ystore_mod = types.ModuleType("ypy_websocket.ystore")
+    ystore_mod.BaseYStore = object
+    ystore_mod.YDocNotFound = RuntimeError
+    websocket_mod = types.ModuleType("ypy_websocket.websocket")
+    websocket_mod.Websocket = object
+    websocket_server_mod = types.ModuleType("ypy_websocket.websocket_server")
+    websocket_server_mod.WebsocketServer = object
+    yroom_mod = types.ModuleType("ypy_websocket.yroom")
+    yroom_mod.YRoom = object
+    yutils_mod = types.ModuleType("ypy_websocket.yutils")
+    yutils_mod.create_update_message = lambda update: b"update:" + bytes(update or b"")
+    ypy_websocket_mod = types.ModuleType("ypy_websocket")
+    ypy_websocket_mod.__path__ = []  # type: ignore[attr-defined]
+    ypy_websocket_mod.ystore = ystore_mod
+    ypy_websocket_mod.yutils = yutils_mod
+    sys.modules["ypy_websocket"] = ypy_websocket_mod
     sys.modules["ypy_websocket.ystore"] = ystore_mod
+    sys.modules["ypy_websocket.websocket"] = websocket_mod
+    sys.modules["ypy_websocket.websocket_server"] = websocket_server_mod
+    sys.modules["ypy_websocket.yroom"] = yroom_mod
+    sys.modules["ypy_websocket.yutils"] = yutils_mod
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -475,6 +493,60 @@ def test_connectivity_snapshot_recovers_stale_browser_route_degradation_when_sid
 
     assert snapshot["required_upstream_link"]["transport_state"] == "ready"
     assert snapshot["required_upstream_link"]["served_by"] == "supervisor_sidecar"
+    route = snapshot["browser_control_route"]
+    assert route["transport_state"] == "ready"
+    assert route["transition_state"] == "ready"
+    assert route["reason"] == "sidecar_browser_route_ready"
+    assert route["blockers"] == []
+
+
+def test_connectivity_snapshot_recovers_runtime_managed_sidecar_route_without_supervisor() -> None:
+    sidecar_runtime = {
+        "enabled": True,
+        "status": "ready",
+        "remote_session_state": "ready",
+        "transport_ready": True,
+        "route_tunnel_contract": {
+            "ws": {
+                "current_owner": "sidecar",
+                "handoff_ready": True,
+            },
+            "yws": {
+                "current_owner": "sidecar",
+                "handoff_ready": True,
+            },
+        },
+    }
+
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root": {
+                "effective_status": "degraded",
+                "effective_state": "unstable",
+            },
+            "hub_root_browser": {
+                "effective_status": "degraded",
+                "effective_state": "flapping",
+                "diagnostics": {"blockers": ["route.flapping"]},
+            },
+        },
+        supervisor_runtime={
+            "available": False,
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "unknown",
+                "blockers": [],
+            },
+            "status": {},
+        },
+        sidecar_runtime=sidecar_runtime,
+    )
+
+    required = snapshot["required_upstream_link"]
+    assert required["transport_state"] == "ready"
+    assert required["transition_state"] == "ready"
+    assert required["served_by"] == "sidecar_runtime"
     route = snapshot["browser_control_route"]
     assert route["transport_state"] == "ready"
     assert route["transition_state"] == "ready"

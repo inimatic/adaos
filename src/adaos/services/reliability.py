@@ -5837,6 +5837,29 @@ def _supervisor_sidecar_browser_route_ready(supervisor: dict[str, Any]) -> bool:
     return True
 
 
+def _sidecar_runtime_browser_route_ready(sidecar_runtime: dict[str, Any] | None) -> bool:
+    sidecar = sidecar_runtime if isinstance(sidecar_runtime, dict) else {}
+    if not bool(sidecar.get("enabled")):
+        return False
+    sidecar_status = str(sidecar.get("status") or "").strip().lower()
+    remote_state = str(sidecar.get("remote_session_state") or "").strip().lower()
+    if sidecar_status != "ready" and remote_state != "ready" and not bool(sidecar.get("transport_ready")):
+        return False
+    route_tunnel = (
+        sidecar.get("route_tunnel_contract")
+        if isinstance(sidecar.get("route_tunnel_contract"), dict)
+        else {}
+    )
+    ws_entry = _sidecar_route_tunnel_entry(route_tunnel, "ws")
+    yws_entry = _sidecar_route_tunnel_entry(route_tunnel, "yws")
+    return (
+        str(ws_entry.get("current_owner") or "").strip().lower() == "sidecar"
+        and str(yws_entry.get("current_owner") or "").strip().lower() == "sidecar"
+        and bool(ws_entry.get("handoff_ready"))
+        and bool(yws_entry.get("handoff_ready"))
+    )
+
+
 def _required_upstream_link_fallback_from_channel_overview(
     overview: dict[str, Any],
 ) -> dict[str, Any]:
@@ -5877,6 +5900,7 @@ def _connectivity_snapshot(
     node_id: str | None,
     channel_overview: dict[str, Any] | None,
     supervisor_runtime: dict[str, Any] | None,
+    sidecar_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     overview = channel_overview if isinstance(channel_overview, dict) else {}
     supervisor = supervisor_runtime if isinstance(supervisor_runtime, dict) else {}
@@ -5886,11 +5910,27 @@ def _connectivity_snapshot(
         if isinstance(supervisor.get("required_upstream_link"), dict)
         else {}
     )
-    sidecar_route_ready = _supervisor_sidecar_browser_route_ready(supervisor)
+    sidecar_route_ready = _supervisor_sidecar_browser_route_ready(
+        supervisor
+    ) or _sidecar_runtime_browser_route_ready(sidecar_runtime)
     fallback_link = _required_upstream_link_fallback_from_channel_overview(overview)
     if _map_connectivity_transport_state(required_link.get("state")) == "unknown":
         if fallback_link:
             required_link = fallback_link
+    if (
+        _map_connectivity_transport_state(required_link.get("state")) == "degraded"
+        and sidecar_route_ready
+        and str(required_link.get("reason") or "").strip().lower() in {"unstable", "flapping"}
+        and not list(required_link.get("blockers") or [])
+    ):
+        required_link = {
+            **required_link,
+            "state": "ready",
+            "ready": True,
+            "reason": "sidecar browser route handoff is ready after stale runtime channel degradation",
+            "served_by": "sidecar_runtime",
+            "blockers": [],
+        }
     elif (
         _map_connectivity_transport_state(required_link.get("state")) == "degraded"
         and _map_connectivity_transport_state(fallback_link.get("state")) == "ready"
@@ -7531,6 +7571,7 @@ def reliability_snapshot(
         node_id=node_id,
         channel_overview=channel_overview,
         supervisor_runtime=supervisor_runtime,
+        sidecar_runtime=sidecar_runtime,
     )
     state_sync = _state_sync_snapshot(sync_runtime)
     yjs_pressure = _yjs_pressure_snapshot(sync_runtime)
