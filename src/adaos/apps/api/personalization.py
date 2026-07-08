@@ -295,6 +295,21 @@ def _register_root_invite_session(
         "expires_at": invite.get("expires_at"),
         "claim_url": fallback_claim_url,
     }
+    for key in (
+        "scope",
+        "profile_hint",
+        "subject_id",
+        "device_id",
+        "device_name",
+        "replacement_device_id",
+        "recovery_id",
+        "revoked_device_ids",
+        "claim_count",
+        "max_sessions",
+        "single_use",
+    ):
+        if key in invite:
+            body[key] = invite.get(key)
     zone_id = _current_zone_id(ctx)
     if zone_id:
         body["zone"] = zone_id
