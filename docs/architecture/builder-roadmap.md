@@ -433,6 +433,22 @@ Open work:
 - [x] `[must]` Support the first non-trivial prototype correction controls:
   product units, availability fields, and simple segmented filters are written
   to the current preview and generated `webui.json`.
+- [x] `[should]` Add the first reviewable prototype workbench affordances:
+  the dev preview can enter review mode, select widgets/fields, collect
+  per-revision comments, copy those notes into the next Builder prompt, and
+  locally drag widgets/fields to express layout intent. The first slice is
+  intentionally lightweight: annotations are browser-session feedback, not a
+  durable Builder review store.
+- [ ] `[should]` Promote review annotations into a durable Builder context
+  artifact that follows UI revisions and is automatically included in the next
+  LLM transform request.
+- [ ] `[should]` Extend declarative UI prototyping beyond single-page forms:
+  model buttons, tabs, modal opening, page transitions, and multi-step forms
+  as WebUI ABI behavior data before asking the LLM to synthesize those flows.
+- [ ] `[could]` Add API-driven prototyping: a user can provide an OpenAPI/API
+  documentation URL or pasted contract, Builder stores the source reference in
+  project memory, then drafts list/detail/action interfaces with explicit
+  auth placeholders and no captured credentials.
 - [x] `[should]` Keep advanced diffs, schemas, route plans, and runtime evidence available
   for developers. `builder_skill.get_session` and `get_preview_state` now
   return `adaos.builder.developer_evidence.v1` with artifact file refs,

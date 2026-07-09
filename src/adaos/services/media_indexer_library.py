@@ -66,15 +66,13 @@ def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any
     if not metadata:
         raise FileNotFoundError("media_indexer_index_missing")
 
-    indexed_root = Path(str(metadata.get("indexed_directory") or "")).expanduser()
-    if not indexed_root.exists() or not indexed_root.is_dir():
-        raise FileNotFoundError("media_indexer_directory_missing")
-    indexed_root = indexed_root.resolve()
-
     for payload in _iter_payloads(metadata):
         if str(payload.get("playback_id") or "").strip().lower() != normalized:
             continue
-        return _resolve_payload_target(payload, indexed_root)
+        roots = _candidate_index_roots(metadata, payload)
+        if not roots:
+            raise FileNotFoundError("media_indexer_directory_missing")
+        return _resolve_payload_target(payload, roots)
 
     raise FileNotFoundError("media_indexer_item_not_found")
 
@@ -89,11 +87,6 @@ def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str
     if not metadata:
         raise FileNotFoundError("media_indexer_index_missing")
 
-    indexed_root = Path(str(metadata.get("indexed_directory") or "")).expanduser()
-    if not indexed_root.exists() or not indexed_root.is_dir():
-        raise FileNotFoundError("media_indexer_directory_missing")
-    indexed_root = indexed_root.resolve()
-
     for payload in _iter_payloads(metadata):
         raw_path = str(payload.get("full_path") or "").strip()
         payload_names = {
@@ -102,19 +95,72 @@ def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str
         }
         if name not in payload_names:
             continue
-        return _resolve_payload_target(payload, indexed_root)
+        roots = _candidate_index_roots(metadata, payload)
+        if not roots:
+            raise FileNotFoundError("media_indexer_directory_missing")
+        return _resolve_payload_target(payload, roots)
 
     raise FileNotFoundError("media_indexer_item_not_found")
 
 
-def _resolve_payload_target(payload: dict[str, Any], indexed_root: Path) -> tuple[Path, dict[str, Any]]:
+def _candidate_index_roots(metadata: dict[str, Any], payload: dict[str, Any]) -> list[Path]:
+    roots: list[Path] = []
+    indexed_root = Path(str(metadata.get("indexed_directory") or "")).expanduser()
+    if indexed_root.exists() and indexed_root.is_dir():
+        roots.append(indexed_root.resolve())
+
+    alias_root = _payload_alias_root(str(metadata.get("indexed_directory") or ""), str(payload.get("full_path") or ""))
+    if alias_root and alias_root.exists() and alias_root.is_dir():
+        resolved = alias_root.resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _payload_alias_root(indexed_directory: str, payload_path: str) -> Path | None:
+    indexed_raw = str(indexed_directory or "").strip()
+    payload_raw = str(payload_path or "").strip()
+    if not indexed_raw or not payload_raw:
+        return None
+    indexed = Path(indexed_raw).expanduser()
+    payload_parent = Path(payload_raw).expanduser().parent
+    indexed_tail = _path_tail_parts(indexed)
+    payload_parts = list(payload_parent.parts)
+    payload_norm = [_norm_part(part) for part in payload_parts]
+    if len(indexed_tail) < 2:
+        return None
+    tail_len = len(indexed_tail)
+    for start in range(0, len(payload_norm) - tail_len + 1):
+        if payload_norm[start : start + tail_len] == indexed_tail:
+            return Path(*payload_parts[: start + tail_len])
+    return None
+
+
+def _path_tail_parts(path: Path) -> list[str]:
+    anchor = _norm_part(path.anchor)
+    parts: list[str] = []
+    for part in path.parts:
+        normalized = _norm_part(part)
+        if not normalized or normalized == anchor:
+            continue
+        if not parts and len(normalized) == 2 and normalized[1] == ":" and normalized[0].isalpha():
+            continue
+        parts.append(normalized)
+    return parts
+
+
+def _norm_part(value: str) -> str:
+    return str(value or "").replace("\\", "/").strip().casefold()
+
+
+def _resolve_payload_target(payload: dict[str, Any], indexed_roots: list[Path]) -> tuple[Path, dict[str, Any]]:
     raw_path = str(payload.get("full_path") or "").strip()
     if not raw_path:
         raise FileNotFoundError("media_indexer_item_missing_path")
     target = Path(raw_path).expanduser().resolve()
     if target.suffix.lower() not in SUPPORTED_INDEXER_MEDIA_EXTENSIONS:
         raise ValueError("unsupported_extension")
-    if not _is_relative_to(target, indexed_root):
+    if not any(_is_relative_to(target, root) for root in indexed_roots):
         raise PermissionError("path_outside_indexed_directory")
     if not target.exists() or not target.is_file():
         raise FileNotFoundError("media_file_not_found")
