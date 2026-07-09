@@ -1044,6 +1044,7 @@ def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_pat
         "artifact_root": str(artifact_root),
         "datasource_id": "prototype_items",
         "fields": [{"id": "title", "type": "string", "label": "Title"}],
+        "user_summary": {"assumptions": ["The first data model uses fields: Title, Notes, Status"]},
     }
     preview = skill._preview_state(session=session)
 
@@ -1060,9 +1061,129 @@ def test_builder_llm_request_includes_runtime_context_and_project_prompt(tmp_pat
     assert current["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["id"] == "prototype-cards"
     assert user_payload["runtime_context"]["current_page_schema"]["widgets"][0]["inputs"]["previewKey"] == "status"
     assert user_payload["runtime_component_contracts"]["ui.list"]["inputs"]["previewKey"].startswith("Single object path")
+    form_contract = user_payload["runtime_component_contracts"]["ui.form"]["inputs"]["fields"]
+    assert "email" in form_contract["supported_field_types"]
+    assert "textarea" in form_contract["supported_field_types"]
+    assert "dateRange" in form_contract["supported_field_types"]
+    assert "multiChoice" in form_contract["supported_field_types"]
+    assert "fileUpload" in form_contract["supported_field_types"]
+    assert "ratingGrid" in form_contract["supported_field_types"]
+    assert "Choose the most semantically precise supported type" in form_contract["selection_guidance"][0]
+    assert "Refactor existing generic text fields" in form_contract["selection_guidance"][1]
+    assert "every requested user answer" in form_contract["selection_guidance"][-1]
+    assert form_contract["semantic_examples"]["convenient dates or date interval"] == "dateRange"
+    assert form_contract["semantic_examples"]["rate several factors"] == "ratingGrid or linearScale fields"
+    assert form_contract["semantic_examples"]["mark choices by days/sections/categories"] == "checkboxGrid or radioGrid"
+    schema_defs = user_payload["webui_v1_abi"]["schema_contract"]["defs"]
+    assert "formInputs" in schema_defs
+    assert "formField" in schema_defs
+    assert "formFieldType" in schema_defs
+    assert "email" in schema_defs["formFieldType"]["enum"]
+    assert "ratingGrid" in schema_defs["formFieldType"]["enum"]
     assert "Always prefer conference vocabulary" in request["system_prompt"]
+    assert "choose the most semantically precise supported formFieldType" in request["system_prompt"]
+    assert "Do not preserve an existing generic text field" in request["system_prompt"]
+    assert "data-capture requirements that need ui.form fields" in request["system_prompt"]
     assert (artifact_root / "builder_memory.md").exists()
     assert (artifact_root / "tz" / "base_tz.md").exists()
+    assert "starting point only" in user_payload["project_memory"]["memory_text"]
+    assert "not a fixed product contract" in user_payload["project_memory"]["user_summary"]["assumptions"][0]
+
+
+def test_builder_form_component_contract_validates_choice_and_grid_fields() -> None:
+    skill = _load_module()
+
+    missing_options = {
+        "id": "form_contract",
+        "widgets": [
+            {
+                "id": "form",
+                "type": "ui.form",
+                "inputs": {"fields": [{"id": "topics", "type": "multiChoice", "label": "Topics"}]},
+            }
+        ],
+    }
+    assert skill._validate_page_schema_component_contracts(missing_options)["ok"] is False
+
+    missing_grid_columns = {
+        "id": "form_contract",
+        "widgets": [
+            {
+                "id": "form",
+                "type": "ui.form",
+                "inputs": {
+                    "fields": [
+                        {
+                            "id": "session_interest",
+                            "type": "checkboxGrid",
+                            "label": "Session interest",
+                            "rows": [{"label": "Day 1", "value": "day_1"}],
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    grid_result = skill._validate_page_schema_component_contracts(missing_grid_columns)
+    assert grid_result["ok"] is False
+    assert "rows and columns" in grid_result["detail"]
+
+    valid = copy.deepcopy(missing_grid_columns)
+    valid["widgets"][0]["inputs"]["fields"][0]["columns"] = [{"label": "Urban planning", "value": "urban"}]
+    valid["widgets"][0]["inputs"]["fields"].append(
+        {
+            "id": "format",
+            "type": "radio",
+            "label": "Format",
+            "choices": [{"label": "Online", "value": "online"}],
+        }
+    )
+    assert skill._validate_page_schema_component_contracts(valid)["ok"] is True
+
+
+def test_builder_project_memory_repairs_mojibake_and_legacy_constraints(tmp_path) -> None:
+    skill = _load_module()
+
+    artifact_root = tmp_path / "prototype"
+    (artifact_root / "tz").mkdir(parents=True)
+    mojibake_fields = "РќР°Р·РІР°РЅРёРµ, Р—Р°РјРµС‚РєРё, РЎС‚Р°С‚СѓСЃ"
+    (artifact_root / "builder_memory.md").write_text(
+        f"# Memory\n- The first data model uses fields: {mojibake_fields}\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "tz" / "base_tz.md").write_text(
+        f"# Spec\n- The first data model uses fields: {mojibake_fields}\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "prompt_state.json").write_text(
+        json.dumps({"base_tz": f"The first data model uses fields: {mojibake_fields}"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    memory = skill._project_memory(
+        {
+            "artifact_root": str(artifact_root),
+            "user_summary": {"assumptions": [f"The first data model uses fields: {mojibake_fields}"]},
+        }
+    )
+
+    assert "Рќ" not in memory["memory_text"]
+    assert "Название, Заметки, Статус" in memory["memory_text"]
+    assert "not a fixed product contract" in memory["memory_text"]
+    assert "Рќ" not in memory["technical_spec_text"]
+    assert "Название, Заметки, Статус" in memory["technical_spec_text"]
+    assert "not a fixed product contract" in memory["user_summary"]["assumptions"][0]
+
+    skill._ensure_builder_project_files(artifact_root, {"title": "Prototype"})
+
+    memory_file_text = (artifact_root / "builder_memory.md").read_text(encoding="utf-8")
+    tz_file_text = (artifact_root / "tz" / "base_tz.md").read_text(encoding="utf-8")
+    state = json.loads((artifact_root / "prompt_state.json").read_text(encoding="utf-8"))
+    assert "Рќ" not in memory_file_text
+    assert "Название, Заметки, Статус" in memory_file_text
+    assert "not a fixed product contract" in tz_file_text
+    assert "Рќ" not in state["base_tz"]
+    assert "not a fixed product contract" in state["base_tz"]
 
 
 def test_builder_webui_title_uses_scenario_yaml_as_canonical_metadata(tmp_path) -> None:
