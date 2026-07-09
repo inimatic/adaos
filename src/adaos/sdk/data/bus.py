@@ -67,6 +67,24 @@ def _run_sync_handler_in_thread(topic: str) -> bool:
         return False
 
 
+def _record_yjs_plain_copy_fault(exc: BaseException, *, operation: str) -> None:
+    try:
+        from adaos.services.incident_registry import (
+            is_yjs_thread_affinity_fault,
+            record_yjs_thread_affinity_fault,
+        )
+
+        if is_yjs_thread_affinity_fault(exc):
+            record_yjs_thread_affinity_fault(
+                source="sdk.data.bus",
+                component="eventbus_plain_payload",
+                operation=operation,
+                exc=exc,
+            )
+    except Exception:
+        pass
+
+
 def _thread_safe_plain(value: Any, *, _depth: int = 0) -> Any:
     """Return a plain payload copy that can be dropped on a worker thread.
 
@@ -90,18 +108,21 @@ def _thread_safe_plain(value: Any, *, _depth: int = 0) -> Any:
             if isinstance(raw, str):
                 raw = json.loads(raw)
             return _thread_safe_plain(raw, _depth=_depth + 1)
-        except Exception:
+        except Exception as exc:
+            _record_yjs_plain_copy_fault(exc, operation="to_json")
             pass
     items = getattr(value, "items", None)
     if callable(items):
         try:
             return {str(key): _thread_safe_plain(item, _depth=_depth + 1) for key, item in items()}
-        except Exception:
+        except Exception as exc:
+            _record_yjs_plain_copy_fault(exc, operation="items")
             return {}
     if not isinstance(value, (str, bytes, bytearray)):
         try:
             return [_thread_safe_plain(item, _depth=_depth + 1) for item in value]
-        except Exception:
+        except Exception as exc:
+            _record_yjs_plain_copy_fault(exc, operation="iter")
             pass
     return repr(value)
 

@@ -19,7 +19,12 @@ from urllib.parse import urlparse
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.hub_root_protocol_store import protocol_streams_snapshot
-from adaos.services.incident_registry import incident_registry_snapshot, record_channel_incident
+from adaos.services.incident_registry import (
+    incident_registry_snapshot,
+    is_yjs_thread_affinity_fault,
+    record_channel_incident,
+    record_yjs_thread_affinity_fault,
+)
 from adaos.services.node_display import node_display_from_config, node_display_payload
 from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
@@ -7018,17 +7023,32 @@ def _as_runtime_plain(value: Any) -> Any:
             if isinstance(raw, str):
                 return json.loads(raw)
             return _as_runtime_plain(raw)
-        except Exception:
+        except Exception as exc:
+            _record_yjs_runtime_plain_fault(exc, operation="to_json")
             pass
     items = getattr(value, "items", None)
     if callable(items):
         try:
             return {key: _as_runtime_plain(nested) for key, nested in items()}
-        except Exception:
+        except Exception as exc:
+            _record_yjs_runtime_plain_fault(exc, operation="items")
             pass
     if isinstance(value, tuple):
         return [_as_runtime_plain(item) for item in value]
     return value
+
+
+def _record_yjs_runtime_plain_fault(exc: BaseException, *, operation: str) -> None:
+    try:
+        if is_yjs_thread_affinity_fault(exc):
+            record_yjs_thread_affinity_fault(
+                source="reliability.runtime",
+                component="live_yjs_materialization",
+                operation=operation,
+                exc=exc,
+            )
+    except Exception:
+        pass
 
 
 def _as_runtime_dict(value: Any) -> dict[str, Any]:
@@ -7110,7 +7130,8 @@ def _live_yjs_materialization_snapshot(webspace_id: str | None) -> dict[str, Any
             "observed_at": time.time(),
             "stale": False,
         }
-    except Exception:
+    except Exception as exc:
+        _record_yjs_runtime_plain_fault(exc, operation="live_materialization_snapshot")
         return None
 
 

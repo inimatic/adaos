@@ -126,6 +126,17 @@ def _domain_from_handler_label(label: str) -> str:
     return "core.eventbus"
 
 
+def is_yjs_thread_affinity_fault(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return (
+        "y_py::" in text
+        and ("ymap" in text or "y_map" in text or "yarray" in text or "y_array" in text)
+        and ("dropped on another thread" in text or "unsendbale" in text or "unsendable" in text)
+    )
+
+
 def _domain_from_cmdline(cmdline: str) -> str:
     text = str(cmdline or "")
     marker = "/.adaos/workspace/skills/.runtime/"
@@ -418,6 +429,14 @@ def record_slow_event_handler(
 
 
 def record_event_handler_crash(*, handler_label: str, event_type: str, exc: BaseException) -> dict[str, Any]:
+    if is_yjs_thread_affinity_fault(exc):
+        return record_yjs_thread_affinity_fault(
+            source="eventbus",
+            component="eventbus",
+            operation=event_type,
+            exc=exc,
+            evidence={"handler": handler_label, "event_type": event_type},
+        )
     domain = _domain_from_handler_label(handler_label)
     return record_incident(
         incident_class="event_handler_crash",
@@ -435,6 +454,39 @@ def record_event_handler_crash(*, handler_label: str, event_type: str, exc: Base
         },
         fingerprint_parts=("event_handler_crash", event_type, handler_label, type(exc).__name__),
         tags=("eventbus", "exception"),
+    )
+
+
+def record_yjs_thread_affinity_fault(
+    *,
+    source: str,
+    component: str = "yjs",
+    operation: str | None = None,
+    exc: BaseException | str | None = None,
+    object_type: str | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    exception_text = _redact_text(exc, limit=500) if exc is not None else None
+    operation_token = _clean_token(operation, fallback="unknown")
+    component_token = _clean_token(component, fallback="yjs")
+    source_token = _clean_token(source, fallback="runtime")
+    return record_incident(
+        incident_class="yjs_thread_affinity_fault",
+        signal="yjs_thread_affinity_fault",
+        severity="degraded",
+        domain="core.yjs",
+        component=component_token,
+        source=source_token,
+        summary="Yjs object crossed a thread boundary and state sync must be treated as degraded",
+        evidence={
+            **(evidence or {}),
+            "operation": operation_token,
+            "object_type": object_type,
+            "exception_type": type(exc).__name__ if isinstance(exc, BaseException) else None,
+            "exception": exception_text,
+        },
+        fingerprint_parts=("yjs_thread_affinity_fault", component_token, source_token, operation_token),
+        tags=("yjs", "thread-affinity", "state-sync", "degradation"),
     )
 
 
@@ -812,6 +864,7 @@ __all__ = [
     "default_incident_registry_path",
     "incident_domain_from_owner",
     "incident_registry_snapshot",
+    "is_yjs_thread_affinity_fault",
     "local_blocking_evidence",
     "load_incident_registry",
     "persist_incident_registry",
@@ -824,6 +877,7 @@ __all__ = [
     "record_member_link_stale",
     "record_runtime_api_timeout",
     "record_slow_event_handler",
+    "record_yjs_thread_affinity_fault",
     "record_yjs_pressure_incident",
     "reset_incident_registry",
 ]

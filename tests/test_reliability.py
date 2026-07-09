@@ -3198,6 +3198,85 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     assert thin_metrics["last_body_bytes"] == 0
 
 
+def test_node_reliability_summary_thin_mode_degrades_state_sync_on_yjs_thread_fault(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+    from adaos.services import incident_registry
+    from adaos.services.status import StatusRegistry
+
+    incident_registry.reset_incident_registry()
+    try:
+        incident_registry.record_yjs_thread_affinity_fault(
+            source="test",
+            component="eventbus_plain_payload",
+            operation="browser.session.changed",
+            exc=RuntimeError("y_py::y_map::YMap is unsendbale, but is dropped on another thread!"),
+        )
+
+        monkeypatch.setattr(
+            "adaos.apps.api.node_api.current_reliability_payload",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("thin summary must not build the full reliability payload")
+            ),
+        )
+        monkeypatch.setattr(
+            node_api,
+            "_thin_sidecar_runtime_fields",
+            lambda: {
+                "sidecarEnablement": {"enabled": False, "source": "role_default"},
+                "sidecarContinuity": {"currentSupport": "not_applicable"},
+                "sidecarProgress": {},
+                "routeTunnel": {},
+                "browserWsHandoffReady": False,
+                "browserYwsHandoffReady": False,
+                "browserWsHandoffState": "disabled",
+                "browserYwsHandoffState": "disabled",
+            },
+        )
+        monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
+        monkeypatch.setattr(
+            node_api,
+            "yjs_sync_runtime_snapshot",
+            lambda **_: {
+                "available": True,
+                "assessment": {"state": "nominal", "reason": ""},
+                "transport": {"server_ready": True, "active_yws_connections": 1},
+                "selected_webspace_id": "desktop",
+                "selected_webspace": {
+                    "rebuild": {"materialization": {"ready": True}},
+                    "gateway_room": {"ready": True, "open_total": 1, "last_open_at": 1783554151.0},
+                },
+            },
+        )
+        registry = StatusRegistry()
+        monkeypatch.setattr(
+            node_api,
+            "get_ctx",
+            lambda: SimpleNamespace(status_registry=registry, paths=SimpleNamespace()),
+        )
+
+        app = FastAPI()
+        app.dependency_overrides[require_token] = lambda: True
+        app.include_router(router, prefix="/api/node")
+        client = TestClient(app)
+
+        response = client.get("/api/node/reliability/summary?mode=thin&webspace_id=desktop")
+        assert response.status_code == 200
+        payload = response.json()
+
+        assert payload["runtimeFault"]["state"] == "degraded"
+        assert payload["stateSync"]["transportState"] == "degraded"
+        assert payload["stateSync"]["semanticState"] == "degraded"
+        assert payload["stateSync"]["freshnessState"] == "stale"
+        assert "yjs_thread_affinity_fault" in payload["stateSync"]["blockers"]
+        assert payload["hubBrowserQuality"]["qualityState"] == "degraded"
+        assert payload["hubBrowserQuality"]["gates"]["runtimeFault"]["state"] == "degraded"
+        assert payload["statusPlane"]["diagnostics"]["derivedCardCount"] == 1
+        assert payload["statusPlane"]["cards"][0]["incidentId"]
+    finally:
+        incident_registry.reset_incident_registry()
+
+
 def test_node_reliability_summary_thin_mode_keeps_member_runtime_route_ready(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.services.status import StatusRegistry

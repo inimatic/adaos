@@ -118,6 +118,24 @@ def test_browser_and_member_helpers_use_expected_domains() -> None:
     assert member["severity"] == "degraded"
 
 
+def test_yjs_thread_affinity_fault_is_degraded_and_specialized() -> None:
+    exc = RuntimeError("y_py::y_map::YMap is unsendbale, but is dropped on another thread!")
+
+    recorded = incidents.record_event_handler_crash(
+        handler_label="adaos.sdk.data.bus._adapt skill=infrastate_skill topic=browser.session.changed",
+        event_type="browser.session.changed",
+        exc=exc,
+    )
+
+    snapshot = incidents.incident_registry_snapshot()
+    item = snapshot["items"][0]
+    assert recorded["class"] == "yjs_thread_affinity_fault"
+    assert item["class"] == "yjs_thread_affinity_fault"
+    assert item["severity"] == "degraded"
+    assert item["domain"] == "core.yjs"
+    assert "state-sync" in item["tags"]
+
+
 def test_process_io_delta_sample_reports_deltas(monkeypatch) -> None:
     rows = iter(
         [

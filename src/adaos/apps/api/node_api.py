@@ -103,6 +103,11 @@ from adaos.services.system_model.service import (
 )
 from adaos.services.system_model.projections import compact_overview_projection_dict
 from adaos.services.status.guard_cards import guard_status_cards_from_runtime
+from adaos.services.incident_registry import (
+    incident_registry_snapshot,
+    is_yjs_thread_affinity_fault,
+    record_yjs_thread_affinity_fault,
+)
 from adaos.services.projection_demand import (
     delete_client_subscription_record,
     projection_demand_snapshot,
@@ -218,11 +223,13 @@ def _clone_json_like(value: Any) -> Any:
             if isinstance(raw, str):
                 return json.loads(raw)
             return json.loads(json.dumps(raw))
-        except Exception:
+        except Exception as exc:
+            _record_yjs_clone_fault(exc, operation="to_json")
             pass
     try:
         return json.loads(json.dumps(value))
-    except Exception:
+    except Exception as exc:
+        _record_yjs_clone_fault(exc, operation="json_clone")
         if value is None:
             return None
         if isinstance(value, dict):
@@ -237,14 +244,29 @@ def _clone_json_like(value: Any) -> Any:
         if callable(items):
             try:
                 return {str(k): _clone_json_like(v) for k, v in items() if str(k)}
-            except Exception:
+            except Exception as exc:
+                _record_yjs_clone_fault(exc, operation="items")
                 return {}
         if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, bytearray)):
             try:
                 return [_clone_json_like(v) for v in value]
-            except Exception:
+            except Exception as exc:
+                _record_yjs_clone_fault(exc, operation="iter")
                 return []
         return str(value)
+
+
+def _record_yjs_clone_fault(exc: BaseException, *, operation: str) -> None:
+    try:
+        if is_yjs_thread_affinity_fault(exc):
+            record_yjs_thread_affinity_fault(
+                source="api.node.reliability.summary",
+                component="json_clone",
+                operation=operation,
+                exc=exc,
+            )
+    except Exception:
+        pass
 
 
 def _coerce_node_webspace_id(value: Any = None) -> str:
@@ -963,6 +985,16 @@ def _thin_runtime_reliability_payload(
     webspace_id: str | None = None,
 ) -> dict[str, Any]:
     resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+    incidents = _current_incident_registry_snapshot()
+    runtime_fault = _runtime_fault_from_incidents(incidents)
+    if str(runtime_fault.get("state") or "").strip().lower() == "degraded":
+        status_registry = _with_derived_status_cards(
+            status_registry,
+            guard_status_cards_from_runtime(
+                {"incident_registry": incidents},
+                webspace_id=resolved_webspace_id,
+            ),
+        )
     status_plane = _compact_status_registry_payload(
         status_registry,
         webspace_id=resolved_webspace_id,
@@ -1070,6 +1102,7 @@ def _thin_runtime_reliability_payload(
         "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
         "blockers": _coerce_list(state_sync.get("blockers")),
     }
+    compact_state_sync = _apply_runtime_fault_to_state_sync(compact_state_sync, runtime_fault)
     compact_webrtc_yjs = _compact_webrtc_yjs_runtime(sync_runtime)
     return {
         "ok": True,
@@ -1083,11 +1116,13 @@ def _thin_runtime_reliability_payload(
         **sidecar_fields,
         "connectivity": connectivity,
         "stateSync": compact_state_sync,
+        "runtimeFault": runtime_fault,
         "webrtcYjs": compact_webrtc_yjs,
         "hubBrowserQuality": _compact_hub_browser_quality(
             connectivity=connectivity,
             state_sync=compact_state_sync,
             webrtc_yjs=compact_webrtc_yjs,
+            runtime_fault=runtime_fault,
         ),
         "detailsRef": {
             "summaryFull": "/api/node/reliability/summary?mode=full",
@@ -1155,6 +1190,99 @@ def _compact_webrtc_yjs_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _current_incident_registry_snapshot() -> dict[str, Any]:
+    try:
+        return incident_registry_snapshot(limit=50, include_evidence=False)
+    except Exception:
+        return {
+            "schema": "adaos.incident_registry.v1",
+            "available": False,
+            "items": [],
+            "active_total": 0,
+        }
+
+
+def _runtime_fault_from_incidents(incidents: dict[str, Any] | None) -> dict[str, Any]:
+    registry = _coerce_dict(incidents)
+    items = [_coerce_dict(item) for item in _coerce_list(registry.get("items"))]
+    selected = [
+        item
+        for item in items
+        if bool(item.get("active"))
+        and (
+            str(item.get("class") or "").strip() == "yjs_thread_affinity_fault"
+            or str(item.get("signal") or "").strip() == "yjs_thread_affinity_fault"
+        )
+    ]
+    if not selected:
+        return {
+            "state": "ready",
+            "reason": None,
+            "blockers": [],
+            "incidents": [],
+        }
+    selected.sort(key=lambda item: float(item.get("last_seen_at") or 0.0), reverse=True)
+    top = selected[0]
+    severity = str(top.get("severity") or "degraded").strip().lower()
+    state = "degraded" if severity in {"critical", "degraded", "high"} else "warning"
+    blockers = sorted(
+        {
+            "yjs_thread_affinity_fault",
+            *(
+                str(item.get("signal") or "").strip()
+                for item in selected
+                if str(item.get("signal") or "").strip()
+            ),
+        }
+    )
+    return {
+        "state": state,
+        "reason": str(top.get("summary") or top.get("signal") or "yjs_thread_affinity_fault").strip()
+        or "yjs_thread_affinity_fault",
+        "blockers": blockers,
+        "incidentId": str(top.get("id") or "").strip() or None,
+        "severity": severity,
+        "lastSeenAgoS": top.get("last_seen_ago_s"),
+        "occurrenceCount": int(top.get("occurrence_count") or 0),
+        "incidents": [
+            {
+                "id": str(item.get("id") or "").strip() or None,
+                "severity": str(item.get("severity") or "").strip() or None,
+                "summary": str(item.get("summary") or "").strip() or None,
+                "lastSeenAgoS": item.get("last_seen_ago_s"),
+            }
+            for item in selected[:3]
+        ],
+    }
+
+
+def _apply_runtime_fault_to_state_sync(
+    state_sync: dict[str, Any],
+    runtime_fault: dict[str, Any] | None,
+) -> dict[str, Any]:
+    fault = _coerce_dict(runtime_fault)
+    if str(fault.get("state") or "").strip().lower() != "degraded":
+        return state_sync
+    updated = dict(state_sync)
+    blockers = [
+        str(item).strip()
+        for item in _coerce_list(updated.get("blockers"))
+        if str(item).strip()
+    ]
+    for item in _coerce_list(fault.get("blockers")) or ["yjs_thread_affinity_fault"]:
+        token = str(item).strip()
+        if token and token not in blockers:
+            blockers.append(token)
+    transport = str(updated.get("transportState") or "").strip().lower()
+    if transport not in {"disconnected", "not_applicable"}:
+        updated["transportState"] = "degraded"
+    updated["semanticState"] = "degraded"
+    updated["freshnessState"] = "stale"
+    updated["fallbackMode"] = "hard_degraded_recovery"
+    updated["blockers"] = blockers
+    return updated
+
+
 def _compact_hub_browser_quality(
     *,
     connectivity: dict[str, Any],
@@ -1162,6 +1290,7 @@ def _compact_hub_browser_quality(
     webrtc_yjs: dict[str, Any],
     yjs_pressure: dict[str, Any] | None = None,
     eventbus_backlog: dict[str, Any] | None = None,
+    runtime_fault: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     def _text(payload: dict[str, Any], *keys: str, default: str = "unknown") -> str:
         for key in keys:
@@ -1259,10 +1388,12 @@ def _compact_hub_browser_quality(
     )
     pressure = _coerce_dict(yjs_pressure)
     backlog = _coerce_dict(eventbus_backlog)
+    fault = _coerce_dict(runtime_fault)
     route_state = _route_state(browser_route)
     sync_state = _sync_state(state_sync)
     pressure_state = _pressure_state(pressure)
     eventbus_state = _eventbus_state(backlog)
+    fault_state = str(fault.get("state") or "ready").strip().lower() or "ready"
     webrtc_state = _text(webrtc_yjs, "state", default="unknown").strip().lower()
     webrtc_enabled = bool(webrtc_yjs.get("enabled"))
     webrtc_gate_state = "ready" if webrtc_state == "ready" else "fallback"
@@ -1328,6 +1459,18 @@ def _compact_hub_browser_quality(
                 "pendingTasks": int(backlog.get("pendingTasks") or backlog.get("pending_tasks") or 0),
                 "boundedQueueTotal": int(backlog.get("boundedQueueTotal") or backlog.get("bounded_queue_total") or 0),
                 "boundedQueuePeak": int(backlog.get("boundedQueuePeak") or backlog.get("bounded_queue_peak") or 0),
+            },
+        ),
+        "runtimeFault": _gate(
+            state=fault_state if fault_state in {"ready", "warning", "degraded"} else "unknown",
+            required=False,
+            reason=str(fault.get("reason") or "").strip() or None,
+            blockers=_coerce_list(fault.get("blockers")),
+            evidence={
+                "incidentId": str(fault.get("incidentId") or "").strip() or None,
+                "severity": str(fault.get("severity") or "").strip() or None,
+                "lastSeenAgoS": fault.get("lastSeenAgoS"),
+                "occurrenceCount": int(fault.get("occurrenceCount") or 0),
             },
         ),
     }
@@ -1702,6 +1845,13 @@ def _compact_runtime_reliability_payload(
     eventbus_backlog = _coerce_dict(runtime.get("eventbus_backlog"))
     webio_control_items = _coerce_list(eventbus_backlog.get("top_webio_stream_controls"))
     compact_webrtc_yjs = _compact_webrtc_yjs_runtime(runtime)
+    incidents = _coerce_dict(runtime.get("incident_registry"))
+    if not incidents:
+        incidents = _current_incident_registry_snapshot()
+    runtime_fault = _runtime_fault_from_incidents(incidents)
+    runtime_for_cards = dict(runtime)
+    if str(runtime_fault.get("state") or "").strip().lower() == "degraded":
+        runtime_for_cards["incident_registry"] = incidents
     resolved_webspace_id = _coerce_node_webspace_id(
         webspace_id
         or runtime.get("webspace_id")
@@ -1709,7 +1859,7 @@ def _compact_runtime_reliability_payload(
     )
     status_snapshot = _with_derived_status_cards(
         status_registry or _current_status_registry_snapshot(webspace_id=resolved_webspace_id),
-        guard_status_cards_from_runtime(runtime, webspace_id=resolved_webspace_id),
+        guard_status_cards_from_runtime(runtime_for_cards, webspace_id=resolved_webspace_id),
     )
     compact_state_sync = {
         "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
@@ -1726,6 +1876,7 @@ def _compact_runtime_reliability_payload(
         "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
         "blockers": _coerce_list(state_sync.get("blockers")),
     }
+    compact_state_sync = _apply_runtime_fault_to_state_sync(compact_state_sync, runtime_fault)
     compact_connectivity = {
         "requiredUpstreamLink": {
             "kind": str(required_upstream_link.get("kind") or "").strip() or None,
@@ -1763,6 +1914,7 @@ def _compact_runtime_reliability_payload(
         **sidecar_fields,
         "connectivity": compact_connectivity,
         "stateSync": compact_state_sync,
+        "runtimeFault": runtime_fault,
         "memberAvailability": _compact_member_availability(hub_member_connection_state),
         "webrtcYjs": compact_webrtc_yjs,
         "yjsPressure": {
@@ -1815,6 +1967,7 @@ def _compact_runtime_reliability_payload(
             webrtc_yjs=compact_webrtc_yjs,
             yjs_pressure=yjs_pressure,
             eventbus_backlog=eventbus_backlog,
+            runtime_fault=runtime_fault,
         ),
         "webioStreamGuard": {
             "available": bool(webio_stream_guard.get("available")),
