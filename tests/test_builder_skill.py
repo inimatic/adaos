@@ -557,6 +557,26 @@ def test_update_current_scenario_prefers_llm_for_ui_changes_when_enabled(monkeyp
     assert result["ui_revision"]["revision"] == "002"
     assert len(llm_calls) == 1
 
+    result = skill.update_current_scenario(
+        "apply review comments",
+        webspace_id="builder-swap-no-llm",
+        _meta={
+            "prototype_review_notes": {
+                "schema": "adaos.prototype_review_notes.v1",
+                "source_webspace_id": "builder-swap-no-llm",
+                "dev_webspace_id": "builder-swap-no-llm-dev",
+                "revision_key": "todo:002",
+                "notes": 'Prototype review notes for todo:002:\n- field field:prototype-form:title ("Title"): Move this field to the top.',
+            }
+        },
+    )
+
+    assert result["patch"]["operation"] == "llm_webui_transform"
+    assert len(llm_calls) == 2
+    assert "apply review comments" in llm_calls[-1]["instruction"]
+    assert "Prototype review notes from the current dev preview" in llm_calls[-1]["instruction"]
+    assert "Move this field to the top" in llm_calls[-1]["instruction"]
+
 
 def test_update_current_scenario_recovers_artifact_root_for_ui_revisions(monkeypatch, tmp_path) -> None:
     skill = _load_module()

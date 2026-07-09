@@ -3202,6 +3202,58 @@ def _repair_text_tree(value: Any) -> Any:
     return value
 
 
+def _prototype_review_notes_from_meta(_meta: Mapping[str, Any] | None) -> str:
+    if not isinstance(_meta, Mapping):
+        return ""
+    raw = _meta.get("prototype_review_notes")
+    if raw is None:
+        raw = _meta.get("prototypeReviewNotes")
+    if isinstance(raw, str):
+        return _repair_mojibake_text(raw).strip()[:12000]
+    if not isinstance(raw, Mapping):
+        return ""
+    notes = _repair_mojibake_text(raw.get("notes")).strip()
+    if notes:
+        return notes[:12000]
+    comments = raw.get("comments")
+    if not isinstance(comments, list):
+        return ""
+    lines: list[str] = []
+    revision = _repair_mojibake_text(raw.get("revision_key")).strip()
+    if revision:
+        lines.append(f"Prototype review notes for {revision}:")
+    for item in comments:
+        if not isinstance(item, Mapping):
+            continue
+        text = _repair_mojibake_text(item.get("text")).strip()
+        if not text:
+            continue
+        element = item.get("element")
+        if isinstance(element, Mapping):
+            ref = _repair_mojibake_text(element.get("ref")).strip()
+            kind = _repair_mojibake_text(element.get("kind")).strip()
+            label = _repair_mojibake_text(element.get("label")).strip()
+            target = " ".join(part for part in (kind, ref, f'"{label}"' if label else "") if part).strip()
+        else:
+            target = ""
+        lines.append(f"- {target}: {text}" if target else f"- {text}")
+    return "\n".join(lines).strip()[:12000]
+
+
+def _instruction_with_prototype_review_notes(instruction: Any, _meta: Mapping[str, Any] | None) -> str:
+    text = _repair_mojibake_text(instruction).strip()
+    notes = _prototype_review_notes_from_meta(_meta)
+    if not notes:
+        return text
+    if notes in text:
+        return text
+    return (
+        f"{text}\n\n"
+        "Prototype review notes from the current dev preview. Treat these as concrete feedback for the next UI revision:\n"
+        f"{notes}"
+    ).strip()
+
+
 def _text_contains_any(text: str, tokens: Iterable[str]) -> bool:
     token_list = [str(token or "").lower() for token in tokens if str(token or "")]
     if not token_list:
@@ -6837,7 +6889,7 @@ def update_current_scenario(
             "topic": topic,
             "dialog": _dialog_state(ws, topic_ref=topic),
         }
-    text = _repair_mojibake_text(instruction).strip()
+    text = _instruction_with_prototype_review_notes(instruction, _meta)
     lowered = text.lower()
     patch = {
         "id": f"patch_{_hash_suffix(session['id'] + text + str(_now()))}",
