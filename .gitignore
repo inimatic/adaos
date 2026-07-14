@@ -9,6 +9,7 @@ adaos.egg-info/
 .coverage
 coverage.xml
 .codex-tmp/
+.codex-*.log*
 /.adaos/
 /.adaos_*/
 .adaos_1
