@@ -1,477 +1,508 @@
-# event management
+# Event Management
 
-# NATS на root-server
+This document is the high-level event-management primer for AdaOS.
 
-NATS на **root-server** —это «магистраль» управления и обмена событиями между всеми хабами/агентами/сервисами AdaOS.
+It describes how services, skills, scenarios, browser runtimes, projection
+dispatchers, and operational surfaces should use events. It intentionally does
+not duplicate the full projection/Yjs architecture or its delivery roadmap.
 
-* **Единый шиной слой** для всего проекта: pub/sub + request/reply для команд, событий и RPC между сервисами (API, LLM-NLU, Telegram I/O, skills).
-* **Федерация хабов**: хабы подключаются как **leafnode** к root-кластеру → локально работают автономно, а при связи — синхронизируются через root.
-* **Изоляция и безопасность**: nkeys/accounts, права на **subjects** по ролям (owner/hub/member), TLS/mTLS — удобно совместить с вашей PKI.
-* **Надёжность через JetStream**: at-least-once доставка, персистентные стримы, **replay**, ретраи с backoff; можно организовать DLQ-паттерн.
-* **Масштабирование**: **queue groups** для горизонтали воркеров (STT/TTS, NLU, интеграции), естественный backpressure.
-* **Наблюдаемость**: varz/connz/routez + метрики Prometheus (у вас уже заведены счётчики tg_updates_total и пр.) для мониторинга трафика и лагов.
-* **Контрольный «контур»**: быстрое, лёгкое и дешёвое по ресурсам ядро управления (в отличие от тяжёлых очередей/логов), идеально для команд/телеметрии.
-* **Кросс-хаб маршрутизация**: root знает, где какой хаб/агент, и умеет адресовать сообщения по схемам subjects.
+Authoritative companion documents:
 
-минимальная схема топиков (пример):
+- [Operational Event Model](../architecture/operational-event-model.md):
+  target event taxonomy, projection demand, lifecycle, node scope, platform
+  emitters, and Yjs materialization rules.
+- [Operational Event Model Roadmap](../architecture/operational-event-model-roadmap.md):
+  master implementation order for event, projection, browser/runtime, and
+  platform-emitter work.
+- [Operational Event Model Reference Plan](../architecture/operational-event-model-reference-plan.md):
+  coverage gates and review checklist for implementation slices.
+- [Projection Subscription Roadmap](../architecture/projection-subscription-roadmap.md):
+  detailed client subscription and projection ABI checklist.
+- [Realtime Reliability Roadmap](../architecture/realtime-reliability-roadmap.md):
+  transport and ordering prerequisites.
 
-* `ada.root.*` — системные события/регистрация/пейринг
-* `ada.hub.{hubId}.>` — всё локальное хаба
-* `ada.agent.{agentId}.cmd` / `.evt` — команды и события агента
-* `ada.skill.{skill}.{evt}` — события навыков
-* `ada.io.tg.*` — Telegram I/O
-* `telemetry.*` — метрики/логи
+## Current Implementation Baseline
 
-где держать NATS:
+AdaOS currently has a local runtime event foundation:
 
-* **root**: кластер NATS (+ JetStream) как центральный брокер и точка федерации.
-* **hub**: опционально локальный NATS, подключённый leafnode-ом к root, чтобы работать офлайн и буферизовать события.
+- `src/adaos/domain/types.py` defines the legacy `Event(type, payload, source,
+  ts)` record.
+- `src/adaos/domain/event_envelope.py` defines the shared operational event
+  envelope compatibility layer.
+- `src/adaos/services/eventbus.py` implements `LocalEventBus` with prefix
+  subscription, async handler scheduling, bounded hot-topic queues,
+  supersede/drop counters, slow-handler logging, crash incident reporting, and
+  backlog snapshots.
+- `src/adaos/sdk/data/events.py` exposes `adaos.sdk.data.events.publish()`,
+  which enriches payloads with `_meta.event`.
+- `src/adaos/sdk/status.py` publishes status-card events through the same bus.
+- Tests cover legacy event normalization, nested `_meta.event` metadata,
+  payload enrichment, generated event ids, and eventbus `emit()` metadata
+  enrichment.
 
+This means the system already has an MVP-compatible event envelope and a
+bounded local bus. The remaining work is broader adoption and consolidation,
+not inventing a second event system.
 
-# Скелет маршрутизации для подсети AdaOS
+## Scope
 
-Далее описание с ролями hub/member, центром интерпретации, резолвером и сценариями
+Event management covers:
 
-## ядро: модель событий и шагов
+- service-to-service runtime notifications
+- skill/core interaction
+- scenario triggers and effects
+- platform operational diagnostics
+- status-card and notification updates
+- projection invalidation and lifecycle
+- NLU/Builder/Root MCP audit and repair signals where event semantics are
+  useful
+- eventual inter-node or root-mediated transport
 
-```yaml
-## inbound event (из hub/member/browser-io)
-type: chat.input|voice.input|action.input|system.signal
-source: agent://member/<id>|agent://hub/<id>|agent://browser/<id>
-payload:
-  raw: "...",  # текст/аудио/кнопка
-  modality: text|voice|click|sensor
-ctx:
-  user_id: ...
-  session_id: ...
-  policies: [low-latency, private, low-cost]   # подсказки планировщику
+Event management does not cover:
+
+- browser projection payload shape in detail
+- Yjs materialization rules
+- projection subscription ABI details
+- Root MCP request/response contracts
+- durable conversation history
+- arbitrary workflow orchestration DSLs
+
+Those topics are owned by the companion architecture documents listed above.
+
+## Design Principles
+
+1. Events are facts or requests, not shared mutable state.
+2. Domain events update runtime memory first; Yjs writes happen only through
+   demanded, fingerprinted projections.
+3. The local bus is the current runtime substrate; transport remains
+   pluggable.
+4. Event producers own event type and payload semantics.
+5. Core owns envelope normalization, trace/scope propagation, dispatcher input
+   shape, and platform-level guardrails.
+6. Consumers must be idempotent where delivery can be repeated.
+7. High-rate topics must be bounded, coalesced, or superseded.
+8. Events must carry enough metadata to be traceable without leaking secrets.
+9. Event names must describe stable runtime contracts, not temporary code
+   locations.
+10. State-changing workflows need explicit approval/policy gates outside the
+    event bus.
+
+## Event Envelope
+
+AdaOS supports legacy events:
+
+```json
+{
+  "type": "node.status",
+  "source": "runtime",
+  "ts": 20.0,
+  "payload": {
+    "state": "ready"
+  }
+}
 ```
 
-```yaml
-## результат интерпретации (центр интерпретации в подсети)
-intent:
-  name: media.find_and_show
-  slots: { title: "Inception" }
-  confidence: 0.84
-directives:
-  addressed_skill: null | skill://member/<id>/media.search   # «адресный навык»
-  prefer_agent: hub|member:<id>|any                          # «активный у меня»
-  plan_hint: [find, stream, display]                         # грубая декомпозиция
+The preferred operational envelope adds event metadata under `_meta.event` in
+the payload:
+
+```json
+{
+  "type": "node.status",
+  "source": "runtime",
+  "ts": 20.0,
+  "payload": {
+    "state": "ready",
+    "_meta": {
+      "event": {
+        "event_id": "evt-demo-1",
+        "trace_id": "trace-demo-1",
+        "source_authority": "platform",
+        "actor": {"kind": "system"},
+        "scope": {"webspace_id": "desktop", "node_id": "node-a"},
+        "schema": "node.status",
+        "version": 1,
+        "priority": "normal"
+      }
+    }
+  }
+}
 ```
 
-```yaml
-## план к выполнению
-plan:
-  steps:
-    - id: find
-      need: capability://media.search
-    - id: stream
-      need: capability://media.playback
-      depends_on: [find]
-    - id: display
-      need: capability://ui.render.video
-      depends_on: [stream]
-  constraints:
-    policies: [low-latency]
-    data_residency: local|cloud-ok
-```
+The shared ABI is `adaos.operational-event-envelope.v1`.
 
-## реестр ресурсов и доступностей
+Required base fields:
 
-каждый агент (hub/member/browser-io) публикует «манифест возможностей» и поддерживает heartbeat:
+- `type`
+- `source`
+- `ts`
+- `payload`
 
-```yaml
-agent: agent://member/plex1
-kind: member
-prio_base: 70                  # статический приоритет
-capabilities:
-  - id: capability://media.search
-    prio: 85
-    cost: medium
-    probe: GET /health/search  # URL или локальный чек
-  - id: capability://media.playback
-    prio: 90
-    outputs: [hls, dash]
-    probe: GET /health/playback
-availability:
-  status: up|degraded|down
-  ttl: 10s                     # lease/обновление статуса
-telemetry:
-  load: 0.42
-  rtt_to:                      # сетевые латентности внутри подсети
-    hub: 12ms
-    browser: 25ms
-```
+Preferred metadata fields:
 
-browser-io тоже публикует приёмники:
+- `event_id`
+- `source_authority`
+- `actor`
+- `scope`
+- `trace_id`
+- `cause_event_id`
+- `schema`
+- `version`
+- `priority`
 
-```yaml
-agent: agent://browser/abc
-kind: browser
-capabilities:
-  - id: capability://ui.render.video
-    prio: 95
-    inputs: [hls, dash, mp4]
-    probe: ping (ws)
-```
+Use `normalize_event_envelope()` before routing event data into dispatchers,
+diagnostics, or policy-aware logic. Use `enrich_event_payload()` or
+`adaos.sdk.data.events.publish()` when producing events.
 
-## резолвер: как выбирается маршрут
+## Naming
 
-1. матчинг: для каждого `plan.steps[*].need` выбираем все агенты с такой способностью и `availability.status==up`.
-2. скоринг кандидатов:
+Event names are dot-separated topics.
 
-```
-score = w_prio*cap.prio
-      + w_base*agent.prio_base
-      - w_load*agent.load
-      - w_rtt*latency_to_adjacent_steps
-      - w_cost*cap.cost
-      + w_policy*policy_fit
-      + w_addressed*1(if addressed_skill matches)
-```
+Recommended patterns:
 
-3. ограничения: форматы io (hls/dash), права/политики, data_residency.
-4. строим цепочку (DAG) с учётом совместимости входов/выходов.
-5. резервирование ресурсов (lease на шаг), запуск, наблюдение, автоперестроение при деградации.
+- facts: `namespace.entity.changed`, `namespace.entity.created`,
+  `namespace.entity.deleted`, `namespace.action.completed`
+- requests: `namespace.action.requested`
+- lifecycle: `namespace.lifecycle.started`, `namespace.lifecycle.ready`,
+  `namespace.lifecycle.stopped`
+- diagnostics: `namespace.diagnostics.changed`, `namespace.failure.recorded`
+- projection lifecycle: `adaos.projection.lifecycle.changed`
 
-## четыре сценария исполнения
+Current examples in code include:
 
-## 1) всё исполняется на hub (сам)
+- `browser.session.changed`
+- `subnet.member.snapshot.changed`
+- `adaos.status.card.changed`
+- `adaos.status.card.single`
+- `adaos.status.card.batch`
+- `adaos.projection.lifecycle.changed`
+- `webio.stream.snapshot.requested`
+- `webio.stream.subscription.changed`
+- `webio.yjs.snapshot.requested`
+- `webio.yjs.subscription.changed`
+- `io.out.stream.publish`
+- `builder.workbench.ensure_requested`
+- `builder.preview.selected`
 
-* когда hub имеет обе способности (например, `tts` + `ui.render.audio`) и политика `private/local`.
-* план:
+Avoid names that encode implementation details, file names, temporary UI
+component names, or transport internals unless the event is explicitly a
+transport diagnostic.
 
-  * `interpret` (hub)
-  * `execute` (hub)
-  * `render` (hub → локальный speaker/browser-io на hub)
-* правило сценария:
+## Event Categories
 
-```yaml
-policy.pin:
-  prefer_agent: hub
-  fallback: member:any
-```
+### Domain Events
 
-## 2) всё исполняется на member (сам)
+Domain events are facts about runtime or product state:
 
-* «активный навык в member» или адресный навык:
+- skill installed
+- scenario selected
+- browser session changed
+- subnet member snapshot changed
+- status card changed
 
-```yaml
-directives:
-  addressed_skill: skill://member/m1/media.search
-policy.pin:
-  prefer_agent: member:m1
-  fallback: hub
-```
+They should not directly write large browser-visible state. They should update
+runtime memory and trigger demanded projection refresh where appropriate.
 
-* member делает `interpret` (если у него локальный NLU) ИЛИ отправляет на «центр интерпретации» (hub), но `execute`/`render` остаются на member (например, проигрывание на его локальном дисплее/динамике).
+### Interaction Events
 
-## 3) input на hub, исполнение на member
+Interaction events coordinate core services, skills, and scenarios:
 
-* типичный случай: голос пришёл на hub-микрофон, а играть нужно на телевизоре-member.
-* план:
+- a runtime surface should refresh
+- a Builder workbench projection is needed
+- a skill should warm or cool a projection family
+- a repair or pending-action path needs attention
 
-  * `interpret` (hub)
-  * `find` (member: сервер медиа)
-  * `stream` (member)
-  * `display` (browser-io или телевизор-member)
-* резолвер сопоставит форматы и выберет member с лучшим `media.playback`. Передача управления/ссылки (HLS) в `ui.render.video` на browser-io.
+These events are internal contracts. They may later produce browser-visible
+projections, but they are not themselves UI payloads.
 
-## 4) «всё на member (сам)» c подсказкой сценария
+### UI Intent Events
 
-* сценарий задаёт приоритетную привязку:
+UI intent events represent what a browser or runtime shell asks to show or do:
 
-```yaml
-steps:
-  - id: find
-    need: capability://media.search
-    prefer: member:any(tag:server)   # например, server-тег
-  - id: display
-    need: capability://ui.render.video
-    prefer: browser:current          # «этот браузер»
-```
+- open a modal
+- select a panel
+- request a snapshot
+- change a stream subscription
 
-## пример: «найди фильм <Название> и покажи в браузере»
+The Operational Event Model owns the detailed projection-demand rules. This
+document only states the boundary: UI intent may change demand; it must not
+become an unbounded stream of full projection writes.
 
-вход: текст из browser-io → hub
+### Platform Events
 
-1. hub → interpret → `media.find_and_show(title=...)`
-2. план: `find` → `stream` → `display`
-3. резолвер:
+Platform events are emitted by AdaOS itself:
 
-   * `find`: выбирает `member:plex1 (media.search, prio=85)`
-   * `stream`: тот же `plex1 (media.playback, hls)`
-   * `display`: `browser:current (ui.render.video, inputs: hls)`
-4. исполнение:
+- status cards
+- notifications
+- runtime diagnostics
+- projection lifecycle changes
+- transport degradation
+- materialization failures
 
-   * `plex1` отдаёт HLS URL (подпись/ACL через hub)
-   * hub передаёт `display.play({url, title, poster})` в browser-io
-5. мониторинг: если `browser-io` отвалился, резолвер предлагает альтернативу (другой браузер/каст на TV-member).
+These events should not be hidden inside one skill payload. They belong to the
+platform plane and can be projected to UI surfaces when demanded.
 
-## как ресурсы «публикуются» и проверяются
+## Local Event Bus Semantics
 
-* **объявление** (при старте/изменении): POST на hub `/registry/announce` с манифестом.
-* **heartbeat** каждые 5–10s, включает краткую телеметрию и результаты probe.
-* **lease** на шаг: hub выдаёт `exec_token(step_id, ttl)`.
-* **приоритеты**:
+`LocalEventBus` is the current in-process implementation.
 
-  * статический (`prio_base`, `cap.prio`) — из конфигурации/сценария.
-  * динамический — коэффициенты от `load`, `rtt`, `battery`, `metered_network`.
+It supports:
 
-## политика и директивы сценариев (минимальный DSL)
+- `subscribe(type_prefix, handler)`
+- `publish(Event(...))`
+- prefix matching
+- async and sync handlers
+- thread-safe scheduling onto the owning event loop
+- bounded queues for selected high-rate topics
+- superseding stale queued work for selected topic/key combinations
+- slow handler and crash incident reporting
+- backlog snapshots for diagnostics
 
-```yaml
-scenario: media_server
-defaults:
-  policies: [low-latency]
-  data_residency: local
-routing:
-  prefer:
-    media.search:  tag:server
-    media.playback: tag:server
-    ui.render.video: browser:current
-  forbid:
-    media.playback: network:metered   # не стримить по дорогому каналу
-overrides:
-  # адресные вызовы
-  - when: { addressed_skill: true }
-    action: pin_to_addressed
-  # «активный навык тут»
-  - when: { prefer_agent: member:self }
-    action: pin_if_available
-```
+Default bounded topics include stream/Yjs control events, stream publishes,
+browser session changes, status-card changes, projection lifecycle changes, and
+subnet member snapshot changes.
 
-## интерфейсы ввода/вывода (io contracts)
+High-rate producers should prefer events that can be coalesced by key:
 
-* `ui.render.video.display.play({url, title, poster}) → ack`
-* `media.search.find({title}) → {items:[{id, url, hls, meta}]}`
-* `media.playback.stream({id|url, format?}) → {hls|dash|mp4}`
+- webspace id
+- node id
+- projection key
+- card id
+- receiver id
+- stream id
+- source
+- parameters fingerprint
 
-совместимость проверяется до запуска шага: `producer.outputs ∩ consumer.inputs ≠ ∅`.
+## Publishing Events
 
-## отказоустойчивость и перезапланирование
-
-* если probe падает или step не стартует за `startup_sla`, резолвер:
-
-  1. снимает lease,
-  2. берёт следующий кандидат по `score`,
-  3. публикует `route.changed` в сессию,
-  4. при полной недоступности — graceful degrade (только «find», показать постер и трейлер из web).
-
-## безопасность и адресация
-
-* все шаги подписаны `exec_token` (scope: step/ttl/slots).
-* «адресный навык» допускается только из сценария/ролей (`member` должен доверять `hub`).
-* доступ к потокам — через временные URL (signed) либо через прокси hub.
-
-## минимальный алгоритм резолвера (псевдокод)
+Preferred SDK path:
 
 ```python
-def resolve(plan, registry, ctx):
-    bindings = {}
-    for step in topo_sort(plan.steps):
-        candidates = registry.query(step.need, status="up")
-        if hint := plan.prefer.get(step.need):
-            candidates = prefer(candidates, hint)
-        scored = [(c, score(c, step, bindings, ctx)) for c in candidates]
-        best = pick_best(scored, constraints=compat_with_neighbors(step, bindings))
-        lease(best, step)
-        bindings[step.id] = best
-    return bindings
+from adaos.sdk.data.events import publish
+
+publish(
+    "demo.event",
+    {"value": 1},
+    source="skill.demo",
+    source_authority="skill",
+    scope={"webspace_id": "desktop"},
+    schema="demo.event",
+    version=1,
+    generate_event_id=True,
+)
 ```
 
-## первые шаги
+Service-level code may use `adaos.services.eventbus.emit()` when it already has
+the bus instance:
 
-* формат манифеста capabilities/availability как выше (YAML/JSON).
-* REST/ws на hub: `/registry/announce`, `/registry/heartbeat`, `/resolve`, `/exec`.
-* резолвер с простым скорингом и совместимостью форматов.
-* DSL сценариев: `routing.prefer/forbid/overrides`, `policies`, `data_residency`.
-* три готовых playbook:
+```python
+from adaos.services.eventbus import emit
 
-  1. **all-on-hub**, 2) **all-on-member**, 3) **hub-input→member-exec→browser-display**.
+emit(
+    bus,
+    "demo.event",
+    {"value": 1},
+    "service.demo",
+    source_authority="platform",
+    scope={"webspace_id": "desktop"},
+    schema="demo.event",
+    version=1,
+    generate_event_id=True,
+)
+```
 
-## Далее
+Do not mutate payloads after publishing. Treat payloads as immutable event data.
 
-* расширение `policy_fit` (privacy/cost/battery),
-* multi-target display (каст на несколько browser-io),
-* предвычисление «коридоров маршрутизации» (кэш кандидатов по intent’ам).
+## Subscribing
 
+Use narrow prefixes where possible:
 
+```python
+bus.subscribe("adaos.status.card.", handle_status_card_event)
+```
 
-что именно включить (mvp)
+Avoid subscribing to all events in production handlers unless the handler is a
+bounded diagnostics collector.
 
-1. единый шина-интерфейс: publish/subscribe, request/reply (команды), broadcast. единые Envelope-поля: event_name, version, ts, source, correlation_id, causation_id, tenant, headers.
-2. реестр событий и схем: json schema для каждого event_name+version; валидация на входе/выходе. хранить в abi/schemas/events.
-3. соглашения по именам:
+Handlers should:
 
-   * команды (запросы на действие): namespace.verb (например, nlp.intent.detect, scenario.run, repo.skill.install)
-   * события (факты): namespace.noun.past (nlp.intent.detected, scenario.completed, repo.skill.installed)
-4. доставка и надёжность: минимум — at-least-once + idempotency_key у обработчиков, retry с backoff, dead-letter queue (DLQ).
-5. планировщик: генерация timer.* событий по cron/once/interval. это покрывает «запуск по времени/условию».
-6. трассировка и аудит: correlation_id, метрики публикаций/ошибок, «tail» лог по теме, опциональный persistent log для отладки/replay.
-7. права: кто может publish/subscribe на какие темы (простые policy на префиксах тем).
+- be idempotent
+- return quickly
+- delegate expensive work to bounded queues or services
+- tolerate repeated delivery
+- tolerate missing optional metadata
+- normalize the envelope before relying on trace/scope/schema fields
+- never perform unbounded Yjs writes directly from a hot event path
 
-архитектурно по этапам
+## Reliability Model
 
-* этап А (локально и просто):
-  in-process event bus + адаптер к Redis Streams (или NATS JetStream — полиглотность и лёгкость деплоя). выбрать один, но сделать transport pluggable.
-* этап B (узлы и облако):
-  hub использует тот же интерфейс с транспортом NATS/Redis; добавляем DLQ, ретраи, простейший реестр схем; root проксирует/федератит темы между подсетями.
-* этап C (удобство и отладка):
-  replay по времени, сохранение выборочных потоков (event store для сценариев), opentelemetry спаны, web-вьювер «живых» событий.
+Current local runtime semantics are best-effort in-process delivery with
+bounded protection for selected hot topics.
 
-вписывание в текущую структуру
+Target reliability directions:
 
-* src/adaos/core/events/: Envelope, типы Event/Command, Result, ошибки.
-* src/adaos/ports/events/: интерфейсы Bus, Subscription, Scheduler, SchemaRegistry.
-* src/adaos/services/events/: LocalBus, RedisBus/NatsBus, CronScheduler, JsonSchemaRegistry.
-* src/adaos/abi/schemas/events/: *.schema.json (+ версии).
-* src/adaos/apps/cli/events.py: tail, publish, subscribe, topics, replay, dlq.
-* конфиг транспорта: get_ctx().config.events (transport: local|redis|nats, urls, auth).
+- keep the `EventBus` port transport-neutral
+- add durable or inter-node transport only behind the same event contract
+- use idempotency keys or event ids for side-effecting consumers
+- use bounded retry/dead-letter patterns only for operations that genuinely
+  require durability
+- keep projection refresh coalesced rather than replaying every intermediate
+  change
 
+NATS/JetStream or another broker may be used later for inter-node delivery, but
+the current architecture should not bake broker-specific subject rules into
+skill or scenario contracts.
 
+## Security And Policy
 
-yaml в навыках/сценариях (совместимо с твоим стилем)
+Events must not carry:
+
+- bearer tokens
+- secrets
+- private keys
+- raw credentials
+- unbounded logs
+- large binary payloads
+- direct browser trust assumptions
+
+Events that can lead to mutation must carry enough metadata for policy:
+
+- actor
+- source authority
+- scope
+- trace id
+- schema/version
+- target ids
+- side-effect or priority hints when relevant
+
+Policy decisions and human approvals belong in the relevant service or Pending
+Action flow, not in ad hoc event handlers.
+
+## Relationship To Projections And Yjs
+
+The event bus is not a Yjs write API.
+
+Correct flow:
+
+```text
+domain/platform event
+  -> service/skill runtime memory update
+  -> demanded projection refresh selected by dispatcher
+  -> ProjectionRecord update if fingerprint changed
+  -> Yjs materialization for active webspace demand
+```
+
+Incorrect flow:
+
+```text
+domain event
+  -> direct large Yjs branch rewrite
+```
+
+Detailed projection demand, lifecycle, node scope, and browser materialization
+rules are defined in the Operational Event Model documents.
+
+## Relationship To Root MCP
+
+Root MCP is not the event bus.
+
+Root MCP exposes typed tool calls, descriptors, audit history, managed target
+status, and operational snapshots to agents. Events may feed Root MCP reports
+or audit surfaces, but agents should not treat event topics as a general-purpose
+remote command API.
+
+Use Root MCP for agent-facing inspection and controlled operations. Use events
+for runtime coordination and projection invalidation.
+
+## Skill And Scenario Declarations
+
+The target direction is for skills and scenarios to declare event interests in
+their manifests when those interests are part of their public contract.
+
+Example skill manifest direction:
 
 ```yaml
-## skill.yaml
 events:
   subscribe:
-    - "nlp.intent.weather.get"
+    - "adaos.status.card.changed"
   publish:
-    - "ui.notify"
-  schemas:
-    nlp.intent.weather.get@1: "abi/schemas/events/nlp.intent.weather.get.v1.schema.json"
-    ui.notify@1: "abi/schemas/events/ui.notify.v1.schema.json"
+    - "demo.skill.result.changed"
 ```
 
+Example scenario trigger direction:
+
 ```yaml
-## scenario.yaml
 triggers:
   - event: "system.boot.completed"
-  - event: "timer.tick"   # от планировщика
 effects:
-  - publish: "ui.notify"
+  - publish: "demo.scenario.started"
 ```
 
-## Реестр событий
+These declarations should not replace runtime policy checks. They are
+descriptive contracts for validation, documentation, Builder, and future Root
+MCP descriptors.
 
-Как «единый словарь» для людей, и как машинный контракт для llm-программиста.
+## Event Registry Direction
 
-**где хранить:**
+AdaOS should converge on a lightweight event registry, but it should align with
+the existing ABI and descriptor system instead of creating a parallel catalog.
 
-* `src/adaos/abi/events/registry.yaml` — индекс.
-* `src/adaos/abi/events/<namespace>/<name>/v<major>/schema.json` — json schema тела.
-* `src/adaos/abi/events/<namespace>/<name>/v<major>/examples/*.json` — примеры.
-* автоген: `src/adaos/abi/events/_dist/registry.json` (слияние для машин).
+Target registry fields:
 
-**минимальная запись в реестре (yaml):**
+- `type`
+- `version`
+- `kind`: `fact`, `request`, `lifecycle`, `diagnostic`, `projection`
+- `summary`
+- `payload_schema`
+- `producers`
+- `consumers`
+- `source_authority`
+- `scope_model`
+- `delivery_notes`
+- `idempotency`
+- `status`: `draft`, `stable`, `deprecated`
 
-```yaml
-events:
-  - fqdn: "nlp.intent.detected"     # namespace.name
-    version: 1
-    kind: "event"                    # event|command|reply
-    summary: "распознанное намерение пользователя"
-    producers: ["skill.nlp"]
-    consumers: ["scenario.*", "ui.*"]
-    schema: "nlp/intent.detected/v1/schema.json"
-    required_headers: ["correlation_id","ts","source"]
-    semantics:
-      delivery: "at-least-once"
-      idempotency_key: "intent_id"
-    status: "stable"                 # draft|stable|deprecated
-    example: "nlp/intent.detected/v1/examples/basic.json"
-```
+Registry entries should be published through Root descriptors when stable
+enough for Builder, NLU Teacher, Skill Factory, and documentation consumers.
 
-**каркас schema.json (json schema draft 2020-12):**
+## Operational Guidance
 
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nlp.intent.detected.v1",
-  "type": "object",
-  "required": ["intent", "slots", "locale"],
-  "properties": {
-    "intent": {"type": "string", "minLength": 1},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "slots": {"type": "object", "additionalProperties": {"type": "string"}},
-    "locale": {"type": "string"}
-  },
-  "additionalProperties": false
-}
-```
+When adding a new event:
 
-**обязательный Envelope (общий для всех):**
+1. Check whether an existing event already covers the runtime fact.
+2. Name the event as a stable semantic contract.
+3. Define the payload shape and expected metadata.
+4. Decide whether the event is domain, interaction, UI intent, platform, or
+   projection lifecycle.
+5. Decide whether consumers must be idempotent.
+6. Decide whether the topic needs bounded/coalesced handling.
+7. Add tests for envelope enrichment or normalization if new metadata is used.
+8. Link projection effects through the dispatcher, not direct Yjs writes.
+9. Document public event contracts in manifests or descriptors when they are
+   part of a skill/scenario surface.
 
-```json
-{
-  "event_name": "nlp.intent.detected",
-  "version": 1,
-  "ts": "2025-09-23T16:20:00Z",
-  "source": "skill.nlp@hostA",
-  "correlation_id": "c-7f8b...",
-  "causation_id": "e-19ab...",
-  "tenant": "default",
-  "headers": {"idempotency_key": "intent:123"}
-}
-```
+## Roadmap Summary
 
-**правила версий:**
+This file does not own the implementation roadmap. The authoritative ordering
+is in [Operational Event Model Roadmap](../architecture/operational-event-model-roadmap.md).
 
-* несовместимые изменения → `v{major+1}` в новой папке; старую помечаем `deprecated` в `registry.yaml`.
-* минорные и патчи не отражаем в fqdn; фиксируем в `schema.json` через `$id` и `x-version: "1.2.0"`.
+From the current code baseline, the near-term event-management priorities are:
 
-**что отдать llm-программисту (contract pack):**
+- adopt `_meta.event` enrichment in more platform and projection-related
+  producers
+- keep legacy `Event(type, payload, source, ts)` compatibility during migration
+- route projection-related topics through the shared dispatcher path
+- add manifest/descriptor exposure for stable skill/scenario event contracts
+- expand diagnostics around bounded queues, superseded work, drops, and slow
+  handlers
+- avoid new direct Yjs writes from hot event handlers
 
-* `registry.json` (машинный индекс всех событий).
-* `schemas/*` (json schema по путям из индекса).
-* `prompts/llm_hints.md` — короткие подсказки по именованию и примерам.
-* `tests/fixtures/*.json` — валидные/невалидные payloads.
-* `openapi-like` зеркало для команд: `src/adaos/abi/commands/openapi.yaml` (чтобы llm понимал request/reply).
+Deferred target-state items:
 
-**cli для работы:**
+- durable broker-backed delivery
+- cross-subnet event federation
+- full event registry with schema examples
+- replay/debug tooling
+- global event sourcing
 
-* `adaos events registry lint` — валидация index + ссылок.
-* `adaos events scaffold <namespace.name> --kind event --version 1` — создать каркас папок, schema, пример, запись в реестр.
-* `adaos events validate <event.json>` — проверить payload по schema + envelope.
-* `adaos events docs build` — сгенерить md/справочник в `docs/events/`.
-
-**интеграция в навыки/сценарии:**
-
-```yaml
-## skill.yaml
-events:
-  subscribe: ["nlp.intent.detected@1"]
-  publish: ["ui.notify@1"]
-  schemas_from: "abi/events"   # корень
-```
-
-```yaml
-## scenario.yaml
-triggers:
-  - event: "system.boot.completed@1"
-effects:
-  - publish: "ui.notify@1"
-```
-
-**для llm-подсказок (встраиваемый шаблон):**
-
-> «используй только события из `registry.json`. для каждого publish/subscribe укажи fqdn и версию. ориентируйся на примеры. поля envelope заполняй автоматически. все payload’ы должны проходить json-schema в `schema` из реестра.»
-
-**ci:**
-
-* pre-commit: `registry lint` + `validate` всех `examples/*.json`.
-* при `status: deprecated` — ворнинг в ci и в `docs`.
-
-**быстрый старт (первые 8 событий):**
-
-* `system.boot.completed@1`
-* `timer.tick@1`
-* `repo.skill.installed@1` (event)
-* `repo.skill.install@1` (command) → reply `repo.skill.install.result@1`
-* `scenario.run@1` (command) / `scenario.completed@1` (event)
-* `nlp.intent.detected@1`
-* `ui.notify@1`
-
-с этим набором llm-программист уже сможет уверенно генерировать хендлеры и сценарии без «угадалок».
+Those should be added only after the current local envelope, projection
+dispatcher, and platform-emitter paths are consistently adopted.

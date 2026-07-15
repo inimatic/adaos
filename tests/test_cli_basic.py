@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 def test_cli_help(cli_app):
     r = CliRunner().invoke(cli_app, ["--help"])
     assert r.exit_code == 0
-    assert "Usage" in r.stdout or "РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµ" in r.stdout.lower()
+    assert "Usage" in r.stdout or "использование" in r.stdout.lower()
 
 
 def test_repo_registry_list_json(cli_app, tmp_base_dir):

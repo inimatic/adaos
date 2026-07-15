@@ -2548,7 +2548,7 @@ async def test_voice_chat_snapshot_request_uses_builder_workbench_topic_when_thr
             text=f"builder turn {index}",
             payload={"id": f"builder.{suffix}.{index}", "from": "hub" if index % 2 else "user", "text": f"builder turn {index}"},
             actor_id="agent:builder_skill:builder" if index % 2 else "",
-            actor_label="РљРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ" if index % 2 else "",
+            actor_label="Конструктор" if index % 2 else "",
             route_id="voice_chat",
             ts=100.0 + index,
         )

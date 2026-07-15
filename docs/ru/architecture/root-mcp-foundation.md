@@ -343,11 +343,11 @@ so operators and agents can tell whether they are looking at logs from the root-
 
 Обычные session list/get views также должны freshness-нормализовать expired leases, чтобы после истечения TTL они не продолжали выглядеть operationally active.
 
-Typed subnet diagnostics С‚Р°РєР¶Рµ РґРѕР»Р¶РЅС‹ РѕС‚РґР°РІР°С‚СЊ compact pressure-oriented projections РґР»СЏ:
+Typed subnet diagnostics также должны отдавать compact pressure-oriented projections для:
 
 - route backlog Рё pending ack streams
-- YJS transport Рё pressure РІС‹Р±СЂР°РЅРЅРѕРіРѕ webspace
-- root-ingested memory-profile summaries РґР»СЏ С‚РµРєСѓС‰РµР№ РїРѕРґСЃРµС‚Рё/runtime
+- YJS transport и pressure выбранного webspace
+- root-ingested memory-profile summaries для текущей подсети/runtime
 
 ### What Should Be Logged
 
