@@ -15,6 +15,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/agent_context.py",
     "src/adaos/services/bootstrap.py",
     "src/adaos/services/bounded_io.py",
+    "src/adaos/services/browser_assets.py",
     "src/adaos/services/core_slots.py",
     "src/adaos/services/core_update.py",
     "src/adaos/services/core_update_policy.py",
@@ -24,6 +25,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/runtime_environment.py",
     "src/adaos/services/runtime_paths.py",
     "src/adaos/services/supervisor_memory.py",
+    "src/adaos/services/webui_contract.py",
 )
 
 SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (

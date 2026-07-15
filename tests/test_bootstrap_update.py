@@ -12,6 +12,11 @@ def test_bounded_io_helper_is_bootstrap_promoted() -> None:
     assert "src/adaos/services/bounded_io.py" in BOOTSTRAP_CRITICAL_PATHS
 
 
+def test_root_webui_helpers_are_bootstrap_promoted() -> None:
+    assert "src/adaos/services/browser_assets.py" in BOOTSTRAP_CRITICAL_PATHS
+    assert "src/adaos/services/webui_contract.py" in BOOTSTRAP_CRITICAL_PATHS
+
+
 def test_model_artifact_helpers_are_bootstrap_promoted() -> None:
     assert "src/adaos/services/models/__init__.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/services/models/artifacts.py" in BOOTSTRAP_CRITICAL_PATHS
