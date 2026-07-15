@@ -13,6 +13,7 @@ from adaos.apps.cli.commands.api import (
     _process_matches_bind,
     _resolve_stop_bind,
     _resolve_bind,
+    _resolve_implicit_api_port_fallback,
     _write_pidfile,
     app,
 )
@@ -113,6 +114,20 @@ def test_bind_preflight_reports_windows_excluded_port(monkeypatch):
     assert result["ok"] is False
     assert result["error"] == "PortExcluded"
     assert result["range"] == [8730, 8829]
+
+
+def test_implicit_api_port_fallback_skips_windows_reserved_port(monkeypatch):
+    def _probe(host, port):
+        if int(port) == 8779:
+            return {"ok": False, "error": "PortExcluded"}
+        if int(port) == 8877:
+            return {"ok": True}
+        return {"ok": False, "error": "PermissionDenied"}
+
+    monkeypatch.setattr("adaos.apps.cli.commands.api._probe_api_bind_availability", _probe)
+
+    assert _resolve_implicit_api_port_fallback("127.0.0.1", 8779, explicit_port=False) == ("127.0.0.1", 8877)
+    assert _resolve_implicit_api_port_fallback("127.0.0.1", 8779, explicit_port=True) == ("127.0.0.1", 8779)
 
 
 def test_api_serve_preflight_failure_keeps_previous_server(monkeypatch):

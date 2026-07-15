@@ -272,6 +272,42 @@ def _probe_api_bind_availability(host: str, port: int) -> dict[str, object]:
             pass
 
 
+def _api_port_fallback_candidates(preferred_port: int) -> list[int]:
+    preferred = [8877, 8878, 8879, 8977, 8978, 9000]
+    out: list[int] = []
+    seen: set[int] = set()
+    for port in preferred:
+        if port != int(preferred_port) and port not in seen:
+            out.append(port)
+            seen.add(port)
+    start = max(1024, int(preferred_port) + 1)
+    for port in range(start, min(65535, start + 512)):
+        if port not in seen:
+            out.append(port)
+            seen.add(port)
+    return out
+
+
+def _resolve_implicit_api_port_fallback(host: str, port: int, *, explicit_port: bool) -> tuple[str, int]:
+    if explicit_port:
+        return host, int(port)
+    probe = _probe_api_bind_availability(host, int(port))
+    if probe.get("ok") is True:
+        return host, int(port)
+    if probe.get("error") not in {"PortExcluded", "PermissionDenied"}:
+        return host, int(port)
+    for candidate in _api_port_fallback_candidates(int(port)):
+        candidate_probe = _probe_api_bind_availability(host, candidate)
+        if candidate_probe.get("ok") is True and not candidate_probe.get("occupied_by"):
+            typer.secho(
+                "[AdaOS] local API port "
+                f"{int(port)} is unavailable ({probe.get('error')}); using {candidate}.",
+                fg=typer.colors.YELLOW,
+            )
+            return host, candidate
+    return host, int(port)
+
+
 def _skills_root_for_runtime_preflight(repo_root: Path) -> Path:
     try:
         raw = get_ctx().paths.skills_dir()
@@ -1271,6 +1307,7 @@ def run_api_runtime(
         explicit_host=explicit_host,
         explicit_port=explicit_port,
     )
+    host, port = _resolve_implicit_api_port_fallback(host, port, explicit_port=explicit_port)
     advertised_base = _advertise_base(host, port)
     pidfile = _pidfile_path(host, port)
 
