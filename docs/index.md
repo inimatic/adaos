@@ -35,6 +35,9 @@ The current implementation is centered around local and private deployments:
 - [Skills](skills.md): skill lifecycle and runtime behavior
 - [Scenarios](scenarios.md): scenario lifecycle and execution model
 - [DevPortal](devportal.md): developer workflows for Root-backed environments
+- [Codex Project Recipes](guides/codex-project-recipes.md): practical local
+  commands for Codex-assisted debugging, tests, workspace skills, UTF-8, and
+  nested Git repositories
 
 ## Current scope
 
