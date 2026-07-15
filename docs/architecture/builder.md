@@ -210,6 +210,76 @@ programming in isolated dev nodes: Root can later move the worker from the
 backend process to NATS/dev-node execution without changing the Builder-facing
 API.
 
+## UI Prototyping LLM Contract
+
+For rapid UI prototyping, Builder should treat the LLM as an adaptive
+designer-programmer and treat AdaOS as the deterministic guardrail. The model is
+allowed to reshape the declarative `adaos.webui.v1` UI inside the ABI boundary;
+AdaOS owns schema validation, revision storage, review, safe apply, runtime
+refresh, and rollback.
+
+The current UI is starting material, not a fixed product contract. When a user
+asks for a design, workflow, layout, copy, data, or prototype change, the LLM
+should make a meaningful visible transformation rather than a rename-only,
+duplicate-only, or no-op patch. It may change:
+
+- field order, grouping, labels, helper text, defaults, options, validation, and
+  field types
+- layout pattern, areas, density, auxiliary panels, and widget placement
+- display widgets such as tables, cards, lists, details, metrics, and JSON
+  previews
+- local prototype interactions through selectors, command bars, actions,
+  `initialState`, and `visibleIf`
+- static/mock data and examples that demonstrate the intended interface
+
+Interactive controls in a prototype may update local page state or static/mock
+data. They must not imply real external IO, device control, credentials,
+network calls, or durable mutations unless the user explicitly asks for such
+behavior and the corresponding skill/scenario contract exists.
+
+Builder's prompt context should stay compact and general: expose an affordance
+map of what the UI can express, not a long list of intent-specific recipes.
+Specialized deterministic checks may validate ABI compatibility and unsafe
+effects, but they should not replace the LLM's responsibility to understand the
+user's request.
+
+Builder prompt assembly is profile-based. The default profile is
+provider/model-agnostic and sends a compact ABI summary plus a prototyping
+affordance map. Later profiles may tune wording, temperature, examples, or
+schema compression for a specific provider/model, but the output contract must
+remain the same complete `adaos.webui.v1` manifest.
+
+## UI Generation Control Examples
+
+These examples are acceptance probes for Builder's rapid prototyping behavior.
+They are intentionally phrased like ordinary user requests. They should later
+become golden fixtures that compare generated `pageSchema` structure, supported
+component use, visible semantic change, and absence of stale sample data.
+
+| Scenario | User request | Expected evaluation focus |
+| --- | --- | --- |
+| Survey form | `Сделай форму опроса для жителей района: контакты, возрастная группа, как часто пользуются парками, оценка безопасности, несколько любимых мест, комментарий и согласие на обработку данных. Добавь пример заполнения.` | Uses specific field types instead of generic text: email/phone where needed, select/radio for age/frequency, rating/scale for safety, multi-choice/chips for places, textarea for comment, toggle for consent; mock data matches the domain. |
+| Conference application | `Сделай прототип анкеты участника городской исследовательской конференции. Нужны личные данные, организация, формат участия, удобные даты, темы интереса, загрузка тезисов, блок доклада и оценка важности факторов развития города.` | Produces a structured form with meaningful sections, date/dateRange, select/multiChoice, fileUpload, textarea, rating/grid where appropriate, plus useful preview/summary widgets. |
+| Online shop | `Сделай черновик интерфейса интернет-магазина для выбора товаров: фильтры, карточки товаров, корзина, промокод и пример оформления заказа без реальной оплаты.` | Separates catalog, filters, cart/order summary, promo input, and checkout mock flow; uses local state/static data only; does not imply real payment or external network calls. |
+| Today's tasks | `Сделай список задач на сегодня: быстрое добавление, приоритет, время, статус выполнения, фильтр по состоянию и компактный вид для телефона.` | Uses form plus list/cards/table as appropriate, boolean/toggle for done, time/date, select/rating for priority, local filter controls, responsive/stacked layout without unused side panels. |
+| Task workbench | `Сделай рабочий экран для ведения задач: слева список, справа детали выбранной задачи, кнопки смены статуса, комментарий и журнал последних изменений на моковых данных.` | Uses split/sidebar only when useful, list/detail/actions/log widgets, local selected item state or static examples, and no hidden real persistence. |
+| Shopping list | `Сделай список покупок для семьи: продукты по категориям, количество, цена, отметка куплено, быстрый ввод и пример данных.` | Uses typed fields for quantity/price/done/category, table/cards with boolean display, realistic grocery mock data, and no leftover task-domain sample rows. |
+| Layout exploration | `Сделай две формы одну под другой с разными вариантами разметки на экране, чтобы можно было выбрать.` | If multiple comparable surfaces are generated, they should differ visibly in grouping, field order, component types, copy, density, support widgets, or interaction model. A valid answer must not only duplicate the same form twice. |
+
+Evaluation should score both contract correctness and prototype usefulness:
+
+- output is a complete `adaos.webui.v1` manifest with renderable
+  `ui.application.desktop.pageSchema`
+- generated widgets use only supported component types and valid field
+  descriptors
+- the result visibly satisfies the user's request rather than only preserving
+  the previous UI
+- interactions are local/mock unless real integrations are requested and
+  available
+- labels, examples, and mock data stay in the requested domain and language
+- stale widgets, empty layout areas, and irrelevant sample rows are removed or
+  adapted
+
 ## Relationship To Skill Factory
 
 The [Skill Factory](skill-factory.md) is the target remote realization layer
