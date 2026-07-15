@@ -7,6 +7,7 @@ from adaos.apps.cli.commands.api import (
     _ensure_api_serve_dev_sidecar,
     _find_matching_server_pids,
     _is_local_url,
+    _missing_runtime_preflight_required_files,
     _process_matches_bind,
     _resolve_stop_bind,
     _resolve_bind,
@@ -80,6 +81,88 @@ def test_resolve_stop_bind_uses_local_hub_url():
         token="t1",
     )
     assert _resolve_stop_bind(conf) == ("127.0.0.1", 8779)
+
+
+def test_runtime_preflight_requires_redevice_sdk(tmp_path):
+    missing = _missing_runtime_preflight_required_files(tmp_path)
+
+    assert "src/adaos/sdk/redevice.py" in missing
+    assert "src/adaos/apps/api/server.py" in missing
+
+
+def test_api_serve_preflight_failure_keeps_previous_server(monkeypatch):
+    runner = CliRunner()
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
+        token="t1",
+    )
+    stopped: list[tuple[str, int]] = []
+
+    monkeypatch.setattr("adaos.apps.cli.commands.api.load_config", lambda: conf)
+    monkeypatch.setattr(
+        "adaos.apps.cli.commands.api._run_api_pre_stop_preflight",
+        lambda host, port: {
+            "ok": False,
+            "errors": [
+                {
+                    "phase": "skill_handler_import",
+                    "error": "ModuleNotFoundError",
+                    "message": "No module named 'adaos.sdk.redevice'",
+                    "path": ".adaos/workspace/skills/.runtime/redevice_list/handlers/main.py",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr("adaos.apps.cli.commands.api._stop_previous_server", lambda host, port: stopped.append((host, port)))
+    monkeypatch.setattr("adaos.apps.cli.commands.api._write_pidfile", lambda *args, **kwargs: None)
+    monkeypatch.setattr("adaos.apps.cli.commands.api._ensure_api_serve_dev_sidecar", lambda *args, **kwargs: None)
+    monkeypatch.setattr("adaos.apps.cli.commands.api.uvicorn.run", lambda *args, **kwargs: None)
+
+    result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "8779"])
+
+    assert result.exit_code == 1
+    assert stopped == []
+    assert "preflight failed" in result.stdout
+    assert "keeping existing API server running" in result.stdout
+
+
+def test_api_restart_preflight_failure_keeps_previous_server(monkeypatch):
+    runner = CliRunner()
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
+        token="t1",
+    )
+    shutdowns: list[tuple[str, int]] = []
+    forced: list[tuple[str, int]] = []
+
+    monkeypatch.setattr("adaos.apps.cli.commands.api.load_config", lambda: conf)
+    monkeypatch.setattr(
+        "adaos.apps.cli.commands.api._run_api_pre_stop_preflight",
+        lambda host, port: {
+            "ok": False,
+            "errors": [{"phase": "required_files", "error": "MissingRequiredFiles", "message": "bad checkout"}],
+        },
+    )
+    monkeypatch.setattr(
+        "adaos.apps.cli.commands.api._request_graceful_shutdown",
+        lambda host, port, token=None, reason="cli.stop": shutdowns.append((host, port)) or True,
+    )
+    monkeypatch.setattr("adaos.apps.cli.commands.api._stop_previous_server", lambda host, port: forced.append((host, port)))
+
+    result = runner.invoke(app, ["restart"])
+
+    assert result.exit_code == 1
+    assert shutdowns == []
+    assert forced == []
+    assert "preflight failed" in result.stdout
 
 
 def test_resolve_stop_bind_rejects_remote_hub_url():

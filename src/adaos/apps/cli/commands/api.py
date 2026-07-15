@@ -25,6 +25,135 @@ apply_runtime_dotenv_overrides()
 app = typer.Typer(help="HTTP API for AdaOS")
 
 
+_RUNTIME_PREFLIGHT_REQUIRED_FILES: tuple[str, ...] = (
+    "src/adaos/apps/api/server.py",
+    "src/adaos/services/bootstrap.py",
+    "src/adaos/services/skills_loader_importlib.py",
+    "src/adaos/services/endpoint_router.py",
+    "src/adaos/services/endpoint_audio.py",
+    "src/adaos/services/redevice_versions.py",
+    "src/adaos/sdk/redevice.py",
+    "src/adaos/sdk/data/device_access.py",
+    "src/adaos/sdk/data/devices.py",
+    "src/adaos/sdk/io/endpoint_audio.py",
+)
+
+_RUNTIME_IMPORT_PREFLIGHT_MARKER = "ADAOS_RUNTIME_PREFLIGHT_RESULT "
+_RUNTIME_IMPORT_PREFLIGHT_CODE = r"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import traceback
+from pathlib import Path
+
+MARKER = "ADAOS_RUNTIME_PREFLIGHT_RESULT "
+
+
+def _emit(payload: dict) -> int:
+    print(MARKER + json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0 if payload.get("ok") is True else 1
+
+
+def _main() -> int:
+    repo_root = Path(sys.argv[1]).expanduser().resolve()
+    skills_root = Path(sys.argv[2]).expanduser().resolve()
+    src_root = repo_root / "src"
+    if src_root.exists():
+        sys.path.insert(0, str(src_root))
+    os.chdir(str(repo_root))
+
+    errors: list[dict] = []
+    handlers: list[str] = []
+    try:
+        import importlib
+
+        importlib.import_module("adaos.apps.api.server")
+    except Exception as exc:
+        errors.append(
+            {
+                "phase": "server_import",
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(limit=8),
+            }
+        )
+
+    try:
+        from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
+
+        loader = ImportlibSkillsLoader()
+        loaded: set[str] = set()
+        discovered = []
+        discovered.extend(("runtime", path, skill) for path, skill in loader._discover_runtime_handlers(skills_root))
+        for source, handler, skill_name in discovered:
+            try:
+                loader._load_handler(handler)
+                handlers.append(str(handler))
+                if skill_name:
+                    loaded.add(str(skill_name))
+            except Exception as exc:
+                errors.append(
+                    {
+                        "phase": "skill_handler_import",
+                        "source": source,
+                        "skill": skill_name or "",
+                        "path": str(handler),
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(limit=8),
+                    }
+                )
+
+        for source, handler_iter in (
+            ("workspace", loader._discover_workspace_handlers(skills_root, loaded)),
+            ("repo_workspace", loader._discover_repo_workspace_handlers(skills_root, loaded)),
+        ):
+            for handler, skill_name in handler_iter:
+                try:
+                    loader._load_handler(handler)
+                    handlers.append(str(handler))
+                    if skill_name:
+                        loaded.add(str(skill_name))
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "phase": "skill_handler_import",
+                            "source": source,
+                            "skill": skill_name or "",
+                            "path": str(handler),
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                            "traceback": traceback.format_exc(limit=8),
+                        }
+                    )
+    except Exception as exc:
+        errors.append(
+            {
+                "phase": "skill_discovery",
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(limit=8),
+            }
+        )
+
+    return _emit(
+        {
+            "ok": not errors,
+            "repo_root": str(repo_root),
+            "skills_root": str(skills_root),
+            "handlers_checked": len(handlers),
+            "errors": errors,
+        }
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
+"""
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -35,6 +164,186 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _repo_root_for_runtime_preflight() -> Path:
+    current_base = _current_base_dir()
+    if current_base is not None and (current_base / "src" / "adaos").exists():
+        return current_base
+    current_file = Path(__file__).resolve()
+    for parent in current_file.parents:
+        if (parent / "src" / "adaos" / "apps" / "api" / "server.py").exists():
+            return parent
+    return Path.cwd().resolve()
+
+
+def _missing_runtime_preflight_required_files(repo_root: Path) -> list[str]:
+    root = Path(repo_root).expanduser().resolve()
+    return [rel for rel in _RUNTIME_PREFLIGHT_REQUIRED_FILES if not (root / rel).exists()]
+
+
+def _skills_root_for_runtime_preflight(repo_root: Path) -> Path:
+    try:
+        raw = get_ctx().paths.skills_dir()
+        return Path(raw() if callable(raw) else raw).expanduser().resolve()
+    except Exception:
+        return (Path(repo_root).expanduser().resolve() / ".adaos" / "workspace" / "skills").resolve()
+
+
+def _parse_runtime_preflight_result(stdout: str) -> dict[str, object] | None:
+    for line in reversed(str(stdout or "").splitlines()):
+        if line.startswith(_RUNTIME_IMPORT_PREFLIGHT_MARKER):
+            raw = line[len(_RUNTIME_IMPORT_PREFLIGHT_MARKER) :]
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                return None
+            return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _run_runtime_import_preflight(repo_root: Path, skills_root: Path, *, timeout: float = 45.0) -> dict[str, object]:
+    env = merged_runtime_dotenv_env(os.environ.copy())
+    src_root = str((repo_root / "src").resolve())
+    existing_pythonpath = str(env.get("PYTHONPATH") or "")
+    env["PYTHONPATH"] = src_root if not existing_pythonpath else src_root + os.pathsep + existing_pythonpath
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", _RUNTIME_IMPORT_PREFLIGHT_CODE, str(repo_root), str(skills_root)],
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(5.0, float(timeout)),
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "repo_root": str(repo_root),
+            "skills_root": str(skills_root),
+            "errors": [
+                {
+                    "phase": "preflight_subprocess",
+                    "error": "TimeoutExpired",
+                    "message": f"runtime import preflight timed out after {exc.timeout}s",
+                }
+            ],
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "repo_root": str(repo_root),
+            "skills_root": str(skills_root),
+            "errors": [
+                {
+                    "phase": "preflight_subprocess",
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                }
+            ],
+        }
+
+    payload = _parse_runtime_preflight_result(completed.stdout)
+    if payload is None:
+        payload = {
+            "ok": False,
+            "repo_root": str(repo_root),
+            "skills_root": str(skills_root),
+            "errors": [
+                {
+                    "phase": "preflight_subprocess",
+                    "error": "InvalidResult",
+                    "message": "runtime preflight did not return a parseable result",
+                    "stdout": str(completed.stdout or "")[-4000:],
+                    "stderr": str(completed.stderr or "")[-4000:],
+                }
+            ],
+        }
+    elif completed.returncode != 0:
+        payload["ok"] = False
+    return payload
+
+
+def _run_api_pre_stop_preflight(host: str, port: int) -> dict[str, object]:
+    if _env_flag("ADAOS_API_SKIP_PRESTOP_PREFLIGHT", default=False):
+        return {"ok": True, "skipped": True, "host": host, "port": int(port)}
+    repo_root = _repo_root_for_runtime_preflight()
+    missing = _missing_runtime_preflight_required_files(repo_root)
+    if missing:
+        return {
+            "ok": False,
+            "repo_root": str(repo_root),
+            "host": host,
+            "port": int(port),
+            "errors": [
+                {
+                    "phase": "required_files",
+                    "error": "MissingRequiredFiles",
+                    "message": "required runtime files are missing",
+                    "missing": missing,
+                }
+            ],
+        }
+    try:
+        skills_root = _skills_root_for_runtime_preflight(repo_root)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "repo_root": str(repo_root),
+            "host": host,
+            "port": int(port),
+            "errors": [
+                {
+                    "phase": "agent_context",
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                }
+            ],
+        }
+    result = _run_runtime_import_preflight(repo_root, skills_root)
+    result.setdefault("host", host)
+    result.setdefault("port", int(port))
+    return result
+
+
+def _ensure_api_pre_stop_preflight_or_exit(host: str, port: int, *, action: str) -> None:
+    result = _run_api_pre_stop_preflight(host, port)
+    if result.get("ok") is True:
+        if result.get("skipped") is True:
+            typer.secho(
+                "[AdaOS] startup preflight skipped by ADAOS_API_SKIP_PRESTOP_PREFLIGHT=1",
+                fg=typer.colors.YELLOW,
+            )
+        return
+    typer.secho(
+        f"[AdaOS] {action} preflight failed; keeping existing API server running.",
+        fg=typer.colors.RED,
+    )
+    errors = result.get("errors") if isinstance(result, dict) else None
+    if isinstance(errors, list):
+        for item in errors[:8]:
+            if not isinstance(item, dict):
+                continue
+            phase = str(item.get("phase") or "preflight")
+            error = str(item.get("error") or "error")
+            message = str(item.get("message") or "")
+            detail = f"{phase}: {error}"
+            if message:
+                detail += f": {message}"
+            typer.secho(f"  - {detail}", fg=typer.colors.RED)
+            missing = item.get("missing")
+            if isinstance(missing, list) and missing:
+                typer.secho("    missing: " + ", ".join(str(part) for part in missing[:12]), fg=typer.colors.RED)
+            path = item.get("path")
+            if path:
+                typer.secho(f"    path: {path}", fg=typer.colors.RED)
+    else:
+        typer.secho("  - preflight returned no structured error list", fg=typer.colors.RED)
+    raise typer.Exit(code=1)
 
 
 def _uvicorn_loop_mode() -> str:
@@ -839,8 +1148,6 @@ def run_api_runtime(
     launch_mode: str,
     pidfile_owner: str,
 ) -> None:
-    from adaos.apps.api.server import app as server_app
-
     conf = None
     try:
         conf = load_config()
@@ -865,6 +1172,9 @@ def run_api_runtime(
     )
     advertised_base = _advertise_base(host, port)
     pidfile = _pidfile_path(host, port)
+
+    _ensure_api_pre_stop_preflight_or_exit(host, port, action="api serve")
+    from adaos.apps.api.server import app as server_app
 
     _stop_previous_server(host, port)
     _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner=pidfile_owner)
@@ -1017,6 +1327,8 @@ def restart():
 
     host, port = bind
     token = getattr(conf, "token", None) or resolve_control_token()
+
+    _ensure_api_pre_stop_preflight_or_exit(host, port, action="api restart")
 
     try:
         managed_restart = _restart_autostart_service_for_current_base_dir(_current_base_dir())
