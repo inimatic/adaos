@@ -772,6 +772,22 @@
               "inputs": { "$ref": "#/$defs/formInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ui.list" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/listInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "item.details" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/detailsInputs" }
+            }
+          }
         }
       ]
     },
@@ -969,6 +985,22 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/formInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ui.list" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/listInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "item.details" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/detailsInputs" }
             }
           }
         }
@@ -1175,6 +1207,90 @@
       "description": "Dot-separated path read from the current widget payload or page state."
     },
 
+    "listInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Inputs for ui.list in rows, grouped rows, or responsive card mode.",
+      "properties": {
+        "variant": { "type": "string", "enum": ["list", "cards"] },
+        "titleKey": { "$ref": "#/$defs/fieldPath" },
+        "subtitleKey": { "$ref": "#/$defs/fieldPath" },
+        "previewKey": { "$ref": "#/$defs/fieldPath" },
+        "imageKey": { "$ref": "#/$defs/fieldPath" },
+        "imageAltKey": { "$ref": "#/$defs/fieldPath" },
+        "badgeKey": { "$ref": "#/$defs/fieldPath" },
+        "groupBy": { "$ref": "#/$defs/fieldPath" },
+        "groupTitleKey": { "$ref": "#/$defs/fieldPath" },
+        "groupSubtitleKey": { "$ref": "#/$defs/fieldPath" },
+        "groupDisplay": { "type": "string", "enum": ["sections", "accordion"] },
+        "search": { "type": "boolean" },
+        "searchEnabled": { "type": "boolean" },
+        "searchPlaceholder": { "type": "string" },
+        "cardMinWidth": { "type": "number", "minimum": 120, "maximum": 480 },
+        "cardImageRatio": { "type": "string", "minLength": 1 },
+        "emptyText": { "type": "string" },
+        "meta": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["key"],
+            "properties": {
+              "key": { "$ref": "#/$defs/fieldPath" },
+              "label": { "type": "string" },
+              "kind": { "type": "string", "enum": ["text", "badge", "boolean"] },
+              "trueLabel": { "type": "string" },
+              "falseLabel": { "type": "string" }
+            }
+          }
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["key", "stateKey"],
+            "properties": {
+              "key": { "$ref": "#/$defs/fieldPath" },
+              "stateKey": { "type": "string", "minLength": 1 },
+              "operator": { "type": "string", "enum": ["equals", "contains", "includes", "truthy", "lte", "gte"] }
+            }
+          }
+        },
+        "buttons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "label": { "type": "string" },
+              "icon": { "type": "string" },
+              "whenKey": { "$ref": "#/$defs/fieldPath" },
+              "whenEquals": {}
+            }
+          }
+        }
+      }
+    },
+
+    "detailsInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "selectedStateKey": { "type": "string", "minLength": 1 },
+        "stateKey": { "type": "string", "minLength": 1 },
+        "fields": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "imageKey": { "$ref": "#/$defs/fieldPath" },
+        "imageAltKey": { "$ref": "#/$defs/fieldPath" },
+        "imageRatio": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?\\s*\\/\\s*[0-9]+(?:\\.[0-9]+)?$"
+        }
+      }
+    },
+
     "formInputs": {
       "type": "object",
       "additionalProperties": true,
@@ -1200,7 +1316,18 @@
         },
         "autoCommit": { "type": "boolean" },
         "commitOnChange": { "type": "boolean" },
-        "showSubmit": { "type": "boolean" }
+        "showSubmit": { "type": "boolean" },
+        "layout": {
+          "type": "string",
+          "enum": ["stack", "responsiveGrid", "responsive-grid", "grid", "auto-grid"],
+          "description": "Field layout. responsiveGrid packs fields into an adaptive grid and collapses to one column when space is narrow."
+        },
+        "fieldLayout": {
+          "type": "string",
+          "enum": ["stack", "responsiveGrid", "responsive-grid", "grid", "auto-grid"]
+        },
+        "minFieldWidth": { "type": "integer", "minimum": 120, "maximum": 640 },
+        "min_field_width": { "type": "integer", "minimum": 120, "maximum": 640 }
       }
     },
 
@@ -1365,6 +1492,25 @@
         "multiple": { "type": "boolean" },
         "maxFiles": { "type": "integer", "minimum": 1 },
         "max_files": { "type": "integer", "minimum": 1 },
+        "span": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 12 },
+            { "const": "full" }
+          ],
+          "description": "Column span used only by responsiveGrid forms. Use full for long text, uploads, and section-wide controls."
+        },
+        "columnSpan": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 12 },
+            { "const": "full" }
+          ]
+        },
+        "column_span": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 12 },
+            { "const": "full" }
+          ]
+        },
         "validation": { "$ref": "#/$defs/formValidation" },
         "branching": { "$ref": "#/$defs/formBranching" },
         "quiz": { "$ref": "#/$defs/formQuiz" }

@@ -78,6 +78,7 @@ def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.Mo
         ],
         model="gpt-test",
         max_tokens=40,
+        reasoning={"effort": "minimal"},
         request_id="req.test",
     )
 
@@ -103,6 +104,7 @@ def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.Mo
         {"role": "user", "content": [{"type": "input_text", "text": "Where is Paris?"}]},
     ]
     assert body["max_output_tokens"] == 40
+    assert body["reasoning"] == {"effort": "minimal"}
     assert "max_tokens" not in body
     assert result["_protocol"]["llm_proxy"] == {
         "base_url": "https://ru.api.inimatic.com",

@@ -35,6 +35,20 @@ If the UI shows `????`, treat it as a data-path bug until proven otherwise:
 check the source file bytes, the API payload, stream/Yjs projection, and the
 browser rendering payload separately.
 
+PowerShell 5.1 re-encodes text sent through a native-process pipeline. Setting
+only `PYTHONIOENCODING=utf-8` can therefore make Python decode an ASCII/legacy
+pipeline as UTF-8 and turn a valid request into `????`. Set `$OutputEncoding`
+before piping, or avoid the text pipeline entirely. A reliable API-test pattern
+is to pass UTF-8 text as Base64 through an environment variable:
+
+```powershell
+$prompt = "Проверь текущий прототип"
+$env:ADAOS_PROMPT_B64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($prompt)
+)
+.venv\Scripts\python.exe -c "import base64, os; print(base64.b64decode(os.environ['ADAOS_PROMPT_B64']).decode('utf-8'))"
+```
+
 ## Python Tests
 
 For targeted core tests from the repository root, set `PYTHONPATH` explicitly:

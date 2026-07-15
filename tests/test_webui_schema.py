@@ -12,6 +12,124 @@ def _load_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "catalog",
+                        "layout": {"type": "stack", "areas": [{"id": "main", "role": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "cards",
+                                "type": "ui.list",
+                                "area": "main",
+                                "inputs": {
+                                    "variant": "cards",
+                                    "titleKey": "title",
+                                    "imageKey": "media.src",
+                                    "imageAltKey": "media.alt",
+                                    "groupBy": "category",
+                                    "groupDisplay": "accordion",
+                                    "cardMinWidth": 220,
+                                    "cardImageRatio": "4 / 3",
+                                    "meta": [
+                                        {"key": "duration", "label": "Time", "kind": "badge"},
+                                        {"key": "favorite", "kind": "boolean", "trueLabel": "Favorite"},
+                                    ],
+                                    "filters": [
+                                        {"key": "category", "stateKey": "categoryFilter", "operator": "equals"},
+                                        {"key": "duration", "stateKey": "maxDuration", "operator": "lte"},
+                                    ],
+                                    "buttons": [{"id": "favorite", "label": "Favorite", "icon": "heart-outline"}],
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_responsive_form_layout() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "responsive-form",
+                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "filters",
+                                "type": "ui.form",
+                                "area": "main",
+                                "inputs": {
+                                    "layout": "responsiveGrid",
+                                    "minFieldWidth": 180,
+                                    "fields": [
+                                        {"id": "search", "type": "shortText", "label": "Search"},
+                                        {"id": "notes", "type": "longText", "label": "Notes", "span": "full"},
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_details_image_mapping() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "catalog-detail",
+                        "layout": {
+                            "type": "split",
+                            "pattern": "focus-detail",
+                            "areas": [
+                                {"id": "main", "role": "main"},
+                                {"id": "details", "role": "aux"},
+                            ],
+                        },
+                        "widgets": [
+                            {
+                                "id": "detail",
+                                "type": "item.details",
+                                "area": "details",
+                                "inputs": {
+                                    "selectedStateKey": "selectedId",
+                                    "imageKey": "media.url",
+                                    "imageAltKey": "title",
+                                    "imageRatio": "4 / 3",
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_staged_load_hints() -> None:
     schema = _load_schema()
     payload = {

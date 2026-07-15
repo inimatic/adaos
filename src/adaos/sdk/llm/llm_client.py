@@ -491,6 +491,7 @@ def _llm_root_payload(
     temperature: float | None = None,
     max_tokens: int | None = None,
     top_p: float | None = None,
+    reasoning: Mapping[str, Any] | None = None,
     request_id: str | None = None,
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
     normalized_messages = _message_list(messages)
@@ -504,6 +505,8 @@ def _llm_root_payload(
         payload["max_tokens"] = int(max_tokens)
     if top_p is not None:
         payload["top_p"] = float(top_p)
+    if isinstance(reasoning, Mapping) and reasoning:
+        payload["reasoning"] = dict(reasoning)
     req_id = str(request_id or "").strip()
     if req_id:
         payload["request_id"] = req_id
@@ -537,6 +540,7 @@ def send_response(
     temperature: float | None = None,
     max_tokens: int | None = None,
     top_p: float | None = None,
+    reasoning: Mapping[str, Any] | None = None,
     request_id: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
@@ -551,6 +555,7 @@ def send_response(
         temperature=temperature,
         max_tokens=max_tokens,
         top_p=top_p,
+        reasoning=reasoning,
         request_id=request_id,
     )
 
@@ -610,6 +615,7 @@ def submit_response_job(
     temperature: float | None = None,
     max_tokens: int | None = None,
     top_p: float | None = None,
+    reasoning: Mapping[str, Any] | None = None,
     request_id: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
@@ -626,6 +632,7 @@ def submit_response_job(
         temperature=temperature,
         max_tokens=max_tokens,
         top_p=top_p,
+        reasoning=reasoning,
         request_id=request_id,
     )
     payload_bytes = _json_size_bytes(root_payload)

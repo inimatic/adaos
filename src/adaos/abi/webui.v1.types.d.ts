@@ -309,6 +309,9 @@ export interface WebUiFormField {
   multiple?: boolean
   maxFiles?: number
   max_files?: number
+  span?: number | 'full'
+  columnSpan?: number | 'full'
+  column_span?: number | 'full'
   validation?: WebUiFormValidation
   branching?: WebUiFormBranching
   quiz?: WebUiFormQuiz
@@ -324,6 +327,66 @@ export interface WebUiFormInputs {
   autoCommit?: boolean
   commitOnChange?: boolean
   showSubmit?: boolean
+  layout?: 'stack' | 'responsiveGrid' | 'responsive-grid' | 'grid' | 'auto-grid'
+  fieldLayout?: 'stack' | 'responsiveGrid' | 'responsive-grid' | 'grid' | 'auto-grid'
+  minFieldWidth?: number
+  min_field_width?: number
+  [key: string]: unknown
+}
+
+export interface WebUiListFilter {
+  key: string
+  stateKey: string
+  operator?: 'equals' | 'contains' | 'includes' | 'truthy' | 'lte' | 'gte'
+}
+
+export interface WebUiListMetaField {
+  key: string
+  label?: string
+  kind?: 'text' | 'badge' | 'boolean'
+  trueLabel?: string
+  falseLabel?: string
+}
+
+export interface WebUiListItemButton {
+  id: string
+  label?: string
+  icon?: string
+  whenKey?: string
+  whenEquals?: unknown
+}
+
+export interface WebUiListInputs {
+  variant?: 'list' | 'cards'
+  titleKey?: string
+  subtitleKey?: string
+  previewKey?: string
+  imageKey?: string
+  imageAltKey?: string
+  badgeKey?: string
+  meta?: readonly WebUiListMetaField[]
+  groupBy?: string
+  groupTitleKey?: string
+  groupSubtitleKey?: string
+  groupDisplay?: 'sections' | 'accordion'
+  filters?: readonly WebUiListFilter[]
+  buttons?: readonly WebUiListItemButton[]
+  search?: boolean
+  searchEnabled?: boolean
+  searchPlaceholder?: string
+  cardMinWidth?: number
+  cardImageRatio?: string
+  emptyText?: string
+  [key: string]: unknown
+}
+
+export interface WebUiDetailsInputs {
+  selectedStateKey?: string
+  stateKey?: string
+  fields?: readonly Record<string, unknown>[]
+  imageKey?: string
+  imageAltKey?: string
+  imageRatio?: string
   [key: string]: unknown
 }
 
@@ -333,7 +396,7 @@ export interface WebUiWidgetConfig {
   area?: string
   title?: string
   dataSource?: Record<string, unknown>
-  inputs?: WebUiFormInputs | Record<string, unknown>
+  inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | Record<string, unknown>
   actions?: readonly unknown[]
   [key: string]: unknown
 }
@@ -341,6 +404,16 @@ export interface WebUiWidgetConfig {
 export interface WebUiFormWidgetConfig extends WebUiWidgetConfig {
   type: 'ui.form'
   inputs?: WebUiFormInputs
+}
+
+export interface WebUiListWidgetConfig extends WebUiWidgetConfig {
+  type: 'ui.list'
+  inputs?: WebUiListInputs
+}
+
+export interface WebUiDetailsWidgetConfig extends WebUiWidgetConfig {
+  type: 'item.details'
+  inputs?: WebUiDetailsInputs
 }
 
 export interface WebUiModalAddress {
