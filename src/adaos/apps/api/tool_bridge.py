@@ -1082,6 +1082,7 @@ class ToolCall(BaseModel):
 
 @router.post("/tools/call", dependencies=[Depends(require_token)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
+    call_started_at = time.perf_counter()
     if not is_accepting_new_work():
         raise HTTPException(status_code=503, detail="node is draining")
     # Разбираем "<skill_name>:<public_tool_name>"
@@ -1104,11 +1105,13 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     )
 
     trace = attach_http_trace_headers(request.headers, response.headers)
+    setup_done_at = time.perf_counter()
     payload: Dict[str, Any] = body.arguments or {}
     webspace_id = _resolve_tool_webspace_id(payload)
     target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)
     local_node_id = str(getattr(conf, "node_id", "") or "").strip()
+    gate_started_at = time.perf_counter()
     await _enforce_runtime_action_gate(
         body=body,
         skill_name=skill_name,
@@ -1118,6 +1121,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         local_node_id=local_node_id,
         ctx=ctx,
     )
+    gate_done_at = time.perf_counter()
     if conf and _should_proxy_tool_call_to_target(
         conf=conf,
         tool_name=body.tool,
@@ -1136,32 +1140,60 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     # Пробуем локально; если навык отсутствует на узле-хабе — проксируем на member
     try:
         started_at = time.perf_counter()
+        local_timings: Dict[str, float] = {}
         def _run_local_tool_unlocked() -> Any:
             if not body.dev and _should_autosync_workspace_runtime(tool_name=body.tool):
+                stage_started = time.perf_counter()
                 _maybe_sync_workspace_runtime(ctx, mgr, skill_name)
+                local_timings["autosync_ms"] = (time.perf_counter() - stage_started) * 1000.0
+            stage_started = time.perf_counter()
             if body.dev:
-                return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                try:
+                    return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                finally:
+                    local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
             try:
-                return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                try:
+                    return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                finally:
+                    local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
             except (FileNotFoundError, RuntimeError, KeyError):
+                repair_started = time.perf_counter()
                 if not _repair_workspace_runtime(ctx, mgr, skill_name, webspace_id=webspace_id):
                     raise
-                return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                local_timings["repair_ms"] = (time.perf_counter() - repair_started) * 1000.0
+                stage_started = time.perf_counter()
+                try:
+                    return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                finally:
+                    local_timings["run_tool_after_repair_ms"] = (time.perf_counter() - stage_started) * 1000.0
 
         def _run_local_tool() -> Any:
             if body.dev or not _workspace_runtime_guard_required(ctx, skill_name, tool_name=body.tool):
                 return _run_local_tool_unlocked()
+            lock_started = time.perf_counter()
             with _workspace_runtime_lock(skill_name):
+                local_timings["workspace_lock_ms"] = (time.perf_counter() - lock_started) * 1000.0
                 return _run_local_tool_unlocked()
 
         result = await anyio.to_thread.run_sync(_run_local_tool)
         took_ms = (time.perf_counter() - started_at) * 1000.0
-        if took_ms >= 2000:
+        total_ms = (time.perf_counter() - call_started_at) * 1000.0
+        if took_ms >= 2000 or total_ms >= 2000:
             _log.warning(
-                "tools.call slow tool=%s dev=%s took_ms=%.1f",
+                "tools.call slow tool=%s dev=%s total_ms=%.1f pre_local_ms=%.1f setup_ms=%.1f gate_ms=%.1f local_total_ms=%.1f workspace_lock_ms=%.1f autosync_ms=%.1f run_tool_ms=%.1f repair_ms=%.1f run_tool_after_repair_ms=%.1f",
                 body.tool,
                 body.dev,
+                total_ms,
+                (started_at - call_started_at) * 1000.0,
+                (setup_done_at - call_started_at) * 1000.0,
+                (gate_done_at - gate_started_at) * 1000.0,
                 took_ms,
+                float(local_timings.get("workspace_lock_ms") or 0.0),
+                float(local_timings.get("autosync_ms") or 0.0),
+                float(local_timings.get("run_tool_ms") or 0.0),
+                float(local_timings.get("repair_ms") or 0.0),
+                float(local_timings.get("run_tool_after_repair_ms") or 0.0),
             )
     except (FileNotFoundError, RuntimeError, KeyError) as e:
         # Если локально не найден навык/слот — попробуем проксировать на участника подсети (только если роль hub)
