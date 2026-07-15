@@ -210,6 +210,47 @@ def test_prompt_llm_profile_options_and_selection(monkeypatch, tmp_path: Path) -
     assert [item["selected"] for item in selected["options"]] == [False, True]
 
 
+def test_prompt_llm_profile_options_use_development_fallback_when_root_returns_raw_models(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    skills_root = tmp_path / "skills"
+    scenarios_root = tmp_path / "scenarios"
+    scenarios_root.mkdir(parents=True)
+    skills_root.mkdir()
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return skills_root
+
+        def dev_scenarios_dir(self) -> Path:
+            return scenarios_root
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths(), bus=object()))
+
+    import adaos.sdk.llm.llm_client as llm_client
+
+    monkeypatch.setattr(
+        llm_client,
+        "list_llm_models",
+        lambda **_kwargs: {
+            "object": "list",
+            "data": [
+                {"id": "text-embedding-ada-002", "object": "model"},
+                {"id": "whisper-1", "object": "model"},
+            ],
+        },
+    )
+
+    options = module.prompt_llm_model_options({"object_type": "scenario", "object_id": "demo_scenario"})
+
+    assert options["ok"] is True
+    assert options["source"] == "hub_fallback"
+    assert options["value"] == "gpt-5"
+    assert [item["id"] for item in options["options"]] == ["gpt-5", "gpt-4.1", "gpt-4o-mini"]
+    assert all(item["scope"] == "development" for item in options["options"])
+
+
 def test_prompt_lists_json_only_dev_scenario(monkeypatch, tmp_path: Path) -> None:
     module = _load_prompt_engineer_module(monkeypatch)
     skills_root = tmp_path / "skills"
