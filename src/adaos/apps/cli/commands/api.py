@@ -1,8 +1,10 @@
 # src\adaos\apps\cli\commands\api.py
 import atexit
 import asyncio
+import errno
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -182,6 +184,94 @@ def _missing_runtime_preflight_required_files(repo_root: Path) -> list[str]:
     return [rel for rel in _RUNTIME_PREFLIGHT_REQUIRED_FILES if not (root / rel).exists()]
 
 
+def _parse_windows_tcp_excluded_ranges(output: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for line in str(output or "").splitlines():
+        parts = line.strip().replace("*", " ").split()
+        if len(parts) < 2:
+            continue
+        try:
+            start = int(parts[0])
+            end = int(parts[1])
+        except ValueError:
+            continue
+        if 0 <= start <= end <= 65535:
+            ranges.append((start, end))
+    return ranges
+
+
+def _windows_tcp_excluded_ranges_for_host(host: str) -> list[tuple[int, int]]:
+    if os.name != "nt":
+        return []
+    normalized = str(host or "").strip()
+    family = "ipv6" if ":" in normalized and normalized not in {"0.0.0.0"} else "ipv4"
+    try:
+        completed = subprocess.run(
+            ["netsh", "interface", family, "show", "excludedportrange", "protocol=tcp"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5.0,
+        )
+    except Exception:
+        return []
+    if completed.returncode != 0:
+        return []
+    return _parse_windows_tcp_excluded_ranges(completed.stdout)
+
+
+def _tcp_exclusion_for_port(host: str, port: int) -> tuple[int, int] | None:
+    target = int(port)
+    for start, end in _windows_tcp_excluded_ranges_for_host(host):
+        if start <= target <= end:
+            return start, end
+    return None
+
+
+def _probe_api_bind_availability(host: str, port: int) -> dict[str, object]:
+    excluded = _tcp_exclusion_for_port(host, port)
+    if excluded is not None:
+        start, end = excluded
+        return {
+            "ok": False,
+            "phase": "bind_port_exclusion",
+            "error": "PortExcluded",
+            "message": f"TCP port {int(port)} is reserved by Windows excluded port range {start}-{end}",
+            "host": host,
+            "port": int(port),
+            "range": [start, end],
+        }
+    bind_host = str(host or "127.0.0.1").strip() or "127.0.0.1"
+    family = socket.AF_INET6 if ":" in bind_host and bind_host not in {"0.0.0.0"} else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.bind((bind_host, int(port)))
+        return {"ok": True, "host": host, "port": int(port)}
+    except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
+        code = int(winerror or getattr(exc, "errno", 0) or 0)
+        if code in {errno.EADDRINUSE, 10048}:
+            owner_pid = _find_listening_server_pid(host, port)
+            if owner_pid:
+                return {"ok": True, "host": host, "port": int(port), "occupied_by": int(owner_pid)}
+        error = "PermissionDenied" if code in {errno.EACCES, 10013} else type(exc).__name__
+        return {
+            "ok": False,
+            "phase": "bind_probe",
+            "error": error,
+            "message": str(exc),
+            "host": host,
+            "port": int(port),
+            "errno": code,
+        }
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 def _skills_root_for_runtime_preflight(repo_root: Path) -> Path:
     try:
         raw = get_ctx().paths.skills_dir()
@@ -287,6 +377,17 @@ def _run_api_pre_stop_preflight(host: str, port: int) -> dict[str, object]:
                     "missing": missing,
                 }
             ],
+        }
+    bind_probe = _probe_api_bind_availability(host, port)
+    if bind_probe.get("ok") is not True:
+        error = dict(bind_probe)
+        error.pop("ok", None)
+        return {
+            "ok": False,
+            "repo_root": str(repo_root),
+            "host": host,
+            "port": int(port),
+            "errors": [error],
         }
     try:
         skills_root = _skills_root_for_runtime_preflight(repo_root)

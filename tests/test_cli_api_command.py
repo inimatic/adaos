@@ -8,6 +8,8 @@ from adaos.apps.cli.commands.api import (
     _find_matching_server_pids,
     _is_local_url,
     _missing_runtime_preflight_required_files,
+    _parse_windows_tcp_excluded_ranges,
+    _probe_api_bind_availability,
     _process_matches_bind,
     _resolve_stop_bind,
     _resolve_bind,
@@ -88,6 +90,29 @@ def test_runtime_preflight_requires_redevice_sdk(tmp_path):
 
     assert "src/adaos/sdk/redevice.py" in missing
     assert "src/adaos/apps/api/server.py" in missing
+
+
+def test_parse_windows_tcp_excluded_ranges():
+    output = """
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+      8730        8829
+     50000       50059     *
+"""
+
+    assert _parse_windows_tcp_excluded_ranges(output) == [(8730, 8829), (50000, 50059)]
+
+
+def test_bind_preflight_reports_windows_excluded_port(monkeypatch):
+    monkeypatch.setattr("adaos.apps.cli.commands.api._tcp_exclusion_for_port", lambda host, port: (8730, 8829))
+
+    result = _probe_api_bind_availability("127.0.0.1", 8777)
+
+    assert result["ok"] is False
+    assert result["error"] == "PortExcluded"
+    assert result["range"] == [8730, 8829]
 
 
 def test_api_serve_preflight_failure_keeps_previous_server(monkeypatch):
