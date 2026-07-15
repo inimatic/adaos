@@ -1106,7 +1106,16 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
 
     trace = attach_http_trace_headers(request.headers, response.headers)
     setup_done_at = time.perf_counter()
-    payload: Dict[str, Any] = body.arguments or {}
+    payload: Dict[str, Any] = dict(body.arguments or {})
+    meta = _mapping(payload.get("_meta"))
+    context = _mapping(body.context)
+    action_source = _first_text(meta.get("action_source"), context.get("action_source"))
+    if not action_source:
+        meta["action_source"] = "api_tool_call"
+        meta.setdefault("origin_label", "API")
+    meta.setdefault("tool", body.tool)
+    meta.setdefault("tool_name", body.tool)
+    payload["_meta"] = meta
     webspace_id = _resolve_tool_webspace_id(payload)
     target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)

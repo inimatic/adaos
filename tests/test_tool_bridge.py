@@ -22,11 +22,15 @@ from adaos.apps.api import tool_bridge as tool_bridge_module
 
 @pytest.fixture(autouse=True)
 def _reset_tool_bridge_runtime_guards() -> None:
-    tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
-    tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
+    if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
+        tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
+    if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LOCKS"):
+        tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
     yield
-    tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
-    tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
+    if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
+        tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
+    if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LOCKS"):
+        tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
 
 
 def _fake_ctx() -> SimpleNamespace:
@@ -583,6 +587,7 @@ def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> 
 
 def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkeypatch) -> None:
     calls: list[str] = []
+    payloads: list[dict[str, object]] = []
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -590,6 +595,7 @@ def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkey
 
         def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
             calls.append(f"{skill_name}:{tool_name}")
+            payloads.append(payload)
             return {"ok": True, "payload": payload}
 
     async def _fake_run_sync(func, *args, **kwargs):
@@ -633,6 +639,9 @@ def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkey
 
     assert result["ok"] is True
     assert calls == ["run_sync", "prompt_engineer_skill:prompt_select_project"]
+    assert payloads[0]["_meta"]["action_source"] == "api_tool_call"
+    assert payloads[0]["_meta"]["origin_label"] == "API"
+    assert payloads[0]["_meta"]["tool"] == "prompt_engineer_skill:prompt_select_project"
 
 
 def test_call_tool_allows_prompt_project_file_save_without_approval(monkeypatch) -> None:

@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
 
 def _load_prompt_engineer_module(monkeypatch):
     monkeypatch.setenv("ADAOS_VALIDATE", "1")
+    if "y_py" not in sys.modules:
+        sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
+    if "ypy_websocket" not in sys.modules:
+        ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
+        sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
+        sys.modules["ypy_websocket.ystore"] = ystore_mod
     module_path = Path(__file__).resolve().parents[1] / ".adaos" / "workspace" / "skills" / "prompt_engineer_skill" / "handlers" / "main.py"
     spec = importlib.util.spec_from_file_location("prompt_engineer_skill_phase2_main", module_path)
     assert spec is not None
@@ -145,6 +153,63 @@ def test_prompt_payload_helpers_accept_kwargs(monkeypatch, tmp_path: Path) -> No
     assert items[0]["object_type"] == "scenario"
 
 
+def test_prompt_llm_profile_options_and_selection(monkeypatch, tmp_path: Path) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    skills_root = tmp_path / "skills"
+    scenarios_root = tmp_path / "scenarios"
+    scenario_root = scenarios_root / "demo_scenario"
+    scenario_root.mkdir(parents=True)
+    skills_root.mkdir()
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return skills_root
+
+        def dev_scenarios_dir(self) -> Path:
+            return scenarios_root
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths(), bus=object()))
+    monkeypatch.setattr(module, "bus_emit", lambda *args, **kwargs: None)
+
+    import adaos.sdk.llm.llm_client as llm_client
+
+    monkeypatch.setattr(
+        llm_client,
+        "list_llm_models",
+        lambda **_kwargs: {
+            "object": "list",
+            "data": [
+                {"id": "gpt-5", "provider": "openai", "label": "GPT-5", "default": True},
+                {"id": "gpt-4.1", "provider": "openai", "label": "GPT-4.1"},
+            ],
+            "model_profiles": [
+                {"id": "gpt-5", "provider": "openai", "label": "GPT-5", "scope": "development", "default": True},
+                {"id": "gpt-4.1", "provider": "openai", "label": "GPT-4.1", "scope": "development"},
+            ],
+        },
+    )
+
+    options = module.prompt_llm_model_options({"object_type": "scenario", "object_id": "demo_scenario"})
+
+    assert options["ok"] is True
+    assert options["value"] == "gpt-5"
+    assert [item["id"] for item in options["options"]] == ["gpt-5", "gpt-4.1"]
+
+    result = module.prompt_set_llm_profile(
+        {"object_type": "scenario", "object_id": "demo_scenario", "model": "gpt-4.1"}
+    )
+
+    assert result["ok"] is True
+    assert result["builder_llm_model"] == "gpt-4.1"
+    state = json.loads((scenario_root / "prompt_state.json").read_text(encoding="utf-8"))
+    assert state["builder_llm_model"] == "gpt-4.1"
+    assert state["llm_profile"]["provider"] == "openai"
+
+    selected = module.prompt_llm_model_options({"object_type": "scenario", "object_id": "demo_scenario"})
+    assert selected["value"] == "gpt-4.1"
+    assert [item["selected"] for item in selected["options"]] == [False, True]
+
+
 def test_prompt_lists_json_only_dev_scenario(monkeypatch, tmp_path: Path) -> None:
     module = _load_prompt_engineer_module(monkeypatch)
     skills_root = tmp_path / "skills"
@@ -243,11 +308,32 @@ def test_prompt_save_project_file_updates_base_tz_state(monkeypatch, tmp_path: P
 def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
     module = _load_prompt_engineer_module(monkeypatch)
     emitted: list[tuple[str, dict, str]] = []
+    bindings: list[dict[str, object]] = []
+
+    class _Workbench:
+        def set_active_draft(self, **kwargs):
+            bindings.append(dict(kwargs))
+            return {"ok": True}
+
+        def publish_projection_sync(self, *_args, **_kwargs):
+            return {"ok": True}
+
+    builder_pkg = types.ModuleType("adaos.services.builder")
+    workbench_module = types.ModuleType("adaos.services.builder.workbench")
+    workbench_module.BuilderWorkbenchService = lambda: _Workbench()
+    monkeypatch.setitem(sys.modules, "adaos.services.builder", builder_pkg)
+    monkeypatch.setitem(sys.modules, "adaos.services.builder.workbench", workbench_module)
 
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(bus=object()))
     monkeypatch.setattr(module, "bus_emit", lambda bus, topic, payload, source: emitted.append((topic, payload, source)))
 
-    result = module.prompt_select_project({"object_type": "scenario", "object_id": "demo_scenario"})
+    result = module.prompt_select_project(
+        {
+            "object_type": "scenario",
+            "object_id": "demo_scenario",
+            "_meta": {"webspace_id": "desktop"},
+        }
+    )
 
     assert result["ok"] is True
     assert result["object_type"] == "scenario"
@@ -256,3 +342,12 @@ def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
     assert emitted[0][0] == "prompt.project.changed"
     assert emitted[1][0] == "builder.preview.selected"
     assert emitted[1][1]["scenario_id"] == "demo_scenario"
+    assert emitted[1][1]["source_webspace_id"] == "desktop"
+    assert bindings == [
+        {
+            "source_webspace_id": "desktop",
+            "active_draft_id": None,
+            "runtime_scenario_id": "demo_scenario",
+            "persist_projection": True,
+        }
+    ]

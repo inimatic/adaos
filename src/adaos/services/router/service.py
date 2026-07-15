@@ -4681,6 +4681,9 @@ class RouterService:
                 "active_agent_avatar_ref",
                 "agent_icon",
                 "agent_avatar_ref",
+                "recipient_label",
+                "origin_label",
+                "action_source",
             ):
                 raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():

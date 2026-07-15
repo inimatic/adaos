@@ -416,6 +416,16 @@ Open work:
   context. The workbench widget now carries active draft/scenario topic
   metadata, ChatWidget sends it with turns and history-more requests, and the
   router publishes only the matching thread projection.
+- [x] `[must]` Treat the incoming Builder message topic as the turn-level
+  source of truth when Prompt IDE state and workbench binding diverge.
+  `builder_skill.update_current_scenario` now aligns the workbench binding to
+  `prompt-project:scenario:<id>` from chat/API metadata before selecting the
+  target session, so a stale `desktop-dev` binding cannot patch another
+  prototype.
+- [x] `[should]` Surface API-origin Builder turns in the same administrative
+  chat history as browser turns. Tool-bridge calls stamp `action_source=api_tool_call`
+  and `origin_label=API`; Builder echoes API requests as `API -> Builder` and
+  labels replies as `Builder -> API`.
 - [x] `[must]` Render the first mockup from Builder-authored `webui.json` and
   apply user comments as patches against the current draft and current
   `webui.json`. The first deterministic slice is covered by
@@ -485,6 +495,11 @@ Open work:
   polls the same root base URL, validates the returned JSON, and only then
   writes `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
   dev-webspace refresh events.
+- [x] `[should]` Add root-owned development LLM model profiles. Root policy now
+  exposes `dev_model_profiles` through `/v1/llm/models?scope=development`;
+  Prompt IDE shows that scoped list in the LLM Profile modal and persists the
+  selected model in `prompt_state.json`; Builder uses that project profile
+  before env/default model fallback.
 - [x] `[must]` Add thread-aware context packet plumbing for Builder:
   `conversation_links.builder_context_packet`, router dialog context payloads,
   and `adaos.sdk.conversation.context` can now select the active Builder

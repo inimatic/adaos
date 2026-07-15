@@ -1204,7 +1204,7 @@
       }
     },
 
-    "formFieldType": {
+    "formInputType": {
       "type": "string",
       "enum": [
         "shortText",
@@ -1288,13 +1288,19 @@
       ]
     },
 
+    "formFieldType": {
+      "$ref": "#/$defs/formInputType",
+      "deprecated": true,
+      "description": "Deprecated alias for formInputType. ui.form.inputs.fields[*].type remains the runtime property."
+    },
+
     "formField": {
       "type": "object",
       "additionalProperties": true,
       "required": ["id", "type"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "type": { "$ref": "#/$defs/formFieldType" },
+        "type": { "$ref": "#/$defs/formInputType" },
         "label": { "type": "string" },
         "title": { "type": "string" },
         "question": { "type": "string" },

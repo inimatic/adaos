@@ -118,7 +118,7 @@ export type WebUiWidgetType =
   | 'host.cvRuntime'
   | 'host.webspaceControls'
 
-export type WebUiFormFieldType =
+export type WebUiFormInputType =
   | 'shortText'
   | 'short_text'
   | 'shortAnswer'
@@ -198,6 +198,8 @@ export type WebUiFormFieldType =
   | 'image'
   | 'video'
 
+export type WebUiFormFieldType = WebUiFormInputType
+
 export type WebUiFormOptionPrimitive = string | number | boolean
 
 export interface WebUiFormOptionObject {
@@ -260,7 +262,7 @@ export interface WebUiFormQuiz {
 
 export interface WebUiFormField {
   id: string
-  type: WebUiFormFieldType | string
+  type: WebUiFormInputType | string
   label?: string
   title?: string
   question?: string

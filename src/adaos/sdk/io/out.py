@@ -69,6 +69,28 @@ def _merged_meta(_meta: Mapping[str, Any] | None) -> dict[str, Any]:
     return _normalize_meta(meta) if meta else meta
 
 
+_CHAT_META_PAYLOAD_KEYS = (
+    "active_agent_id",
+    "active_agent_label",
+    "active_agent_gender",
+    "active_agent_voice",
+    "active_agent_icon",
+    "active_agent_avatar_ref",
+    "agent_icon",
+    "agent_avatar_ref",
+    "recipient_label",
+    "origin_label",
+    "action_source",
+)
+
+
+def _copy_chat_meta_payload_fields(payload: dict[str, Any], meta: Mapping[str, Any]) -> None:
+    for key in _CHAT_META_PAYLOAD_KEYS:
+        value = meta.get(key)
+        if isinstance(value, str) and value.strip() and key not in payload:
+            payload[key] = value.strip()
+
+
 def _local_node_id() -> str:
     try:
         conf = load_config()
@@ -239,6 +261,7 @@ def chat_append(
     meta = _merged_meta(_meta)
     if meta:
         payload["_meta"] = meta
+        _copy_chat_meta_payload_fields(payload, meta)
     if actions:
         payload["actions"] = [dict(item) for item in actions if isinstance(item, Mapping)]
     _publish("io.out.chat.append", payload, source="sdk.io.out")

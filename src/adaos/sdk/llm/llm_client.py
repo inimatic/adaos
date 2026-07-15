@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from urllib.parse import quote
 
 import requests
 from adaos.services.agent_context import get_ctx
@@ -361,12 +362,13 @@ def _legacy_http_enabled() -> bool:
     return bool(os.getenv("ADAOS_LLM_ENDPOINT"))
 
 
-def list_llm_models(*, timeout: float | None = None) -> Dict[str, Any]:
+def list_llm_models(*, timeout: float | None = None, scope: str | None = None) -> Dict[str, Any]:
     """
     Fetch available LLM models from the Root LLM proxy.
     """
+    params = {"scope": scope} if isinstance(scope, str) and scope.strip() else None
     if _legacy_http_enabled() or os.getenv("ADAOS_LLM_MODELS_ENDPOINT"):
-        resp = requests.get(_llm_models_endpoint(), headers=_auth_headers(), timeout=timeout or 30)
+        resp = requests.get(_llm_models_endpoint(), headers=_auth_headers(), params=params, timeout=timeout or 30)
         resp.raise_for_status()
         data: Dict[str, Any] = resp.json() if resp.text else {}
         return data
@@ -388,7 +390,10 @@ def list_llm_models(*, timeout: float | None = None) -> Dict[str, Any]:
             )
         )
         try:
-            raw = http.request("GET", "/v1/llm/models", headers=headers or None, timeout=timeout or 30)
+            path = "/v1/llm/models"
+            if params:
+                path = f"{path}?scope={quote(str(params['scope']))}"
+            raw = http.request("GET", path, headers=headers or None, timeout=timeout or 30)
             if isinstance(raw, Mapping):
                 return dict(raw)
             if isinstance(raw, list):
