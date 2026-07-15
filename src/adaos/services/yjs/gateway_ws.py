@@ -5839,6 +5839,13 @@ class WorkspaceWebsocketServer(WebsocketServer):
             try:
                 ui_map = room.ydoc.get_map("ui")
                 data_map = room.ydoc.get_map("data")
+                ui_keys = list(ui_map.keys())
+                data_keys = list(data_map.keys())
+                # y_py YMap objects are thread-affine. Keep only plain lists in
+                # diagnostics locals so later cross-thread frame sampling cannot
+                # drop a live YMap on the wrong thread.
+                del ui_map
+                del data_map
                 room._diag_effective_branch_snapshot = {
                     "ready": _room_effective_top_level_ready(room.ydoc),
                     "mode": "top_level_debug",
@@ -5846,8 +5853,8 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 _ylog.debug(
                     "YRoom ready webspace=%s ui keys=%s data keys=%s",
                     webspace_id,
-                    list(ui_map.keys()),
-                    list(data_map.keys()),
+                    ui_keys,
+                    data_keys,
                 )
             except Exception:
                 _ylog.warning("failed to inspect YDoc for webspace=%s", webspace_id, exc_info=True)

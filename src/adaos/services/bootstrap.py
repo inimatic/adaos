@@ -3517,14 +3517,41 @@ class BootstrapService:
                                 except Exception as exc:
                                     snap["exc"] = f"{type(exc).__name__}: {exc}"
                                 frames: list[str] = []
+
+                                def _frame_has_y_py_locals(frame: Any) -> bool:
+                                    locals_values: Any = None
+                                    try:
+                                        locals_values = getattr(frame, "f_locals", {}) or {}
+                                        for value in locals_values.values():
+                                            try:
+                                                if type(value).__module__.split(".", 1)[0] == "y_py":
+                                                    return True
+                                            finally:
+                                                del value
+                                    except Exception:
+                                        return False
+                                    finally:
+                                        del locals_values
+                                    return False
+
                                 try:
                                     for frame in task.get_stack(limit=max(1, int(stack_limit))):
                                         try:
+                                            if _frame_has_y_py_locals(frame):
+                                                frames.append("y_py_frame")
+                                                break
                                             frames.append(
                                                 f"{Path(frame.f_code.co_filename).name}:{int(frame.f_lineno)}:{frame.f_code.co_name}"
                                             )
                                         except Exception:
                                             continue
+                                        finally:
+                                            # Do not let diagnostics retain live
+                                            # frame objects. Frames can keep
+                                            # y_py YDoc/YMap locals alive and
+                                            # later drop them on a different
+                                            # thread during GC on Windows.
+                                            del frame
                                 except Exception as exc:
                                     frames = [f"{type(exc).__name__}: {exc}"]
                                 snap["stack"] = frames
