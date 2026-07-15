@@ -63,6 +63,9 @@ try:
 except Exception:
     VOICE_CHAT_VISIBLE_TAIL = 24
 VOICE_CHAT_HISTORY_LIMIT = 200
+VOICE_CHAT_STREAM_TEXT_MAX_CHARS = 1200
+VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = 4096
+VOICE_CHAT_STREAM_ACTIONS_MAX = 6
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
     {
         "id": GENERAL_DIALOG_AGENT_ID,
@@ -141,6 +144,80 @@ _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
         ),
     },
 )
+
+
+def _truncate_voice_chat_stream_text(value: Any, *, max_chars: int = VOICE_CHAT_STREAM_TEXT_MAX_CHARS) -> str:
+    text = str(value or "")
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
+
+def _compact_voice_chat_stream_action(action: Mapping[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in ("id", "label", "title", "icon", "fill", "command"):
+        value = action.get(key)
+        if value is not None and value != "":
+            compact[key] = value
+    if action.get("disabled") is True:
+        compact["disabled"] = True
+    for key in ("params", "action"):
+        value = action.get(key)
+        if value is None:
+            continue
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            continue
+        if len(encoded) <= VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS:
+            compact[key] = value
+    return compact
+
+
+def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in (
+        "id",
+        "from",
+        "ts",
+        "seq",
+        "conversation_id",
+        "dialog_channel_id",
+        "thread_id",
+        "conversation_topic_id",
+        "topic_id",
+        "turn_trace_id",
+        "active_agent_id",
+        "active_agent_label",
+        "active_agent_icon",
+        "active_agent_avatar_ref",
+        "agent_avatar_ref",
+        "recipient_label",
+        "origin_label",
+    ):
+        value = item.get(key)
+        if value is not None and value != "":
+            compact[key] = value
+    compact["text"] = _truncate_voice_chat_stream_text(item.get("text"))
+    actions = item.get("actions")
+    if isinstance(actions, list):
+        compact_actions = [
+            _compact_voice_chat_stream_action(action)
+            for action in actions[:VOICE_CHAT_STREAM_ACTIONS_MAX]
+            if isinstance(action, Mapping)
+        ]
+        compact_actions = [action for action in compact_actions if action]
+        if compact_actions:
+            compact["actions"] = compact_actions
+    return compact
+
+
+def _compact_voice_chat_stream_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _compact_voice_chat_stream_message(item)
+        for item in messages
+        if isinstance(item, Mapping)
+    ]
 _GENERAL_AGENT_ADDRESS_RE = re.compile(
     r"^\s*(?:general|ассистент|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
     re.IGNORECASE | re.UNICODE,
@@ -3093,7 +3170,9 @@ class RouterService:
         ) -> str:
             # Keep the browser stream as a compact tail. Voice must never wait
             # on heavier YJS history writes before dispatching NLU.
-            cached_messages = [dict(item) for item in messages if isinstance(item, dict)]
+            cached_messages = _compact_voice_chat_stream_messages(
+                [dict(item) for item in messages if isinstance(item, dict)]
+            )
             total_count = int(total_message_count if total_message_count is not None else len(cached_messages))
             conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(cached_messages)
             signature = _voice_chat_persist_signature(
@@ -3188,7 +3267,9 @@ class RouterService:
             has_more_before: bool = False,
             total_message_count: int | None = None,
         ) -> None:
-            snapshot = [dict(item) for item in messages[-VOICE_CHAT_VISIBLE_TAIL:] if isinstance(item, dict)]
+            snapshot = _compact_voice_chat_stream_messages(
+                [dict(item) for item in messages[-VOICE_CHAT_VISIBLE_TAIL:] if isinstance(item, dict)]
+            )
             if not snapshot:
                 return
             conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(snapshot)

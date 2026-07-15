@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -2893,6 +2894,58 @@ async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> No
     assert expanded["before_cursor"] == "0"
     assert expanded["messages"][0]["text"] == "turn 0"
     assert expanded["messages"][-1]["text"] == "turn 9"
+
+
+async def test_voice_chat_stream_compacts_heavy_message_payloads(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "compact-stream-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            )
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    heavy_notes = "x" * 80000
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "apply notes",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "prototype_review_notes": {"notes": heavy_notes},
+                },
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_stream
+    message = seen_stream[-1].payload["data"]["messages"][-1]
+    assert message["text"] == "apply notes"
+    assert "_meta" not in message
+    assert "prototype_review_notes" not in json.dumps(message, ensure_ascii=False)
 
 
 async def test_voice_chat_user_autocorrects_text_before_nlu(monkeypatch) -> None:
