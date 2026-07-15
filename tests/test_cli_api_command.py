@@ -8,15 +8,18 @@ from adaos.apps.cli.commands.api import (
     _find_matching_server_pids,
     _is_local_url,
     _missing_runtime_preflight_required_files,
+    _parse_windows_dynamic_port_range,
     _parse_windows_tcp_excluded_ranges,
     _probe_api_bind_availability,
     _process_matches_bind,
+    _run_api_pre_stop_preflight,
     _resolve_stop_bind,
     _resolve_bind,
     _resolve_implicit_api_port_fallback,
     _write_pidfile,
     app,
 )
+from adaos.apps.cli.commands import api as api_cmd
 from adaos.apps.cli.commands import dev as dev_cmd
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
 from adaos.services.node_config import NodeConfig
@@ -106,6 +109,17 @@ Start Port    End Port
     assert _parse_windows_tcp_excluded_ranges(output) == [(8730, 8829), (50000, 50059)]
 
 
+def test_parse_windows_dynamic_port_range():
+    output = """
+Protocol tcp Dynamic Port Range
+---------------------------------
+Start Port      : 1024
+Number of Ports : 13977
+"""
+
+    assert _parse_windows_dynamic_port_range(output) == {"start": 1024, "count": 13977, "end": 15000}
+
+
 def test_bind_preflight_reports_windows_excluded_port(monkeypatch):
     monkeypatch.setattr("adaos.apps.cli.commands.api._tcp_exclusion_for_port", lambda host, port: (8730, 8829))
 
@@ -114,6 +128,22 @@ def test_bind_preflight_reports_windows_excluded_port(monkeypatch):
     assert result["ok"] is False
     assert result["error"] == "PortExcluded"
     assert result["range"] == [8730, 8829]
+
+
+def test_implicit_api_port_repair_precedes_fallback(monkeypatch):
+    monkeypatch.setattr(
+        api_cmd,
+        "_probe_api_bind_availability",
+        lambda host, port: {"ok": False, "error": "PortExcluded"} if int(port) == 8777 else {"ok": True},
+    )
+    monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: types.SimpleNamespace())
+    monkeypatch.setattr(
+        api_cmd,
+        "_repair_windows_api_port_exclusion",
+        lambda host, port, probe, repo_root: {"attempted": True, "repaired": True},
+    )
+
+    assert _resolve_implicit_api_port_fallback("127.0.0.1", 8777, explicit_port=False) == ("127.0.0.1", 8777)
 
 
 def test_implicit_api_port_fallback_skips_windows_reserved_port(monkeypatch):
@@ -128,6 +158,32 @@ def test_implicit_api_port_fallback_skips_windows_reserved_port(monkeypatch):
 
     assert _resolve_implicit_api_port_fallback("127.0.0.1", 8779, explicit_port=False) == ("127.0.0.1", 8877)
     assert _resolve_implicit_api_port_fallback("127.0.0.1", 8779, explicit_port=True) == ("127.0.0.1", 8779)
+
+
+def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
+    calls = {"probe": 0}
+
+    def _probe(host, port):
+        calls["probe"] += 1
+        if calls["probe"] == 1:
+            return {"ok": False, "error": "PortExcluded"}
+        return {"ok": True}
+
+    monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
+    monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda repo_root: [])
+    monkeypatch.setattr(api_cmd, "_probe_api_bind_availability", _probe)
+    monkeypatch.setattr(
+        api_cmd,
+        "_repair_windows_api_port_exclusion",
+        lambda host, port, probe, repo_root: {"attempted": True, "repaired": True},
+    )
+    monkeypatch.setattr(api_cmd, "_skills_root_for_runtime_preflight", lambda repo_root: tmp_path / "skills")
+    monkeypatch.setattr(api_cmd, "_run_runtime_import_preflight", lambda repo_root, skills_root: {"ok": True})
+
+    result = _run_api_pre_stop_preflight("127.0.0.1", 8777)
+
+    assert result["ok"] is True
+    assert calls["probe"] == 2
 
 
 def test_api_serve_preflight_failure_keeps_previous_server(monkeypatch):

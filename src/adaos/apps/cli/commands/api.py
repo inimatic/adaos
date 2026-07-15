@@ -1,6 +1,7 @@
 # src\adaos\apps\cli\commands\api.py
 import atexit
 import asyncio
+import ctypes
 import errno
 import json
 import os
@@ -200,6 +201,44 @@ def _parse_windows_tcp_excluded_ranges(output: str) -> list[tuple[int, int]]:
     return ranges
 
 
+def _parse_windows_dynamic_port_range(output: str) -> dict[str, int] | None:
+    start: int | None = None
+    count: int | None = None
+    for line in str(output or "").splitlines():
+        if "Start Port" in line:
+            try:
+                start = int(line.rsplit(":", 1)[1].strip())
+            except Exception:
+                start = None
+        elif "Number of Ports" in line:
+            try:
+                count = int(line.rsplit(":", 1)[1].strip())
+            except Exception:
+                count = None
+    if start is None or count is None or count <= 0:
+        return None
+    return {"start": start, "count": count, "end": start + count - 1}
+
+
+def _windows_tcp_dynamic_range(family: str = "ipv4") -> dict[str, int] | None:
+    if os.name != "nt":
+        return None
+    try:
+        completed = subprocess.run(
+            ["netsh", "interface", family, "show", "dynamicportrange", "protocol=tcp"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5.0,
+        )
+    except Exception:
+        return None
+    if completed.returncode != 0:
+        return None
+    return _parse_windows_dynamic_port_range(completed.stdout)
+
+
 def _windows_tcp_excluded_ranges_for_host(host: str) -> list[tuple[int, int]]:
     if os.name != "nt":
         return []
@@ -227,6 +266,54 @@ def _tcp_exclusion_for_port(host: str, port: int) -> tuple[int, int] | None:
         if start <= target <= end:
             return start, end
     return None
+
+
+def _runtime_preflight_diagnostics_dir(repo_root: Path) -> Path:
+    root = Path(repo_root).expanduser().resolve() / ".adaos" / "diagnostics"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _write_api_bind_diagnostic(repo_root: Path, payload: dict[str, object]) -> str | None:
+    try:
+        root = _runtime_preflight_diagnostics_dir(repo_root)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        port = int(payload.get("port") or 0)
+        path = root / f"api-bind-preflight-{stamp}-{port}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        return str(path)
+    except Exception:
+        return None
+
+
+def _api_bind_diagnostic_snapshot(
+    host: str,
+    port: int,
+    *,
+    probe: dict[str, object] | None = None,
+    repair: dict[str, object] | None = None,
+) -> dict[str, object]:
+    owner_pid = _find_listening_server_pid(host, int(port))
+    snapshot: dict[str, object] = {
+        "schema_version": "adaos.api_bind_preflight.v1",
+        "host": host,
+        "port": int(port),
+        "platform": sys.platform,
+        "probe": probe or _probe_api_bind_availability(host, int(port)),
+        "listener_pid": owner_pid,
+        "timestamp": time.time(),
+    }
+    if repair is not None:
+        snapshot["repair"] = repair
+    if os.name == "nt":
+        excluded = _windows_tcp_excluded_ranges_for_host(host)
+        snapshot["windows"] = {
+            "ipv4_dynamic_range": _windows_tcp_dynamic_range("ipv4"),
+            "ipv6_dynamic_range": _windows_tcp_dynamic_range("ipv6"),
+            "tcp_excluded_ranges": [[start, end] for start, end in excluded],
+            "target_excluded_range": list(_tcp_exclusion_for_port(host, int(port)) or []),
+        }
+    return snapshot
 
 
 def _probe_api_bind_availability(host: str, port: int) -> dict[str, object]:
@@ -272,6 +359,117 @@ def _probe_api_bind_availability(host: str, port: int) -> dict[str, object]:
             pass
 
 
+def _is_windows_admin() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _run_windows_netsh(args: list[str], *, timeout: float = 20.0) -> dict[str, object]:
+    try:
+        completed = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(1.0, float(timeout)),
+        )
+        return {
+            "cmd": args,
+            "returncode": completed.returncode,
+            "stdout": str(completed.stdout or "")[-4000:],
+            "stderr": str(completed.stderr or "")[-4000:],
+        }
+    except Exception as exc:
+        return {"cmd": args, "returncode": -1, "error": type(exc).__name__, "message": str(exc)}
+
+
+def _should_attempt_api_port_repair(host: str, port: int, probe: dict[str, object]) -> bool:
+    if os.name != "nt":
+        return False
+    raw = str(os.getenv("ADAOS_API_PORT_REPAIR") or "").strip().lower()
+    if raw in {"0", "false", "off", "no"}:
+        return False
+    target_port = int(port)
+    repair_any = str(os.getenv("ADAOS_API_REPAIR_ANY_PORT") or "").strip().lower() in {"1", "true", "on", "yes"}
+    if target_port != 8777 and not repair_any:
+        return False
+    if probe.get("error") not in {"PortExcluded", "PermissionDenied"}:
+        return False
+    normalized_host = str(host or "").strip().lower()
+    return normalized_host in {"", "127.0.0.1", "localhost", "0.0.0.0"}
+
+
+def _repair_windows_api_port_exclusion(host: str, port: int, probe: dict[str, object], repo_root: Path) -> dict[str, object]:
+    report: dict[str, object] = {
+        "schema_version": "adaos.api_bind_repair.v1",
+        "attempted": False,
+        "repaired": False,
+        "host": host,
+        "port": int(port),
+        "reason": probe,
+        "steps": [],
+    }
+    if not _should_attempt_api_port_repair(host, int(port), probe):
+        report["skipped_reason"] = "not_applicable"
+        return report
+    if not _is_windows_admin():
+        report["skipped_reason"] = "not_admin"
+        _write_api_bind_diagnostic(repo_root, _api_bind_diagnostic_snapshot(host, int(port), probe=probe, repair=report))
+        return report
+
+    report["attempted"] = True
+    report["before"] = _api_bind_diagnostic_snapshot(host, int(port), probe=probe).get("windows", {})
+    target = int(port)
+    for family in ("ipv4", "ipv6"):
+        dynamic = _windows_tcp_dynamic_range(family) or {}
+        start = int(dynamic.get("start") or 0)
+        end = int(dynamic.get("end") or -1)
+        if start <= target <= end:
+            report["steps"].append(
+                _run_windows_netsh(
+                    ["netsh", "interface", family, "set", "dynamicportrange", "protocol=tcp", "start=49152", "num=16384"]
+                )
+            )
+
+    if _tcp_exclusion_for_port(host, target) is not None:
+        report["steps"].append(_run_windows_netsh(["net", "stop", "winnat"], timeout=30.0))
+        excluded = _tcp_exclusion_for_port(host, target)
+        if excluded is not None:
+            start, end = excluded
+            report["steps"].append(
+                _run_windows_netsh(
+                    [
+                        "netsh",
+                        "interface",
+                        "ipv4",
+                        "delete",
+                        "excludedportrange",
+                        "protocol=tcp",
+                        f"startport={start}",
+                        f"numberofports={end - start + 1}",
+                    ]
+                )
+            )
+        report["steps"].append(_run_windows_netsh(["net", "start", "winnat"], timeout=30.0))
+
+    after_probe = _probe_api_bind_availability(host, target)
+    report["after_probe"] = after_probe
+    report["after"] = _api_bind_diagnostic_snapshot(host, target, probe=after_probe).get("windows", {})
+    report["repaired"] = after_probe.get("ok") is True and not after_probe.get("occupied_by")
+    diagnostic_path = _write_api_bind_diagnostic(
+        repo_root,
+        _api_bind_diagnostic_snapshot(host, target, probe=after_probe, repair=report),
+    )
+    if diagnostic_path:
+        report["diagnostic_path"] = diagnostic_path
+    return report
+
+
 def _api_port_fallback_candidates(preferred_port: int) -> list[int]:
     preferred = [8877, 8878, 8879, 8977, 8978, 9000]
     out: list[int] = []
@@ -294,8 +492,17 @@ def _resolve_implicit_api_port_fallback(host: str, port: int, *, explicit_port: 
     probe = _probe_api_bind_availability(host, int(port))
     if probe.get("ok") is True:
         return host, int(port)
+    repo_root = _repo_root_for_runtime_preflight()
+    repair = _repair_windows_api_port_exclusion(host, int(port), probe, repo_root)
+    if repair.get("repaired") is True:
+        typer.secho(f"[AdaOS] repaired local API port {int(port)}; continuing on the standard port.", fg=typer.colors.GREEN)
+        return host, int(port)
     if probe.get("error") not in {"PortExcluded", "PermissionDenied"}:
         return host, int(port)
+    diagnostic_path = _write_api_bind_diagnostic(
+        repo_root,
+        _api_bind_diagnostic_snapshot(host, int(port), probe=probe, repair=repair),
+    )
     for candidate in _api_port_fallback_candidates(int(port)):
         candidate_probe = _probe_api_bind_availability(host, candidate)
         if candidate_probe.get("ok") is True and not candidate_probe.get("occupied_by"):
@@ -304,6 +511,8 @@ def _resolve_implicit_api_port_fallback(host: str, port: int, *, explicit_port: 
                 f"{int(port)} is unavailable ({probe.get('error')}); using {candidate}.",
                 fg=typer.colors.YELLOW,
             )
+            if diagnostic_path:
+                typer.secho(f"[AdaOS] bind diagnostics: {diagnostic_path}", fg=typer.colors.YELLOW)
             return host, candidate
     return host, int(port)
 
@@ -416,15 +625,27 @@ def _run_api_pre_stop_preflight(host: str, port: int) -> dict[str, object]:
         }
     bind_probe = _probe_api_bind_availability(host, port)
     if bind_probe.get("ok") is not True:
-        error = dict(bind_probe)
-        error.pop("ok", None)
-        return {
-            "ok": False,
-            "repo_root": str(repo_root),
-            "host": host,
-            "port": int(port),
-            "errors": [error],
-        }
+        repair = _repair_windows_api_port_exclusion(host, int(port), bind_probe, repo_root)
+        if repair.get("repaired") is True:
+            bind_probe = _probe_api_bind_availability(host, port)
+        if bind_probe.get("ok") is True:
+            typer.secho(f"[AdaOS] repaired local API port {int(port)} before startup.", fg=typer.colors.GREEN)
+        else:
+            diagnostic_path = _write_api_bind_diagnostic(
+                repo_root,
+                _api_bind_diagnostic_snapshot(host, int(port), probe=bind_probe, repair=repair),
+            )
+            error = dict(bind_probe)
+            error.pop("ok", None)
+            if diagnostic_path:
+                error["diagnostic_path"] = diagnostic_path
+            return {
+                "ok": False,
+                "repo_root": str(repo_root),
+                "host": host,
+                "port": int(port),
+                "errors": [error],
+            }
     try:
         skills_root = _skills_root_for_runtime_preflight(repo_root)
     except Exception as exc:
@@ -478,6 +699,9 @@ def _ensure_api_pre_stop_preflight_or_exit(host: str, port: int, *, action: str)
             path = item.get("path")
             if path:
                 typer.secho(f"    path: {path}", fg=typer.colors.RED)
+            diagnostic_path = item.get("diagnostic_path")
+            if diagnostic_path:
+                typer.secho(f"    diagnostic: {diagnostic_path}", fg=typer.colors.RED)
     else:
         typer.secho("  - preflight returned no structured error list", fg=typer.colors.RED)
     raise typer.Exit(code=1)

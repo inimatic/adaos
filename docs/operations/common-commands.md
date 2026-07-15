@@ -26,6 +26,18 @@ Notes:
 - Use a different port such as `8779` when you do not want
   `https://inimatic.com/` to auto-attach to the local runtime and prefer it to
   stay on Root.
+- On Windows, `adaos api serve` checks whether the requested port is blocked by
+  TCP excluded-port ranges before stopping an existing runtime. If the standard
+  local port `8777` is blocked by a Windows dynamic/excluded-port conflict, the
+  CLI records a diagnostic JSON file under `.adaos/diagnostics/` and attempts a
+  best-effort repair when it has administrator privileges:
+  - move the Windows dynamic TCP range back to `49152-65535` when it overlaps
+    the requested AdaOS port;
+  - restart WinNAT and remove the stale excluded range when possible;
+  - re-probe the bind before falling back to another port.
+- Set `ADAOS_API_PORT_REPAIR=0` to disable the Windows repair attempt. Set
+  `ADAOS_API_REPAIR_ANY_PORT=1` only for diagnostics when you want the same
+  repair logic for a non-standard port.
 - Supervisor-managed runtime mode is separate: it owns port `8776`, manages
   slots, and sets `ADAOS_SUPERVISOR_ENABLED=1`.
 - Development runtimes with `ENV_TYPE=dev` do not follow hub/root core-update
