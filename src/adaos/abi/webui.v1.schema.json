@@ -1226,6 +1226,8 @@
         "search": { "type": "boolean" },
         "searchEnabled": { "type": "boolean" },
         "searchPlaceholder": { "type": "string" },
+        "addButton": { "type": "boolean" },
+        "addButtonLabel": { "type": "string" },
         "cardMinWidth": { "type": "number", "minimum": 120, "maximum": 480 },
         "cardImageRatio": { "type": "string", "minLength": 1 },
         "emptyText": { "type": "string" },

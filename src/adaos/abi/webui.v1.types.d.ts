@@ -374,6 +374,8 @@ export interface WebUiListInputs {
   search?: boolean
   searchEnabled?: boolean
   searchPlaceholder?: string
+  addButton?: boolean
+  addButtonLabel?: string
   cardMinWidth?: number
   cardImageRatio?: string
   emptyText?: string

@@ -252,6 +252,20 @@ duplicate-only, or no-op patch. It may change:
   `initialState`, and `visibleIf`
 - static/mock data and examples that demonstrate the intended interface
 
+An additive request must preserve unrelated behavior from the current UI.
+Adding a command to an existing widget must not replace its selection,
+navigation, or modal actions unless the user explicitly asks to remove or
+replace them. For `ui.list`, `inputs.buttons` are per-item/card commands. The
+single list-level Add command next to card search uses `inputs.addButton`,
+`inputs.addButtonLabel`, and an `add` or `click:add` widget action.
+
+Every promoted revision stamps the actual revision and scenario into
+`pageSchema.meta.builder`. Review Apply messages carry a localized semantic
+origin (`Review notes` / `Замечания`) instead of being indistinguishable from a
+generic API call. Once Builder accepts the job, the client consumes only the
+comments present in that submitted packet; comments added concurrently remain
+available for the next revision.
+
 Interactive controls in a prototype may update local page state or static/mock
 data. They must not imply real external IO, device control, credentials,
 network calls, or durable mutations unless the user explicitly asks for such

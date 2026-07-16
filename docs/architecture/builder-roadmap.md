@@ -517,6 +517,14 @@ Open work:
   array edits from shifting later widget targets. Prompt and repair contracts
   require explicit creation of intermediate parent containers and the ABI-required
   nested `pageSchema.autoActions[*].action` shape.
+- [x] `[must]` Preserve unrelated interactions during additive Builder edits.
+  The compact contract now distinguishes per-item `ui.list.inputs.buttons`
+  from the list-level `addButton` command, keeps existing select/navigation/
+  modal actions unless replacement is explicit, and stamps the promoted
+  revision into `pageSchema.meta.builder`.
+- [x] `[must]` Make Review Apply traceable and consumable. Review requests are
+  labeled with a localized semantic origin instead of generic API, and the
+  client removes only comments included in the accepted review packet.
 - [x] `[must]` Keep non-streaming and legacy full-`adaos.webui.v1` model
   profiles operational through the same Root job and Builder commit contract.
 - [x] `[should]` Stabilize the persistent prompt prefix, provide a versioned
