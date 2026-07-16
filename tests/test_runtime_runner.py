@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 import time
@@ -132,6 +133,46 @@ def test_execute_tool_does_not_reuse_stale_skill_module_across_slot_paths(tmp_pa
 
     assert first["marker"] == "old-slot"
     assert second["marker"] == "new-slot"
+
+
+def test_execute_tool_uses_exact_active_slot_when_old_skills_package_is_loaded(tmp_path: Path) -> None:
+    slot_a = tmp_path / "slots" / "A" / "src"
+    slot_b = tmp_path / "slots" / "B" / "src"
+    (slot_a / "skills").mkdir(parents=True, exist_ok=True)
+    (slot_a / "skills" / "__init__.py").write_text("", encoding="utf-8")
+    old_skill = _write_skill(slot_a / "skills", "builder_skill", "old-slot")
+    new_skill = _write_skill(slot_b / "skills", "builder_skill", "new-slot")
+
+    tracked_prefixes = ("skills", "builder_skill", "handlers", "_adaos_runtime.builder_skill")
+    before_modules = {
+        key: sys.modules[key]
+        for key in list(sys.modules.keys())
+        if key == "skills" or key.startswith(tracked_prefixes)
+    }
+    before_path = list(sys.path)
+    before_snapshots = dict(runtime_runner_module._SKILL_SOURCE_SNAPSHOTS)
+    try:
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        sys.path.insert(0, str(slot_a))
+        old_module = importlib.import_module("skills.builder_skill.handlers.main")
+        assert old_module.get_snapshot()["marker"] == "old-slot"
+
+        current = runtime_runner_module.execute_tool(
+            new_skill,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+        )
+    finally:
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.update(before_snapshots)
+        sys.path[:] = before_path
+        for key in list(sys.modules.keys()):
+            if key == "skills" or key.startswith(tracked_prefixes):
+                sys.modules.pop(key, None)
+        sys.modules.update(before_modules)
+
+    assert current["marker"] == "new-slot"
 
 
 def test_execute_tool_supports_bare_tool_decorator(tmp_path: Path) -> None:

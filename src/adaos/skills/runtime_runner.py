@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import sys
@@ -189,6 +190,9 @@ def _load_skill_module(skill_path: Path, module_name: str):
     candidates: list[str] = []
     if _is_generic_handlers_module(module_name):
         _purge_generic_skill_modules()
+        loaded = _load_module_from_skill_source(skill_path, module_name)
+        if loaded is not None:
+            return loaded
         candidates.extend(
             [
                 f"skills.{skill_pkg}.{module_name}",
@@ -206,11 +210,6 @@ def _load_skill_module(skill_path: Path, module_name: str):
         except Exception as exc:
             last_error = exc
 
-    if _is_generic_handlers_module(module_name):
-        loaded = _load_module_from_skill_source(skill_path, module_name)
-        if loaded is not None:
-            return loaded
-
     if last_error is not None:
         raise last_error
     return importlib.import_module(module_name)
@@ -222,7 +221,11 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     candidate_file = skill_path.joinpath(*relative.parts).with_suffix(".py")
     if not candidate_file.exists():
         return None
-    synthetic_name = f"_adaos_runtime.{skill_path.name}.{module_name}"
+    path_key = hashlib.sha256(str(skill_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    synthetic_name = f"_adaos_runtime.{skill_path.name}.{path_key}.{module_name}"
+    existing = sys.modules.get(synthetic_name)
+    if existing is not None and _module_file_is_under(existing, skill_path):
+        return existing
     spec = importlib.util.spec_from_file_location(synthetic_name, candidate_file)
     if spec is None or spec.loader is None:
         return None
