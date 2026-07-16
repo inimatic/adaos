@@ -503,19 +503,30 @@ Open work:
   bounded Root job progress, staged logical UI patches, atomic ABI-validated
   promotion, and legacy full-response models in
   [Builder Streaming Patch Architecture](builder-streaming-patches.md).
-- [ ] `[must]` Stream typed provider events into a bounded replayable Root job
+- [x] `[must]` Stream typed provider events into a bounded replayable Root job
   progress journal while retaining the complete terminal response.
-- [ ] `[must]` Expose Root progress through the SDK and project it into one
-  stable Builder chat job card instead of appending one message per phase.
-- [ ] `[must]` Add strict `adaos.builder.webui_patch_batch.v1` output, staged
+- [x] `[must]` Expose Root progress through the SDK and project it into one
+  stable Builder chat job card instead of displaying one message per phase.
+  The first slice groups bounded phase messages by `progress_group_id`; durable
+  single-message ledger upsert remains follow-up work.
+- [x] `[must]` Add strict `adaos.builder.webui_patch_stream.v1` JSONL output,
+  compatible batch parsing, staged
   RFC 6902 application, source revision/hash guards, full ABI validation, and
-  atomic revision promotion.
-- [ ] `[must]` Keep non-streaming and legacy full-`adaos.webui.v1` model
+  atomic revision promotion. Stable `@<id>` JSON Pointer tokens prevent earlier
+  array edits from shifting later widget targets.
+- [x] `[must]` Keep non-streaming and legacy full-`adaos.webui.v1` model
   profiles operational through the same Root job and Builder commit contract.
-- [ ] `[should]` Stabilize the persistent prompt prefix, provide a versioned
+- [x] `[should]` Stabilize the persistent prompt prefix, provide a versioned
   `prompt_cache_key`, and record provider cache effectiveness per revision.
-- [ ] `[should]` Add recipe-book and other control prompts that compare TTFT,
-  total generation time, patch correctness, preservation, and cache reuse.
+  Stable ABI/runtime/affordance context precedes project state and instruction;
+  a measured warm request reused 8,832 of 11,593 input tokens.
+- [x] `[should]` Add recipe-book and other control prompts that compare TTFT,
+  total generation time, patch correctness, preservation, and cache reuse. The
+  July 2026 recipe-book run established a useful `gpt-5` prototype from the
+  generic scaffold and then corrected details through small stable-id patches.
+- [ ] `[should]` Replace phase-message grouping with one durable conversation
+  message updated by stable job/message id; retain the bounded phase journal as
+  evidence rather than separate transcript entries.
 - [ ] `[could]` Add Root push delivery (NATS/WS) for job progress after polling
   replay is proven reliable; polling remains the recovery path.
 - [ ] `[deferred]` Retrieve extended ABI knowledge through MCP only as a repair

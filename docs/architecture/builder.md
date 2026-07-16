@@ -188,15 +188,19 @@ runtime uses Root-managed asynchronous LLM jobs:
 1. Builder submits a bounded Responses API payload to `POST /v1/llm/jobs`.
 2. Root records the job in Redis with `request_id` idempotency, caller identity,
    model, status, attempts, and a TTL.
-3. Root executes the upstream model request in the background and stores either
-   the raw response or a structured error.
+3. Root executes the upstream model request in the background, consumes typed
+   provider SSE when the model supports it, and stores a bounded replayable
+   progress journal plus either the complete response or a structured error.
 4. If the submit response times out, the SDK first calls
    `POST /v1/llm/jobs/lookup` on the same root with the same payload. Root
    returns the existing job only when the request fingerprint matches; otherwise
    it reports `llm_request_id_conflict` with diagnostic fingerprint tags.
 5. Builder polls `GET /v1/llm/jobs/{job_id}` on the same root base URL that
-   accepted the job.
-6. Builder validates the returned JSON against the Builder/webui contracts
+   accepted the job, forwarding new monotonic progress entries to one grouped
+   chat card. Root push delivery may be added later without removing polling as
+   the recovery path.
+6. Builder stages complete semantic JSONL patches on a private copy and validates
+   the reconstructed document against the Builder/webui contracts
    before writing `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
    dev-webspace refresh events.
 

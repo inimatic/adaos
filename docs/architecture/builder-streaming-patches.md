@@ -1,7 +1,7 @@
 # Builder Streaming Patch Architecture
 
 Status: target architecture with a backward-compatible first implementation
-slice.
+slice validated end to end in July 2026.
 
 ## Objective
 
@@ -33,32 +33,25 @@ bounded Root journal and terminal job snapshot.
 
 ## Target Semantic Contract
 
-The preferred model output is a strict object whose `patches` use the generic
-RFC 6902 operation vocabulary:
+The preferred model output is newline-delimited JSON. Every physical line is a
+complete object, and patch lines use the generic RFC 6902 operation vocabulary:
 
-```json
-{
-  "schema": "adaos.builder.webui_patch_batch.v1",
-  "base_revision": "008",
-  "base_hash": "sha256:...",
-  "patches": [
-    {
-      "seq": 1,
-      "op": "replace",
-      "path": "/ui/application/desktop/pageSchema/widgets/2/inputs/title",
-      "value": "Recipes"
-    }
-  ],
-  "comment": "Updated the recipe section title.",
-  "unable_reason": ""
-}
+```jsonl
+{"schema":"adaos.builder.webui_patch_stream.v1","type":"meta","base_hash":"sha256:..."}
+{"type":"patch","seq":1,"op":"replace","path":"/ui/application/desktop/pageSchema/widgets/@recipe-list/inputs/title","value":"Recipes"}
+{"type":"complete","comment":"Updated the recipe section title.","unable_reason":""}
 ```
 
 The allowed operations are `add`, `remove`, `replace`, `move`, `copy`, and
-`test`. Each batch carries the source revision and fingerprint. Operations are
+`test`. The meta line carries the source fingerprint; the Builder session owns
+the source revision. Operations are
 ordered, idempotently journaled by `(job_id, seq)`, and applied to a private
-shadow copy. Stable object/widget ids and preceding `test` operations are
-preferred when an array index could otherwise target the wrong element.
+shadow copy. An existing member of an id-bearing array should be addressed with
+the AdaOS stable pointer token `@<id>`. `add` creates a missing object member;
+`replace` requires the member to exist after all preceding operations.
+
+`adaos.builder.webui_patch_batch.v1` remains an accepted compact batch form for
+providers that produce one complete object instead of reliable JSONL.
 
 An incremental parser may expose a patch only after its complete JSON object
 has arrived. It must not assume that one SSE delta or one network chunk is one
@@ -125,7 +118,7 @@ provider prompt caching reuses a stable input prefix across different jobs.
 
 ## Chat Projection
 
-One Builder job is represented by one durable chat message with a stable
+The target representation is one durable Builder chat message with a stable
 message id. Its compact pages are updated by phase:
 
 - accepted
@@ -137,6 +130,36 @@ The current unfinished page shows a non-interactive loader. Completed pages
 are selectable. A terminal result adds revision actions to the same card. The
 conversation ledger stores the final message plus bounded phase evidence; it
 must not store every token delta as a separate message.
+
+The first implementation slice emits bounded phase messages carrying the same
+`progress_group_id`; the client coalesces them into one card and exposes each
+completed phase as a compact page. Durable in-place ledger update is the next
+compatibility-preserving step. Polling remains the replay/recovery mechanism.
+
+## July 2026 Evaluation
+
+The reference run created `streaming_recipe_book_eval` from the generic Builder
+scaffold and produced a responsive recipe catalog with deterministic Picsum
+cards, category controls, search, selected-recipe details, and a local favorite
+action. The final correction used stable widget paths, added
+`item.details.inputs.imageKey`, passed the complete ABI/component/action
+validator, promoted revision `006`, and refreshed `desktop-dev`.
+
+Measured evidence from the run:
+
+- provider TTFT: 0.74-1.25 seconds for the measured `gpt-5` jobs
+- cold full-prototype generation: 12.8 seconds at Root
+- small warm generation: 3.8 seconds at Root with 8,832 of 11,593 input tokens
+  served from the provider prompt cache
+- final post-profile-change correction: 4.6 seconds at Root before one bounded
+  repair pass
+- local context construction: 0.05-0.14 seconds; Root submit: 1.2-1.9 seconds
+- validated apply plus dev-webspace materialization: approximately 3.1 seconds,
+  of which semantic runtime rebuild was approximately 2.1-2.7 seconds
+
+`gpt-4o-mini` produced syntactically recoverable output but materially weaker
+layout and interaction choices for the same broad prototype request. The model
+profile remains selectable; the reference quality run used `gpt-5`.
 
 ## Observability
 
@@ -152,4 +175,3 @@ At minimum each revision and Root job expose:
 
 This evidence distinguishes provider latency from local prompt construction,
 Root queueing, Builder validation, and dev-webspace refresh latency.
-
