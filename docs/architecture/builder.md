@@ -222,6 +222,12 @@ API.
 
 ## UI Prototyping LLM Contract
 
+Long-running UI transformations follow the target
+[Builder Streaming Patch Architecture](builder-streaming-patches.md). Provider
+SSE, Root job progress, and semantic UI patches are separate protocols. The
+active `webui.json` remains a complete, atomically promoted
+`adaos.webui.v1` document; partial output is never rendered as canonical UI.
+
 For rapid UI prototyping, Builder should treat the LLM as an adaptive
 designer-programmer and treat AdaOS as the deterministic guardrail. The model is
 allowed to reshape the declarative `adaos.webui.v1` UI inside the ABI boundary;

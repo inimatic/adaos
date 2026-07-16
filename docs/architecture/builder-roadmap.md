@@ -499,6 +499,27 @@ Open work:
   responses now report queue/execution/total timing, provider IDs, service
   tier, token/cache counts, retry/tool/MCP traces, and Builder stores the
   bounded summary in `ui_revisions/NNN.json`.
+- [x] `[must]` Define the backward-compatible target protocol for provider SSE,
+  bounded Root job progress, staged logical UI patches, atomic ABI-validated
+  promotion, and legacy full-response models in
+  [Builder Streaming Patch Architecture](builder-streaming-patches.md).
+- [ ] `[must]` Stream typed provider events into a bounded replayable Root job
+  progress journal while retaining the complete terminal response.
+- [ ] `[must]` Expose Root progress through the SDK and project it into one
+  stable Builder chat job card instead of appending one message per phase.
+- [ ] `[must]` Add strict `adaos.builder.webui_patch_batch.v1` output, staged
+  RFC 6902 application, source revision/hash guards, full ABI validation, and
+  atomic revision promotion.
+- [ ] `[must]` Keep non-streaming and legacy full-`adaos.webui.v1` model
+  profiles operational through the same Root job and Builder commit contract.
+- [ ] `[should]` Stabilize the persistent prompt prefix, provide a versioned
+  `prompt_cache_key`, and record provider cache effectiveness per revision.
+- [ ] `[should]` Add recipe-book and other control prompts that compare TTFT,
+  total generation time, patch correctness, preservation, and cache reuse.
+- [ ] `[could]` Add Root push delivery (NATS/WS) for job progress after polling
+  replay is proven reliable; polling remains the recovery path.
+- [ ] `[deferred]` Retrieve extended ABI knowledge through MCP only as a repair
+  fallback after compact embedded contracts and patch repair fail.
 - [x] `[should]` Add root-owned development LLM model profiles. Root policy now
   exposes `dev_model_profiles` through `/v1/llm/models?scope=development`;
   Prompt IDE shows that scoped list in the LLM Profile modal and persists the
