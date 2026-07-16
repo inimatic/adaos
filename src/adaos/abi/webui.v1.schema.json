@@ -701,7 +701,8 @@
       "additionalProperties": true,
       "properties": {
         "version": { "type": "string" },
-        "desktop": { "$ref": "#/$defs/uiDesktopApplication" }
+        "desktop": { "$ref": "#/$defs/uiDesktopApplication" },
+        "modals": { "$ref": "#/$defs/modalMap" }
       }
     },
     "uiDesktopApplication": {
@@ -743,6 +744,10 @@
     "widgetCatalogEntry": {
       "type": "object",
       "additionalProperties": true,
+      "propertyNames": {
+        "not": { "pattern": "\\." },
+        "description": "Widget properties are nested JSON members; dotted property names are not interpreted as paths."
+      },
       "required": ["id", "type"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
@@ -958,6 +963,10 @@
     "widgetConfig": {
       "type": "object",
       "additionalProperties": true,
+      "propertyNames": {
+        "not": { "pattern": "\\." },
+        "description": "Widget properties are nested JSON members; dotted property names are not interpreted as paths."
+      },
       "required": ["id", "type", "area"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
@@ -1319,6 +1328,23 @@
         "autoCommit": { "type": "boolean" },
         "commitOnChange": { "type": "boolean" },
         "showSubmit": { "type": "boolean" },
+        "secondaryActions": {
+          "type": "array",
+          "description": "Optional presentation metadata for non-primary form actions. Each id must match a supported trigger declared in widget.actions, such as cancel.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "label": { "type": "string" },
+              "variant": {
+                "type": "string",
+                "enum": ["primary", "secondary", "tertiary", "solid", "outline", "clear"]
+              }
+            }
+          }
+        },
         "layout": {
           "type": "string",
           "enum": ["stack", "responsiveGrid", "responsive-grid", "grid", "auto-grid"],

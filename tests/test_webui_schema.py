@@ -91,6 +91,73 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_rejects_dotted_widget_properties() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "invalid-form",
+                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "form",
+                                "type": "ui.form",
+                                "area": "main",
+                                "inputs": {"fields": [{"id": "title", "type": "shortText"}]},
+                                "inputs.secondaryActions": [{"id": "cancel", "label": "Cancel"}],
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_validates_widgets_inside_application_modals() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "catalog",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [{"id": "catalog", "type": "ui.list", "area": "main"}],
+                    }
+                },
+                "modals": {
+                    "edit_modal": {
+                        "schema": {
+                            "id": "edit_modal",
+                            "layout": {"type": "stack", "areas": [{"id": "modal"}]},
+                            "widgets": [
+                                {
+                                    "id": "edit_form",
+                                    "type": "ui.form",
+                                    "area": "modal",
+                                    "inputs": {"fields": [{"id": "title", "type": "shortText"}]},
+                                    "inputs.secondaryActions": [{"id": "cancel", "label": "Cancel"}],
+                                }
+                            ],
+                        }
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_details_image_mapping() -> None:
     schema = _load_schema()
     payload = {
