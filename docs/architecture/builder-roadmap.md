@@ -527,6 +527,14 @@ Open work:
   client removes only comments included in the accepted review packet.
 - [x] `[must]` Keep non-streaming and legacy full-`adaos.webui.v1` model
   profiles operational through the same Root job and Builder commit contract.
+- [x] `[must]` Persist scenario-local terminal LLM job outcomes before session
+  projection updates. Builder now reconciles `llm_jobs/<job_id>.json` into its
+  pending-job view so a worker/runtime boundary cannot leave a completed job
+  permanently queued or block the next prototype request.
+- [x] `[must]` Repair invalid semantic patch streams from the complete current
+  `webui.json`. The bounded repair turn returns one full `adaos.webui.v1`
+  document, which is ABI/component validated and atomically promoted; Builder
+  does not maintain intent-specific normalization rules for model output.
 - [x] `[should]` Stabilize the persistent prompt prefix, provide a versioned
   `prompt_cache_key`, and record provider cache effectiveness per revision.
   Stable ABI/runtime/affordance context precedes project state and instruction;
@@ -546,7 +554,10 @@ Open work:
   exposes `dev_model_profiles` through `/v1/llm/models?scope=development`;
   Prompt IDE shows that scoped list in the LLM Profile modal and persists the
   selected model in `prompt_state.json`; Builder uses that project profile
-  before env/default model fallback.
+  before env/default model fallback. `gpt-5` is the development baseline
+  (`default=true`); regional Root relays preserve the scope query so the Hub
+  receives the same authoritative list instead of the complete provider
+  catalog.
 - [x] `[must]` Add thread-aware context packet plumbing for Builder:
   `conversation_links.builder_context_packet`, router dialog context payloads,
   and `adaos.sdk.conversation.context` can now select the active Builder

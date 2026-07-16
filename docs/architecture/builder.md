@@ -204,6 +204,12 @@ runtime uses Root-managed asynchronous LLM jobs:
    before writing `webui.json`, `ui_revisions/NNN.json`, and
    dev-webspace refresh events.
 
+Builder also writes a small atomic terminal marker under the scenario-local
+`llm_jobs/` directory before updating session memory. This journal is the
+recovery authority when a worker succeeds or fails while the runtime session
+projection is unavailable; stale in-memory `queued` entries cannot block later
+requests indefinitely.
+
 Each terminal Root job exposes bounded telemetry alongside the response:
 queue/execution/total duration, provider response and request IDs, service tier,
 input/cache/output/reasoning token counts, retry attempts, requested and used
@@ -282,6 +288,12 @@ provider/model-agnostic and sends a compact ABI summary plus a prototyping
 affordance map. Later profiles may tune wording, temperature, examples, or
 schema compression for a specific provider/model, but the output contract must
 remain the same complete `adaos.webui.v1` manifest.
+
+The Root-owned `development` model profile uses `gpt-5` as its baseline. Prompt
+IDE obtains the scoped profile list from `/v1/llm/models?scope=development`, and
+new Builder projects inherit the profile marked `default=true`. Other Root LLM
+workloads retain their own defaults; selecting a comparison model in Prompt IDE
+changes only the current development project.
 
 ## UI Generation Control Examples
 

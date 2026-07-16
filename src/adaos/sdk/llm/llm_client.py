@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import time
-from urllib.parse import quote
 
 import requests
 from adaos.services.agent_context import get_ctx
@@ -390,10 +389,13 @@ def list_llm_models(*, timeout: float | None = None, scope: str | None = None) -
             )
         )
         try:
-            path = "/v1/llm/models"
-            if params:
-                path = f"{path}?scope={quote(str(params['scope']))}"
-            raw = http.request("GET", path, headers=headers or None, timeout=timeout or 30)
+            raw = http.request(
+                "GET",
+                "/v1/llm/models",
+                params=params,
+                headers=headers or None,
+                timeout=timeout or 30,
+            )
             if isinstance(raw, Mapping):
                 return dict(raw)
             if isinstance(raw, list):
@@ -497,12 +499,16 @@ def _llm_root_payload(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     stream_protocol: str | None = None,
+    profile_scope: str | None = None,
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
     normalized_messages = _message_list(messages)
-    payload: Dict[str, Any] = {
-        "model": model or os.getenv("ADAOS_LLM_MODEL") or "gpt-4o-mini",
-        "messages": normalized_messages,
-    }
+    payload: Dict[str, Any] = {"messages": normalized_messages}
+    resolved_model = str(model or os.getenv("ADAOS_LLM_MODEL") or "").strip()
+    if resolved_model:
+        payload["model"] = resolved_model
+    scope = str(profile_scope or "").strip().lower()
+    if scope:
+        payload["profile_scope"] = scope
     if temperature is not None:
         payload["temperature"] = float(temperature)
     if max_tokens is not None:
@@ -561,6 +567,7 @@ def send_response(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     stream_protocol: str | None = None,
+    profile_scope: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
     """
@@ -580,6 +587,7 @@ def send_response(
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=prompt_cache_retention,
         stream_protocol=stream_protocol,
+        profile_scope=profile_scope,
     )
 
     if _legacy_http_enabled():
@@ -644,6 +652,7 @@ def submit_response_job(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     stream_protocol: str | None = None,
+    profile_scope: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
     """
@@ -665,6 +674,7 @@ def submit_response_job(
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=prompt_cache_retention,
         stream_protocol=stream_protocol,
+        profile_scope=profile_scope,
     )
     payload_bytes = _json_size_bytes(root_payload)
     if _legacy_http_enabled():

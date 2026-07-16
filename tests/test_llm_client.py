@@ -113,6 +113,47 @@ def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.Mo
     }
 
 
+def test_list_llm_models_passes_development_scope_as_query_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    requests: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+
+        def request(self, method, path, **kwargs):
+            requests.append({"method": method, "path": path, "kwargs": kwargs})
+            return {"data": [], "model_profiles": []}
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    llm.list_llm_models(scope="development")
+
+    assert requests[0]["path"] == "/v1/llm/models"
+    assert requests[0]["kwargs"]["params"] == {"scope": "development"}  # type: ignore[index]
+
+
+def test_llm_root_payload_uses_profile_scope_without_forcing_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    monkeypatch.delenv("ADAOS_LLM_MODEL", raising=False)
+
+    payload, _messages = llm._llm_root_payload(
+        [{"role": "user", "content": "Build the interface."}],
+        profile_scope="development",
+    )
+
+    assert "model" not in payload
+    assert payload["profile_scope"] == "development"
+
+
 def test_send_response_falls_back_when_zone_proxy_cannot_reach_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     from adaos.sdk.llm import llm_client as llm
 

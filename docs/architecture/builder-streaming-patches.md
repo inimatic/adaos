@@ -177,6 +177,15 @@ Measured evidence from the run:
 layout and interaction choices for the same broad prototype request. The model
 profile remains selectable; the reference quality run used `gpt-5`.
 
+A second clean-room run created `e2e_16_89cb7724` from the generic scaffold with
+an ordinary Russian-language request. `gpt-5` produced a responsive four-item
+home recipe catalog with stable Picsum images, search, category filters,
+selected-recipe details, add/edit modals, and typed forms. A follow-up exposed a
+flattened form-property error; the component validator rejected it and the
+full-document repair path returned a valid `adaos.webui.v1` revision. Browser
+checks covered desktop and 390 px mobile layouts, card-to-detail selection,
+search, add/edit/cancel actions, and editable Review comments.
+
 ## Observability
 
 At minimum each revision and Root job expose:
