@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 from uuid import uuid4
 
 from adaos.domain.personalization_access import (
@@ -143,6 +144,8 @@ class PersonalizationAccessStore:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else None
         self._data: dict[str, Any] = {key: ({} if key != "audit" else []) for key in self._BUCKETS}
+        self._batch_depth = 0
+        self._batch_dirty = False
         if self.path and self.path.exists():
             self._load()
 
@@ -162,11 +165,32 @@ class PersonalizationAccessStore:
     def save(self) -> None:
         if self.path is None:
             return
+        if self._batch_depth:
+            self._batch_dirty = True
+            return
+        self._save_now()
+
+    def _save_now(self) -> None:
+        if self.path is None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        temporary_path = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+        temporary_path.write_text(
             json.dumps(self._data, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
+        temporary_path.replace(self.path)
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0 and self._batch_dirty:
+                self._batch_dirty = False
+                self._save_now()
 
     def snapshot(self) -> dict[str, Any]:
         return json.loads(json.dumps(self._data, ensure_ascii=False))
@@ -462,6 +486,9 @@ class PersonalizationAccessService:
         self.store = store or PersonalizationAccessStore()
         self.owner = owner or SubjectRef("user", "owner")
         self.access_link_denier = access_link_denier
+
+    def batch(self):
+        return self.store.batch()
 
     def put_user(
         self,

@@ -78,6 +78,34 @@ def test_phase2_profile_preferences_header_and_redacted_audit(tmp_path, monkeypa
     assert preference_audit[0]["redacted_diff"]["preference"] == "<redacted>"
 
 
+def test_profile_updates_persist_access_state_once_per_operation(tmp_path, monkeypatch) -> None:
+    fake_ctx = _ctx()
+    store = PersonalizationAccessStore(tmp_path / "access.json")
+    access = PersonalizationAccessService(
+        store,
+        owner=profile_module.SubjectRef("user", "masha"),
+    )
+    service = profile_module.UserProfileService(fake_ctx, access=access)
+    original_save = store._save_now
+    save_count = 0
+
+    def counted_save() -> None:
+        nonlocal save_count
+        save_count += 1
+        original_save()
+
+    monkeypatch.setattr(store, "_save_now", counted_save)
+
+    service.update_profile({"display_name": "Masha", "language": "ru"})
+    assert save_count == 1
+
+    service.update_preferences({"theme": "dark", "memory_privacy": "local"})
+    assert save_count == 2
+
+    service.header_settings()
+    assert save_count == 3
+
+
 def test_phase2_profile_rejects_role_membership_policy_fields() -> None:
     service = profile_module.UserProfileService(_ctx())
 

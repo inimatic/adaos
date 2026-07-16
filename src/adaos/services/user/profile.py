@@ -141,6 +141,16 @@ class UserProfileService:
         *,
         actor: SubjectRef | str | None = None,
     ) -> UserProfile:
+        with self.access.batch():
+            return self._update_profile(settings, user_id, actor=actor)
+
+    def _update_profile(
+        self,
+        settings: Dict[str, object],
+        user_id: Optional[str] = None,
+        *,
+        actor: SubjectRef | str | None = None,
+    ) -> UserProfile:
         uid = user_id or self.current_user_id()
         actor_ref = self._actor(actor)
         subject = self._subject(uid)
@@ -193,6 +203,22 @@ class UserProfileService:
         actor: SubjectRef | str | None = None,
         device_override: bool = False,
     ) -> Dict[str, object]:
+        with self.access.batch():
+            return self._update_preferences(
+                patch,
+                user_id,
+                actor=actor,
+                device_override=device_override,
+            )
+
+    def _update_preferences(
+        self,
+        patch: Mapping[str, object],
+        user_id: Optional[str] = None,
+        *,
+        actor: SubjectRef | str | None = None,
+        device_override: bool = False,
+    ) -> Dict[str, object]:
         uid = user_id or self.current_user_id()
         actor_ref = self._actor(actor)
         subject = self._subject(uid)
@@ -224,6 +250,10 @@ class UserProfileService:
         return self.get_preferences(uid, actor=actor_ref)
 
     def header_settings(self, user_id: Optional[str] = None) -> dict[str, object]:
+        with self.access.batch():
+            return self._header_settings(user_id)
+
+    def _header_settings(self, user_id: Optional[str] = None) -> dict[str, object]:
         uid = user_id or self.current_user_id()
         profile = self.get_profile(uid)
         preferences = self.get_preferences(uid)

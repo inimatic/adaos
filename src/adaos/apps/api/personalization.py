@@ -905,6 +905,27 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
         raise _http_error(exc) from exc
 
 
+@router.patch("/current-user/settings", dependencies=[Depends(require_token)])
+async def update_current_user_settings(body: dict[str, Any], ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+    try:
+        service = _profile(ctx)
+        actor = _actor(ctx)
+        profile_patch = body.get("profile") if isinstance(body.get("profile"), Mapping) else {}
+        preferences_patch = body.get("preferences") if isinstance(body.get("preferences"), Mapping) else {}
+        with service.access.batch():
+            profile = service.update_profile(_profile_patch(profile_patch), actor=actor)
+            preferences = service.update_preferences(_preferences_patch(preferences_patch), actor=actor)
+            settings = service.header_settings()
+        return {
+            "ok": True,
+            "profile": _profile_view(profile),
+            "preferences": preferences,
+            "settings": settings,
+        }
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
 @router.get("/admin/summary", dependencies=[Depends(require_token)])
 async def admin_summary(
     audit_limit: int = Query(default=50, ge=1, le=200),

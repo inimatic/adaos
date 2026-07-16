@@ -52,11 +52,23 @@ def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
     assert preferences.status_code == 200
     assert preferences.json()["preferences"]["theme"] == "dark"
 
+    settings = client.patch(
+        "/api/personalization/current-user/settings",
+        json={
+            "profile": {"display_name": "Maria", "language": "en"},
+            "preferences": {"theme": "light", "ui_density": "comfortable"},
+        },
+        headers=TOKEN_HEADERS,
+    )
+    assert settings.status_code == 200
+    assert settings.json()["settings"]["display_name"] == "Maria"
+    assert settings.json()["settings"]["theme"] == "light"
+
     header = client.get("/api/personalization/current-user/header-settings", headers=TOKEN_HEADERS)
     assert header.status_code == 200
     payload = header.json()["settings"]
-    assert payload["display_name"] == "Masha"
-    assert payload["theme"] == "dark"
+    assert payload["display_name"] == "Maria"
+    assert payload["theme"] == "light"
     assert payload["role_status"] == {"value": "owner", "editable": False}
     assert payload["identity_source"] == "owner_settings_fallback"
 
