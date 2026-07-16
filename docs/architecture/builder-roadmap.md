@@ -254,7 +254,7 @@ Current implementation slices:
   `restricted_maintenance_repair`.
 - [x] `[must]` Builder preview emits `review_policy` with profile, mandatory
   review classes, policy blocks, auto-apply eligibility, decision, and evidence.
-- [x] `[must]` Builder preview and Builder skill Pending Actions carry
+- [x] `[must]` Builder preview and release/destructive Pending Actions carry
   conversation action-risk evidence. The preview gate uses
   `conversation_safety.classify_action_risk(...)` and blocks auto-apply when
   filesystem, network, device-control, credential, or cross-node classes
@@ -263,11 +263,10 @@ Current implementation slices:
   `adaos builder approval-profiles` and `GET /api/builder/approval-profiles`.
 - [x] `[must]` Legacy draft metadata with `human_review_required=true` is treated
   as an explicit manual-review override.
-- [x] `[must]` `builder_skill` consumes the first
-  `builder.pending_action.response` slice for patch review responses: approved
-  patches are marked with review evidence, the draft preview is refreshed, and
-  the Builder dialog receives a topic-scoped status message. Full release/apply
-  evidence remains in Phase 6.
+- [x] `[must]` Keep local UI draft creation and ABI-valid revision promotion
+  outside Pending Actions. They are revisioned, reversible through `Set current`,
+  and reviewed through chat/review notes. Pending Actions begin at destructive,
+  activation, release, external-I/O, permission, or mandatory-policy boundaries.
 
 Open work:
 
@@ -282,11 +281,10 @@ Open work:
   actions, and the remaining NLU Teacher clarification flow to produce and
   consume Pending Actions. NLU Teacher candidate confirmations and
   service-supervisor runtime recovery failures have initial migrations.
-- [x] `[must]` Make Builder draft and patch review produce Pending Actions
-  before browser apply/approve flows. The current Builder skill publishes
-  `builder.scenario_draft.review` and `builder.scenario_patch.review` actions
-  with conversation/thread/source refs and routes responses to
-  `builder.pending_action.response`.
+- [x] `[must]` Retire `builder.scenario_draft.review` and
+  `builder.scenario_patch.review` from the local prototyping loop. The client
+  suppresses stale instances; `builder.scenario_delete.review` and future
+  release/activation actions retain durable approval.
 - [x] `[must]` Make Pending Actions node-aware: producer and response handler
   identity must include `node_id` plus skill/scenario/system actor identity.
 - [x] `[must]` Define Pending Actions localization contract: every system title,
@@ -301,8 +299,7 @@ Open work:
   `data.pending_actions` and responds through the event command plane.
 - [ ] `[should]` Add review UI/workbench for Builder tasks and previews.
 - [ ] `[must]` Attach policy evidence and approval identity to every applied Builder
-  runtime change. Draft/patch review actions already carry source refs; the
-  apply/release step still needs to persist the approval identity.
+  runtime change. The apply/release step still needs to persist approval identity.
 - [ ] `[should]` Support reject/redirect feedback that becomes new Builder context instead
   of being lost as chat history.
 - [ ] `[deferred]` Support delegated Pending Actions subscription handshake where
@@ -487,13 +484,13 @@ Open work:
   UI chat state.
 - [x] `[must]` Complete the browser/Voice/Prompt IDE ownership slice:
   `builder_skill` returns canonical dialog/topic refs, emits chat with the same
-  thread metadata, owns draft/patch Pending Actions, and `attach_dialog_widget`
+  thread metadata, owns revision/review-note history, and `attach_dialog_widget`
   exposes the current workbench binding instead of a separate UI transcript.
 - [x] `[must]` Move long Builder LLM transformations from synchronous
   `/v1/llm/response` calls to Root-managed async jobs. `builder_skill` now
   submits `/v1/llm/jobs`, stores pending job refs in the Builder session,
   polls the same root base URL, validates the returned JSON, and only then
-  writes `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
+  writes `webui.json`, `ui_revisions/NNN.json`, and
   dev-webspace refresh events.
 - [x] `[must]` Preserve per-revision LLM timing and usage evidence. Root job
   responses now report queue/execution/total timing, provider IDs, service
@@ -509,11 +506,17 @@ Open work:
   stable Builder chat job card instead of displaying one message per phase.
   The first slice groups bounded phase messages by `progress_group_id`; durable
   single-message ledger upsert remains follow-up work.
+- [x] `[must]` Bound the Voice chat stream snapshot by actual UTF-8 bytes, not
+  only message count, and preserve `progress_seq`. Full history remains in the
+  conversation store; the compact stream cannot trip the WebIO fanout budget and
+  delay all Builder phases until terminal recovery.
 - [x] `[must]` Add strict `adaos.builder.webui_patch_stream.v1` JSONL output,
   compatible batch parsing, staged
   RFC 6902 application, source revision/hash guards, full ABI validation, and
   atomic revision promotion. Stable `@<id>` JSON Pointer tokens prevent earlier
-  array edits from shifting later widget targets.
+  array edits from shifting later widget targets. Prompt and repair contracts
+  require explicit creation of intermediate parent containers and the ABI-required
+  nested `pageSchema.autoActions[*].action` shape.
 - [x] `[must]` Keep non-streaming and legacy full-`adaos.webui.v1` model
   profiles operational through the same Root job and Builder commit contract.
 - [x] `[should]` Stabilize the persistent prompt prefix, provide a versioned

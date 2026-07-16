@@ -201,7 +201,7 @@ runtime uses Root-managed asynchronous LLM jobs:
    the recovery path.
 6. Builder stages complete semantic JSONL patches on a private copy and validates
    the reconstructed document against the Builder/webui contracts
-   before writing `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
+   before writing `webui.json`, `ui_revisions/NNN.json`, and
    dev-webspace refresh events.
 
 Each terminal Root job exposes bounded telemetry alongside the response:
@@ -517,13 +517,16 @@ The runtime must provide:
 
 ## Relationship To Pending Actions
 
-Builder review, reject/redirect feedback, and high-risk apply decisions should
-use the core Pending Actions mechanism rather than ad-hoc chat prompts or
-notification-only UI.
+Local prototype creation and ABI-valid UI revisions do not create Pending
+Actions. They are reversible revisions: chat and element review notes provide
+feedback, while `Set current` provides rollback. A binary approval stack is a
+poor fit for an incremental prototype where each revision builds on the current
+one.
 
-Pending Actions are the durable human-in-the-loop surface for choices that may
-change runtime state or future behavior. Notifications may point to those
-choices, but notifications must not become the source of truth for approval.
+Pending Actions are the durable human-in-the-loop surface for deletion,
+activation/release, new permissions, external I/O, credentials, device control,
+or another mandatory policy boundary. Notifications may point to those choices,
+but notifications must not become the source of truth for approval.
 
 Relevant document:
 

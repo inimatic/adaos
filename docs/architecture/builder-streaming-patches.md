@@ -133,17 +133,29 @@ must not store every token delta as a separate message.
 
 The first implementation slice emits bounded phase messages carrying the same
 `progress_group_id`; the client coalesces them into one card and exposes each
-completed phase as a compact page. Durable in-place ledger update is the next
+completed phase as a compact page. The browser projection is also bounded by
+actual UTF-8 payload bytes and retains `progress_seq`; full messages stay in the
+conversation store. Durable in-place ledger update is the next
 compatibility-preserving step. Polling remains the replay/recovery mechanism.
+
+RFC 6902 patch lines must create missing intermediate containers explicitly.
+For example, if `ui.application.modals` is absent, the stream first adds that
+object and only then adds a concrete modal below it. Builder rejects rather than
+silently normalizes a malformed stream, and one repair request receives the
+exact missing-parent diagnostic. Component contracts remain ABI-driven; for
+example every `pageSchema.autoActions` item wraps the executable action in its
+required `action` member.
 
 ## July 2026 Evaluation
 
 The reference run created `streaming_recipe_book_eval` from the generic Builder
 scaffold and produced a responsive recipe catalog with deterministic Picsum
 cards, category controls, search, selected-recipe details, and a local favorite
-action. The final correction used stable widget paths, added
-`item.details.inputs.imageKey`, passed the complete ABI/component/action
-validator, promoted revision `006`, and refreshed `desktop-dev`.
+action. The final follow-up used stable widget paths, declared
+`ui.application.modals.recipe_detail_modal`, attached selection/open actions to
+the recipe cards, preserved the modal while adding two catalog rows, passed the
+complete ABI/component/action validator, promoted revision `009`, and refreshed
+`desktop-dev`.
 
 Measured evidence from the run:
 
@@ -156,6 +168,10 @@ Measured evidence from the run:
 - local context construction: 0.05-0.14 seconds; Root submit: 1.2-1.9 seconds
 - validated apply plus dev-webspace materialization: approximately 3.1 seconds,
   of which semantic runtime rebuild was approximately 2.1-2.7 seconds
+- modal conversion after the missing-parent contract fix: 15.1 seconds at Root,
+  16.9 seconds through validated local apply, without a repair pass
+- warm two-row catalog update: 7.5 seconds at Root and 8.2 seconds through apply,
+  with 9,344 of 11,991 input tokens served from the provider cache
 
 `gpt-4o-mini` produced syntactically recoverable output but materially weaker
 layout and interaction choices for the same broad prototype request. The model
