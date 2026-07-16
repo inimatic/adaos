@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 import json
 import logging
 import os
@@ -493,6 +493,10 @@ def _llm_root_payload(
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
     request_id: str | None = None,
+    stream: bool | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
+    stream_protocol: str | None = None,
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
     normalized_messages = _message_list(messages)
     payload: Dict[str, Any] = {
@@ -510,6 +514,17 @@ def _llm_root_payload(
     req_id = str(request_id or "").strip()
     if req_id:
         payload["request_id"] = req_id
+    if stream is not None:
+        payload["stream"] = bool(stream)
+    cache_key = str(prompt_cache_key or "").strip()
+    if cache_key:
+        payload["prompt_cache_key"] = cache_key
+    cache_retention = str(prompt_cache_retention or "").strip()
+    if cache_retention:
+        payload["prompt_cache_retention"] = cache_retention
+    protocol = str(stream_protocol or "").strip().lower()
+    if protocol:
+        payload["stream_protocol"] = protocol
     return _responses_payload(payload, normalized_messages), normalized_messages
 
 
@@ -542,6 +557,10 @@ def send_response(
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
     request_id: str | None = None,
+    stream: bool | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
+    stream_protocol: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
     """
@@ -557,6 +576,10 @@ def send_response(
         top_p=top_p,
         reasoning=reasoning,
         request_id=request_id,
+        stream=stream,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_retention=prompt_cache_retention,
+        stream_protocol=stream_protocol,
     )
 
     if _legacy_http_enabled():
@@ -617,6 +640,10 @@ def submit_response_job(
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
     request_id: str | None = None,
+    stream: bool | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_retention: str | None = None,
+    stream_protocol: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
     """
@@ -634,6 +661,10 @@ def submit_response_job(
         top_p=top_p,
         reasoning=reasoning,
         request_id=request_id,
+        stream=stream,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_retention=prompt_cache_retention,
+        stream_protocol=stream_protocol,
     )
     payload_bytes = _json_size_bytes(root_payload)
     if _legacy_http_enabled():
@@ -963,6 +994,7 @@ def wait_response_job(
     poll_interval_s: float = 2,
     request_timeout: float | None = None,
     log_interval_s: float = 30,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
     started = time.monotonic()
     deadline = started + max(0.1, float(timeout_s))
@@ -973,6 +1005,7 @@ def wait_response_job(
     last_poll_error = ""
     next_log_at = started
     poll_count = 0
+    last_progress_seq = -1
     _LOG.debug(
         "root LLM job wait start job_id=%s base_url=%s timeout_s=%.1f poll_interval_s=%.1f request_timeout_s=%.1f",
         job_id,
@@ -1018,6 +1051,22 @@ def wait_response_job(
             continue
         now = time.monotonic()
         status = str(last.get("status") or "").lower()
+        progress = last.get("progress") if isinstance(last.get("progress"), Mapping) else {}
+        try:
+            progress_seq = int(progress.get("seq") or 0)
+        except (TypeError, ValueError):
+            progress_seq = 0
+        if progress_callback is not None and progress_seq != last_progress_seq:
+            try:
+                progress_callback(dict(progress))
+            except Exception:
+                _LOG.warning(
+                    "root LLM job progress callback failed job_id=%s seq=%s",
+                    job_id,
+                    progress_seq,
+                    exc_info=True,
+                )
+            last_progress_seq = progress_seq
         if status in {"succeeded", "failed"}:
             _LOG.debug(
                 "root LLM job wait completed job_id=%s base_url=%s status=%s polls=%d elapsed_ms=%.1f",

@@ -81,6 +81,10 @@ _CHAT_META_PAYLOAD_KEYS = (
     "recipient_label",
     "origin_label",
     "action_source",
+    "progress_group_id",
+    "progress_phase",
+    "progress_status",
+    "progress_label",
 )
 
 
@@ -264,6 +268,9 @@ def chat_append(
         _copy_chat_meta_payload_fields(payload, meta)
     if actions:
         payload["actions"] = [dict(item) for item in actions if isinstance(item, Mapping)]
+    progress_seq = meta.get("progress_seq") if isinstance(meta, Mapping) else None
+    if isinstance(progress_seq, (int, float)):
+        payload["progress_seq"] = int(progress_seq)
     _publish("io.out.chat.append", payload, source="sdk.io.out")
     return {"ok": True}
 

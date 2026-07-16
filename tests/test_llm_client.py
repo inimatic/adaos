@@ -500,6 +500,50 @@ def test_wait_response_job_retries_transient_poll_502(monkeypatch: pytest.Monkey
     ]
 
 
+def test_llm_root_payload_includes_stream_and_prompt_cache_controls() -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    payload, _messages = llm._llm_root_payload(
+        [{"role": "system", "content": "Stable contract"}, {"role": "user", "content": "Change UI"}],
+        model="gpt-5",
+        stream=True,
+        prompt_cache_key="adaos-builder-cache",
+        prompt_cache_retention="24h",
+        stream_protocol="jsonl",
+    )
+
+    assert payload["stream"] is True
+    assert payload["prompt_cache_key"] == "adaos-builder-cache"
+    assert payload["prompt_cache_retention"] == "24h"
+    assert payload["stream_protocol"] == "jsonl"
+    assert payload["instructions"] == "Stable contract"
+
+
+def test_wait_response_job_reports_each_progress_sequence_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    jobs = iter(
+        [
+            {"status": "running", "progress": {"seq": 1, "current_phase": "provider"}},
+            {"status": "running", "progress": {"seq": 1, "current_phase": "provider"}},
+            {"status": "running", "progress": {"seq": 2, "current_phase": "generating"}},
+            {"status": "succeeded", "progress": {"seq": 3, "current_phase": "completed"}},
+        ]
+    )
+    monkeypatch.setattr(llm, "get_response_job", lambda *args, **kwargs: next(jobs))
+    progress: list[dict[str, object]] = []
+
+    result = llm.wait_response_job(
+        "llm_job_progress",
+        timeout_s=2,
+        poll_interval_s=0.01,
+        progress_callback=lambda value: progress.append(dict(value)),
+    )
+
+    assert result["status"] == "succeeded"
+    assert [item["seq"] for item in progress] == [1, 2, 3]
+
+
 def test_response_job_submit_skips_unhealthy_primary_root(monkeypatch: pytest.MonkeyPatch) -> None:
     from adaos.sdk.llm import llm_client as llm
 

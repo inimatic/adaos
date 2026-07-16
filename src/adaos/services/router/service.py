@@ -194,6 +194,10 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
         "agent_avatar_ref",
         "recipient_label",
         "origin_label",
+        "progress_group_id",
+        "progress_phase",
+        "progress_status",
+        "progress_label",
     ):
         value = item.get(key)
         if value is not None and value != "":
@@ -4765,10 +4769,17 @@ class RouterService:
                 "recipient_label",
                 "origin_label",
                 "action_source",
+                "progress_group_id",
+                "progress_phase",
+                "progress_status",
+                "progress_label",
             ):
                 raw_value = payload.get(key) if payload.get(key) is not None else meta.get(key)
                 if isinstance(raw_value, str) and raw_value.strip():
                     msg[key] = raw_value.strip()
+            progress_seq = payload.get("progress_seq") if payload.get("progress_seq") is not None else meta.get("progress_seq")
+            if isinstance(progress_seq, (int, float)):
+                msg["progress_seq"] = int(progress_seq)
             voice_profile = payload.get("voice_profile") if isinstance(payload.get("voice_profile"), dict) else None
             if voice_profile is None and isinstance(meta.get("voice_profile"), dict):
                 voice_profile = meta.get("voice_profile")
