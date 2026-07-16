@@ -495,6 +495,10 @@ Open work:
   polls the same root base URL, validates the returned JSON, and only then
   writes `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
   dev-webspace refresh events.
+- [x] `[must]` Preserve per-revision LLM timing and usage evidence. Root job
+  responses now report queue/execution/total timing, provider IDs, service
+  tier, token/cache counts, retry/tool/MCP traces, and Builder stores the
+  bounded summary in `ui_revisions/NNN.json`.
 - [x] `[should]` Add root-owned development LLM model profiles. Root policy now
   exposes `dev_model_profiles` through `/v1/llm/models?scope=development`;
   Prompt IDE shows that scoped list in the LLM Profile modal and persists the

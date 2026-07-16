@@ -200,6 +200,16 @@ runtime uses Root-managed asynchronous LLM jobs:
    before writing `webui.json`, `ui_revisions/NNN.json`, Pending Actions, and
    dev-webspace refresh events.
 
+Each terminal Root job exposes bounded telemetry alongside the response:
+queue/execution/total duration, provider response and request IDs, service tier,
+input/cache/output/reasoning token counts, retry attempts, requested and used
+tools, output item types, and MCP usage. Builder persists this summary under
+`ui_revisions/NNN.json -> llm.telemetry` and copies the provider response ID and
+service tier into `inference`. Raw prompts, credentials, and tool payloads are
+not duplicated into telemetry. This is the primary evidence for separating
+local preparation, Root queueing, provider generation, repair, validation, and
+runtime materialization latency.
+
 This makes OpenAI/read-timeout failures visible as job state instead of
 breaking the Voice or Prompt IDE request path. The synchronous
 `/v1/llm/response` endpoint remains a compatibility path for smaller calls,
