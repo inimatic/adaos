@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Any, Dict, Mapping, Optional
 
 from adaos.domain.personalization_access import (
@@ -140,9 +141,10 @@ class UserProfileService:
         user_id: Optional[str] = None,
         *,
         actor: SubjectRef | str | None = None,
+        emit_event: bool = True,
     ) -> UserProfile:
         with self.access.batch():
-            return self._update_profile(settings, user_id, actor=actor)
+            return self._update_profile(settings, user_id, actor=actor, emit_event=emit_event)
 
     def _update_profile(
         self,
@@ -150,6 +152,7 @@ class UserProfileService:
         user_id: Optional[str] = None,
         *,
         actor: SubjectRef | str | None = None,
+        emit_event: bool = True,
     ) -> UserProfile:
         uid = user_id or self.current_user_id()
         actor_ref = self._actor(actor)
@@ -165,16 +168,20 @@ class UserProfileService:
         self.ctx.kv.set(self._profile_key(uid), contract.to_dict())
         self.access.put_user(subject, actor=actor_ref)
         self.access.put_profile(contract, actor=actor_ref)
+        if emit_event:
+            self.emit_profile_changed(uid, current)
+        return self.get_profile(uid, actor=actor_ref)
+
+    def emit_profile_changed(self, user_id: str, settings: Mapping[str, object]) -> None:
         try:
             emit(
                 self.ctx.bus,
                 "user.profile.changed",
-                {"user_id": uid, "settings": dict(current)},
+                {"user_id": user_id, "settings": dict(settings)},
                 "user.profile",
             )
         except Exception:
             pass
-        return self.get_profile(uid, actor=actor_ref)
 
     def get_preferences(self, user_id: Optional[str] = None, *, actor: SubjectRef | str | None = None) -> Dict[str, object]:
         uid = user_id or self.current_user_id()
@@ -202,6 +209,7 @@ class UserProfileService:
         *,
         actor: SubjectRef | str | None = None,
         device_override: bool = False,
+        emit_event: bool = True,
     ) -> Dict[str, object]:
         with self.access.batch():
             return self._update_preferences(
@@ -209,6 +217,7 @@ class UserProfileService:
                 user_id,
                 actor=actor,
                 device_override=device_override,
+                emit_event=emit_event,
             )
 
     def _update_preferences(
@@ -218,6 +227,7 @@ class UserProfileService:
         *,
         actor: SubjectRef | str | None = None,
         device_override: bool = False,
+        emit_event: bool = True,
     ) -> Dict[str, object]:
         uid = user_id or self.current_user_id()
         actor_ref = self._actor(actor)
@@ -225,6 +235,7 @@ class UserProfileService:
         self._check(actor_ref, "preferences.write.self", subject)
         current = self.get_preferences(uid, actor=actor_ref)
         current.update(dict(patch))
+        updated_at = time.time()
         records: dict[str, dict[str, object]] = {}
         for key, value in current.items():
             preference = Preference(
@@ -233,21 +244,36 @@ class UserProfileService:
                 value=value,
                 scope=self._scope(uid),
                 device_override=device_override,
+                updated_at=updated_at,
             )
             records[str(key)] = preference.to_dict()
             if str(key) in patch:
                 self.access.put_preference(preference, actor=actor_ref)
         self.ctx.kv.set(self._preferences_key(uid), records)
+        if emit_event:
+            self.emit_preferences_changed(uid, patch, updated_at)
+        return self.get_preferences(uid, actor=actor_ref)
+
+    def emit_preferences_changed(
+        self,
+        user_id: str,
+        settings: Mapping[str, object],
+        revision: float,
+    ) -> None:
         try:
             emit(
                 self.ctx.bus,
                 "user.preferences.changed",
-                {"user_id": uid, "keys": sorted(str(key) for key in patch.keys())},
+                {
+                    "user_id": user_id,
+                    "keys": sorted(str(key) for key in settings.keys()),
+                    "settings": dict(settings),
+                    "preferences_revision": revision,
+                },
                 "user.profile",
             )
         except Exception:
             pass
-        return self.get_preferences(uid, actor=actor_ref)
 
     def header_settings(self, user_id: Optional[str] = None) -> dict[str, object]:
         with self.access.batch():
@@ -256,7 +282,16 @@ class UserProfileService:
     def _header_settings(self, user_id: Optional[str] = None) -> dict[str, object]:
         uid = user_id or self.current_user_id()
         profile = self.get_profile(uid)
-        preferences = self.get_preferences(uid)
+        preferences = dict(profile.preferences)
+        raw_preferences = self.ctx.kv.get(self._preferences_key(uid), {}) or {}
+        preferences_revision = max(
+            (
+                float(value.get("updated_at") or 0)
+                for value in raw_preferences.values()
+                if isinstance(value, Mapping)
+            ),
+            default=0.0,
+        )
         settings = dict(profile.settings)
         role_value = "owner" if uid == self.current_user_id() else None
         return {
@@ -268,6 +303,7 @@ class UserProfileService:
             "timezone": profile.timezone or preferences.get("timezone") or settings.get("timezone"),
             "theme": preferences.get("theme") or settings.get("theme") or "system",
             "memory_privacy": preferences.get("memory_privacy") or settings.get("memory_privacy") or "default",
+            "preferences_revision": preferences_revision,
             "current_subnet": getattr(self.ctx.settings, "subnet_id", None),
             "current_workspace": preferences.get("current_workspace") or settings.get("current_workspace"),
             "role_status": {"value": role_value, "editable": False},

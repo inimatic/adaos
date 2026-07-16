@@ -70,6 +70,8 @@ def test_phase2_profile_preferences_header_and_redacted_audit(tmp_path, monkeypa
     assert header["role_status"] == {"value": "owner", "editable": False}
     assert fake_ctx.kv.get("users/masha/profile.v0")["schema_version"].startswith("adaos.personalization_access")
     assert sorted(events[1][1]["keys"]) == ["memory_privacy", "theme"]
+    assert events[1][1]["settings"] == {"theme": "dark", "memory_privacy": "local"}
+    assert float(events[1][1]["preferences_revision"]) > 0
 
     audit = access.list_audit(subject=profile_module.SubjectRef("user", "masha"), limit=20)
     assert any(item["event_type"] == "profile.updated" for item in audit)
@@ -81,6 +83,7 @@ def test_phase2_profile_preferences_header_and_redacted_audit(tmp_path, monkeypa
 def test_profile_updates_persist_access_state_once_per_operation(tmp_path, monkeypatch) -> None:
     fake_ctx = _ctx()
     store = PersonalizationAccessStore(tmp_path / "access.json")
+    store._MAX_AUDIT_RECORDS = 2
     access = PersonalizationAccessService(
         store,
         owner=profile_module.SubjectRef("user", "masha"),
@@ -104,6 +107,7 @@ def test_profile_updates_persist_access_state_once_per_operation(tmp_path, monke
 
     service.header_settings()
     assert save_count == 3
+    assert len(store.snapshot()["audit"]) == 2
 
 
 def test_phase2_profile_rejects_role_membership_policy_fields() -> None:

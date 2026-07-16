@@ -63,6 +63,7 @@ def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
     assert settings.status_code == 200
     assert settings.json()["settings"]["display_name"] == "Maria"
     assert settings.json()["settings"]["theme"] == "light"
+    assert float(settings.json()["settings"]["preferences_revision"]) > 0
 
     header = client.get("/api/personalization/current-user/header-settings", headers=TOKEN_HEADERS)
     assert header.status_code == 200

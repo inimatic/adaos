@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
@@ -906,16 +906,30 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
 
 
 @router.patch("/current-user/settings", dependencies=[Depends(require_token)])
-async def update_current_user_settings(body: dict[str, Any], ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+async def update_current_user_settings(
+    body: dict[str, Any],
+    background_tasks: BackgroundTasks,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
     try:
         service = _profile(ctx)
         actor = _actor(ctx)
         profile_patch = body.get("profile") if isinstance(body.get("profile"), Mapping) else {}
         preferences_patch = body.get("preferences") if isinstance(body.get("preferences"), Mapping) else {}
         with service.access.batch():
-            profile = service.update_profile(_profile_patch(profile_patch), actor=actor)
-            preferences = service.update_preferences(_preferences_patch(preferences_patch), actor=actor)
+            clean_profile_patch = _profile_patch(profile_patch)
+            clean_preferences_patch = _preferences_patch(preferences_patch)
+            profile = service.update_profile(clean_profile_patch, actor=actor, emit_event=False)
+            preferences = service.update_preferences(clean_preferences_patch, actor=actor, emit_event=False)
             settings = service.header_settings()
+        revision = float(settings.get("preferences_revision") or 0)
+        background_tasks.add_task(service.emit_profile_changed, profile.user_id, profile.settings)
+        background_tasks.add_task(
+            service.emit_preferences_changed,
+            profile.user_id,
+            clean_preferences_patch,
+            revision,
+        )
         return {
             "ok": True,
             "profile": _profile_view(profile),

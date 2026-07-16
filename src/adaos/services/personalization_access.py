@@ -140,6 +140,7 @@ class PersonalizationAccessStore:
         "revocations",
         "audit",
     )
+    _MAX_AUDIT_RECORDS = 2000
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else None
@@ -384,7 +385,10 @@ class PersonalizationAccessStore:
 
     def append_audit(self, record: AuditRecord) -> dict[str, Any]:
         data = record.to_dict()
-        self._data["audit"].append(data)
+        audit = self._data["audit"]
+        audit.append(data)
+        if len(audit) > self._MAX_AUDIT_RECORDS:
+            del audit[:-self._MAX_AUDIT_RECORDS]
         self.save()
         return data
 
