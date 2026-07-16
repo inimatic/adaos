@@ -58,6 +58,7 @@ from adaos.services.reliability import (
     _state_sync_snapshot,
     media_plane_runtime_snapshot,
     reliability_snapshot,
+    sidecar_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
 from adaos.services.operations import submit_install_operation
@@ -176,6 +177,14 @@ _RELIABILITY_SUMMARY_METRICS: dict[str, Any] = {
         "body_bytes_total": 0,
     },
     "modes": {},
+}
+_RUNTIME_ENDPOINT_METRICS_LOCK = threading.Lock()
+_RUNTIME_ENDPOINT_METRICS: dict[str, Any] = {
+    "schema": "adaos.runtime_endpoint.metrics.v1",
+    "started_at": time.time(),
+    "updated_at": None,
+    "slow_threshold_ms": 1000.0,
+    "endpoints": {},
 }
 
 
@@ -516,6 +525,52 @@ def _summary_body_size(payload: Mapping[str, Any]) -> int:
         return len(raw.encode("utf-8"))
     except Exception:
         return 0
+
+
+def _runtime_endpoint_slow_threshold_ms() -> float:
+    return _env_float("ADAOS_RUNTIME_ENDPOINT_SLOW_MS", 1000.0, minimum=1.0)
+
+
+def _record_runtime_endpoint_metric(
+    *,
+    endpoint: str,
+    duration_ms: float,
+    status_code: int,
+    body_bytes: int,
+    error: str | None = None,
+) -> None:
+    now = time.time()
+    endpoint_id = str(endpoint or "unknown").strip() or "unknown"
+    duration = max(0.0, float(duration_ms or 0.0))
+    body_size = max(0, int(body_bytes or 0))
+    slow_threshold = _runtime_endpoint_slow_threshold_ms()
+    with _RUNTIME_ENDPOINT_METRICS_LOCK:
+        endpoints = _coerce_dict(_RUNTIME_ENDPOINT_METRICS.get("endpoints"))
+        row = _coerce_dict(endpoints.get(endpoint_id))
+        row["response_total"] = int(row.get("response_total") or 0) + 1
+        row["error_total"] = int(row.get("error_total") or 0) + (1 if error else 0)
+        row["slow_total"] = int(row.get("slow_total") or 0) + (1 if duration >= slow_threshold else 0)
+        row["body_bytes_total"] = int(row.get("body_bytes_total") or 0) + body_size
+        row["last_status_code"] = int(status_code)
+        row["last_duration_ms"] = round(duration, 3)
+        row["last_body_bytes"] = body_size
+        row["last_error"] = str(error or "").strip() or None
+        row["last_at"] = now
+        row["max_duration_ms"] = round(max(float(row.get("max_duration_ms") or 0.0), duration), 3)
+        row["max_body_bytes"] = max(int(row.get("max_body_bytes") or 0), body_size)
+        if duration >= slow_threshold:
+            row["last_slow_at"] = now
+            row["last_slow_duration_ms"] = round(duration, 3)
+            row["last_slow_body_bytes"] = body_size
+        endpoints[endpoint_id] = row
+        _RUNTIME_ENDPOINT_METRICS["slow_threshold_ms"] = slow_threshold
+        _RUNTIME_ENDPOINT_METRICS["endpoints"] = endpoints
+        _RUNTIME_ENDPOINT_METRICS["updated_at"] = now
+
+
+def _runtime_endpoint_metrics_snapshot() -> dict[str, Any]:
+    with _RUNTIME_ENDPOINT_METRICS_LOCK:
+        return json.loads(json.dumps(_RUNTIME_ENDPOINT_METRICS, ensure_ascii=True, default=str))
 
 
 def _record_reliability_summary_metric(
@@ -941,6 +996,7 @@ def _reliability_summary_metrics_snapshot(
         owner=owner,
         limit=limit,
     )
+    payload["runtime_endpoints"] = _runtime_endpoint_metrics_snapshot()
     return payload
 
 
@@ -949,16 +1005,19 @@ def _json_response_with_etag(
     *,
     if_none_match: str | None = None,
     mode: str,
+    started_at: float | None = None,
 ) -> Response:
     etag = _summary_etag(payload)
     cache_hit = _etag_matches(if_none_match, etag)
     body_bytes = 0 if cache_hit else _summary_body_size(payload)
+    duration_ms = max(0.0, (time.time() - float(started_at or time.time())) * 1000.0)
     headers = {
         "Cache-Control": "no-cache",
         "ETag": etag,
         "X-AdaOS-Summary-Mode": mode,
         "X-AdaOS-Summary-Cache": "hit" if cache_hit else "miss",
         "X-AdaOS-Summary-Body-Bytes": str(body_bytes),
+        "X-AdaOS-Runtime-Duration-Ms": str(round(duration_ms, 3)),
     }
     _record_reliability_summary_metric(
         mode=mode,
@@ -967,12 +1026,19 @@ def _json_response_with_etag(
         cache_hit=cache_hit,
         etag=etag,
     )
+    _record_runtime_endpoint_metric(
+        endpoint=f"/api/node/reliability/summary:{mode}",
+        duration_ms=duration_ms,
+        status_code=304 if cache_hit else 200,
+        body_bytes=body_bytes,
+    )
     _log.debug(
-        "reliability summary response mode=%s status=%s bytes=%s cache=%s",
+        "reliability summary response mode=%s status=%s bytes=%s cache=%s duration_ms=%.3f",
         mode,
         304 if cache_hit else 200,
         body_bytes,
         "hit" if cache_hit else "miss",
+        duration_ms,
     )
     if cache_hit:
         return Response(status_code=304, headers=headers)
@@ -3851,8 +3917,35 @@ async def node_projection_diagnostics(
 
 
 @router.get("/reliability", dependencies=[Depends(require_token)])
-async def node_reliability() -> dict[str, Any]:
-    return await _current_reliability_payload_async()
+async def node_reliability() -> Response:
+    started_at = time.time()
+    try:
+        payload = await _current_reliability_payload_async()
+        body_bytes = _summary_body_size(payload)
+        duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
+        _record_runtime_endpoint_metric(
+            endpoint="/api/node/reliability",
+            duration_ms=duration_ms,
+            status_code=200,
+            body_bytes=body_bytes,
+        )
+        return JSONResponse(
+            content=payload,
+            headers={
+                "X-AdaOS-Runtime-Duration-Ms": str(round(duration_ms, 3)),
+                "X-AdaOS-Runtime-Body-Bytes": str(body_bytes),
+            },
+        )
+    except Exception as exc:
+        duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
+        _record_runtime_endpoint_metric(
+            endpoint="/api/node/reliability",
+            duration_ms=duration_ms,
+            status_code=500,
+            body_bytes=0,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
 
 
 @router.get("/reliability/summary", dependencies=[Depends(require_token)])
@@ -3861,6 +3954,7 @@ async def node_reliability_summary(
     mode: str | None = None,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
+    started_at = time.time()
     requested_mode = str(mode or "compat").strip().lower()
     if requested_mode in {"thin", "status", "status_plane"}:
         resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -3873,6 +3967,7 @@ async def node_reliability_summary(
             payload,
             if_none_match=if_none_match,
             mode="thin",
+            started_at=started_at,
         )
 
     reliability = await _current_reliability_payload_async(webspace_id=webspace_id)
@@ -3887,6 +3982,7 @@ async def node_reliability_summary(
         payload,
         if_none_match=if_none_match,
         mode=str(payload["mode"]),
+        started_at=started_at,
     )
 
 
@@ -3955,20 +4051,47 @@ async def hub_root_route_reset(payload: HubRootRouteResetRequest) -> dict[str, A
 
 @router.get("/sidecar/status", dependencies=[Depends(require_token)])
 async def sidecar_status(request: Request) -> dict[str, Any]:
+    started_at = time.time()
     if _supervisor_enabled():
-        return await _proxy_supervisor_json(method="GET", path="/api/supervisor/sidecar/status", timeout=3.0)
-    conf = await anyio.to_thread.run_sync(load_config)
-    reliability = await _current_reliability_payload_async()
-    runtime = reliability.get("runtime") if isinstance(reliability.get("runtime"), dict) else {}
-    process = realtime_sidecar_listener_snapshot(
-        getattr(request.app.state, "realtime_sidecar_proc", None),
-        role=conf.role,
-    )
-    return {
-        "ok": True,
-        "runtime": runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {},
-        "process": process,
-    }
+        payload = await _proxy_supervisor_json(method="GET", path="/api/supervisor/sidecar/status", timeout=3.0)
+        duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
+        _record_runtime_endpoint_metric(
+            endpoint="/api/node/sidecar/status",
+            duration_ms=duration_ms,
+            status_code=200,
+            body_bytes=_summary_body_size(payload),
+        )
+        return payload
+    try:
+        conf = await anyio.to_thread.run_sync(load_config)
+        runtime = sidecar_runtime_snapshot(role=conf.role)
+        process = realtime_sidecar_listener_snapshot(
+            getattr(request.app.state, "realtime_sidecar_proc", None),
+            role=conf.role,
+        )
+        payload = {
+            "ok": True,
+            "runtime": runtime,
+            "process": process,
+        }
+        duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
+        _record_runtime_endpoint_metric(
+            endpoint="/api/node/sidecar/status",
+            duration_ms=duration_ms,
+            status_code=200,
+            body_bytes=_summary_body_size(payload),
+        )
+        return payload
+    except Exception as exc:
+        duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
+        _record_runtime_endpoint_metric(
+            endpoint="/api/node/sidecar/status",
+            duration_ms=duration_ms,
+            status_code=500,
+            body_bytes=0,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
 
 
 @router.post("/sidecar/restart", dependencies=[Depends(require_token)])

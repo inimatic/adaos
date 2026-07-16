@@ -152,6 +152,61 @@ def test_node_sidecar_status_proxies_to_supervisor_when_enabled(monkeypatch) -> 
     assert payload["process"]["listener_running"] is True
 
 
+def test_node_sidecar_status_uses_lightweight_runtime_snapshot(monkeypatch) -> None:
+    sys.modules.setdefault("nats", types.SimpleNamespace())
+    fake_y_py = types.SimpleNamespace(
+        YDoc=type("YDoc", (), {}),
+        apply_update=lambda *args, **kwargs: None,
+    )
+    sys.modules.setdefault("y_py", fake_y_py)
+    fake_ystore_module = types.ModuleType("ypy_websocket.ystore")
+    fake_ystore_module.BaseYStore = object
+    fake_ystore_module.YDocNotFound = RuntimeError
+    fake_ypy_websocket = types.ModuleType("ypy_websocket")
+    fake_ypy_websocket.ystore = fake_ystore_module
+    sys.modules.setdefault("ypy_websocket", fake_ypy_websocket)
+    sys.modules.setdefault("ypy_websocket.ystore", fake_ystore_module)
+    from adaos.apps.api import node_api
+
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.setattr(node_api, "load_config", lambda: types.SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api,
+        "current_reliability_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("full reliability snapshot must not run")),
+    )
+    monkeypatch.setattr(
+        node_api,
+        "sidecar_runtime_snapshot",
+        lambda **kwargs: {
+            "status": "ready",
+            "transport_provenance": {"remote_url": "wss://ru.api.inimatic.com/nats"},
+        },
+    )
+    monkeypatch.setattr(
+        node_api,
+        "realtime_sidecar_listener_snapshot",
+        lambda *args, **kwargs: {"listener_running": True},
+    )
+
+    app = FastAPI()
+    app.include_router(node_api.router, prefix="/api/node")
+    app.dependency_overrides[require_token] = lambda: None
+
+    client = TestClient(app)
+    resp = client.get("/api/node/sidecar/status")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert payload["runtime"]["status"] == "ready"
+    assert payload["process"]["listener_running"] is True
+
+    metrics = client.get("/api/node/reliability/summary/metrics").json()
+    endpoints = metrics["metrics"]["runtime_endpoints"]["endpoints"]
+    assert endpoints["/api/node/sidecar/status"]["response_total"] >= 1
+
+
 def test_node_sidecar_restart_proxies_to_supervisor_when_enabled(monkeypatch) -> None:
     sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
