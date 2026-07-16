@@ -2948,6 +2948,30 @@ async def test_voice_chat_stream_compacts_heavy_message_payloads(monkeypatch) ->
     assert "prototype_review_notes" not in json.dumps(message, ensure_ascii=False)
 
 
+def test_voice_chat_stream_tail_is_utf8_byte_bounded_and_keeps_progress_sequence() -> None:
+    messages = [
+        {
+            "id": f"message-{index}",
+            "from": "hub",
+            "text": "данные " * 300,
+            "progress_group_id": "job-1",
+            "progress_phase": f"phase-{index}",
+            "progress_seq": index,
+        }
+        for index in range(24)
+    ]
+
+    compact = router_service_module._compact_voice_chat_stream_messages(messages)
+    bounded, omitted = router_service_module._bound_voice_chat_stream_messages(compact, max_bytes=4096)
+
+    encoded = json.dumps(bounded, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(encoded) <= 4096
+    assert omitted > 0
+    assert bounded[-1]["id"] == "message-23"
+    assert bounded[-1]["progress_seq"] == 23
+    assert [item["progress_seq"] for item in bounded] == sorted(item["progress_seq"] for item in bounded)
+
+
 async def test_voice_chat_user_autocorrects_text_before_nlu(monkeypatch) -> None:
     bus = LocalEventBus()
     doc = _Doc()

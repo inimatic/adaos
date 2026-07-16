@@ -66,6 +66,13 @@ VOICE_CHAT_HISTORY_LIMIT = 200
 VOICE_CHAT_STREAM_TEXT_MAX_CHARS = 1200
 VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = 4096
 VOICE_CHAT_STREAM_ACTIONS_MAX = 6
+try:
+    VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = max(
+        4096,
+        min(int(str(os.getenv("ADAOS_VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES") or "16384").strip()), 65536),
+    )
+except Exception:
+    VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = 16384
 _CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
     {
         "id": GENERAL_DIALOG_AGENT_ID,
@@ -189,6 +196,8 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
         "turn_trace_id",
         "active_agent_id",
         "active_agent_label",
+        "active_agent_gender",
+        "active_agent_voice",
         "active_agent_icon",
         "active_agent_avatar_ref",
         "agent_avatar_ref",
@@ -198,6 +207,7 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
         "progress_phase",
         "progress_status",
         "progress_label",
+        "progress_seq",
     ):
         value = item.get(key)
         if value is not None and value != "":
@@ -222,6 +232,45 @@ def _compact_voice_chat_stream_messages(messages: list[dict[str, Any]]) -> list[
         for item in messages
         if isinstance(item, Mapping)
     ]
+
+
+def _voice_chat_stream_json_bytes(value: Any) -> int:
+    return len(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode(
+            "utf-8", errors="replace"
+        )
+    )
+
+
+def _bound_voice_chat_stream_messages(
+    messages: list[dict[str, Any]],
+    *,
+    max_bytes: int = VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES,
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep the newest contiguous chat tail within the WebIO payload budget."""
+    budget = max(1024, int(max_bytes or VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES))
+    selected_reversed: list[dict[str, Any]] = []
+    used_bytes = 2  # JSON list brackets.
+    for source in reversed(messages):
+        candidate = dict(source)
+        candidate_bytes = _voice_chat_stream_json_bytes(candidate)
+        while candidate_bytes > budget - 2 and isinstance(candidate.get("actions"), list) and candidate["actions"]:
+            candidate["actions"] = candidate["actions"][:-1]
+            if not candidate["actions"]:
+                candidate.pop("actions", None)
+            candidate_bytes = _voice_chat_stream_json_bytes(candidate)
+        if candidate_bytes > budget - 2:
+            candidate["text"] = _truncate_voice_chat_stream_text(candidate.get("text"), max_chars=256)
+            candidate_bytes = _voice_chat_stream_json_bytes(candidate)
+        separator_bytes = 1 if selected_reversed else 0
+        if selected_reversed and used_bytes + separator_bytes + candidate_bytes > budget:
+            break
+        selected_reversed.append(candidate)
+        used_bytes += separator_bytes + candidate_bytes
+        if used_bytes >= budget:
+            break
+    selected = list(reversed(selected_reversed))
+    return selected, max(0, len(messages) - len(selected))
 _GENERAL_AGENT_ADDRESS_RE = re.compile(
     r"^\s*(?:general|ассистент|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
     re.IGNORECASE | re.UNICODE,
@@ -3174,15 +3223,25 @@ class RouterService:
         ) -> str:
             # Keep the browser stream as a compact tail. Voice must never wait
             # on heavier YJS history writes before dispatching NLU.
-            cached_messages = _compact_voice_chat_stream_messages(
+            compact_messages = _compact_voice_chat_stream_messages(
                 [dict(item) for item in messages if isinstance(item, dict)]
             )
-            total_count = int(total_message_count if total_message_count is not None else len(cached_messages))
+            cached_messages, omitted_for_budget = _bound_voice_chat_stream_messages(compact_messages)
+            total_count = int(total_message_count if total_message_count is not None else len(compact_messages))
+            effective_has_more_before = bool(has_more_before) or omitted_for_budget > 0 or total_count > len(cached_messages)
+            effective_before_cursor = str(before_cursor or "")
+            if omitted_for_budget:
+                try:
+                    effective_before_cursor = str(int(effective_before_cursor or "0") + omitted_for_budget)
+                except (TypeError, ValueError):
+                    effective_before_cursor = str(max(0, total_count - len(cached_messages)))
+            elif not effective_before_cursor and effective_has_more_before:
+                effective_before_cursor = str(max(0, total_count - len(cached_messages)))
             conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(cached_messages)
             signature = _voice_chat_persist_signature(
                 cached_messages,
-                before_cursor=str(before_cursor or ""),
-                has_more_before=bool(has_more_before),
+                before_cursor=effective_before_cursor,
+                has_more_before=effective_has_more_before,
                 total_message_count=total_count,
             )
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
@@ -3204,8 +3263,8 @@ class RouterService:
                 "last_refresh_ts": last_refresh_ts,
                 "message_count": len(cached_messages),
                 "total_message_count": total_count,
-                "has_more_before": bool(has_more_before),
-                "before_cursor": str(before_cursor or ""),
+                "has_more_before": effective_has_more_before,
+                "before_cursor": effective_before_cursor,
                 "history_mode": "compact_tail",
                 "conversation_id": conversation_id,
                 "dialog_channel_id": dialog_channel_id,
@@ -3222,8 +3281,8 @@ class RouterService:
                     "last_refresh_ts": last_refresh_ts,
                     "message_count": len(cached_messages),
                     "total_message_count": total_count,
-                    "has_more_before": bool(has_more_before),
-                    "before_cursor": str(before_cursor or ""),
+                    "has_more_before": effective_has_more_before,
+                    "before_cursor": effective_before_cursor,
                     "history_mode": "compact_tail",
                     "conversation_id": conversation_id,
                     "dialog_channel_id": dialog_channel_id,
