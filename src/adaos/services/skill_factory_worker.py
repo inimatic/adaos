@@ -40,7 +40,14 @@ def _read_json(path: Path) -> dict[str, Any]:
     return dict(raw) if isinstance(raw, Mapping) else {}
 
 
-def _run(command: Sequence[str], *, cwd: Path, input_text: str | None = None, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    input_text: str | None = None,
+    timeout: float = 120.0,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(item) for item in command],
         cwd=str(cwd),
@@ -52,6 +59,7 @@ def _run(command: Sequence[str], *, cwd: Path, input_text: str | None = None, ti
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
+        env=dict(env) if env is not None else None,
     )
 
 
@@ -107,7 +115,13 @@ class SubprocessCodexExecutor:
         if self.model:
             command.extend(["--model", self.model])
         command.append("-")
-        result = _run(command, cwd=workspace, input_text=prompt, timeout=self.timeout_seconds)
+        result = _run(
+            command,
+            cwd=workspace,
+            input_text=prompt,
+            timeout=self.timeout_seconds,
+            env=self._bounded_environment(),
+        )
         final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
         return CodexRunResult(
             returncode=result.returncode,
@@ -116,6 +130,28 @@ class SubprocessCodexExecutor:
             final_message=final_message,
             command=tuple(command),
         )
+
+    @staticmethod
+    def _bounded_environment() -> dict[str, str]:
+        # Codex authentication remains in its local home, while API keys and
+        # arbitrary AdaOS/runtime secrets are deliberately not inherited.
+        allowed = {
+            "PATH",
+            "PATHEXT",
+            "SYSTEMROOT",
+            "WINDIR",
+            "COMSPEC",
+            "TEMP",
+            "TMP",
+            "HOME",
+            "USERPROFILE",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "CODEX_HOME",
+            "LANG",
+            "LC_ALL",
+        }
+        return {key: value for key, value in os.environ.items() if key.upper() in allowed and value}
 
 
 class LocalSkillFactoryWorker:
@@ -440,6 +476,24 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 checks.append({"kind": "python", "path": path.relative_to(workspace).as_posix(), "ok": True})
             except Exception as exc:
                 errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
+
+        webui_schema_path = self.repo_root / "src" / "adaos" / "abi" / "webui.v1.schema.json"
+        if webui_schema_path.exists():
+            try:
+                from jsonschema import Draft202012Validator
+
+                validator = Draft202012Validator(_read_json(webui_schema_path))
+                for path in sorted(workspace.rglob("webui.json")):
+                    payload = _read_json(path)
+                    validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
+                    if validation_errors:
+                        errors.extend(
+                            f"{path.relative_to(workspace)}: webui schema: {item.message}" for item in validation_errors[:20]
+                        )
+                    else:
+                        checks.append({"kind": "webui.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
+            except Exception as exc:
+                errors.append(f"webui schema validation setup failed: {type(exc).__name__}: {exc}")
 
         target = dict(assignment.get("target") or {})
         target_id = _safe_token(target.get("id"), fallback="generated_skill")

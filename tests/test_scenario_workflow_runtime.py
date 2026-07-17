@@ -96,6 +96,45 @@ def test_prompt_workflow_exposes_virtual_automation_state(tmp_path: Path) -> Non
 
 
 @pytest.mark.anyio
+async def test_successful_execute_hands_brief_to_local_automation(monkeypatch, tmp_path: Path) -> None:
+    runtime, _paths = _runtime(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    class _Automation:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def start_from_execute(self, **kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "session": {"status": "queued"}}
+
+    async def fake_set_state(*args, **kwargs):
+        calls.append({"set_state": args[3], **kwargs})
+
+    async def fake_set_status(*args, **kwargs):
+        calls.append({"llm_status": args[2], "message": args[3], **kwargs})
+
+    import adaos.services.builder.automation as automation_module
+
+    monkeypatch.setattr(automation_module, "BuilderAutomationService", _Automation)
+    monkeypatch.setattr(ScenarioWorkflowRuntime, "set_state", fake_set_state)
+    monkeypatch.setattr(ScenarioWorkflowRuntime, "_set_llm_status", fake_set_status)
+
+    await runtime._start_local_automation_from_tz_execute(
+        "prompt-dev",
+        "prompt_engineer_scenario",
+        object_type="scenario",
+        object_id="recipes",
+        result={"ok": True, "output_text": "Approved implementation brief", "output_path": "tz/ts_draft.md"},
+    )
+
+    assert calls[0]["implementation_brief"] == "Approved implementation brief"
+    assert calls[1]["set_state"] == "automation"
+    assert calls[2]["llm_status"] == "automation"
+
+
+@pytest.mark.anyio
 async def test_refresh_prompt_project_snapshots_updates_selected_topic(monkeypatch, tmp_path: Path) -> None:
     runtime, paths = _runtime(tmp_path)
     root = paths.dev_scenarios_dir() / "prototype_app_4d5758e5"

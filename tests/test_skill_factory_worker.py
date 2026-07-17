@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from adaos.services.skill_factory import SkillFactoryService
-from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
+from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker, SubprocessCodexExecutor
 
 
 def _scenario(root: Path, scenario_id: str) -> Path:
@@ -129,3 +129,17 @@ def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
     assert result["ok"] is False
     assert "outside the task scope" in result["error"]
     assert not (tmp_path / "outside.txt").exists()
+
+
+def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("ADAOS_TOKEN", "secret")
+    monkeypatch.setenv("CODEX_HOME", "C:/codex-home")
+    monkeypatch.setenv("PATH", "C:/bin")
+
+    environment = SubprocessCodexExecutor._bounded_environment()
+
+    assert environment["CODEX_HOME"] == "C:/codex-home"
+    assert environment["PATH"] == "C:/bin"
+    assert "OPENAI_API_KEY" not in environment
+    assert "ADAOS_TOKEN" not in environment
