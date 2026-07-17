@@ -9818,6 +9818,44 @@ async def apply_builder_revision_materialization(
     if not requested_scenario:
         raise ValueError("scenario_id is required")
 
+    source_webspace_id = str((event_payload or {}).get("source_webspace_id") or "").strip()
+    if source_webspace_id:
+        try:
+            from adaos.services.builder.workbench import BuilderWorkbenchService
+
+            binding = BuilderWorkbenchService.from_context().get_workspace_binding(source_webspace_id)
+        except Exception:
+            binding = {}
+            _log.debug(
+                "builder materialization target guard unavailable source_webspace=%s dev_webspace=%s scenario=%s",
+                source_webspace_id,
+                webspace_id,
+                requested_scenario,
+                exc_info=True,
+            )
+        desired_dev_webspace = str(binding.get("dev_webspace_id") or "").strip()
+        desired_scenario = str(binding.get("runtime_scenario_id") or "").strip()
+        if desired_dev_webspace == webspace_id and desired_scenario and desired_scenario != requested_scenario:
+            _log.info(
+                "builder materialization superseded source_webspace=%s dev_webspace=%s requested_scenario=%s desired_scenario=%s revision=%s",
+                source_webspace_id,
+                webspace_id,
+                requested_scenario,
+                desired_scenario,
+                str(revision or "").strip() or "-",
+            )
+            return {
+                "ok": True,
+                "accepted": False,
+                "skipped": "superseded_builder_target",
+                "action": "builder_revision_apply",
+                "source_webspace_id": source_webspace_id,
+                "webspace_id": webspace_id,
+                "scenario_id": requested_scenario,
+                "desired_scenario_id": desired_scenario,
+                "revision": str(revision or "").strip() or None,
+            }
+
     state, resolved_scenario_id, scenario_resolution = await _resolve_rebuild_scenario_target(
         webspace_id,
         requested_scenario,

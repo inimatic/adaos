@@ -1109,6 +1109,31 @@ async def _on_prompt_project_changed_refresh_workflow(evt: Dict[str, Any]) -> No
     if object_type not in {"skill", "scenario"} or not object_id:
         return
     webspace_id = _resolve_webspace_id(payload)
+    reason = str(payload.get("reason") or "").strip()
+    if object_type == "scenario" and reason in {"builder_project_created", "builder_project_switched"}:
+        try:
+            from adaos.services.builder.workbench import BuilderWorkbenchService
+
+            binding = BuilderWorkbenchService.from_context().get_workspace_binding(webspace_id)
+        except Exception:
+            binding = {}
+            _log.debug(
+                "prompt project target guard unavailable webspace=%s object_id=%s reason=%s",
+                webspace_id,
+                object_id,
+                reason,
+                exc_info=True,
+            )
+        desired_scenario = str(binding.get("runtime_scenario_id") or "").strip()
+        if desired_scenario and desired_scenario != object_id:
+            _log.info(
+                "prompt project change superseded webspace=%s object_id=%s desired_scenario=%s reason=%s",
+                webspace_id,
+                object_id,
+                desired_scenario,
+                reason,
+            )
+            return
     ctx = get_ctx()
     runtime = ScenarioWorkflowRuntime(ctx)
     try:

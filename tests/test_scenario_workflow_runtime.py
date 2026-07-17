@@ -149,3 +149,42 @@ async def test_refresh_prompt_project_snapshots_updates_selected_topic(monkeypat
     selection = json.loads((paths.state_dir() / "prompt_ide" / "selection" / "desktop.json").read_text(encoding="utf-8"))
     assert selection["object_id"] == "prototype_app_4d5758e5"
     assert selection["topic_id"] == "prompt-project:scenario:prototype_app_4d5758e5"
+
+
+@pytest.mark.anyio
+async def test_builder_prompt_project_change_skips_superseded_target(monkeypatch) -> None:
+    refreshed: list[tuple[str, str, str]] = []
+
+    class _Workbench:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def get_workspace_binding(self, webspace_id):
+            assert webspace_id == "desktop"
+            return {"runtime_scenario_id": "builder"}
+
+    class _Runtime:
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        async def refresh_prompt_project_snapshots(self, webspace_id, *, object_type, object_id):
+            refreshed.append((webspace_id, object_type, object_id))
+
+    import adaos.services.builder.workbench as workbench_module
+
+    monkeypatch.setattr(workbench_module, "BuilderWorkbenchService", _Workbench)
+    monkeypatch.setattr(workflow_runtime_module, "ScenarioWorkflowRuntime", _Runtime)
+    monkeypatch.setattr(workflow_runtime_module, "get_ctx", lambda: object())
+
+    await workflow_runtime_module._on_prompt_project_changed_refresh_workflow(
+        {
+            "source_webspace_id": "desktop",
+            "webspace_id": "desktop",
+            "object_type": "scenario",
+            "object_id": "stale_prototype",
+            "reason": "builder_project_created",
+        }
+    )
+
+    assert refreshed == []

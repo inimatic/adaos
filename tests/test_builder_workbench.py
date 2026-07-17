@@ -398,3 +398,32 @@ async def test_builder_project_changed_does_not_trigger_duplicate_preview_reload
     )
 
     assert calls == [("scenario", "prototype_app", "manual_project_file_save")]
+
+
+@pytest.mark.asyncio
+async def test_builder_preview_selected_skips_superseded_builder_event(monkeypatch) -> None:
+    import adaos.services.builder.workbench as workbench_module
+
+    ensure_calls: list[dict] = []
+
+    class _Workbench:
+        def get_workspace_binding(self, source_webspace_id):
+            assert source_webspace_id == "desktop"
+            return {"runtime_scenario_id": "builder"}
+
+        async def ensure_dev_webspace(self, source_webspace_id, **kwargs):
+            ensure_calls.append({"source_webspace_id": source_webspace_id, **kwargs})
+
+    monkeypatch.setattr(workbench_module, "BuilderWorkbenchService", _Workbench)
+
+    await workbench_module._on_builder_preview_selected(
+        {
+            "source_webspace_id": "desktop",
+            "object_type": "scenario",
+            "object_id": "stale_prototype",
+            "scenario_id": "stale_prototype",
+            "reason": "builder_project_created",
+        }
+    )
+
+    assert ensure_calls == []

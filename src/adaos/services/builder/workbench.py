@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ BUILDER_RUNTIME_FALLBACK_SCENARIO_ID = "web_desktop"
 BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
 BUILDER_OWNER = f"skill:{BUILDER_SKILL_ID}"
+_log = logging.getLogger("adaos.builder.workbench")
 
 
 def safe_source_webspace_id(value: Any) -> str:
@@ -573,7 +575,21 @@ async def _on_builder_preview_selected(evt: Any) -> None:
     if object_type != "scenario" or not scenario_id:
         return
     source_webspace_id = str(payload.get("source_webspace_id") or payload.get("webspace_id") or "").strip() or None
-    await BuilderWorkbenchService().ensure_dev_webspace(
+    service = BuilderWorkbenchService()
+    reason = str(payload.get("reason") or "").strip()
+    if reason in {"builder_project_created", "builder_project_switched"}:
+        binding = service.get_workspace_binding(source_webspace_id)
+        desired_scenario = str(binding.get("runtime_scenario_id") or "").strip()
+        if desired_scenario and desired_scenario != scenario_id:
+            _log.info(
+                "builder preview selection superseded source_webspace=%s scenario=%s desired_scenario=%s reason=%s",
+                source_webspace_id,
+                scenario_id,
+                desired_scenario,
+                reason,
+            )
+            return
+    await service.ensure_dev_webspace(
         source_webspace_id,
         active_draft_id=str(payload.get("draft_id") or "").strip() or None,
         runtime_scenario_id=scenario_id,

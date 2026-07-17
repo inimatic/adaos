@@ -4142,6 +4142,63 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
     assert result["webspace_identity_update"]["home_scenario_before"] == "prompt_engineer_scenario"
 
 
+def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> None:
+    webspace_id = "phase2-builder-superseded-dev"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="DEV: Superseded Builder",
+        kind="dev",
+        source_mode="dev",
+        home_scenario="current_builder",
+    )
+    rebuild_calls: list[str] = []
+
+    class _Workbench:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def get_workspace_binding(self, source_webspace_id):
+            assert source_webspace_id == "desktop"
+            return {
+                "source_webspace_id": "desktop",
+                "dev_webspace_id": webspace_id,
+                "runtime_scenario_id": "current_builder",
+            }
+
+    import adaos.services.builder.workbench as workbench_module
+
+    monkeypatch.setattr(workbench_module, "BuilderWorkbenchService", _Workbench)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "rebuild_webspace_from_sources",
+        lambda *args, **kwargs: rebuild_calls.append(str(kwargs.get("scenario_id"))),
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.apply_builder_revision_materialization(
+            webspace_id,
+            scenario_id="stale_prototype",
+            revision="002",
+            event_payload={"source_webspace_id": "desktop"},
+        )
+    )
+
+    assert result == {
+        "ok": True,
+        "accepted": False,
+        "skipped": "superseded_builder_target",
+        "action": "builder_revision_apply",
+        "source_webspace_id": "desktop",
+        "webspace_id": webspace_id,
+        "scenario_id": "stale_prototype",
+        "desired_scenario_id": "current_builder",
+        "revision": "002",
+    }
+    assert rebuild_calls == []
+
+
 def test_phase4_projection_refresh_uses_dev_space_for_dev_webspace(monkeypatch) -> None:
     webspace_id = "phase4-dev-refresh"
     ensure_workspace(webspace_id)
