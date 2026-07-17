@@ -147,6 +147,46 @@ def test_builder_chat_routes_to_active_local_automation(monkeypatch) -> None:
     ]
 
 
+def test_builder_chat_delegates_active_automation_to_runtime_skill(monkeypatch) -> None:
+    class _Automation:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def find_active_session(self, *, webspace_id):
+            assert webspace_id == "prompt-dev"
+            return {"object_type": "scenario", "object_id": "recipes"}
+
+    class _Manager:
+        def run_tool(self, skill, tool, payload):
+            assert (skill, tool) == ("builder_automation_skill", "chat")
+            assert payload["object_type"] == "scenario"
+            assert payload["object_id"] == "recipes"
+            assert payload["webspace_id"] == "prompt-dev"
+            return {
+                "ok": True,
+                "handled": True,
+                "status": "automation_queued",
+                "message": "Iteration queued.",
+            }
+
+    import adaos.services.builder.automation as automation_module
+
+    monkeypatch.setattr(automation_module, "BuilderAutomationService", _Automation)
+
+    result = asyncio.run(
+        tool_bridge_module._route_builder_automation_chat(
+            tool_name="builder_skill:chat",
+            payload={"text": "Add a favorites filter"},
+            webspace_id="prompt-dev",
+            manager=_Manager(),
+        )
+    )
+
+    assert result["status"] == "automation_queued"
+    assert result["message"] == "Iteration queued."
+
+
 def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch) -> None:
     published = _patch_runtime_approval_pending_actions(monkeypatch)
 

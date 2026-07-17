@@ -15,8 +15,40 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
 STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.1.0"
+AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
+
+_ACTIVE_STATUSES = {
+    "starting",
+    "queued",
+    "assigned",
+    "workspace_preparing",
+    "in_progress",
+    "tests_running",
+    "commit_ready",
+}
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "expired"}
+_STATUS_RANK = {
+    "starting": 0,
+    "queued": 0,
+    "assigned": 1,
+    "workspace_preparing": 1,
+    "in_progress": 2,
+    "tests_running": 3,
+    "commit_ready": 4,
+    "completed": 5,
+    "failed": 5,
+    "cancelled": 5,
+    "expired": 5,
+}
+_AUTOMATION_STEPS = (
+    ("queued", "builder.automation.step.queued", 0),
+    ("workspace", "builder.automation.step.workspace", 1),
+    ("implementation", "builder.automation.step.implementation", 2),
+    ("verification", "builder.automation.step.verification", 3),
+    ("result", "builder.automation.step.result", 4),
+)
 
 
 def _now_iso() -> str:
@@ -33,6 +65,23 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _publish_automation_changed(projection: Mapping[str, Any]) -> None:
+    try:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit
+
+        emit(
+            get_ctx().bus,
+            "builder.automation.changed",
+            dict(projection),
+            source="builder.automation",
+        )
+    except Exception:
+        # The service also runs in validation, tests, and early startup where no
+        # process-wide AgentContext exists yet. Persistence remains authoritative.
+        return
+
+
 @dataclass(slots=True)
 class BuilderAutomationService:
     state_dir: Path
@@ -41,6 +90,7 @@ class BuilderAutomationService:
     dev_scenarios_root: Path
     runs_root: Path | None = None
     worker_factory: Callable[[], LocalSkillFactoryWorker] | None = None
+    event_sink: Callable[[Mapping[str, Any]], None] | None = None
     background: bool = True
     factory: SkillFactoryService = field(init=False)
 
@@ -63,6 +113,7 @@ class BuilderAutomationService:
             repo_root=repo_root,
             dev_skills_root=Path(dev_skills),
             dev_scenarios_root=Path(dev_scenarios),
+            event_sink=_publish_automation_changed,
             background=background,
         )
 
@@ -89,7 +140,13 @@ class BuilderAutomationService:
         with _LOCK:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
-                return {"ok": True, "duplicate": True, "session": self.refresh_session(current)}
+                refreshed = self.refresh_session(current)
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "session": refreshed,
+                    "automation": self.project_session(refreshed),
+                }
             session = {
                 "schema": AUTOMATION_SESSION_SCHEMA,
                 "session_id": f"automation.{kind}.{project_id}",
@@ -114,7 +171,13 @@ class BuilderAutomationService:
             session["task_history"].append(session["current_task_id"])
             self._save_session(session)
         self._launch_worker(session["session_id"])
-        return {"ok": True, "duplicate": False, "session": session, "task": submitted["task"]}
+        return {
+            "ok": True,
+            "duplicate": False,
+            "session": session,
+            "task": submitted["task"],
+            "automation": self.project_session(session),
+        }
 
     def submit_turn(
         self,
@@ -143,6 +206,7 @@ class BuilderAutomationService:
                     "status": "automation_busy",
                     "message": "Локальный Codex ещё выполняет предыдущую итерацию. Дождитесь завершения и отправьте уточнение повторно.",
                     "session": session,
+                    "automation": self.project_session(session),
                 }
             session["iteration"] = int(session.get("iteration") or 0) + 1
             session.setdefault("turns", []).append(
@@ -162,13 +226,116 @@ class BuilderAutomationService:
             "message": f"Локальный Codex принял итерацию {session['iteration']}: {instruction}",
             "session": session,
             "task": submitted["task"],
+            "automation": self.project_session(session),
         }
 
     def status(self, *, object_type: str, object_id: str) -> dict[str, Any]:
         session = self.get_session(object_type, object_id)
         if not session:
             return {"ok": False, "error": "automation_session_not_found"}
-        return {"ok": True, "session": self.refresh_session(session)}
+        current = self.refresh_session(session)
+        return {"ok": True, "session": current, "automation": self.project_session(current)}
+
+    def projection(
+        self,
+        *,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        session = (
+            self.get_session(str(object_type), str(object_id))
+            if object_type and object_id
+            else self.find_active_session(webspace_id=webspace_id)
+        )
+        if not session:
+            return {
+                "ok": False,
+                "error": "automation_session_not_found",
+                "automation": self.empty_projection(webspace_id=webspace_id),
+            }
+        current = self.refresh_session(session)
+        return {"ok": True, "session": current, "automation": self.project_session(current)}
+
+    @staticmethod
+    def empty_projection(*, webspace_id: str | None = None) -> dict[str, Any]:
+        return {
+            "schema": AUTOMATION_PROJECTION_SCHEMA,
+            "stage": "automation",
+            "status": "idle",
+            "phase": "idle",
+            "busy": False,
+            "terminal": False,
+            "can_submit": False,
+            "webspace_id": str(webspace_id or "desktop"),
+            "project": None,
+            "iteration": 0,
+            "task_id": None,
+            "steps": BuilderAutomationService._step_projection("idle"),
+            "updated_at": None,
+        }
+
+    @staticmethod
+    def project_session(session: Mapping[str, Any]) -> dict[str, Any]:
+        status = str(session.get("status") or "starting").strip() or "starting"
+        task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
+        result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
+        failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
+        return {
+            "schema": AUTOMATION_PROJECTION_SCHEMA,
+            "stage": "automation",
+            "session_id": str(session.get("session_id") or "") or None,
+            "status": status,
+            "phase": BuilderAutomationService._phase_for_status(status),
+            "busy": status in _ACTIVE_STATUSES,
+            "terminal": status in _TERMINAL_STATUSES,
+            "can_submit": status == "completed",
+            "webspace_id": str(session.get("webspace_id") or "desktop"),
+            "project": {
+                "type": str(session.get("object_type") or ""),
+                "id": str(session.get("object_id") or ""),
+                "companion_skill_id": str(session.get("companion_skill_id") or "") or None,
+            },
+            "iteration": int(session.get("iteration") or 0),
+            "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
+            "steps": BuilderAutomationService._step_projection(status),
+            "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
+            "error": str(failure.get("error") or task.get("error") or "").strip() or None,
+            "updated_at": session.get("updated_at"),
+        }
+
+    @staticmethod
+    def _phase_for_status(status: str) -> str:
+        return {
+            "starting": "queued",
+            "queued": "queued",
+            "assigned": "workspace",
+            "workspace_preparing": "workspace",
+            "in_progress": "implementation",
+            "tests_running": "verification",
+            "commit_ready": "result",
+            "completed": "completed",
+            "failed": "error",
+            "cancelled": "cancelled",
+            "expired": "expired",
+        }.get(status, "unknown")
+
+    @staticmethod
+    def _step_projection(status: str) -> list[dict[str, Any]]:
+        current_rank = _STATUS_RANK.get(status, -1)
+        failed = status in {"failed", "cancelled", "expired"}
+        steps: list[dict[str, Any]] = []
+        for step_id, label_key, rank in _AUTOMATION_STEPS:
+            if failed and step_id == "result":
+                state = "error"
+            elif status == "completed" or current_rank > rank:
+                state = "completed"
+            elif current_rank == rank:
+                state = "current"
+            else:
+                state = "pending"
+            steps.append({"id": step_id, "label_i18n": {"key": label_key}, "state": state})
+        return steps
 
     def get_session(self, object_type: str, object_id: str) -> dict[str, Any] | None:
         try:
@@ -314,7 +481,22 @@ class BuilderAutomationService:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"
 
     def _save_session(self, session: Mapping[str, Any]) -> None:
-        _write_json(self._session_path(str(session["object_type"]), str(session["object_id"])), dict(session))
+        payload = dict(session)
+        path = self._session_path(str(payload["object_type"]), str(payload["object_id"]))
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            previous = None
+        if previous == payload:
+            return
+        _write_json(path, payload)
+        if self.event_sink is not None:
+            self.event_sink(self.project_session(payload))
 
 
-__all__ = ["AUTOMATION_SESSION_SCHEMA", "BuilderAutomationService", "STANDARD_PROMPT_VERSION"]
+__all__ = [
+    "AUTOMATION_PROJECTION_SCHEMA",
+    "AUTOMATION_SESSION_SCHEMA",
+    "BuilderAutomationService",
+    "STANDARD_PROMPT_VERSION",
+]

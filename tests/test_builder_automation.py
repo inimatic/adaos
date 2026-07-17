@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from adaos.services.builder.automation import BuilderAutomationService
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
 
@@ -82,6 +84,60 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert status["session"]["iteration"] == 1
     assert status["session"]["turns"][0]["text"] == "Add filtering by cooking time."
     assert len(status["session"]["task_history"]) == 2
+
+
+def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+
+    result = service.projection(webspace_id="prompt-dev")
+
+    assert result["ok"] is True
+    projection = result["automation"]
+    assert projection["status"] == "completed"
+    assert projection["phase"] == "completed"
+    assert projection["can_submit"] is True
+    assert projection["project"] == {
+        "type": "scenario",
+        "id": "recipes",
+        "companion_skill_id": "recipes_skill",
+    }
+    assert projection["steps"][-1]["state"] == "completed"
+
+    schema_path = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi" / "builder.automation_projection.v1.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(projection)
+
+
+def test_empty_projection_disables_automation_input() -> None:
+    projection = BuilderAutomationService.empty_projection(webspace_id="prompt-dev")
+
+    assert projection["status"] == "idle"
+    assert projection["can_submit"] is False
+    assert projection["project"] is None
+
+
+def test_projection_event_is_not_reemitted_for_unchanged_status_reads(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    events: list[dict] = []
+    service.event_sink = lambda payload: events.append(dict(payload))
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    event_count = len(events)
+
+    service.status(object_type="scenario", object_id="recipes")
+    service.status(object_type="scenario", object_id="recipes")
+
+    assert len(events) == event_count
 
 
 def test_completed_iteration_clears_stale_failure_from_session(tmp_path: Path) -> None:
