@@ -190,3 +190,36 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
     assert len(calls) == 2
     assert "Deterministic validation repair" in calls[1]
     assert "required file missing" in calls[1]
+
+
+def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:
+    reported: list[tuple[str, dict]] = []
+    projected: list[tuple[str, str, str]] = []
+
+    class _Factory:
+        def report_progress(self, task_id, payload):
+            reported.append((task_id, dict(payload)))
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path / "repo",
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+        progress_callback=lambda task_id, status, message: projected.append((task_id, status, message)),
+    )
+    worker.factory = _Factory()
+
+    worker._progress("task.1", "tests_running", "Running validation")
+
+    assert reported == [
+        (
+            "task.1",
+            {
+                "node_id": "devnode.local-codex",
+                "status": "tests_running",
+                "stage": "tests_running",
+                "message": "Running validation",
+            },
+        )
+    ]
+    assert projected == [("task.1", "tests_running", "Running validation")]

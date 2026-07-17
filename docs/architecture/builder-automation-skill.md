@@ -49,7 +49,10 @@ not copied into the Web UI document.
 Every persisted session update emits `builder.automation.changed`. Builder UI
 can update from that event and call `get_state` for first paint or recovery.
 The persisted session and Skill Factory task are authoritative if an event is
-missed.
+missed. The local worker mirrors each bounded progress transition into the
+Automation session, so `workspace`, `implementation`, `verification`, and
+`result` can advance without UI polling. Unchanged state reads do not emit a
+new event.
 
 During migration, an active Automation session addressed through
 `builder_skill.chat` is delegated to the installed

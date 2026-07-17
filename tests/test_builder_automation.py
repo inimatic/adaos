@@ -133,6 +133,11 @@ def test_projection_event_is_not_reemitted_for_unchanged_status_reads(tmp_path: 
         webspace_id="prompt-dev",
     )
     event_count = len(events)
+    statuses = [event["status"] for event in events]
+    assert "workspace_preparing" in statuses
+    assert "in_progress" in statuses
+    assert "tests_running" in statuses
+    assert statuses[-1] == "completed"
 
     service.status(object_type="scenario", object_id="recipes")
     service.status(object_type="scenario", object_id="recipes")

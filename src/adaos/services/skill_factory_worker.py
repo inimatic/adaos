@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ from adaos.services.skill_factory import SkillFactoryService
 RUNNER_VERSION = "adaos-local-codex-worker/0.1.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
+_log = logging.getLogger("adaos.skill_factory.local_worker")
 
 
 def _now_iso() -> str:
@@ -191,6 +193,7 @@ class LocalSkillFactoryWorker:
         runs_root: Path | None = None,
         node_id: str = "devnode.local-codex",
         executor: Callable[..., CodexRunResult] | None = None,
+        progress_callback: Callable[[str, str, str], None] | None = None,
         max_repair_attempts: int = 1,
     ) -> None:
         self.state_dir = Path(state_dir)
@@ -200,6 +203,7 @@ class LocalSkillFactoryWorker:
         self.runs_root = Path(runs_root or (self.state_dir / "skill_factory" / "local_runs"))
         self.node_id = node_id
         self.executor = executor or SubprocessCodexExecutor()
+        self.progress_callback = progress_callback
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
@@ -368,6 +372,11 @@ class LocalSkillFactoryWorker:
             task_id,
             {"node_id": self.node_id, "status": status, "stage": status, "message": message},
         )
+        if self.progress_callback is not None:
+            try:
+                self.progress_callback(task_id, status, message)
+            except Exception:
+                _log.warning("local worker progress callback failed task=%s status=%s", task_id, status, exc_info=True)
 
     def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> None:
         target = dict(assignment.get("target") or {})

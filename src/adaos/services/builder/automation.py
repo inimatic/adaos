@@ -281,6 +281,7 @@ class BuilderAutomationService:
         task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
         result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
         failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
+        progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
             "stage": "automation",
@@ -299,6 +300,7 @@ class BuilderAutomationService:
             "iteration": int(session.get("iteration") or 0),
             "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
             "steps": BuilderAutomationService._step_projection(status),
+            "progress": dict(progress) if progress else None,
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
             "error": str(failure.get("error") or task.get("error") or "").strip() or None,
             "updated_at": session.get("updated_at"),
@@ -461,12 +463,53 @@ class BuilderAutomationService:
                 dev_skills_root=self.dev_skills_root,
                 dev_scenarios_root=self.dev_scenarios_root,
                 runs_root=self.runs_root,
+                progress_callback=lambda task_id, status, message: self._on_worker_progress(
+                    session_id,
+                    task_id,
+                    status,
+                    message,
+                ),
             )
+            if hasattr(worker, "progress_callback") and getattr(worker, "progress_callback", None) is None:
+                worker.progress_callback = lambda task_id, status, message: self._on_worker_progress(
+                    session_id,
+                    task_id,
+                    status,
+                    message,
+                )
             worker.run_once()
             with _LOCK:
-                session = next((item for item in [self.find_active_session()] if item and item.get("session_id") == session_id), None)
+                session = self._find_session_by_id(session_id)
                 if session:
                     self.refresh_session(session)
+
+    def _on_worker_progress(self, session_id: str, task_id: str, status: str, message: str) -> None:
+        with _LOCK:
+            session = self._find_session_by_id(session_id)
+            if not session or str(session.get("current_task_id") or "") != str(task_id or ""):
+                return
+            session["status"] = str(status or session.get("status") or "in_progress")
+            session["progress"] = {
+                "task_id": str(task_id or ""),
+                "status": session["status"],
+                "message": str(message or ""),
+                "updated_at": _now_iso(),
+            }
+            session["updated_at"] = session["progress"]["updated_at"]
+            self._save_session(session)
+
+    def _find_session_by_id(self, session_id: str) -> dict[str, Any] | None:
+        token = str(session_id or "").strip()
+        if not token:
+            return None
+        for path in self.root.glob("*.json"):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(raw, Mapping) and str(raw.get("session_id") or "") == token:
+                return dict(raw)
+        return None
 
     def _project_ref(self, object_type: str, object_id: str) -> tuple[str, str]:
         kind = str(object_type or "").strip().lower()
