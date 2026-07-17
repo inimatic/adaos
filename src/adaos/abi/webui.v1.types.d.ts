@@ -87,12 +87,34 @@ export interface WebUiAction {
   id?: string
   label?: string
   icon?: string
+  enabledIf?: string
   type: string
   target?: string
   params?: Record<string, unknown>
   allowOffline?: boolean
   feedback?: Record<string, unknown>
   [key: string]: unknown
+}
+
+export type WebUiStateMutationOperation =
+  | { op: 'set'; path: string; value?: unknown }
+  | { op: 'toggle'; path: string }
+  | { op: 'toggleArrayItem'; path: string; value: unknown }
+  | { op: 'increment'; path: string; amount?: unknown; min?: unknown; max?: unknown; removeWhenZero?: boolean }
+  | { op: 'remove'; path: string }
+
+export interface WebUiDeclarativeExpression {
+  kind: 'expression'
+  op: 'add' | 'subtract' | 'multiply' | 'divide' | 'min' | 'max' | 'round' | 'equals' | 'gt' | 'gte' | 'lt' | 'lte' | 'and' | 'or' | 'not' | 'if' | 'count' | 'formatNumber'
+  args?: readonly unknown[]
+  value?: unknown
+  condition?: unknown
+  then?: unknown
+  else?: unknown
+  digits?: unknown
+  locale?: unknown
+  style?: 'decimal' | 'currency'
+  currency?: string
 }
 
 export type WebUiWidgetType =
@@ -349,8 +371,25 @@ export interface WebUiFormInputs {
 
 export interface WebUiListFilter {
   key: string
-  stateKey: string
-  operator?: 'equals' | 'contains' | 'includes' | 'truthy' | 'lte' | 'gte'
+  stateKey?: string
+  value?: unknown
+  enabledIf?: string
+  operator?: 'equals' | 'contains' | 'includes' | 'in' | 'truthy' | 'lt' | 'lte' | 'gt' | 'gte'
+}
+
+export interface WebUiListSortOption {
+  key: string
+  direction?: 'asc' | 'desc'
+  numeric?: boolean
+}
+
+export interface WebUiListSort {
+  key?: string
+  direction?: 'asc' | 'desc'
+  numeric?: boolean
+  stateKey?: string
+  value?: unknown
+  options?: Readonly<Record<string, WebUiListSortOption>>
 }
 
 export interface WebUiListMetaField {
@@ -383,6 +422,7 @@ export interface WebUiListInputs {
   groupSubtitleKey?: string
   groupDisplay?: 'sections' | 'accordion'
   filters?: readonly WebUiListFilter[]
+  sort?: WebUiListSort
   buttons?: readonly WebUiListItemButton[]
   search?: boolean
   searchEnabled?: boolean

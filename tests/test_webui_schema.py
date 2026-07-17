@@ -57,6 +57,69 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "interactive-catalog",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "catalog",
+                                "type": "ui.list",
+                                "area": "main",
+                                "inputs": {
+                                    "filters": [{"key": "id", "stateKey": "favorites", "operator": "in"}],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "click:favorite",
+                                        "type": "mutateState",
+                                        "params": {
+                                            "operations": [
+                                                {"op": "toggleArrayItem", "path": "favorites", "value": "$event.id"},
+                                                {"op": "increment", "path": "cart.$event.id", "amount": 1, "min": 0},
+                                            ]
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_requires_interval_for_auto_actions() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "bad-auto-action",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [{"id": "content", "type": "item.details", "area": "main"}],
+                        "autoActions": [{"id": "tick", "action": {"type": "updateState", "params": {"tick": True}}}],
+                    }
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_responsive_form_layout() -> None:
     schema = _load_schema()
     payload = {
@@ -834,3 +897,53 @@ def test_webui_schema_rejects_stream_receiver_without_mode() -> None:
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_literal_collection_filter() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "cart",
+                "type": "ui.list",
+                "inputs": {
+                    "filters": [
+                        {"key": "quantity", "operator": "gt", "value": 0},
+                    ]
+                },
+            }
+        ]
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_state_selected_list_sort_and_conditional_action() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "catalog",
+                "type": "ui.list",
+                "inputs": {
+                    "sort": {
+                        "stateKey": "sort_by",
+                        "options": {
+                            "price_asc": {"key": "price", "direction": "asc", "numeric": True},
+                            "price_desc": {"key": "price", "direction": "desc", "numeric": True},
+                        },
+                    }
+                },
+                "actions": [
+                    {
+                        "on": "select",
+                        "enabledIf": "$state.detailMode === 'modal'",
+                        "type": "openModal",
+                        "params": {"modalId": "product_details"},
+                    }
+                ],
+            }
+        ]
+    }
+
+    Draft202012Validator(schema).validate(payload)
