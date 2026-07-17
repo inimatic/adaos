@@ -56,7 +56,7 @@ gate easy to read by priority.
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: addressed Builder entrypoint, dedicated Builder conversation, paired Prompt IDE dev webspace, first phrase-level build flow, thread-aware embedded chat, and non-specialist draft summary exist; Prompt IDE as full Builder Workbench remains open. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
-| 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, and forge task-branch policy exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
+| 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -603,6 +603,14 @@ Current implementation slices:
   Root descriptors.
 - [x] `[must]` Root has a local Skill Factory queue, dev-node registry, Root
   MCP task tools, sparse checkout policy, branch validation, and diagnostics.
+- [x] `[must]` Add the first platform-owned Automation-stage adapter.
+  `builder_automation_skill` delegates implementation to
+  `BuilderAutomationService`, exposes `start`, `chat`, and `get_state`, and
+  publishes the ABI-validated `adaos.builder.automation_projection.v1`
+  lifecycle without duplicating executor state in the skill.
+- [x] `[must]` Route Prompt IDE Builder chat through the installed Automation
+  skill while a project automation session is active, retaining the direct
+  local service route only as migration fallback.
 
 Open work:
 

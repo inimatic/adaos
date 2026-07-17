@@ -349,6 +349,13 @@ The boundary is:
 - User Hub owns final pull, validation, staging, Pending Actions, approval, and
   normal skill/scenario lifecycle activation.
 
+The first local implementation-stage adapter is
+[`builder_automation_skill`](builder-automation-skill.md). It exposes the
+Builder-facing `start`, `chat`, and `get_state` contract while keeping Codex
+execution, task persistence, and artifact validation in core services. This
+boundary lets the local worker be replaced by an isolated Skill Factory dev
+node without changing the Builder UI contract.
+
 This means remote realization must still produce ordinary AdaOS artifacts:
 skills, scenarios, manifests, `webui.json`, tests, reports, and release
 evidence. It must not directly mutate the user's live runtime.
