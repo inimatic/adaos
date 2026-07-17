@@ -104,6 +104,8 @@ class SubprocessCodexExecutor:
     def __call__(self, *, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / "last_message.md"
+        live_events_path = output_dir / "codex-live.jsonl"
+        live_stderr_path = output_dir / "codex-live.stderr.log"
         command = [
             self.executable,
             "exec",
@@ -122,18 +124,33 @@ class SubprocessCodexExecutor:
         if self.model:
             command.extend(["--model", self.model])
         command.append("-")
-        result = _run(
-            command,
-            cwd=workspace,
-            input_text=prompt,
-            timeout=self.timeout_seconds,
-            env=self._bounded_environment(),
-        )
+        with live_events_path.open("w", encoding="utf-8", newline="\n") as events_file, live_stderr_path.open(
+            "w", encoding="utf-8", newline="\n"
+        ) as stderr_file:
+            process = subprocess.Popen(
+                command,
+                cwd=str(workspace),
+                stdin=subprocess.PIPE,
+                stdout=events_file,
+                stderr=stderr_file,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._bounded_environment(),
+            )
+            try:
+                process.communicate(input=prompt, timeout=self.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                raise
+        events = live_events_path.read_text(encoding="utf-8", errors="replace")
+        stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
         final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
         return CodexRunResult(
-            returncode=result.returncode,
-            events=result.stdout,
-            stderr=result.stderr,
+            returncode=int(process.returncode or 0),
+            events=events,
+            stderr=stderr,
             final_message=final_message,
             command=tuple(command),
         )
@@ -244,6 +261,7 @@ class LocalSkillFactoryWorker:
             test_report: dict[str, Any] = {}
             for repair_attempt in range(self.max_repair_attempts + 1):
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
+                self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
                 self._validate_changed_paths(assignment, changed_paths)
                 test_report = self._validate_workspace(assignment, workspace)
@@ -265,6 +283,7 @@ class LocalSkillFactoryWorker:
                     raise RuntimeError(
                         f"Codex repair exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}"
                     )
+            self._cleanup_generated_files(workspace)
             _write_json(output_dir / "test_report.json", test_report)
             if not test_report["ok"]:
                 raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
@@ -382,6 +401,16 @@ class LocalSkillFactoryWorker:
             raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
 
     def _patch_skill_scaffold(self, root: Path, skill_id: str, source_id: str) -> None:
+        text_suffixes = {".py", ".yaml", ".yml", ".json", ".md", ".intent", ".txt"}
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in text_suffixes:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "new_skill" in text or "New Skill" in text:
+                path.write_text(
+                    text.replace("new_skill", skill_id).replace("New Skill", skill_id.replace("_", " ").title()),
+                    encoding="utf-8",
+                )
         manifest_path = root / "skill.yaml"
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         manifest["name"] = skill_id
@@ -540,7 +569,45 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         for path in required:
             if not path.exists():
                 errors.append(f"required file missing: {path.relative_to(workspace)}")
+        self._run_generated_tests(workspace, checks, errors)
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    def _run_generated_tests(self, workspace: Path, checks: list[dict[str, Any]], errors: list[str]) -> None:
+        for tests_dir in sorted(path for path in workspace.glob("skills/*/tests") if path.is_dir()):
+            test_files = list(tests_dir.glob("test_*.py"))
+            if not test_files:
+                continue
+            environment = SubprocessCodexExecutor._bounded_environment()
+            environment["PYTHONPATH"] = str(self.repo_root / "src")
+            result = _run(
+                [sys.executable, "-m", "pytest", "-q", str(tests_dir), "-p", "no:cacheprovider"],
+                cwd=workspace,
+                timeout=180.0,
+                env=environment,
+            )
+            relative = tests_dir.relative_to(workspace).as_posix()
+            checks.append(
+                {
+                    "kind": "pytest",
+                    "path": relative,
+                    "ok": result.returncode == 0,
+                    "output": (result.stdout + result.stderr)[-4000:],
+                }
+            )
+            if result.returncode:
+                errors.append(f"{relative}: pytest failed: {(result.stdout + result.stderr)[-2000:]}")
+
+    @staticmethod
+    def _cleanup_generated_files(root: Path) -> None:
+        for cache_dir in sorted(root.rglob("__pycache__"), reverse=True):
+            if cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+        for cache_dir in sorted(root.rglob(".pytest_cache"), reverse=True):
+            if cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+        for path in root.rglob("*.pyc"):
+            if path.is_file():
+                path.unlink()
 
     def _dependency_changes(self, workspace: Path) -> list[dict[str, Any]]:
         names = {"requirements.txt", "pyproject.toml", "uv.lock", "package.json", "package-lock.json"}
@@ -564,6 +631,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 shutil.copytree(source, destination, dirs_exist_ok=True)
             else:
                 shutil.copytree(source, destination)
+            self._cleanup_generated_files(destination)
 
 
 __all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor"]

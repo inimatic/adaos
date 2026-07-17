@@ -161,15 +161,17 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
         }
     )
     calls: list[str] = []
+    original_handler: list[str] = []
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         calls.append(prompt)
         handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
         if len(calls) == 1:
+            original_handler.append(handler.read_text(encoding="utf-8"))
             handler.unlink()
         else:
             handler.parent.mkdir(parents=True, exist_ok=True)
-            handler.write_text("def chat():\n    return {'ok': True}\n", encoding="utf-8")
+            handler.write_text(original_handler[0] + "\n# repaired\n", encoding="utf-8")
         return CodexRunResult(returncode=0, final_message="done")
 
     worker = LocalSkillFactoryWorker(

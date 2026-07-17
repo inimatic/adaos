@@ -61,6 +61,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["standard_prompt_version"].startswith("adaos-skill-realization/")
     assert (service.dev_skills_root / "recipes_skill" / "skill.yaml").exists()
+    assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
 def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path) -> None:
@@ -81,3 +82,20 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert status["session"]["iteration"] == 1
     assert status["session"]["turns"][0]["text"] == "Add filtering by cooking time."
     assert len(status["session"]["task_history"]) == 2
+
+
+def test_completed_iteration_clears_stale_failure_from_session(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    session = dict(started["session"])
+    session["last_failure"] = {"message": "previous attempt failed"}
+
+    refreshed = service.refresh_session(session)
+
+    assert refreshed["status"] == "completed"
+    assert "last_failure" not in refreshed

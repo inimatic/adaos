@@ -884,7 +884,7 @@ distribution.
   `registered_waiting`.
 - [ ] `[must]` Record dev-node image/runtime version, private skill version,
   Codex runner version, and supported test-tool versions during registration.
-- [ ] `[must]` Add a local dev-node simulator for repository tests and
+- [x] `[must]` Add a local dev-node simulator for repository tests and
   operator trials.
 - [ ] `[deferred]` Add hardened isolation profiles such as seccomp/AppArmor,
   VM/firecracker-style execution, or host-level attestation after the MVP

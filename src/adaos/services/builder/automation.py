@@ -212,10 +212,19 @@ class BuilderAutomationService:
         current["status"] = task.get("status")
         current["task"] = task
         current["updated_at"] = task.get("updated_at") or _now_iso()
+        run_dir = Path(self.runs_root) / _safe_token(task_id)
+        current["local_run"] = {
+            "path": str(run_dir),
+            "events_path": str(run_dir / "output" / "codex-live.jsonl"),
+            "stderr_path": str(run_dir / "output" / "codex-live.stderr.log"),
+            "result_path": str(run_dir / "output" / "result.json"),
+        }
         if task.get("result"):
             current["last_result"] = task.get("result")
+            current.pop("last_failure", None)
         if task.get("failure_history"):
             current["last_failure"] = task.get("failure_history")[-1]
+            current.pop("last_result", None)
         self._save_session(current)
         return current
 
