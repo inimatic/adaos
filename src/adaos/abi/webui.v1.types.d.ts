@@ -82,6 +82,19 @@ export interface WebUiPageSchema {
   [key: string]: unknown
 }
 
+export interface WebUiAction {
+  on?: string
+  id?: string
+  label?: string
+  icon?: string
+  type: string
+  target?: string
+  params?: Record<string, unknown>
+  allowOffline?: boolean
+  feedback?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 export type WebUiWidgetType =
   | 'collection.grid'
   | 'collection.tree'
@@ -399,7 +412,7 @@ export interface WebUiWidgetConfig {
   title?: string
   dataSource?: Record<string, unknown>
   inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | Record<string, unknown>
-  actions?: readonly unknown[]
+  actions?: readonly WebUiAction[]
   [key: string]: unknown
 }
 

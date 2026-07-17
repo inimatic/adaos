@@ -1475,7 +1475,10 @@
         "required": { "type": "boolean" },
         "disabled": { "type": "boolean" },
         "readonly": { "type": "boolean" },
-        "visibleIf": { "type": "string" },
+        "visibleIf": {
+          "type": "string",
+          "description": "State expression controlling visibility. Supports canonical $state comparisons/logical operators and literal true/false."
+        },
         "visible_if": { "type": "string" },
         "default": {},
         "defaultValue": {},
@@ -1931,10 +1934,13 @@
       "additionalProperties": true,
       "required": ["type"],
       "properties": {
-        "on": { "type": "string", "description": "Trigger name (e.g. 'select')." },
+        "on": {
+          "type": "string",
+          "description": "Trigger name, for example select, click:<buttonId>, or change:<fieldId>. On command bars/actions, click with no id applies to every button; click with action.id targets that button."
+        },
         "id": {
           "$ref": "#/$defs/id",
-          "description": "Stable action id used by defaultAction, submit, keyboard, and feedback contracts."
+          "description": "Stable action id used by defaultAction, submit, keyboard, and feedback contracts. With on=click in command bars/actions, also binds the action to the button with the same id."
         },
         "label": { "type": "string" },
         "icon": {
