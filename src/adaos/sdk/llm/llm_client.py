@@ -494,6 +494,7 @@ def _llm_root_payload(
     max_tokens: int | None = None,
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
+    text: Mapping[str, Any] | None = None,
     request_id: str | None = None,
     stream: bool | None = None,
     prompt_cache_key: str | None = None,
@@ -517,6 +518,8 @@ def _llm_root_payload(
         payload["top_p"] = float(top_p)
     if isinstance(reasoning, Mapping) and reasoning:
         payload["reasoning"] = dict(reasoning)
+    if isinstance(text, Mapping) and text:
+        payload["text"] = dict(text)
     req_id = str(request_id or "").strip()
     if req_id:
         payload["request_id"] = req_id
@@ -562,6 +565,7 @@ def send_response(
     max_tokens: int | None = None,
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
+    text: Mapping[str, Any] | None = None,
     request_id: str | None = None,
     stream: bool | None = None,
     prompt_cache_key: str | None = None,
@@ -582,6 +586,7 @@ def send_response(
         max_tokens=max_tokens,
         top_p=top_p,
         reasoning=reasoning,
+        text=text,
         request_id=request_id,
         stream=stream,
         prompt_cache_key=prompt_cache_key,
@@ -647,6 +652,7 @@ def submit_response_job(
     max_tokens: int | None = None,
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
+    text: Mapping[str, Any] | None = None,
     request_id: str | None = None,
     stream: bool | None = None,
     prompt_cache_key: str | None = None,
@@ -669,6 +675,7 @@ def submit_response_job(
         max_tokens=max_tokens,
         top_p=top_p,
         reasoning=reasoning,
+        text=text,
         request_id=request_id,
         stream=stream,
         prompt_cache_key=prompt_cache_key,

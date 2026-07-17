@@ -541,7 +541,7 @@ def test_wait_response_job_retries_transient_poll_502(monkeypatch: pytest.Monkey
     ]
 
 
-def test_llm_root_payload_includes_stream_and_prompt_cache_controls() -> None:
+def test_llm_root_payload_includes_stream_prompt_cache_and_text_format_controls() -> None:
     from adaos.sdk.llm import llm_client as llm
 
     payload, _messages = llm._llm_root_payload(
@@ -551,12 +551,14 @@ def test_llm_root_payload_includes_stream_and_prompt_cache_controls() -> None:
         prompt_cache_key="adaos-builder-cache",
         prompt_cache_retention="24h",
         stream_protocol="jsonl",
+        text={"format": {"type": "json_object"}},
     )
 
     assert payload["stream"] is True
     assert payload["prompt_cache_key"] == "adaos-builder-cache"
     assert payload["prompt_cache_retention"] == "24h"
     assert payload["stream_protocol"] == "jsonl"
+    assert payload["text"] == {"format": {"type": "json_object"}}
     assert payload["instructions"] == "Stable contract"
 
 
