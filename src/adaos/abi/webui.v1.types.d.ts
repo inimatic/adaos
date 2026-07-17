@@ -400,12 +400,34 @@ export interface WebUiListMetaField {
   falseLabel?: string
 }
 
-export interface WebUiListItemButton {
+export type WebUiActionButtonKind = 'primary' | 'secondary' | 'danger'
+export type WebUiActionButtonFill = 'solid' | 'outline' | 'clear'
+
+export interface WebUiActionButton {
   id: string
   label?: string
   icon?: string
+  kind?: WebUiActionButtonKind
+  fill?: WebUiActionButtonFill
+  disabled?: boolean
+  enabledIf?: string
+  value?: unknown
+  stateKey?: string
+  selected?: boolean
+  connected?: boolean
+  node_status?: string
+  state?: string
   whenKey?: string
   whenEquals?: unknown
+}
+
+export interface WebUiListItemButton extends WebUiActionButton {}
+
+export interface WebUiActionsInputs {
+  buttons?: readonly WebUiActionButton[]
+  variant?: 'tabs' | 'segmented' | 'toolbar' | 'stack' | 'header'
+  size?: 'small' | 'default' | 'medium'
+  [key: string]: unknown
 }
 
 export interface WebUiListInputs {
@@ -481,7 +503,7 @@ export interface WebUiWidgetConfig {
   area?: string
   title?: string
   dataSource?: Record<string, unknown>
-  inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | WebUiChatInputs | Record<string, unknown>
+  inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | WebUiChatInputs | WebUiActionsInputs | Record<string, unknown>
   actions?: readonly WebUiAction[]
   [key: string]: unknown
 }

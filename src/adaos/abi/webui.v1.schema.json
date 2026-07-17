@@ -801,6 +801,14 @@
               "inputs": { "$ref": "#/$defs/chatInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar"] } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/actionsInputs" }
+            }
+          }
         }
       ]
     },
@@ -1036,6 +1044,14 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/detailsInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar"] } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/actionsInputs" }
             }
           }
         }
@@ -1331,18 +1347,57 @@
         },
         "buttons": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "required": ["id"],
-            "properties": {
-              "id": { "$ref": "#/$defs/id" },
-              "label": { "type": "string" },
-              "icon": { "type": "string" },
-              "whenKey": { "$ref": "#/$defs/fieldPath" },
-              "whenEquals": {}
-            }
-          }
+          "items": { "$ref": "#/$defs/actionButton" }
+        }
+      }
+    },
+
+    "actionButton": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string" },
+        "icon": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["primary", "secondary", "danger"],
+          "description": "Semantic button intent. Use danger for destructive or irreversible commands; presentation remains theme-controlled."
+        },
+        "fill": {
+          "type": "string",
+          "enum": ["solid", "outline", "clear"],
+          "description": "Optional presentation emphasis. Prefer kind over raw colors."
+        },
+        "disabled": { "type": "boolean" },
+        "enabledIf": { "type": "string", "minLength": 1 },
+        "value": {},
+        "stateKey": { "type": "string", "minLength": 1 },
+        "selected": { "type": "boolean" },
+        "connected": { "type": "boolean" },
+        "node_status": { "type": "string" },
+        "state": { "type": "string" },
+        "whenKey": { "$ref": "#/$defs/fieldPath" },
+        "whenEquals": {}
+      }
+    },
+
+    "actionsInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "buttons": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/actionButton" }
+        },
+        "variant": {
+          "type": "string",
+          "enum": ["tabs", "segmented", "toolbar", "stack", "header"]
+        },
+        "size": {
+          "type": "string",
+          "enum": ["small", "default", "medium"]
         }
       }
     },

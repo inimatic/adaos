@@ -197,6 +197,59 @@ def test_webui_schema_accepts_responsive_split_widths_and_multiline_chat() -> No
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_semantic_danger_action_button() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "project-overview",
+                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "project-actions",
+                                "type": "ui.actions",
+                                "area": "main",
+                                "inputs": {
+                                    "variant": "stack",
+                                    "buttons": [
+                                        {
+                                            "id": "archive",
+                                            "label": "Archive",
+                                            "icon": "archive-outline",
+                                            "kind": "danger",
+                                            "fill": "solid",
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["buttons"][0][
+        "kind"
+    ] = "red"
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["buttons"][0][
+        "kind"
+    ] = "danger"
+    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["buttons"][0][
+        "appearance"
+    ] = "danger"
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_rejects_unbounded_split_widths() -> None:
     schema = _load_schema()
     payload = {
