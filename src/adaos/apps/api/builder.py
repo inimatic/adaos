@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
-from adaos.services.builder import BuilderWorkbenchService, BuilderWorkspaceService
+from adaos.services.builder import BuilderAutomationService, BuilderWorkbenchService, BuilderWorkspaceService
 
 
 router = APIRouter(dependencies=[Depends(require_token)])
@@ -18,6 +18,10 @@ def _get_service() -> BuilderWorkspaceService:
 
 def _get_workbench_service() -> BuilderWorkbenchService:
     return BuilderWorkbenchService.from_context()
+
+
+def _get_automation_service() -> BuilderAutomationService:
+    return BuilderAutomationService.from_context()
 
 
 class BuilderDraftRequest(BaseModel):
@@ -66,6 +70,22 @@ class BuilderActiveDraftRequest(BaseModel):
     webspace_id: str | None = None
     draft_id: str | None = None
     runtime_scenario_id: str | None = None
+
+
+class BuilderAutomationStartRequest(BaseModel):
+    object_type: str = Field(..., pattern="^(skill|scenario)$")
+    object_id: str = Field(..., min_length=1)
+    implementation_brief: str = Field(..., min_length=1)
+    webspace_id: str = "desktop"
+    conversation_id: str | None = None
+    brief_path: str | None = None
+
+
+class BuilderAutomationTurnRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    object_type: str | None = Field(default=None, pattern="^(skill|scenario)$")
+    object_id: str | None = None
+    webspace_id: str | None = None
 
 
 @router.get("/approval-profiles")
@@ -133,6 +153,49 @@ def create_realize_request(body: BuilderRealizeRequest, service: BuilderWorkspac
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/automation/start")
+def start_automation(
+    body: BuilderAutomationStartRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    try:
+        return service.start_from_execute(
+            object_type=body.object_type,
+            object_id=body.object_id,
+            implementation_brief=body.implementation_brief,
+            webspace_id=body.webspace_id,
+            conversation_id=body.conversation_id,
+            brief_path=body.brief_path,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/automation/turn")
+def submit_automation_turn(
+    body: BuilderAutomationTurnRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    try:
+        return service.submit_turn(
+            text=body.text,
+            object_type=body.object_type,
+            object_id=body.object_id,
+            webspace_id=body.webspace_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/automation/status")
+def automation_status(
+    object_type: str,
+    object_id: str,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    return service.status(object_type=object_type, object_id=object_id)
 
 
 @router.get("/previews/{preview_id}")
