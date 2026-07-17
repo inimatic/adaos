@@ -793,6 +793,14 @@
               "inputs": { "$ref": "#/$defs/detailsInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ui.chat" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/chatInputs" }
+            }
+          }
         }
       ]
     },
@@ -946,6 +954,18 @@
           ],
           "description": "Renderer intent hint. Keeps skill manifests declarative without requiring renderer-specific CSS."
         },
+        "sidebarWidth": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 480,
+          "description": "Preferred desktop sidebar width in CSS pixels. Compact layouts still use the responsive drawer."
+        },
+        "auxWidth": {
+          "type": "integer",
+          "minimum": 220,
+          "maximum": 600,
+          "description": "Preferred desktop auxiliary-panel width in CSS pixels. Medium and compact layouts may stack it."
+        },
         "areas": { "type": "array", "items": { "$ref": "#/$defs/area" } }
       }
     },
@@ -956,7 +976,13 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "role": { "type": "string" },
-        "label": { "type": "string" }
+        "label": { "type": "string" },
+        "width": {
+          "type": "integer",
+          "minimum": 160,
+          "maximum": 600,
+          "description": "Preferred desktop width in CSS pixels for nav/sidebar or auxiliary areas. Responsive layouts may stack or drawer the area."
+        }
       }
     },
 
@@ -1318,6 +1344,23 @@
             }
           }
         }
+      }
+    },
+
+    "chatInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Inputs for ui.chat. Multiline composers use Shift+Enter for a newline and Enter or Ctrl/Cmd+Enter for submit by default.",
+      "properties": {
+        "multiline": { "type": "boolean", "default": false },
+        "composerRows": { "type": "integer", "minimum": 1, "maximum": 12, "default": 4 },
+        "composerAutoGrow": { "type": "boolean", "default": true },
+        "sendOnEnter": { "type": "boolean", "default": true },
+        "sendOnCtrlEnter": { "type": "boolean", "default": true },
+        "placeholder": { "type": "string" },
+        "hint": { "type": "string" },
+        "sendCommand": { "type": "string", "minLength": 1 },
+        "openCommand": { "type": "string", "minLength": 1 }
       }
     },
 

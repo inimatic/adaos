@@ -154,6 +154,74 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_responsive_split_widths_and_multiline_chat() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "builder",
+                        "layout": {
+                            "type": "split",
+                            "sidebarWidth": 320,
+                            "auxWidth": 360,
+                            "areas": [
+                                {"id": "left", "role": "nav", "width": 320},
+                                {"id": "main", "role": "main"},
+                                {"id": "right", "role": "aux"},
+                            ],
+                        },
+                        "widgets": [
+                            {
+                                "id": "builder-chat",
+                                "type": "ui.chat",
+                                "area": "main",
+                                "inputs": {
+                                    "multiline": True,
+                                    "composerRows": 4,
+                                    "composerAutoGrow": True,
+                                    "sendOnEnter": True,
+                                    "sendOnCtrlEnter": True,
+                                    "sendCommand": "voice.chat.user",
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_rejects_unbounded_split_widths() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "builder",
+                        "layout": {
+                            "type": "split",
+                            "sidebarWidth": 900,
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [],
+                    }
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_rejects_dotted_widget_properties() -> None:
     schema = _load_schema()
     payload = {

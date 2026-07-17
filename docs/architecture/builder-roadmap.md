@@ -648,6 +648,56 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Web UI Architecture](web-ui-architecture.md): browser-facing generated UI
 - [Runtime Guarding](runtime-guarding.md): guard/quarantine feedback into repair
 
+## Builder Workbench Lifecycle Surface
+
+The Builder Workbench prototype now uses one project-oriented surface instead
+of the legacy Prompt IDE toolbar split:
+
+- the left navigation owns project selection and the three-stage lifecycle
+  tree (`Prototype`, `Automation`, `Publication`)
+- the main area switches between project overview, the durable Builder
+  conversation, and the selected artifact
+- the auxiliary area is contextual: runtime projection on Overview,
+  development/LLM controls on Conversation, and the artifact tree on Artifacts
+- `ui.chat` supports an optional multiline composer; `Shift+Enter` inserts a
+  newline while `Enter` and `Ctrl/Cmd+Enter` submit by default
+- split layouts can declare bounded sidebar and auxiliary widths while medium
+  and compact breakpoints retain stack/drawer behavior
+
+Long-running lifecycle transitions must not be browser-owned. The Builder skill
+owns an idempotent transition record and projects its compact status to the
+Workbench:
+
+```text
+queued -> preparing -> materializing -> verifying -> ready
+                                             \-> failed
+queued/running -> superseded
+```
+
+The record separates desired state (`project`, `stage`, artifact version,
+controlled webspace, generation id) from observed runtime state (materialized
+scenario/version, verification time, sync status). A newer desired generation
+supersedes older queued or running work. The UI reports `ready` only when the
+observed projection matches the latest desired generation.
+
+- [x] `[must]` Prototype project selection, lifecycle navigation, contextual
+  Overview/Conversation/Artifacts surfaces, and desired/observed webspace
+  metadata in the `builder` dev scenario.
+- [x] `[must]` Add reusable multiline `ui.chat` composer behavior and bounded
+  declarative split-column widths.
+- [ ] `[must]` Persist the authoritative Builder transition record in the skill
+  and make transition submission idempotent by generation id.
+- [ ] `[must]` Materialize only the latest desired generation and mark older
+  queued/running generations `superseded`.
+- [ ] `[must]` Stream transition and observed-projection changes to the
+  Workbench; do not poll or infer readiness from the browser command response.
+- [ ] `[must]` Reconcile desired and observed versions after reconnect, process
+  restart, and manual runtime changes; expose an explicit drift state.
+- [ ] `[should]` Connect project cards and artifact trees to Builder-owned data
+  instead of the prototype's static examples.
+- [ ] `[should]` Add browser acceptance for wide, medium, and compact lifecycle
+  layouts plus multiline keyboard behavior.
+
 ## Should Readiness Decision
 
 Builder can now start selective `[should]` work without waiting for every

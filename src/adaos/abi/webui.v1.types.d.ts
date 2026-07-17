@@ -74,7 +74,7 @@ export interface WebUiDesktopApplication {
 export interface WebUiPageSchema {
   id: string
   title?: string
-  layout: Record<string, unknown>
+  layout: WebUiLayout
   widgets: readonly WebUiWidgetConfig[]
   initialState?: Record<string, unknown>
   autoActions?: readonly unknown[]
@@ -445,13 +445,43 @@ export interface WebUiDetailsInputs {
   [key: string]: unknown
 }
 
+export interface WebUiLayoutArea {
+  id: string
+  role?: string
+  label?: string
+  width?: number
+  [key: string]: unknown
+}
+
+export interface WebUiLayout {
+  type: string
+  pattern?: string
+  sidebarWidth?: number
+  auxWidth?: number
+  areas: readonly WebUiLayoutArea[]
+  [key: string]: unknown
+}
+
+export interface WebUiChatInputs {
+  multiline?: boolean
+  composerRows?: number
+  composerAutoGrow?: boolean
+  sendOnEnter?: boolean
+  sendOnCtrlEnter?: boolean
+  placeholder?: string
+  hint?: string
+  sendCommand?: string
+  openCommand?: string
+  [key: string]: unknown
+}
+
 export interface WebUiWidgetConfig {
   id: string
   type: WebUiWidgetType | string
   area?: string
   title?: string
   dataSource?: Record<string, unknown>
-  inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | Record<string, unknown>
+  inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | WebUiChatInputs | Record<string, unknown>
   actions?: readonly WebUiAction[]
   [key: string]: unknown
 }
@@ -469,6 +499,11 @@ export interface WebUiListWidgetConfig extends WebUiWidgetConfig {
 export interface WebUiDetailsWidgetConfig extends WebUiWidgetConfig {
   type: 'item.details'
   inputs?: WebUiDetailsInputs
+}
+
+export interface WebUiChatWidgetConfig extends WebUiWidgetConfig {
+  type: 'ui.chat'
+  inputs?: WebUiChatInputs
 }
 
 export interface WebUiModalAddress {
