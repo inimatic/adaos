@@ -86,6 +86,15 @@ def test_prompt_project_snapshots_include_files_and_tz_state(tmp_path: Path) -> 
     assert [item["path"] for item in section["files"]["list"]] == ["scenario.json", "tz/base_tz.md"]  # type: ignore[index]
 
 
+def test_prompt_workflow_exposes_virtual_automation_state(tmp_path: Path) -> None:
+    runtime, _paths = _runtime(tmp_path)
+
+    states = runtime._states_with_automation("prompt_engineer_scenario", {"tz": {"label": "Stage: TZ"}})
+
+    assert states["automation"]["label"] == "Stage: Automation"
+    assert states["automation"]["actions"] == []
+
+
 @pytest.mark.anyio
 async def test_refresh_prompt_project_snapshots_updates_selected_topic(monkeypatch, tmp_path: Path) -> None:
     runtime, paths = _runtime(tmp_path)

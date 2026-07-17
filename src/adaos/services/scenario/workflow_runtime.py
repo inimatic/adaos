@@ -170,6 +170,7 @@ class ScenarioWorkflowRuntime:
         states = wf.get("states") or {}
         if not isinstance(states, dict) or not states:
             return
+        states = self._states_with_automation(scenario_id, states)
         initial = wf.get("initial_state")
         if not isinstance(initial, str) or not initial:
             # fallback: first key in states
@@ -275,6 +276,7 @@ class ScenarioWorkflowRuntime:
         states = wf.get("states") or {}
         if not isinstance(states, dict) or not states:
             return
+        states = self._states_with_automation(scenario_id, states)
 
         # Determine current state from Yjs or fallback to initial_state.
         initial = wf.get("initial_state")
@@ -431,6 +433,7 @@ class ScenarioWorkflowRuntime:
         states = wf.get("states") or {}
         if not isinstance(states, dict) or not states:
             return
+        states = self._states_with_automation(scenario_id, states)
         if state_id not in states:
             # Fallback: ignore unknown state ids.
             return
@@ -665,6 +668,79 @@ class ScenarioWorkflowRuntime:
                 object_id=object_id,
                 result=result,
             )
+            await self._start_local_automation_from_tz_execute(
+                webspace_id,
+                scenario_id,
+                object_type=object_type,
+                object_id=object_id,
+                result=result,
+            )
+
+    async def _start_local_automation_from_tz_execute(
+        self,
+        webspace_id: str,
+        scenario_id: str,
+        *,
+        object_type: Optional[str],
+        object_id: Optional[str],
+        result: Any,
+    ) -> None:
+        """Handoff a successful standard Execute brief to the local Codex worker."""
+        if not isinstance(result, dict) or not result.get("ok", True):
+            return
+        output_text = result.get("output_text")
+        if not isinstance(output_text, str) or not output_text.strip():
+            return
+        if str(object_type or "").strip().lower() not in {"skill", "scenario"} or not str(object_id or "").strip():
+            return
+
+        from adaos.services.builder.automation import BuilderAutomationService
+
+        try:
+            started = await anyio.to_thread.run_sync(
+                lambda: BuilderAutomationService.from_context().start_from_execute(
+                    object_type=str(object_type),
+                    object_id=str(object_id),
+                    implementation_brief=output_text,
+                    webspace_id=webspace_id,
+                    conversation_id=_builder_conversation_id(webspace_id),
+                    brief_path=str(result.get("output_path") or "") or None,
+                )
+            )
+        except Exception as exc:
+            _log.warning(
+                "workflow.automation.start_failed webspace=%s object=%s:%s error=%s",
+                webspace_id,
+                object_type,
+                object_id,
+                exc,
+                exc_info=True,
+            )
+            await self._set_llm_status(webspace_id, "error", f"Codex: automation error ({exc})")
+            return
+        if not started.get("ok"):
+            await self._set_llm_status(webspace_id, "error", "Codex: automation was not started")
+            return
+        await self.set_state(
+            scenario_id,
+            webspace_id,
+            "automation",
+            object_type=object_type,
+            object_id=object_id,
+        )
+        await self._set_llm_status(webspace_id, "automation", "Codex: queued")
+
+    @staticmethod
+    def _states_with_automation(scenario_id: str, states: Dict[str, Any]) -> Dict[str, Any]:
+        if scenario_id != "prompt_engineer_scenario" or "automation" in states:
+            return states
+        augmented = dict(states)
+        augmented["automation"] = {
+            "label": "Stage: Automation",
+            "context": {"edit": ["builder_chat"], "readonly": ["base_tz", "tz_addenda"]},
+            "actions": [],
+        }
+        return augmented
 
     async def _update_llm_artifacts_from_tz_execute(
         self,
