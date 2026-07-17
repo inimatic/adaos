@@ -2,5 +2,6 @@
 
 from .workbench import BuilderWorkbenchService
 from .workspace import BuilderWorkspaceService
+from .automation import BuilderAutomationService
 
-__all__ = ["BuilderWorkspaceService", "BuilderWorkbenchService"]
+__all__ = ["BuilderAutomationService", "BuilderWorkspaceService", "BuilderWorkbenchService"]
