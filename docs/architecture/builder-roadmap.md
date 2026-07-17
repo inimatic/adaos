@@ -535,6 +535,11 @@ Open work:
   `webui.json`. The bounded repair turn returns one full `adaos.webui.v1`
   document, which is ABI/component validated and atomically promoted; Builder
   does not maintain intent-specific normalization rules for model output.
+- [x] `[must]` Make the full-document repair deterministic at the transport
+  boundary. Builder requests Root Responses JSON-object mode for the fallback,
+  preflights the current WebUI/component contract, and includes every detected
+  migration issue in both the primary and repair context. Invalid JSON or an
+  invalid component graph is reported and never promoted as a revision.
 - [x] `[should]` Stabilize the persistent prompt prefix, provide a versioned
   `prompt_cache_key`, and record provider cache effectiveness per revision.
   Stable ABI/runtime/affordance context precedes project state and instruction;
@@ -685,6 +690,15 @@ observed projection matches the latest desired generation.
   metadata in the `builder` dev scenario.
 - [x] `[must]` Add reusable multiline `ui.chat` composer behavior and bounded
   declarative split-column widths.
+- [x] `[must]` Prototype the compact project workbench requested for the
+  Artifacts and Overview surfaces: a rootless file picker, a selected-file
+  path and editor/viewer, protected read-only artifacts, editable project
+  metadata, direct copy sources in New Project, and explicit archive/restore
+  actions. Browser acceptance was completed against Builder revision `024`.
+- [x] `[must]` Ignore stale project-selection, preview-selection, and revision
+  materialization events when their scenario no longer matches the latest
+  source-webspace binding. This prevents an older asynchronous event from
+  replacing the currently selected Builder projection.
 - [ ] `[must]` Persist the authoritative Builder transition record in the skill
   and make transition submission idempotent by generation id.
 - [ ] `[must]` Materialize only the latest desired generation and mark older
