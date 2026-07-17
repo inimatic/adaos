@@ -213,6 +213,29 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
         if value is not None and value != "":
             compact[key] = value
     compact["text"] = _truncate_voice_chat_stream_text(item.get("text"))
+    meta = item.get("_meta")
+    if isinstance(meta, Mapping):
+        compact_meta: dict[str, Any] = {}
+        for key in (
+            "route_id",
+            "dialog_channel_id",
+            "dialog_event_kind",
+            "canonical_event_kind",
+            "input_event_kind",
+            "origin",
+            "origin_kind",
+            "actor_kind",
+            "source",
+        ):
+            value = meta.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+                if value:
+                    compact_meta[key] = value[:160]
+            elif isinstance(value, (bool, int, float)):
+                compact_meta[key] = value
+        if compact_meta:
+            compact["_meta"] = compact_meta
     actions = item.get("actions")
     if isinstance(actions, list):
         compact_actions = [
@@ -723,6 +746,29 @@ def _conversation_manifest_channel_records(webspace_id: str) -> list[dict[str, A
                     },
                 }
             )
+    if not any(str(item.get("id") or "").strip() == BUILDER_DIALOG_CHANNEL_ID for item in channels_out):
+        renderer_capabilities = _normalize_manifest_renderer_capabilities({})
+        channels_out.append(
+            {
+                "id": BUILDER_DIALOG_CHANNEL_ID,
+                "channel_id": BUILDER_DIALOG_CHANNEL_ID,
+                "label": "Builder",
+                "owner": f"skill:{BUILDER_SKILL_ID}",
+                "conversation_id": _skill_conversation_id(BUILDER_SKILL_ID, ws),
+                "default_skill": BUILDER_SKILL_ID,
+                "default_tool": "chat",
+                "route_id": "voice_chat",
+                "policy": _dialog_channel_policy(
+                    BUILDER_DIALOG_CHANNEL_ID,
+                    default_tool=f"{BUILDER_SKILL_ID}.chat",
+                ),
+                "meta": {
+                    "source": "core:builder_dialog",
+                    "contract_validated": True,
+                    "renderer_capabilities": renderer_capabilities,
+                },
+            }
+        )
     return channels_out
 
 
@@ -804,7 +850,7 @@ def _conversation_companion_profile_agent_records() -> list[dict[str, Any]]:
 
 
 def _seed_conversation_registry() -> None:
-    records = [_general_agent_projection()]
+    records = _fallback_agent_registry_records()
     records.extend(_conversation_manifest_agent_records())
     records.extend(_conversation_companion_profile_agent_records())
     unique: dict[str, dict[str, Any]] = {}
@@ -813,8 +859,6 @@ def _seed_conversation_registry() -> None:
         if agent_id:
             unique[agent_id] = record
     records = list(unique.values())
-    if len(records) <= 1:
-        records = _fallback_agent_registry_records()
     try:
         conversation_store.seed_agents(records, source="router.bootstrap")
     except Exception:
@@ -826,23 +870,22 @@ def _agent_registry_records() -> list[dict[str, Any]]:
         records = conversation_store.list_agents()
     except Exception:
         records = []
-    if records:
-        general = _general_agent_record()
-        merged: list[dict[str, Any]] = []
-        has_general = False
-        for item in records:
-            record = dict(item)
-            if str(record.get("id") or "").strip() == GENERAL_DIALOG_AGENT_ID:
-                record = {
-                    **record,
-                    **general,
-                }
-                has_general = True
-            merged.append(record)
-        if not has_general:
-            return [general, *merged]
-        return merged
-    return _fallback_agent_registry_records()
+    merged_by_id = {
+        str(item.get("id") or "").strip(): dict(item)
+        for item in _fallback_agent_registry_records()
+        if str(item.get("id") or "").strip()
+    }
+    for item in records:
+        record = dict(item)
+        agent_id = str(record.get("id") or "").strip()
+        if not agent_id:
+            continue
+        merged_by_id[agent_id] = {**merged_by_id.get(agent_id, {}), **record}
+    merged_by_id[GENERAL_DIALOG_AGENT_ID] = {
+        **merged_by_id.get(GENERAL_DIALOG_AGENT_ID, {}),
+        **_general_agent_record(),
+    }
+    return list(merged_by_id.values())
 
 
 def _agent_record_by_id(agent_id: Any) -> dict[str, Any] | None:
@@ -5999,12 +6042,6 @@ class RouterService:
             if not cid or cid == GENERAL_DIALOG_CHANNEL_ID:
                 return False
             try:
-                active = dialog_runtime.get_active_channel(ws)
-            except Exception:
-                active = None
-            if active is not None and str(active.channel_id or "").strip().lower() == cid:
-                return True
-            try:
                 channel = next(
                     (
                         item
@@ -6015,15 +6052,47 @@ class RouterService:
                 )
             except Exception:
                 channel = None
+            if not isinstance(channel, dict) and cid == BUILDER_DIALOG_CHANNEL_ID:
+                channel = {
+                    "id": BUILDER_DIALOG_CHANNEL_ID,
+                    "channel_id": BUILDER_DIALOG_CHANNEL_ID,
+                    "label": "Builder",
+                    "owner": f"skill:{BUILDER_SKILL_ID}",
+                    "conversation_id": _skill_conversation_id(BUILDER_SKILL_ID, ws),
+                    "default_skill": BUILDER_SKILL_ID,
+                    "default_tool": "chat",
+                    "route_id": "voice_chat",
+                }
             if not isinstance(channel, dict):
                 return False
+            default_skill = str(channel.get("default_skill") or "").strip()
+            owner = str(channel.get("owner") or f"channel:{cid}").strip() or f"channel:{cid}"
+            if not default_skill and owner.startswith("skill:"):
+                default_skill = owner.split(":", 1)[1]
+            default_tool = str(channel.get("default_tool") or "").strip()
+            if "." in default_tool:
+                tool_skill, _, tool_name = default_tool.partition(".")
+                default_skill = default_skill or tool_skill
+                default_tool = tool_name
+            try:
+                active = dialog_runtime.get_active_channel(ws)
+            except Exception:
+                active = None
+            if (
+                active is not None
+                and str(active.channel_id or "").strip().lower() == cid
+                and str(active.owner or "").strip() == owner
+                and str(active.default_skill or "").strip() == default_skill
+                and str(active.default_tool or "").strip() == default_tool
+            ):
+                return True
             try:
                 dialog_runtime.activate_channel(
                     webspace_id=ws,
                     channel_id=cid,
-                    owner=str(channel.get("owner") or f"channel:{cid}").strip() or f"channel:{cid}",
-                    default_skill=str(channel.get("default_skill") or "").strip(),
-                    default_tool=str(channel.get("default_tool") or "").strip(),
+                    owner=owner,
+                    default_skill=default_skill,
+                    default_tool=default_tool,
                     conversation_id=str(channel.get("conversation_id") or f"conv.{cid}.{ws}").strip(),
                     active_agent_id=str(meta.get("active_agent_id") or "").strip() or None,
                     active_agent_label=str(meta.get("active_agent_label") or "").strip() or None,

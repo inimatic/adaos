@@ -781,8 +781,8 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
     assert doc.get_map("data")["dialog"]["active_channel_id"] == "builder"
     builder_row = conversation_store.get_dialog_channel(webspace_id, "builder")
     assert builder_row is not None
-    assert builder_row["meta"]["manifest_validated"] is True
-    assert builder_row["meta"]["source"] == "skill:builder_skill.skill_yaml"
+    assert builder_row["meta"].get("manifest_validated") is True or builder_row["meta"].get("contract_validated") is True
+    assert builder_row["meta"]["source"] in {"skill:builder_skill.skill_yaml", "core:builder_dialog"}
     assert "dialog.visible_tail" in builder_row["meta"]["renderer_capabilities"]["targets"]
 
     bus.publish(
@@ -997,6 +997,94 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     assert state is not None
     assert state.channel_id == "builder"
     assert state.default_skill == "builder_skill"
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_requested_builder_channel_refreshes_stale_active_tool(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    webspace_id = "builder-stale-active-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "builder handled",
+            "dialog": {
+                "dialog_channel_id": "builder",
+                "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                "owner": "skill:builder_skill",
+                "default_tool": "builder_skill.chat",
+                "active_agent_id": "agent:builder_skill:builder",
+            },
+        }
+
+    monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: SimpleNamespace(run_tool=_run_tool))
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="builder",
+        owner="skill:builder_skill",
+        default_skill="builder_skill",
+        default_tool="talk",
+        conversation_id=f"conv.skill.builder_skill.default.{webspace_id}",
+        active_agent_id="agent:builder_skill:builder",
+        route_id="voice_chat",
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "refresh the workbench",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "shared",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert calls
+    assert calls[0][0:2] == ("builder_skill", "chat")
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.default_tool == "chat"
     dialog_runtime.reset_all()
 
 
@@ -2944,7 +3032,7 @@ async def test_voice_chat_stream_compacts_heavy_message_payloads(monkeypatch) ->
     assert seen_stream
     message = seen_stream[-1].payload["data"]["messages"][-1]
     assert message["text"] == "apply notes"
-    assert "_meta" not in message
+    assert message["_meta"] == {"route_id": "voice_chat"}
     assert "prototype_review_notes" not in json.dumps(message, ensure_ascii=False)
 
 
@@ -2970,6 +3058,28 @@ def test_voice_chat_stream_tail_is_utf8_byte_bounded_and_keeps_progress_sequence
     assert bounded[-1]["id"] == "message-23"
     assert bounded[-1]["progress_seq"] == 23
     assert [item["progress_seq"] for item in bounded] == sorted(item["progress_seq"] for item in bounded)
+
+
+def test_voice_chat_stream_compaction_keeps_bounded_message_provenance() -> None:
+    compact = router_service_module._compact_voice_chat_stream_message(
+        {
+            "id": "message-1",
+            "from": "hub",
+            "text": "done",
+            "_meta": {
+                "route_id": "voice_chat",
+                "dialog_event_kind": "dialog.user_message",
+                "origin_kind": "api",
+                "private_payload": {"prompt": "x" * 10_000},
+            },
+        }
+    )
+
+    assert compact["_meta"] == {
+        "route_id": "voice_chat",
+        "dialog_event_kind": "dialog.user_message",
+        "origin_kind": "api",
+    }
 
 
 async def test_voice_chat_user_autocorrects_text_before_nlu(monkeypatch) -> None:
