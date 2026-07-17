@@ -1947,7 +1947,11 @@
           "type": "string",
           "description": "Ionicon name or resource:<id>."
         },
-        "type": { "type": "string", "minLength": 1, "description": "Action type (e.g. 'callHost')." },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Runtime action type (e.g. 'callHost'). Legacy type 'none' is accepted as a compatibility no-op, but generators should remove obsolete action entries instead of emitting it."
+        },
         "target": { "type": "string" },
         "params": { "type": "object", "additionalProperties": true },
         "allowOffline": {
