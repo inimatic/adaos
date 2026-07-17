@@ -384,13 +384,30 @@ def _register_root_invite_revocation(
         return
 
 
+def _invite_is_publicly_claimable(invite: Mapping[str, Any]) -> bool:
+    status = str(invite.get("status") or "pending").strip().lower()
+    if status != "pending":
+        return False
+    expires_at = invite.get("expires_at")
+    if expires_at in (None, ""):
+        return True
+    try:
+        expires_ts = float(expires_at)
+    except (TypeError, ValueError):
+        return True
+    return expires_ts > time.time()
+
+
 def _public_invite_view(invite: Mapping[str, Any], request: Request, ctx: AgentContext) -> dict[str, Any]:
     invite_id = str(invite.get("invite_id") or "").strip()
     result = dict(invite)
     fallback_claim_url = _base_join_url(request, ctx, invite_id)
-    claim_url = _register_root_invite_session(invite, request, ctx, fallback_claim_url)
-    result["claim_url"] = claim_url or ""
-    if not claim_url:
+    if not _invite_is_publicly_claimable(invite):
+        result["claim_url"] = ""
+        return result
+    claim_url = _register_root_invite_session(invite, request, ctx, fallback_claim_url) or fallback_claim_url
+    result["claim_url"] = claim_url
+    if claim_url == fallback_claim_url:
         result["claim_url_error"] = "root_invite_session_unavailable"
     return result
 

@@ -17,6 +17,7 @@ def _disable_root_invite_registration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ROOT_TOKEN", raising=False)
     monkeypatch.delenv("ADAOS_ROOT_TOKEN", raising=False)
     monkeypatch.delenv("HUB_ROOT_TOKEN", raising=False)
+    object.__setattr__(get_ctx().settings, "root_token", "")
 
 
 def _client() -> TestClient:
@@ -165,6 +166,73 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission(mon
     assert revoked.json()["invite"]["status"] == "revoked"
     assert access_links.authorize_link("browser", "browser-a") == (False, "denied")
     assert access_links.authorize_link("browser", "dev-browser-a") == (False, "denied")
+
+
+def test_phase5_guest_invite_keeps_fallback_claim_url_when_root_registration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    object.__setattr__(get_ctx().settings, "root_token", "root-token")
+    monkeypatch.setattr(personalization, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("root down")))
+    client = _client()
+
+    created = client.post(
+        "/api/personalization/invites/guest",
+        json={"scope": {"kind": "workspace", "id": "family"}, "expires_in_minutes": 10},
+        headers=TOKEN_HEADERS,
+    )
+
+    assert created.status_code == 200
+    invite = created.json()["invite"]
+    assert invite["claim_url"]
+    assert f"adaos_invite={invite['invite_id']}" in invite["claim_url"]
+    assert invite["claim_url_error"] == "root_invite_session_unavailable"
+
+
+def test_phase5_revoked_guest_invite_is_not_reregistered_for_qr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    object.__setattr__(get_ctx().settings, "root_token", "root-token")
+    register_calls: list[object] = []
+
+    class _FakeRootResponse:
+        def __enter__(self) -> "_FakeRootResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"ok":true,"claim_url":"https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru"}'
+
+    def _fake_urlopen(*args: object, **kwargs: object) -> _FakeRootResponse:
+        register_calls.append(args[0] if args else None)
+        return _FakeRootResponse()
+
+    monkeypatch.setattr(personalization, "urlopen", _fake_urlopen)
+    client = _client()
+
+    created = client.post(
+        "/api/personalization/invites/guest",
+        json={"scope": {"kind": "workspace", "id": "family"}, "expires_in_minutes": 10},
+        headers=TOKEN_HEADERS,
+    )
+    assert created.status_code == 200
+    invite_id = created.json()["invite"]["invite_id"]
+    assert len(register_calls) == 1
+
+    revoked = client.post(
+        f"/api/personalization/invites/{invite_id}/revoke",
+        json={"reason": "mistake"},
+        headers=TOKEN_HEADERS,
+    )
+    assert revoked.status_code == 200
+
+    listed = client.get("/api/personalization/invites", headers=TOKEN_HEADERS)
+    assert listed.status_code == 200
+    listed_invite = next(item for item in listed.json()["invites"] if item["invite_id"] == invite_id)
+    assert listed_invite["status"] == "revoked"
+    assert listed_invite["claim_url"] == ""
+    assert len(register_calls) == 2
 
 
 def test_phase5_targeted_invite_is_public_preview_and_single_use_claim() -> None:
