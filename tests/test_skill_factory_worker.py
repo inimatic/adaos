@@ -143,3 +143,48 @@ def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkey
     assert environment["PATH"] == "C:/bin"
     assert "OPENAI_API_KEY" not in environment
     assert "ADAOS_TOKEN" not in environment
+
+
+def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _scenario(dev_scenarios, "recipe_book")
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+        }
+    )
+    calls: list[str] = []
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        calls.append(prompt)
+        handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
+        if len(calls) == 1:
+            handler.unlink()
+        else:
+            handler.parent.mkdir(parents=True, exist_ok=True)
+            handler.write_text("def chat():\n    return {'ok': True}\n", encoding="utf-8")
+        return CodexRunResult(returncode=0, final_message="done")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+        max_repair_attempts=1,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert len(calls) == 2
+    assert "Deterministic validation repair" in calls[1]
+    assert "required file missing" in calls[1]

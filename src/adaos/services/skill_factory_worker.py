@@ -89,10 +89,17 @@ class SubprocessCodexExecutor:
         executable: str = "codex",
         model: str | None = None,
         timeout_seconds: int = 4 * 60 * 60,
+        sandbox_mode: str | None = None,
     ) -> None:
         self.executable = executable
         self.model = str(model or "").strip() or None
         self.timeout_seconds = max(60, int(timeout_seconds))
+        configured_sandbox = str(sandbox_mode or os.getenv("ADAOS_LOCAL_CODEX_SANDBOX") or "").strip()
+        # Native Codex workspace sandboxing is not currently writable in our
+        # Windows host profile.  Local-process is an explicitly trusted debug
+        # backend with a bounded environment and disposable task checkout;
+        # Docker workers should override this back to workspace-write.
+        self.sandbox_mode = configured_sandbox or ("danger-full-access" if os.name == "nt" else "workspace-write")
 
     def __call__(self, *, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -104,7 +111,7 @@ class SubprocessCodexExecutor:
             "--ephemeral",
             "--ignore-user-config",
             "--sandbox",
-            "workspace-write",
+            self.sandbox_mode,
             "-c",
             'approval_policy="never"',
             "-C",
@@ -167,6 +174,7 @@ class LocalSkillFactoryWorker:
         runs_root: Path | None = None,
         node_id: str = "devnode.local-codex",
         executor: Callable[..., CodexRunResult] | None = None,
+        max_repair_attempts: int = 1,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.repo_root = Path(repo_root)
@@ -175,6 +183,7 @@ class LocalSkillFactoryWorker:
         self.runs_root = Path(runs_root or (self.state_dir / "skill_factory" / "local_runs"))
         self.node_id = node_id
         self.executor = executor or SubprocessCodexExecutor()
+        self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
     def ensure_registered(self) -> dict[str, Any]:
@@ -228,15 +237,34 @@ class LocalSkillFactoryWorker:
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
             self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
             codex_result = self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
-            (runtime_dir / "codex-events.jsonl").write_text(codex_result.events, encoding="utf-8")
-            (runtime_dir / "codex-stderr.log").write_text(codex_result.stderr, encoding="utf-8")
+            self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
             if codex_result.returncode:
                 raise RuntimeError(f"Codex exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}")
 
-            self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
-            changed_paths = self._changed_paths(workspace)
-            self._validate_changed_paths(assignment, changed_paths)
-            test_report = self._validate_workspace(assignment, workspace)
+            test_report: dict[str, Any] = {}
+            for repair_attempt in range(self.max_repair_attempts + 1):
+                self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
+                changed_paths = self._changed_paths(workspace)
+                self._validate_changed_paths(assignment, changed_paths)
+                test_report = self._validate_workspace(assignment, workspace)
+                if test_report["ok"]:
+                    break
+                if repair_attempt >= self.max_repair_attempts:
+                    break
+                self._progress(task_id, "in_progress", "Codex is repairing deterministic validation failures")
+                repair_prompt = (
+                    prompt
+                    + "\n\n# Deterministic validation repair\n\n"
+                    + "The previous implementation did not pass the worker checks below. Continue in the existing workspace, "
+                    + "fix every reported issue, rerun relevant checks, and leave the workspace in a valid state.\n\n"
+                    + "\n".join(f"- {item}" for item in test_report["errors"][:40])
+                )
+                codex_result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
+                self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
+                if codex_result.returncode:
+                    raise RuntimeError(
+                        f"Codex repair exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}"
+                    )
             _write_json(output_dir / "test_report.json", test_report)
             if not test_report["ok"]:
                 raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
@@ -307,6 +335,14 @@ class LocalSkillFactoryWorker:
             except Exception:
                 pass
             return {"ok": False, "assignment": dict(assignment), **failure, "run_dir": str(run_root)}
+
+    @staticmethod
+    def _record_codex_attempt(runtime_dir: Path, result: CodexRunResult, *, attempt: int) -> None:
+        suffix = "" if attempt == 0 else f"-repair-{attempt}"
+        (runtime_dir / f"codex-events{suffix}.jsonl").write_text(result.events, encoding="utf-8")
+        (runtime_dir / f"codex-stderr{suffix}.log").write_text(result.stderr, encoding="utf-8")
+        if result.final_message:
+            (runtime_dir / f"codex-final{suffix}.md").write_text(result.final_message, encoding="utf-8")
 
     def _progress(self, task_id: str, status: str, message: str) -> None:
         self.factory.report_progress(
