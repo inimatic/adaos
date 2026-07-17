@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
+
+
+def _scenario(root: Path, scenario_id: str) -> Path:
+    target = root / scenario_id
+    target.mkdir(parents=True)
+    (target / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.1.0",
+                "depends": [],
+                "description": "Recipe book interface prototype",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (target / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"application": {}}}),
+        encoding="utf-8",
+    )
+    (target / "builder.draft.json").write_text(
+        json.dumps({"draft_id": "draft.recipe", "source": {"utterance": "Create a recipe book"}}),
+        encoding="utf-8",
+    )
+    return target
+
+
+def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _scenario(dev_scenarios, "recipe_book")
+
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "source": {"type": "prompt_ide", "text": "Implement the approved recipe book prototype."},
+            "artifacts": {
+                "implementation_brief": "Recipes must be searchable and open a detailed view.",
+                "companion_skill_id": "recipe_book_skill",
+            },
+            "repo": {
+                "sparse_paths": [
+                    "scenarios/recipe_book/",
+                    "skills/recipe_book_skill/",
+                    "docs/requirements/recipe_book/",
+                ]
+            },
+        }
+    )
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+        assert "Recipes must be searchable" in prompt
+        skill_handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
+        skill_handler.write_text(skill_handler.read_text(encoding="utf-8") + "\n# realized by test\n", encoding="utf-8")
+        scenario_path = workspace / "scenarios" / "recipe_book" / "scenario.json"
+        scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+        scenario["depends"] = ["recipe_book_skill"]
+        scenario_path.write_text(json.dumps(scenario, indent=2), encoding="utf-8")
+        return CodexRunResult(returncode=0, events='{"type":"done"}\n', final_message="Implemented recipe skill.")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+    )
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert result["assignment"]["realize_request"]["artifacts"]["implementation_brief"].startswith("Recipes")
+    assert (dev_skills / "recipe_book_skill" / "skill.yaml").exists()
+    assert "realized by test" in (dev_skills / "recipe_book_skill" / "handlers" / "main.py").read_text(encoding="utf-8")
+    scenario = json.loads((dev_scenarios / "recipe_book" / "scenario.json").read_text(encoding="utf-8"))
+    assert scenario["depends"] == ["recipe_book_skill"]
+    task = next(
+        item
+        for item in factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == submitted["task"]["task_id"]
+    )
+    assert task["status"] == "completed"
+    assert task["result"]["commit_hash"]
+    assert task["result"]["provenance"]["runner_version"].startswith("adaos-local-codex-worker/")
+
+
+def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _scenario(dev_scenarios, "recipe_book")
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+        }
+    )
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        path = workspace / "outside.txt"
+        path.write_text("not allowed", encoding="utf-8")
+        return CodexRunResult(returncode=0)
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+    )
+    result = worker.run_once()
+
+    assert result["ok"] is False
+    assert "outside the task scope" in result["error"]
+    assert not (tmp_path / "outside.txt").exists()

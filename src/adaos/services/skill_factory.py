@@ -1225,6 +1225,11 @@ class SkillFactoryService:
                 "realization": _mapping(task.get("realization_policy")),
             },
             "snapshot_context": _mapping(task.get("snapshot_context")),
+            # The worker needs the normalized Builder payload to construct a
+            # deterministic instruction packet.  Keep it task-scoped and
+            # already redacted instead of asking the worker to reconstruct
+            # requirements from conversation history.
+            "realize_request": _mapping(task.get("realize_request")),
             "evidence": _mapping(task.get("evidence")) or {
                 "schema": "adaos.skill_factory.task_evidence.v1",
                 "expected_paths": _expected_evidence_paths(task_id),
