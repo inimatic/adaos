@@ -230,19 +230,6 @@ def _load_runtime_skill_schema() -> dict[str, Any]:
     return _read_json(root / "services" / "skill" / "skill_schema.json")
 
 
-def _template_dir(kind: str, template_id: str) -> Path:
-    root = Path(__file__).resolve().parents[2]
-    if kind == "skill":
-        path = root / "skills_templates" / template_id
-    elif kind == "scenario":
-        path = root / "scenario_templates" / template_id
-    else:
-        raise ValueError(f"unsupported template kind: {kind}")
-    if not path.exists():
-        raise FileNotFoundError(f"Builder template not found: {path}")
-    return path
-
-
 def _ctx_path(paths: Any, attr: str) -> Path | None:
     try:
         getter = getattr(paths, attr)
@@ -284,6 +271,7 @@ class BuilderWorkspaceService:
     scenarios_root: Path | None = None
     dev_skills_root: Path | None = None
     dev_scenarios_root: Path | None = None
+    developer_service: Any | None = None
 
     @classmethod
     def from_context(cls) -> "BuilderWorkspaceService":
@@ -295,10 +283,13 @@ class BuilderWorkspaceService:
         scenarios_root = None
         dev_skills_root = None
         dev_scenarios_root = None
+        developer_service = None
         try:
             from adaos.services.agent_context import get_ctx
+            from adaos.services.root.service import RootDeveloperService
 
             ctx = get_ctx()
+            developer_service = RootDeveloperService()
             workspace_root = _ctx_path(ctx.paths, "workspace_dir")
             skills_root = _ctx_path(ctx.paths, "skills_dir")
             scenarios_root = _ctx_path(ctx.paths, "scenarios_dir")
@@ -323,6 +314,7 @@ class BuilderWorkspaceService:
             scenarios_root=scenarios_root,
             dev_skills_root=dev_skills_root,
             dev_scenarios_root=dev_scenarios_root,
+            developer_service=developer_service,
         )
 
     @property
@@ -367,6 +359,44 @@ class BuilderWorkspaceService:
             raise ValueError("AdaOS dev workspace is not available in the current context")
         return (Path(root).expanduser().resolve() / artifact_id).resolve()
 
+    def _require_developer_service(self) -> Any:
+        if self.developer_service is None:
+            raise RuntimeError(
+                "BuilderWorkspaceService requires RootDeveloperService; "
+                "construct it with from_context() or inject the core developer service"
+            )
+        return self.developer_service
+
+    def checkpoint_artifact(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_kind = str(kind or "").strip().lower().rstrip("s")
+        artifact_id = _slug(artifact_id)
+        if normalized_kind not in {"skill", "scenario"}:
+            raise ValueError("kind must be skill or scenario")
+        service = self._require_developer_service()
+        result = (
+            service.push_skill(artifact_id, message=message)
+            if normalized_kind == "skill"
+            else service.push_scenario(artifact_id, message=message)
+        )
+        return {
+            "ok": True,
+            "kind": normalized_kind,
+            "name": str(getattr(result, "name", artifact_id) or artifact_id),
+            "stored_path": str(getattr(result, "stored_path", "") or ""),
+            "sha256": str(getattr(result, "sha256", "") or ""),
+            "bytes_uploaded": int(getattr(result, "bytes_uploaded", 0) or 0),
+            "version": getattr(result, "version", None),
+            "updated_at": getattr(result, "updated_at", None),
+            "commit": getattr(result, "commit", None),
+            "message": getattr(result, "message", None) or " ".join(str(message or "").split()).strip() or None,
+        }
+
     def create_draft(
         self,
         *,
@@ -404,13 +434,24 @@ class BuilderWorkspaceService:
         template_id = template_id or ("skill_default" if kind == "skill" else "scenario_default")
         draft_id = self._new_draft_id(artifact_id)
         draft_dir = self.drafts_dir() / draft_id
-        artifact_root = self._dev_artifact_root(kind, artifact_id)
-        if artifact_root.exists():
+        expected_artifact_root = self._dev_artifact_root(kind, artifact_id)
+        if expected_artifact_root.exists():
             raise ValueError(
-                f"{kind} '{artifact_id}' already exists in DEV workspace at {artifact_root}; "
+                f"{kind} '{artifact_id}' already exists in DEV workspace at {expected_artifact_root}; "
                 "use descriptor_fix or remove/rename the DEV artifact first"
             )
-        _copytree(_template_dir(kind, template_id), artifact_root)
+        developer_service = self._require_developer_service()
+        created = (
+            developer_service.create_skill(artifact_id, template=template_id)
+            if kind == "skill"
+            else developer_service.create_scenario(artifact_id, template=template_id)
+        )
+        artifact_root = Path(getattr(created, "path", "")).expanduser().resolve()
+        if artifact_root != expected_artifact_root:
+            raise RuntimeError(
+                f"Core developer service created {kind} at unexpected path {artifact_root}; "
+                f"expected {expected_artifact_root}"
+            )
 
         if kind == "skill":
             self._patch_skill_template(artifact_root, artifact_id, source_idea)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+from types import SimpleNamespace
 
 from adaos.services.builder import BuilderWorkspaceService
 from adaos.services.skill_factory import REALIZE_REQUEST_SCHEMA, SkillFactoryService
@@ -8,14 +10,32 @@ from adaos.services.skill_factory import REALIZE_REQUEST_SCHEMA, SkillFactorySer
 
 def _builder_service(tmp_path: Path) -> BuilderWorkspaceService:
     workspace = tmp_path / "workspace"
+    dev_skills = tmp_path / "dev" / "test-subnet" / "skills"
+    dev_scenarios = tmp_path / "dev" / "test-subnet" / "scenarios"
+
+    class _DeveloperService:
+        def _create(self, kind: str, name: str, template: str | None):
+            package_root = Path(__file__).resolve().parents[1] / "src" / "adaos"
+            source = package_root / ("skills_templates" if kind == "skill" else "scenario_templates") / str(template)
+            target = (dev_skills if kind == "skill" else dev_scenarios) / name
+            shutil.copytree(source, target)
+            return SimpleNamespace(path=target, name=name)
+
+        def create_skill(self, name: str, template: str | None = None):
+            return self._create("skill", name, template or "skill_default")
+
+        def create_scenario(self, name: str, template: str | None = None):
+            return self._create("scenario", name, template or "scenario_default")
+
     return BuilderWorkspaceService(
         state_dir=tmp_path / "state",
         repo_root=tmp_path,
         workspace_root=workspace,
         skills_root=workspace / "skills",
         scenarios_root=workspace / "scenarios",
-        dev_skills_root=tmp_path / "dev" / "test-subnet" / "skills",
-        dev_scenarios_root=tmp_path / "dev" / "test-subnet" / "scenarios",
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        developer_service=_DeveloperService(),
     )
 
 

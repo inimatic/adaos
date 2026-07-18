@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,14 +21,32 @@ from adaos.services.root.service import RootDeveloperService
 
 def _service(tmp_path: Path) -> BuilderWorkspaceService:
     workspace = tmp_path / "workspace"
+    dev_skills = tmp_path / "dev" / "test-subnet" / "skills"
+    dev_scenarios = tmp_path / "dev" / "test-subnet" / "scenarios"
+
+    class _DeveloperService:
+        def _create(self, kind: str, name: str, template: str | None):
+            package_root = Path(__file__).resolve().parents[1] / "src" / "adaos"
+            source = package_root / ("skills_templates" if kind == "skill" else "scenario_templates") / str(template)
+            target = (dev_skills if kind == "skill" else dev_scenarios) / name
+            shutil.copytree(source, target)
+            return SimpleNamespace(path=target, name=name)
+
+        def create_skill(self, name: str, template: str | None = None):
+            return self._create("skill", name, template or "skill_default")
+
+        def create_scenario(self, name: str, template: str | None = None):
+            return self._create("scenario", name, template or "scenario_default")
+
     return BuilderWorkspaceService(
         state_dir=tmp_path / "state",
         repo_root=tmp_path,
         workspace_root=workspace,
         skills_root=workspace / "skills",
         scenarios_root=workspace / "scenarios",
-        dev_skills_root=tmp_path / "dev" / "test-subnet" / "skills",
-        dev_scenarios_root=tmp_path / "dev" / "test-subnet" / "scenarios",
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        developer_service=_DeveloperService(),
     )
 
 
@@ -271,6 +290,63 @@ def test_builder_artifacts_live_under_existing_devspace(tmp_path: Path) -> None:
     assert (draft_dir / "builder.draft.json").exists()
 
 
+def test_builder_draft_create_and_checkpoint_delegate_to_core_dev_service(tmp_path: Path) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+    dev_scenarios = tmp_path / "dev" / "test-subnet" / "scenarios"
+
+    class _CoreDeveloperService:
+        def create_scenario(self, name: str, template: str | None = None):
+            calls.append(("create", name, template))
+            source = Path(__file__).resolve().parents[1] / "src" / "adaos" / "scenario_templates" / str(template)
+            target = dev_scenarios / name
+            shutil.copytree(source, target)
+            return SimpleNamespace(path=target, name=name)
+
+        def push_scenario(self, name: str, *, message: str | None = None):
+            calls.append(("push", name, message))
+            return SimpleNamespace(
+                name=name,
+                stored_path=f"scenarios/{name}",
+                sha256="sha256-demo",
+                bytes_uploaded=123,
+                version="0.1.1",
+                updated_at="2026-07-18T00:00:00Z",
+                commit="forge-commit",
+                message=message,
+            )
+
+    service = BuilderWorkspaceService(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        workspace_root=tmp_path / "workspace",
+        skills_root=tmp_path / "workspace" / "skills",
+        scenarios_root=tmp_path / "workspace" / "scenarios",
+        dev_skills_root=tmp_path / "dev" / "test-subnet" / "skills",
+        dev_scenarios_root=dev_scenarios,
+        developer_service=_CoreDeveloperService(),
+    )
+
+    created = service.create_draft(
+        kind="scenario",
+        artifact_id="core_created_scenario",
+        source_idea="Create a scenario through Builder chat.",
+        template_id="builder_scenario",
+    )
+    checkpoint = service.checkpoint_artifact(
+        kind="scenario",
+        artifact_id="core_created_scenario",
+        message="LLM added the requested form",
+    )
+
+    assert Path(created["artifact_root"]) == dev_scenarios / "core_created_scenario"
+    assert calls == [
+        ("create", "core_created_scenario", "builder_scenario"),
+        ("push", "core_created_scenario", "LLM added the requested form"),
+    ]
+    assert checkpoint["commit"] == "forge-commit"
+    assert checkpoint["message"] == "LLM added the requested form"
+
+
 def test_builder_cli_accepts_unquoted_multi_word_idea(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     monkeypatch.setattr(builder_cli.BuilderWorkspaceService, "from_context", classmethod(lambda cls: service))
@@ -330,7 +406,7 @@ def test_builder_cli_list_and_push_use_existing_dev_service(tmp_path: Path, monk
                 )
             ]
 
-        def push_skill(self, name: str):
+        def push_skill(self, name: str, *, message: str | None = None):
             return SimpleNamespace(
                 kind="skill",
                 name=name,
@@ -339,6 +415,8 @@ def test_builder_cli_list_and_push_use_existing_dev_service(tmp_path: Path, monk
                 bytes_uploaded=42,
                 version="0.2.1",
                 updated_at="2026-06-04T00:00:01Z",
+                commit="forge123",
+                message=message,
             )
 
     monkeypatch.setattr(builder_cli, "_service", lambda: _Svc())

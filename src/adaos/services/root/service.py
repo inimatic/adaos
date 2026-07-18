@@ -94,6 +94,13 @@ def _current_timestamp() -> str:
     return _now().replace(microsecond=0).isoformat()
 
 
+def _normalize_draft_commit_message(value: str | None) -> str | None:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return None
+    return text[:240]
+
+
 def _parse_timestamp(value: str | None) -> datetime:
     if not value:
         return _EPOCH
@@ -486,6 +493,8 @@ class ArtifactPushResult:
     bytes_uploaded: int
     version: str | None = None
     updated_at: str | None = None
+    commit: str | None = None
+    message: str | None = None
 
 
 @dataclass(slots=True)
@@ -1160,12 +1169,12 @@ class RootDeveloperService:
         )
         return result
 
-    def push_skill(self, name: str) -> ArtifactPushResult:
+    def push_skill(self, name: str, *, message: str | None = None) -> ArtifactPushResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(self.ctx.bus, "root.dev.skill.push.start", {"name": name, "node_id": node_id}, "root.dev")
         try:
-            result = self._push_artifact("skills", name)
+            result = self._push_artifact("skills", name, message=message)
         except Exception:
             emit(
                 self.ctx.bus,
@@ -1183,17 +1192,19 @@ class RootDeveloperService:
                 "version": result.version,
                 "updated_at": result.updated_at,
                 "bytes": result.bytes_uploaded,
+                "commit": result.commit,
+                "message": result.message,
             },
             "root.dev",
         )
         return result
 
-    def push_scenario(self, name: str) -> ArtifactPushResult:
+    def push_scenario(self, name: str, *, message: str | None = None) -> ArtifactPushResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(self.ctx.bus, "root.dev.scenario.push.start", {"name": name, "node_id": node_id}, "root.dev")
         try:
-            result = self._push_artifact("scenarios", name)
+            result = self._push_artifact("scenarios", name, message=message)
         except Exception:
             emit(
                 self.ctx.bus,
@@ -1211,6 +1222,8 @@ class RootDeveloperService:
                 "version": result.version,
                 "updated_at": result.updated_at,
                 "bytes": result.bytes_uploaded,
+                "commit": result.commit,
+                "message": result.message,
             },
             "root.dev",
         )
@@ -2201,7 +2214,13 @@ class RootDeveloperService:
         verify = self._load_verify_context(ca_path)
         return str(cert_path), str(key_path), verify
 
-    def _push_artifact(self, kind: Literal["skills", "scenarios"], name: str) -> ArtifactPushResult:
+    def _push_artifact(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        message: str | None = None,
+    ) -> ArtifactPushResult:
         cfg = self._load_config()
 
         owner_id = cfg.owner_id
@@ -2254,6 +2273,7 @@ class RootDeveloperService:
         cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
+        commit_message = _normalize_draft_commit_message(message)
         if kind == "skills":
             response = client.push_skill_draft(
                 name=name,
@@ -2262,6 +2282,7 @@ class RootDeveloperService:
                 verify=verify,
                 cert=(cert_path, key_path),
                 sha256=digest,
+                message=commit_message,
             )
         else:
             response = client.push_scenario_draft(
@@ -2271,6 +2292,7 @@ class RootDeveloperService:
                 verify=verify,
                 cert=(cert_path, key_path),
                 sha256=digest,
+                message=commit_message,
             )
         stored = response.get("stored_path")
         if not isinstance(stored, str) or not stored:
@@ -2283,6 +2305,8 @@ class RootDeveloperService:
             bytes_uploaded=len(archive_bytes),
             version=(manifest_meta or {}).get("version"),
             updated_at=(manifest_meta or {}).get("updated_at"),
+            commit=str(response.get("commit") or "").strip() or None,
+            message=commit_message,
         )
 
     def _update_artifact(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"], name: str) -> ArtifactUpdateResult:

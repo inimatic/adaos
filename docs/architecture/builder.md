@@ -79,18 +79,24 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
 4. **Design plan**: Builder records the artifact plan, data route plan,
    side-effect class, permissions, runtime lifecycle needs, and test strategy.
 5. **Draft generation**: Builder creates or edits workspace artifacts through
-   ordinary repository files and templates.
+   the core `adaos dev skill|scenario create` service contract and ordinary
+   repository files and templates. Chat and API entrypoints do not copy
+   templates through a separate Builder-only path.
 6. **Static validation**: AdaOS validates schemas, manifests, route plans,
    imports, handler boundaries, and unsafe runtime patterns.
-7. **Preview**: AdaOS runs phrase probes, action previews, UI/materialization
+7. **VCS checkpoint**: after a complete validated LLM result is materialized,
+   Builder invokes the core `adaos dev skill|scenario push` service contract.
+   The LLM `comment` is normalized into the Forge commit message, and the
+   returned commit SHA is attached to the local revision evidence.
+8. **Preview**: AdaOS runs phrase probes, action previews, UI/materialization
    previews, and install/test dry-runs where available.
-8. **Review gate**: a human, policy rule, or narrower auto-apply profile
+9. **Review gate**: a human, policy rule, or narrower auto-apply profile
    approves, rejects, or redirects the candidate.
-9. **Prepare/install**: AdaOS uses skill/scenario lifecycle commands and
+10. **Prepare/install**: AdaOS uses skill/scenario lifecycle commands and
    runtime slots rather than hot-patching live behavior.
-10. **Activate**: AdaOS activates the prepared runtime and records rollback
+11. **Activate**: AdaOS activates the prepared runtime and records rollback
     evidence.
-11. **Observe and repair**: guard, quarantine, NLU Teacher, status, and
+12. **Observe and repair**: guard, quarantine, NLU Teacher, status, and
     runtime diagnostics feed new Builder tasks when the design needs repair.
 
 ## Relationship To Skills
@@ -434,6 +440,15 @@ Builder also exposes an operational CLI facade over the existing dev lifecycle:
 - `adaos builder push <id> --kind skill|scenario`: uploads through the existing
   Forge dev push path. It does not replace activation, install, approval, or
   runtime apply gates.
+
+The same lifecycle is mandatory for non-CLI entrypoints. Builder chat creates
+artifacts through `RootDeveloperService.create_skill/create_scenario`. Once all
+files from a successful LLM turn are written and validated, it calls
+`RootDeveloperService.push_skill/push_scenario` with the normalized LLM
+`comment`. `ui_revisions/NNN.json -> vcs_checkpoint` records the attempt,
+message, Forge commit, digest, and remote path. A remote push failure is
+reported but does not erase or invalidate the already validated local
+revision; retry and recovery remain possible from the dev workspace.
 
 This facade is intentionally not a new storage layer. It exists so Builder
 work can be driven from one command branch while source ownership remains in

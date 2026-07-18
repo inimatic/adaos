@@ -56,6 +56,8 @@ def _create_result_payload(result: ArtifactCreateResult) -> dict[str, Any]:
         "path": str(result.path),
         "version": result.version,
         "updated_at": result.updated_at,
+        "commit": getattr(result, "commit", None),
+        "message": getattr(result, "message", None),
     }
 
 
@@ -101,6 +103,8 @@ def _echo_push_result(result: ArtifactPushResult, json_output: bool) -> None:
     typer.echo(f"Stored path: {result.stored_path}")
     typer.echo(f"SHA256: {result.sha256}")
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
+    if getattr(result, "commit", None):
+        typer.echo(f"Commit: {result.commit}")
 
 
 def _echo_list_result(items: list[ArtifactListItem], json_output: bool) -> None:
@@ -312,13 +316,18 @@ def workbench_delete(
 def push(
     artifact_id: str = typer.Argument(..., help="Skill or scenario id in the Builder/dev workspace."),
     kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
+    message: str | None = typer.Option(None, "--message", "-m", help="Forge commit message."),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Upload a Builder/dev artifact through the existing Forge dev push flow."""
     artifact_kind = _normalize_artifact_kind(kind)
     service = _service()
     try:
-        result = service.push_skill(artifact_id) if artifact_kind == "skill" else service.push_scenario(artifact_id)
+        result = (
+            service.push_skill(artifact_id, message=message)
+            if artifact_kind == "skill"
+            else service.push_scenario(artifact_id, message=message)
+        )
     except RootServiceError as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(1)

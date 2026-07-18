@@ -173,6 +173,9 @@ Open work:
   CTX dev roots (`.adaos/dev/<subnet>/skills` and
   `.adaos/dev/<subnet>/scenarios`) so `adaos dev skill|scenario validate`,
   `push`, `test`, and `activate` continue to own the lifecycle.
+- [x] `[must]` Route every Builder/chat skill or scenario creation through the
+  same core `RootDeveloperService.create_skill/create_scenario` contract used
+  by `adaos dev skill|scenario create`; remove the parallel template-copy path.
 - [x] `[must]` Keep Builder draft indexes and preview records as service
   metadata under `state/builder`, not as an alternate source tree.
 - [x] `[must]` Define draft metadata: task id, source idea, selected template,
@@ -233,6 +236,11 @@ Open work:
 - [x] `[should]` Add `adaos builder push <id> --kind skill|scenario` as a
   convenience facade over the existing Forge dev upload path. Runtime activation
   and policy approval stay in later phases.
+- [x] `[must]` Create a Forge VCS checkpoint after each complete validated LLM
+  materialization through `RootDeveloperService.push_skill/push_scenario`.
+  Normalize the LLM `comment` as the commit message and persist commit SHA,
+  digest, remote path, version, and failure evidence in the UI revision. Keep
+  a valid local revision intact when the remote checkpoint fails.
 
 Primary references:
 

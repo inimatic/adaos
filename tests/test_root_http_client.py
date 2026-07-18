@@ -114,3 +114,50 @@ def test_hub_control_report_uses_short_configurable_timeout(monkeypatch) -> None
 
     assert client.hub_control_report(payload={"ok": True}) == {"ok": True}
     assert captured["timeout"] == 1.25
+
+
+def test_draft_push_sends_vcs_commit_message(monkeypatch) -> None:
+    captured: list[tuple[str, str, dict]] = []
+    client = RootHttpClient(base_url="https://api.example.test")
+
+    def _request(_self, method, path, **kwargs):
+        captured.append((method, path, dict(kwargs.get("json") or {})))
+        return {"ok": True, "stored_path": "draft/path", "commit": "abc123"}
+
+    monkeypatch.setattr(RootHttpClient, "_request", _request)
+
+    client.push_skill_draft(
+        name="demo_skill",
+        archive_b64="eA==",
+        node_id="node-1",
+        sha256="sha",
+        message="Builder generated a form",
+    )
+    client.push_scenario_draft(
+        name="demo_scenario",
+        archive_b64="eA==",
+        node_id="node-1",
+        sha256="sha",
+        message="Builder generated a dashboard",
+    )
+
+    assert captured[0][1:] == (
+        "/v1/skills/draft",
+        {
+            "name": "demo_skill",
+            "archive_b64": "eA==",
+            "node_id": "node-1",
+            "sha256": "sha",
+            "message": "Builder generated a form",
+        },
+    )
+    assert captured[1][1:] == (
+        "/v1/scenarios/draft",
+        {
+            "name": "demo_scenario",
+            "archive_b64": "eA==",
+            "node_id": "node-1",
+            "sha256": "sha",
+            "message": "Builder generated a dashboard",
+        },
+    )

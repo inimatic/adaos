@@ -983,10 +983,13 @@ def skill_create(
 
 
 @skill_app.command("push")
-def skill_push(name: str) -> None:
+def skill_push(
+    name: str,
+    message: str | None = typer.Option(None, "--message", "-m", help="Forge commit message."),
+) -> None:
     service = _service()
     try:
-        result = service.push_skill(name)
+        result = service.push_skill(name, message=message)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
@@ -994,6 +997,8 @@ def skill_push(name: str) -> None:
     typer.echo(f"Stored path: {result.stored_path}")
     typer.echo(f"SHA256: {result.sha256}")
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
+    if result.commit:
+        typer.echo(f"Commit: {result.commit}")
 
 
 @skill_app.command("list")
@@ -1128,10 +1133,13 @@ def scenario_create(
 
 
 @scenario_app.command("push")
-def scenario_push(name: str) -> None:
+def scenario_push(
+    name: str,
+    message: str | None = typer.Option(None, "--message", "-m", help="Forge commit message."),
+) -> None:
     service = _service()
     try:
-        result = service.push_scenario(name)
+        result = service.push_scenario(name, message=message)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
@@ -1139,6 +1147,8 @@ def scenario_push(name: str) -> None:
     typer.echo(f"Stored path: {result.stored_path}")
     typer.echo(f"SHA256: {result.sha256}")
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
+    if result.commit:
+        typer.echo(f"Commit: {result.commit}")
 
 
 @scenario_app.command("list")
