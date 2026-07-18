@@ -49,6 +49,61 @@ def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     assert [item["id"] for item in older["messages"]] == ["msg.1", "msg.2"]
 
 
+def test_conversation_store_merges_legacy_builder_conversation_and_tracks_change() -> None:
+    suffix = uuid4().hex[:10]
+    canonical_id = f"conv.builder.canonical.{suffix}"
+    legacy_id = f"conv.builder.legacy.{suffix}"
+    topic_id = f"prompt-project:scenario:{suffix}"
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id=canonical_id,
+        webspace_id="global",
+        owner="skill:builder_skill",
+    )
+    conversation_store.upsert_conversation(
+        conversation_id=legacy_id,
+        webspace_id="desktop",
+        owner="skill:builder_skill",
+    )
+    message = conversation_store.append_message(
+        conversation_id=legacy_id,
+        thread_id=topic_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="user",
+        text="Preserve this Builder request",
+        payload={"id": f"m.builder.legacy.{suffix}", "from": "user"},
+    )
+
+    merged = conversation_store.merge_conversations(
+        source_conversation_id=legacy_id,
+        target_conversation_id=canonical_id,
+    )
+    change = conversation_store.upsert_development_change(
+        change_id=f"builder_change_{suffix}",
+        conversation_id=canonical_id,
+        thread_id=topic_id,
+        topic_id=topic_id,
+        status="pushed",
+        source_message_ids=[str(message["id"])],
+        artifact_refs=[{"kind": "scenario", "id": suffix}],
+        revision_refs=[{"revision": "003"}],
+        commit_refs=[{"commit": "abc123"}],
+        summary="Preserve this Builder request",
+    )
+
+    projection = conversation_store.list_projection(canonical_id, thread_id=topic_id, limit=10)
+    assert merged["messages_moved"] == 1
+    assert [item["text"] for item in projection["messages"]] == ["Preserve this Builder request"]
+    assert change and change["source_message_ids"] == [message["id"]]
+    assert conversation_store.list_development_changes(
+        conversation_id=canonical_id,
+        artifact_kind="scenario",
+        artifact_id=suffix,
+    )[0]["commit_refs"] == [{"commit": "abc123"}]
+
+
 def test_conversation_store_keeps_agent_registry_and_memory() -> None:
     conversation_store.ensure_schema()
     conversation_store.seed_agents(
@@ -165,12 +220,9 @@ def test_conversation_store_recovers_empty_or_stale_projection_from_ledger() -> 
         conversation_id=conversation_id,
         limit=2,
     )
+    current_store_projection = conversation_store.list_projection(conversation_id, limit=2)
     fresh = conversation_store.recover_projection_from_store(
-        {
-            "conversation_id": conversation_id,
-            "messages": [{"id": "fresh", "text": "fresh", "seq": 3}],
-            "total_message_count": 3,
-        },
+        current_store_projection,
         conversation_id=conversation_id,
         limit=2,
     )
@@ -183,7 +235,7 @@ def test_conversation_store_recovers_empty_or_stale_projection_from_ledger() -> 
     assert stale["total_message_count"] == 3
     assert fresh["recovery"]["recovered"] is False
     assert fresh["recovery"]["source"] == "current_projection"
-    assert fresh["messages"][0]["text"] == "fresh"
+    assert fresh["messages"][0]["text"] == "recoverable turn 2"
 
 
 def test_conversation_store_rebuilds_redaction_aware_segments() -> None:

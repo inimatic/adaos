@@ -9,7 +9,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
@@ -373,16 +373,20 @@ class BuilderWorkspaceService:
         kind: str,
         artifact_id: str,
         message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_kind = str(kind or "").strip().lower().rstrip("s")
         artifact_id = _slug(artifact_id)
         if normalized_kind not in {"skill", "scenario"}:
             raise ValueError("kind must be skill or scenario")
         service = self._require_developer_service()
+        push_kwargs: dict[str, Any] = {"message": message}
+        if metadata:
+            push_kwargs["metadata"] = dict(metadata)
         result = (
-            service.push_skill(artifact_id, message=message)
+            service.push_skill(artifact_id, **push_kwargs)
             if normalized_kind == "skill"
-            else service.push_scenario(artifact_id, message=message)
+            else service.push_scenario(artifact_id, **push_kwargs)
         )
         return {
             "ok": True,
@@ -395,6 +399,7 @@ class BuilderWorkspaceService:
             "updated_at": getattr(result, "updated_at", None),
             "commit": getattr(result, "commit", None),
             "message": getattr(result, "message", None) or " ".join(str(message or "").split()).strip() or None,
+            "metadata": dict(getattr(result, "metadata", None) or metadata or {}),
         }
 
     def create_draft(

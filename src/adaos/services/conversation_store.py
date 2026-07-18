@@ -263,6 +263,35 @@ _SCHEMA = (
     CREATE INDEX IF NOT EXISTS idx_conversation_audit_conversation_created
     ON conversation_audit_events(conversation_id, created_at);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_development_changes (
+        change_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        thread_id TEXT,
+        topic_id TEXT,
+        status TEXT NOT NULL DEFAULT 'accepted',
+        source_message_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_refs_json TEXT NOT NULL DEFAULT '{}',
+        artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+        revision_refs_json TEXT NOT NULL DEFAULT '[]',
+        commit_refs_json TEXT NOT NULL DEFAULT '[]',
+        result_message_id TEXT,
+        request_id TEXT,
+        model TEXT,
+        summary TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        meta_json TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_development_changes_topic
+    ON conversation_development_changes(topic_id, updated_at);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_development_changes_conversation
+    ON conversation_development_changes(conversation_id, thread_id, updated_at);
+    """,
 )
 
 
@@ -1164,6 +1193,114 @@ def get_conversation(conversation_id: str, *, include_redacted: bool = False) ->
     return _row_to_conversation(row) if row else None
 
 
+def merge_conversations(*, source_conversation_id: str, target_conversation_id: str) -> dict[str, Any]:
+    source_id = str(source_conversation_id or "").strip()
+    target_id = str(target_conversation_id or "").strip()
+    if not source_id or not target_id:
+        raise ValueError("source_conversation_id and target_conversation_id are required")
+    if source_id == target_id or not ensure_schema():
+        return {"ok": True, "source": source_id, "target": target_id, "messages_moved": 0}
+    moved = 0
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        target = con.execute(
+            "SELECT conversation_id FROM conversation_conversations WHERE conversation_id=?",
+            (target_id,),
+        ).fetchone()
+        source = con.execute(
+            "SELECT * FROM conversation_conversations WHERE conversation_id=?",
+            (source_id,),
+        ).fetchone()
+        if not source:
+            return {"ok": True, "source": source_id, "target": target_id, "messages_moved": 0}
+        if not target:
+            raise ValueError(f"target conversation does not exist: {target_id}")
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            next_seq = int(
+                con.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE conversation_id=?",
+                    (target_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            sequence_offset = next_seq
+            rows = con.execute(
+                "SELECT * FROM conversation_messages WHERE conversation_id=? ORDER BY ts ASC, seq ASC",
+                (source_id,),
+            ).fetchall()
+            for row in rows:
+                next_seq += 1
+                try:
+                    con.execute(
+                        "UPDATE conversation_messages SET conversation_id=?, seq=? WHERE message_id=?",
+                        (target_id, next_seq, row["message_id"]),
+                    )
+                except sqlite3.IntegrityError:
+                    con.execute(
+                        "UPDATE conversation_messages SET conversation_id=?, seq=?, idempotency_key=NULL WHERE message_id=?",
+                        (target_id, next_seq, row["message_id"]),
+                    )
+                _message_fts_upsert(
+                    con,
+                    message_id=str(row["message_id"]),
+                    conversation_id=target_id,
+                    thread_id=str(row["thread_id"] or "").strip() or None,
+                    webspace_id=str(row["webspace_id"] or ""),
+                    channel_id=str(row["channel_id"] or ""),
+                    owner=str(row["owner"] or ""),
+                    role=str(row["role"] or ""),
+                    text=str(row["text"] or ""),
+                )
+                moved += 1
+            con.execute("UPDATE conversation_threads SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_turn_traces SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_dialog_channels SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_active_dialog_channels SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_dialog_frames SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute(
+                "UPDATE conversation_segments SET conversation_id=?, start_seq=start_seq+?, end_seq=end_seq+? WHERE conversation_id=?",
+                (target_id, sequence_offset, sequence_offset, source_id),
+            )
+            con.execute("UPDATE conversation_segment_summary_jobs SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_audit_events SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_development_changes SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            source_meta = _json_load(source["meta_json"], {})
+            source_meta = dict(source_meta) if isinstance(source_meta, Mapping) else {}
+            source_meta.update({"merged_into": target_id, "merged_at": time.time()})
+            con.execute(
+                "UPDATE conversation_conversations SET status='merged', updated_at=?, meta_json=? WHERE conversation_id=?",
+                (time.time(), _json_dump(source_meta), source_id),
+            )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    return {"ok": True, "source": source_id, "target": target_id, "messages_moved": moved}
+
+
+def merge_conversations_by_prefix(*, prefix: str, target_conversation_id: str) -> dict[str, Any]:
+    token = str(prefix or "").strip()
+    target_id = str(target_conversation_id or "").strip()
+    if not token or not target_id or not ensure_schema():
+        return {"ok": True, "target": target_id, "sources": [], "messages_moved": 0}
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        rows = con.execute(
+            "SELECT conversation_id FROM conversation_conversations WHERE conversation_id LIKE ? AND conversation_id!=? AND status!='merged'",
+            (f"{token}%", target_id),
+        ).fetchall()
+    results = [
+        merge_conversations(source_conversation_id=str(row[0]), target_conversation_id=target_id)
+        for row in rows
+    ]
+    return {
+        "ok": True,
+        "target": target_id,
+        "sources": [item["source"] for item in results],
+        "messages_moved": sum(int(item.get("messages_moved") or 0) for item in results),
+    }
+
+
 def start_thread(
     *,
     conversation_id: str,
@@ -1230,6 +1367,186 @@ def _row_to_thread(row: sqlite3.Row) -> dict[str, Any]:
         "created_by": _json_load(row["created_by_json"], {}),
         "meta": _json_load(row["meta_json"], {}),
     }
+
+
+def _row_to_development_change(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "schema": "adaos.conversation.development_change.v1",
+        "change_id": row["change_id"],
+        "conversation_id": row["conversation_id"],
+        "thread_id": row["thread_id"],
+        "topic_id": row["topic_id"],
+        "status": row["status"],
+        "source_message_ids": _json_load(row["source_message_ids_json"], []),
+        "source_refs": _json_load(row["source_refs_json"], {}),
+        "artifact_refs": _json_load(row["artifact_refs_json"], []),
+        "revision_refs": _json_load(row["revision_refs_json"], []),
+        "commit_refs": _json_load(row["commit_refs_json"], []),
+        "result_message_id": row["result_message_id"],
+        "request_id": row["request_id"],
+        "model": row["model"],
+        "summary": row["summary"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "meta": _json_load(row["meta_json"], {}),
+    }
+
+
+def upsert_development_change(
+    *,
+    change_id: str,
+    conversation_id: str,
+    thread_id: str | None = None,
+    topic_id: str | None = None,
+    status: str = "accepted",
+    source_message_ids: Sequence[str] | None = None,
+    source_refs: Mapping[str, Any] | None = None,
+    artifact_refs: Sequence[Mapping[str, Any]] | None = None,
+    revision_refs: Sequence[Mapping[str, Any] | str] | None = None,
+    commit_refs: Sequence[Mapping[str, Any] | str] | None = None,
+    result_message_id: str | None = None,
+    request_id: str | None = None,
+    model: str | None = None,
+    summary: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    cid = str(change_id or "").strip()
+    conversation = str(conversation_id or "").strip()
+    if not cid or not conversation:
+        raise ValueError("change_id and conversation_id are required")
+    now = float(ts or time.time())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        existing = con.execute(
+            "SELECT * FROM conversation_development_changes WHERE change_id=?",
+            (cid,),
+        ).fetchone()
+        existing_change = _row_to_development_change(existing) if existing else {}
+
+        def _selected_sequence(key: str, incoming: Sequence[Any] | None) -> list[Any]:
+            if incoming is not None:
+                return list(incoming)
+            value = existing_change.get(key)
+            return list(value) if isinstance(value, list) else []
+
+        selected_source_ids = [str(item) for item in _selected_sequence("source_message_ids", source_message_ids) if str(item).strip()]
+        selected_artifacts = [dict(item) for item in _selected_sequence("artifact_refs", artifact_refs) if isinstance(item, Mapping)]
+        selected_revisions = _selected_sequence("revision_refs", revision_refs)
+        selected_commits = _selected_sequence("commit_refs", commit_refs)
+        selected_source_refs = dict(source_refs) if source_refs is not None else dict(existing_change.get("source_refs") or {})
+        selected_meta = dict(existing_change.get("meta") or {})
+        if meta is not None:
+            selected_meta.update(dict(meta))
+        con.execute(
+            """
+            INSERT INTO conversation_development_changes(
+                change_id, conversation_id, thread_id, topic_id, status,
+                source_message_ids_json, source_refs_json, artifact_refs_json,
+                revision_refs_json, commit_refs_json, result_message_id,
+                request_id, model, summary, created_at, updated_at, meta_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(change_id) DO UPDATE SET
+                conversation_id=excluded.conversation_id,
+                thread_id=COALESCE(excluded.thread_id, conversation_development_changes.thread_id),
+                topic_id=COALESCE(excluded.topic_id, conversation_development_changes.topic_id),
+                status=excluded.status,
+                source_message_ids_json=excluded.source_message_ids_json,
+                source_refs_json=excluded.source_refs_json,
+                artifact_refs_json=excluded.artifact_refs_json,
+                revision_refs_json=excluded.revision_refs_json,
+                commit_refs_json=excluded.commit_refs_json,
+                result_message_id=COALESCE(excluded.result_message_id, conversation_development_changes.result_message_id),
+                request_id=COALESCE(excluded.request_id, conversation_development_changes.request_id),
+                model=COALESCE(excluded.model, conversation_development_changes.model),
+                summary=COALESCE(excluded.summary, conversation_development_changes.summary),
+                updated_at=excluded.updated_at,
+                meta_json=excluded.meta_json
+            """,
+            (
+                cid,
+                conversation,
+                str(thread_id or existing_change.get("thread_id") or "").strip() or None,
+                str(topic_id or existing_change.get("topic_id") or "").strip() or None,
+                str(status or existing_change.get("status") or "accepted").strip() or "accepted",
+                _json_dump(selected_source_ids),
+                _json_dump(selected_source_refs),
+                _json_dump(selected_artifacts),
+                _json_dump(selected_revisions),
+                _json_dump(selected_commits),
+                str(result_message_id or "").strip() or None,
+                str(request_id or "").strip() or None,
+                str(model or "").strip() or None,
+                str(summary or "").strip() or None,
+                float(existing_change.get("created_at") or now),
+                now,
+                _json_dump(selected_meta),
+            ),
+        )
+        con.commit()
+        row = con.execute(
+            "SELECT * FROM conversation_development_changes WHERE change_id=?",
+            (cid,),
+        ).fetchone()
+    return _row_to_development_change(row) if row else None
+
+
+def get_development_change(change_id: str) -> dict[str, Any] | None:
+    token = str(change_id or "").strip()
+    if not token or not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM conversation_development_changes WHERE change_id=?",
+            (token,),
+        ).fetchone()
+    return _row_to_development_change(row) if row else None
+
+
+def list_development_changes(
+    *,
+    conversation_id: str | None = None,
+    topic_id: str | None = None,
+    artifact_kind: str | None = None,
+    artifact_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    where: list[str] = []
+    params: list[Any] = []
+    if str(conversation_id or "").strip():
+        where.append("conversation_id=?")
+        params.append(str(conversation_id).strip())
+    if str(topic_id or "").strip():
+        where.append("topic_id=?")
+        params.append(str(topic_id).strip())
+    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"SELECT * FROM conversation_development_changes {sql_where} ORDER BY updated_at DESC LIMIT ?",
+            [*params, safe_limit],
+        ).fetchall()
+    changes = [_row_to_development_change(row) for row in rows]
+    kind = str(artifact_kind or "").strip().lower().rstrip("s")
+    artifact = str(artifact_id or "").strip()
+    if kind or artifact:
+        changes = [
+            item
+            for item in changes
+            if any(
+                (not kind or str(ref.get("kind") or "").strip().lower().rstrip("s") == kind)
+                and (not artifact or str(ref.get("id") or ref.get("name") or "").strip() == artifact)
+                for ref in item.get("artifact_refs") or []
+                if isinstance(ref, Mapping)
+            )
+        ]
+    return changes
 
 
 def upsert_dialog_channel(

@@ -204,6 +204,10 @@ def _echo_update_result(kind_label: str, result: ArtifactUpdateResult, json_outp
             "target": _display_path(result.target_path),
             "version": result.version,
             "updated_at": result.updated_at,
+            "commit": result.commit,
+            "message": result.message,
+            "metadata": result.metadata,
+            "recovery": result.recovery,
         }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -214,6 +218,10 @@ def _echo_update_result(kind_label: str, result: ArtifactUpdateResult, json_outp
         typer.echo(f"Version: {result.version}")
     if result.updated_at:
         typer.echo(f"Updated at: {result.updated_at}")
+    if result.commit:
+        typer.echo(f"Commit: {result.commit}")
+    if result.recovery and result.recovery.get("messages_recovered"):
+        typer.echo(f"Recovered Builder messages: {result.recovery['messages_recovered']}")
 
 
 @root_app.command("init")

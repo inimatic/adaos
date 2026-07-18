@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 from dataclasses import dataclass, field
@@ -164,6 +165,7 @@ class BuilderAutomationService:
                 "companion_skill_id": f"{project_id}_skill" if kind == "scenario" else project_id,
                 "webspace_id": str(webspace_id or "desktop"),
                 "conversation_id": str(conversation_id or "").strip() or None,
+                "topic_id": f"prompt-project:{kind}:{project_id}",
                 "implementation_brief": brief,
                 "brief_path": str(brief_path or "").strip() or None,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
@@ -175,6 +177,9 @@ class BuilderAutomationService:
                 "created_at": _now_iso(),
                 "updated_at": _now_iso(),
             }
+            session["change_id"] = "builder_change_automation_" + hashlib.sha256(
+                f"{session['session_id']}:{session['created_at']}".encode("utf-8")
+            ).hexdigest()[:16]
             submitted = self._submit(session, iteration_instruction="")
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
@@ -642,10 +647,28 @@ class BuilderAutomationService:
 
         service = BuilderWorkspaceService.from_context()
         checkpoints: list[dict[str, Any]] = []
+        change_id = str(session.get("change_id") or "").strip()
+        conversation_id = str(session.get("conversation_id") or "").strip()
+        topic_id = str(session.get("topic_id") or "").strip()
+        metadata = {
+            "change_id": change_id,
+            "conversation_id": conversation_id,
+            "topic_id": topic_id,
+            "thread_id": topic_id,
+            "request_id": str(session.get("current_task_id") or "").strip(),
+        }
+        metadata = {key: value for key, value in metadata.items() if value}
         for kind, artifact_id in artifacts:
             try:
+                checkpoint_kwargs: dict[str, Any] = {
+                    "kind": kind,
+                    "artifact_id": artifact_id,
+                    "message": message,
+                }
+                if metadata:
+                    checkpoint_kwargs["metadata"] = metadata
                 checkpoints.append(
-                    dict(service.checkpoint_artifact(kind=kind, artifact_id=artifact_id, message=message) or {})
+                    dict(service.checkpoint_artifact(**checkpoint_kwargs) or {})
                 )
             except Exception as exc:
                 checkpoints.append(
@@ -657,6 +680,28 @@ class BuilderAutomationService:
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
+        if change_id and conversation_id:
+            try:
+                from adaos.services import conversation_store
+
+                conversation_store.upsert_development_change(
+                    change_id=change_id,
+                    conversation_id=conversation_id,
+                    thread_id=topic_id or None,
+                    topic_id=topic_id or None,
+                    status="pushed" if checkpoints and all(item.get("ok") for item in checkpoints) else "checkpoint_failed",
+                    artifact_refs=[{"kind": kind, "id": artifact_id} for kind, artifact_id in artifacts],
+                    commit_refs=[
+                        {"kind": item.get("kind"), "id": item.get("name"), "commit": item.get("commit")}
+                        for item in checkpoints
+                        if item.get("commit")
+                    ],
+                    request_id=str(session.get("current_task_id") or "").strip() or None,
+                    summary=message,
+                    meta={"automation_session_id": session.get("session_id")},
+                )
+            except Exception:
+                pass
         return checkpoints
 
     def _prepare_and_activate_dev_skill(self, skill_id: str, *, webspace_id: str) -> dict[str, Any]:

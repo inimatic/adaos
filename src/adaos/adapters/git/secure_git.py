@@ -50,6 +50,9 @@ class SecureGitClient(GitClient):
         # Purely local operation once refs are present.
         return self.base.show(dir, spec)
 
+    def latest_commit_for_path(self, dir: str, path: str) -> dict[str, object]:
+        return self.base.latest_commit_for_path(dir, path)
+
     # sparse passthrough
     def sparse_init(self, dir: str, cone: bool = True) -> None:
         self.base.sparse_init(dir, cone)

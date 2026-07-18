@@ -9,6 +9,7 @@ from adaos.services import conversation_context, conversation_store
 BUILDER_CHANNEL_ID = "builder"
 BUILDER_OWNER = "skill:builder_skill"
 BUILDER_SKILL = "builder_skill"
+BUILDER_CONVERSATION_ID = f"conv.skill.{BUILDER_SKILL}.default"
 TEACHER_CHANNEL_ID = "teacher"
 TEACHER_OWNER = "core:nlu_teacher"
 
@@ -24,8 +25,8 @@ def _safe_id(value: Any, default: str) -> str:
 
 
 def builder_conversation_id(webspace_id: str | None = None) -> str:
-    ws = _safe_id(webspace_id, "default")
-    return f"conv.skill.{BUILDER_SKILL}.default.{ws}"
+    del webspace_id
+    return BUILDER_CONVERSATION_ID
 
 
 def builder_topic_ref(
@@ -131,17 +132,26 @@ def teacher_thread_id(
 
 def ensure_builder_conversation(webspace_id: str | None = None) -> dict[str, Any]:
     ws = _safe_id(webspace_id, "default")
-    cid = builder_conversation_id(ws)
+    cid = builder_conversation_id()
     stored = False
     try:
         if conversation_store.ensure_schema():
             conversation_store.upsert_conversation(
                 conversation_id=cid,
-                webspace_id=ws,
+                webspace_id="global",
                 owner=BUILDER_OWNER,
                 kind="builder",
                 title="Builder",
-                meta={"channel_id": BUILDER_CHANNEL_ID, "surface": "builder"},
+                meta={
+                    "channel_id": BUILDER_CHANNEL_ID,
+                    "surface": "builder",
+                    "scope": "global",
+                    "topic_contract": "project",
+                },
+            )
+            conversation_store.merge_conversations_by_prefix(
+                prefix=f"{BUILDER_CONVERSATION_ID}.",
+                target_conversation_id=cid,
             )
             conversation_store.upsert_dialog_channel(
                 webspace_id=ws,

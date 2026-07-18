@@ -10,7 +10,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 import logging
-from typing import Iterator, Optional, Final, Sequence, Union
+from typing import Any, Iterator, Optional, Final, Sequence, Union
 from adaos.ports.git import GitClient
 
 
@@ -753,6 +753,15 @@ class CliGitClient(GitClient):
 
     def show(self, dir: StrOrPath, spec: str) -> str:
         return _run_git(["show", spec], cwd=dir)
+
+    def latest_commit_for_path(self, dir: StrOrPath, path: str) -> dict[str, Any]:
+        raw = _run_git(["log", "-1", "--format=%H%x00%B", "--", str(path)], cwd=dir)
+        commit, separator, message = raw.partition("\0")
+        return {
+            "commit": commit.strip(),
+            "message": message.strip() if separator else "",
+            "path": str(path),
+        }
 
     # --- sparse ---
     def sparse_init(self, dir: StrOrPath, cone: bool = True) -> None:

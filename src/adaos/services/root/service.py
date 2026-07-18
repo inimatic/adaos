@@ -101,6 +101,53 @@ def _normalize_draft_commit_message(value: str | None) -> str | None:
     return text[:240]
 
 
+_DRAFT_METADATA_TRAILERS = {
+    "AdaOS-Change-Id": "change_id",
+    "AdaOS-Conversation-Id": "conversation_id",
+    "AdaOS-Topic-Id": "topic_id",
+    "AdaOS-Thread-Id": "thread_id",
+    "AdaOS-Revision": "revision",
+    "AdaOS-Model": "model",
+    "AdaOS-Request-Id": "request_id",
+    "AdaOS-Result-Message-Id": "result_message_id",
+    "AdaOS-Source-Messages": "source_message_ids",
+}
+
+
+def _normalize_draft_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    source = dict(value or {})
+    allowed = set(_DRAFT_METADATA_TRAILERS.values())
+    out: dict[str, Any] = {}
+    for key in allowed:
+        raw = source.get(key)
+        if key == "source_message_ids":
+            values = raw if isinstance(raw, (list, tuple)) else str(raw or "").split(",")
+            normalized = [" ".join(str(item or "").split())[:160] for item in values]
+            normalized = [item for item in normalized if item][:32]
+            if normalized:
+                out[key] = normalized
+            continue
+        text = " ".join(str(raw or "").split()).strip()[:512]
+        if text:
+            out[key] = text
+    return out
+
+
+def _parse_draft_commit_metadata(message: str | None) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for line in str(message or "").splitlines():
+        key, separator, value = line.partition(":")
+        field = _DRAFT_METADATA_TRAILERS.get(key.strip()) if separator else None
+        if not field:
+            continue
+        text = value.strip()
+        if field == "source_message_ids":
+            result[field] = [item.strip() for item in text.split(",") if item.strip()]
+        elif text:
+            result[field] = text
+    return _normalize_draft_metadata(result)
+
+
 def _parse_timestamp(value: str | None) -> datetime:
     if not value:
         return _EPOCH
@@ -495,6 +542,7 @@ class ArtifactPushResult:
     updated_at: str | None = None
     commit: str | None = None
     message: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -515,6 +563,10 @@ class ArtifactUpdateResult:
     target_path: Path
     version: str | None = None
     updated_at: str | None = None
+    commit: str | None = None
+    message: str | None = None
+    metadata: dict[str, Any] | None = None
+    recovery: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -588,6 +640,30 @@ def create_zip_bytes(root: Path) -> bytes:
 
 def archive_bytes_to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
+
+
+def _extract_zip_bytes(data: bytes, target: Path) -> None:
+    target = target.expanduser().resolve()
+    temporary = target.parent / f".{target.name}.update-{os.getpid()}-{int(time.time() * 1000)}"
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir(parents=True, exist_ok=False)
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for entry in archive.infolist():
+                relative = Path(entry.filename.replace("\\", "/"))
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise RootServiceError(f"Archive entry escapes artifact root: {entry.filename}")
+                destination = (temporary / relative).resolve()
+                if temporary not in destination.parents and destination != temporary:
+                    raise RootServiceError(f"Archive entry escapes artifact root: {entry.filename}")
+            archive.extractall(temporary)
+        if target.exists():
+            shutil.rmtree(target)
+        temporary.replace(target)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
 
 
 def fingerprint_for_key(key: rsa.RSAPrivateKey) -> str:
@@ -1181,12 +1257,18 @@ class RootDeveloperService:
         )
         return result
 
-    def push_skill(self, name: str, *, message: str | None = None) -> ArtifactPushResult:
+    def push_skill(
+        self,
+        name: str,
+        *,
+        message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ArtifactPushResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(self.ctx.bus, "root.dev.skill.push.start", {"name": name, "node_id": node_id}, "root.dev")
         try:
-            result = self._push_artifact("skills", name, message=message)
+            result = self._push_artifact("skills", name, message=message, metadata=metadata)
         except Exception:
             emit(
                 self.ctx.bus,
@@ -1206,17 +1288,24 @@ class RootDeveloperService:
                 "bytes": result.bytes_uploaded,
                 "commit": result.commit,
                 "message": result.message,
+                "metadata": result.metadata,
             },
             "root.dev",
         )
         return result
 
-    def push_scenario(self, name: str, *, message: str | None = None) -> ArtifactPushResult:
+    def push_scenario(
+        self,
+        name: str,
+        *,
+        message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ArtifactPushResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(self.ctx.bus, "root.dev.scenario.push.start", {"name": name, "node_id": node_id}, "root.dev")
         try:
-            result = self._push_artifact("scenarios", name, message=message)
+            result = self._push_artifact("scenarios", name, message=message, metadata=metadata)
         except Exception:
             emit(
                 self.ctx.bus,
@@ -1236,6 +1325,7 @@ class RootDeveloperService:
                 "bytes": result.bytes_uploaded,
                 "commit": result.commit,
                 "message": result.message,
+                "metadata": result.metadata,
             },
             "root.dev",
         )
@@ -1261,6 +1351,9 @@ class RootDeveloperService:
                 "node_id": node_id,
                 "version": result.version,
                 "updated_at": result.updated_at,
+                "commit": result.commit,
+                "metadata": result.metadata,
+                "recovery": result.recovery,
             },
             "root.dev",
         )
@@ -1286,6 +1379,9 @@ class RootDeveloperService:
                 "node_id": node_id,
                 "version": result.version,
                 "updated_at": result.updated_at,
+                "commit": result.commit,
+                "metadata": result.metadata,
+                "recovery": result.recovery,
             },
             "root.dev",
         )
@@ -2234,6 +2330,7 @@ class RootDeveloperService:
         name: str,
         *,
         message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> ArtifactPushResult:
         cfg = self._load_config()
 
@@ -2288,6 +2385,7 @@ class RootDeveloperService:
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
         commit_message = _normalize_draft_commit_message(message)
+        commit_metadata = _normalize_draft_metadata(metadata)
         if kind == "skills":
             response = client.push_skill_draft(
                 name=name,
@@ -2297,6 +2395,7 @@ class RootDeveloperService:
                 cert=(cert_path, key_path),
                 sha256=digest,
                 message=commit_message,
+                metadata=commit_metadata,
             )
         else:
             response = client.push_scenario_draft(
@@ -2307,6 +2406,7 @@ class RootDeveloperService:
                 cert=(cert_path, key_path),
                 sha256=digest,
                 message=commit_message,
+                metadata=commit_metadata,
             )
         stored = response.get("stored_path")
         if not isinstance(stored, str) or not stored:
@@ -2321,39 +2421,91 @@ class RootDeveloperService:
             updated_at=(manifest_meta or {}).get("updated_at"),
             commit=str(response.get("commit") or "").strip() or None,
             message=commit_message,
+            metadata=_normalize_draft_metadata(
+                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else commit_metadata
+            ),
         )
 
     def _update_artifact(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"], name: str) -> ArtifactUpdateResult:
         assert_safe_name(name)
-        forge_repo = getattr(cfg.dev_settings, "forge_repo", None)
-        forge_path = getattr(cfg.dev_settings, "forge_path", None)
-        print("forge_repo, forge_path_log", forge_repo, forge_path)
-        if not forge_repo or not forge_path:
-            raise RootServiceError("Forge repository is not configured; re-run 'adaos dev root init' with a Root that provides forge repo info")
-
-        repo_dir = Path(self.ctx.paths.dev_dir()) / ".forge"
-        repo_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            self.ctx.git.ensure_repo(str(repo_dir), forge_repo)
-            self.ctx.git.pull(str(repo_dir))
-        except Exception as exc:  # pragma: no cover - git failures depend on environment
-            raise RootServiceError(f"Failed to update forge repository at {repo_dir}: {exc}") from exc
-
         node_id = cfg.node_settings.id or cfg.node_id
-        relative = Path(forge_path) / "nodes" / node_id / kind / name
-        source = repo_dir / relative
-        if not source.exists():
-            raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found in forge repository (expected at {relative})")
-
         owner = cfg.owner_id or "pending_owner"
         workspace = self._prepare_workspace(cfg, owner=owner)
         target = workspace / kind / name
+        source = Path(kind) / name
+        commit_info: dict[str, Any] = {}
+        archive_error: Exception | None = None
+        downloaded = False
 
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(source, target)
+        try:
+            cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
+            response = self._client(cfg).get_draft_archive(
+                kind=kind,
+                name=name,
+                node_id=node_id,
+                verify=verify,
+                cert=(cert_path, key_path),
+            )
+            archive_b64 = str(response.get("archive_b64") or "").strip()
+            if not archive_b64:
+                raise RootServiceError("Root draft archive response is missing archive_b64")
+            archive_bytes = base64.b64decode(archive_b64, validate=True)
+            expected_digest = str(response.get("sha256") or "").strip().lower()
+            actual_digest = hashlib.sha256(archive_bytes).hexdigest()
+            if expected_digest and expected_digest != actual_digest:
+                raise RootServiceError("Root draft archive SHA256 mismatch")
+            _extract_zip_bytes(archive_bytes, target)
+            source = Path(str(response.get("stored_path") or f"{kind}/{name}"))
+            response_metadata = response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            commit_info = {
+                "commit": str(response.get("commit") or "").strip(),
+                "message": str(response.get("message") or "").strip(),
+                "metadata": _normalize_draft_metadata(response_metadata),
+            }
+            downloaded = True
+        except Exception as exc:
+            archive_error = exc
+            _log.info("Root draft archive update unavailable kind=%s name=%s; trying Forge checkout: %s", kind, name, exc)
 
+        forge_repo = getattr(cfg.dev_settings, "forge_repo", None)
+        forge_path = getattr(cfg.dev_settings, "forge_path", None)
+        if not downloaded:
+            if not forge_repo or not forge_path:
+                raise RootServiceError(
+                    "Root draft archive update failed and Forge checkout is not configured: "
+                    f"{type(archive_error).__name__}: {archive_error}"
+                ) from archive_error
+            repo_dir = Path(self.ctx.paths.dev_dir()) / ".forge"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                self.ctx.git.ensure_repo(str(repo_dir), forge_repo)
+                self.ctx.git.pull(str(repo_dir))
+            except Exception as exc:  # pragma: no cover - git failures depend on environment
+                raise RootServiceError(f"Failed to update forge repository at {repo_dir}: {exc}") from exc
+            relative = Path(forge_path) / "nodes" / node_id / kind / name
+            checkout_source = repo_dir / relative
+            if not checkout_source.exists():
+                raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found in forge repository (expected at {relative})")
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(checkout_source, target)
+            source = checkout_source
+            try:
+                commit_info = dict(self.ctx.git.latest_commit_for_path(str(repo_dir), relative.as_posix()) or {})
+            except Exception:
+                _log.debug("failed to read Forge commit metadata for %s", relative, exc_info=True)
+        commit_message = str(commit_info.get("message") or "").strip()
+        commit_metadata = _normalize_draft_metadata(
+            commit_info.get("metadata") if isinstance(commit_info.get("metadata"), Mapping) else None
+        ) or _parse_draft_commit_metadata(commit_message)
+        recovery = self._reconcile_builder_change_from_forge(
+            kind=kind,
+            name=name,
+            target=target,
+            commit=str(commit_info.get("commit") or "").strip() or None,
+            message=commit_message or None,
+            metadata=commit_metadata,
+        )
         manifest_name, version, updated_at = self._artifact_manifest_info(target, kind)
         return ArtifactUpdateResult(
             kind=kind.rstrip("s"),
@@ -2362,7 +2514,168 @@ class RootDeveloperService:
             target_path=target,
             version=version,
             updated_at=updated_at,
+            commit=str(commit_info.get("commit") or "").strip() or None,
+            message=commit_message or None,
+            metadata=commit_metadata or None,
+            recovery=recovery,
         )
+
+    def _reconcile_builder_change_from_forge(
+        self,
+        *,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        target: Path,
+        commit: str | None,
+        message: str | None,
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        change_id = str(metadata.get("change_id") or "").strip()
+        conversation_id = str(metadata.get("conversation_id") or "").strip()
+        topic_id = str(metadata.get("topic_id") or metadata.get("thread_id") or "").strip()
+        thread_id = str(metadata.get("thread_id") or topic_id).strip()
+        if not change_id or not conversation_id:
+            return None
+        from adaos.services import conversation_store
+
+        existing_conversation = conversation_store.get_conversation(conversation_id)
+        if not existing_conversation:
+            conversation_store.upsert_conversation(
+                conversation_id=conversation_id,
+                webspace_id="global",
+                owner="skill:builder_skill",
+                kind="builder",
+                title="Builder",
+                meta={"surface": "builder", "scope": "global", "recovered_from_forge": True},
+            )
+        if thread_id:
+            conversation_store.start_thread(
+                conversation_id=conversation_id,
+                thread_id=thread_id,
+                title=f"Builder: {name}",
+                created_by={"type": "core", "id": "forge_recovery"},
+                meta={"topic_id": topic_id or thread_id, "artifact_kind": kind.rstrip("s"), "artifact_id": name},
+            )
+        revision = str(metadata.get("revision") or "").strip()
+        source_message_ids = [
+            str(item).strip()
+            for item in metadata.get("source_message_ids", [])
+            if str(item).strip()
+        ] if isinstance(metadata.get("source_message_ids"), list) else []
+        artifact_ref = {"kind": kind.rstrip("s"), "id": name, "path": str(target)}
+        revision_refs = [{"revision": revision, "path": f"ui_revisions/{revision}.json"}] if revision else []
+        commit_refs = [{"commit": commit, "message": str(message or "").splitlines()[0]}] if commit else []
+        existing_change = conversation_store.get_development_change(change_id) or {}
+        existing_change_meta = existing_change.get("meta") if isinstance(existing_change.get("meta"), Mapping) else {}
+        reconciled_status = "recovered" if existing_change_meta.get("synthetic_chat") else "pushed"
+        change = conversation_store.upsert_development_change(
+            change_id=change_id,
+            conversation_id=conversation_id,
+            thread_id=thread_id or None,
+            topic_id=topic_id or None,
+            status=reconciled_status,
+            source_message_ids=source_message_ids,
+            source_refs={"request_id": metadata.get("request_id")},
+            artifact_refs=[artifact_ref],
+            revision_refs=revision_refs,
+            commit_refs=commit_refs,
+            result_message_id=str(metadata.get("result_message_id") or "").strip() or None,
+            request_id=str(metadata.get("request_id") or "").strip() or None,
+            model=str(metadata.get("model") or "").strip() or None,
+            summary=str(message or "").splitlines()[0][:240],
+            meta={"reconciled_from_forge": True},
+        )
+        projection = conversation_store.list_projection(
+            conversation_id,
+            thread_id=thread_id or None,
+            limit=1,
+            max_items=1,
+        )
+        if int(projection.get("total_message_count") or 0) > 0:
+            return {"registered": True, "messages_recovered": 0, "change": change}
+
+        revision_payload: dict[str, Any] = {}
+        revision_path = target / "ui_revisions" / f"{revision}.json" if revision else None
+        if revision_path is not None and revision_path.is_file():
+            try:
+                raw = json.loads(revision_path.read_text(encoding="utf-8-sig") or "{}")
+                revision_payload = dict(raw) if isinstance(raw, Mapping) else {}
+            except Exception:
+                _log.debug("failed to read recovered Builder revision %s", revision_path, exc_info=True)
+        request_payload = revision_payload.get("request") if isinstance(revision_payload.get("request"), Mapping) else {}
+        llm_payload = revision_payload.get("llm") if isinstance(revision_payload.get("llm"), Mapping) else {}
+        request_text = str(request_payload.get("text") or "").strip()
+        result_text = str(llm_payload.get("comment") or "").strip() or str(message or "").splitlines()[0].strip()
+        recovered_ids: list[str] = []
+        recovered_request_id: str | None = None
+        base_id = hashlib.sha256(f"{change_id}:{commit or ''}".encode("utf-8")).hexdigest()[:20]
+        common_meta = {
+            "source": "forge_recovery",
+            "recovered": True,
+            "change_id": change_id,
+            "topic_id": topic_id or thread_id,
+            "artifact_kind": kind.rstrip("s"),
+            "artifact_id": name,
+            "revision": revision or None,
+            "commit": commit,
+        }
+        if request_text:
+            recovered = conversation_store.append_message(
+                conversation_id=conversation_id,
+                thread_id=thread_id or None,
+                webspace_id="recovery",
+                channel_id="builder",
+                owner="skill:builder_skill",
+                role="user",
+                text=request_text,
+                payload={"id": f"m.recovery.{base_id}.request", "from": "recovery"},
+                meta=common_meta,
+                actor_id="forge_recovery",
+                actor_label="Recovered request",
+                idempotency_key=f"forge-recovery:{change_id}:request",
+            )
+            if recovered:
+                recovered_request_id = str(recovered.get("id") or "") or None
+                if recovered_request_id:
+                    recovered_ids.append(recovered_request_id)
+        if result_text:
+            recovered = conversation_store.append_message(
+                conversation_id=conversation_id,
+                thread_id=thread_id or None,
+                webspace_id="recovery",
+                channel_id="builder",
+                owner="skill:builder_skill",
+                role="assistant",
+                text=result_text,
+                payload={"id": f"m.recovery.{base_id}.result", "from": "hub"},
+                meta=common_meta,
+                actor_id="agent:builder_skill:builder",
+                actor_label="Builder (recovered)",
+                idempotency_key=f"forge-recovery:{change_id}:result",
+            )
+            if recovered:
+                recovered_ids.append(str(recovered.get("id") or ""))
+        if recovered_ids:
+            final_change = conversation_store.upsert_development_change(
+                change_id=change_id,
+                conversation_id=conversation_id,
+                thread_id=thread_id or None,
+                topic_id=topic_id or None,
+                status="recovered",
+                source_message_ids=list(
+                    dict.fromkeys([*source_message_ids, *([recovered_request_id] if recovered_request_id else [])])
+                ),
+                artifact_refs=[artifact_ref],
+                revision_refs=revision_refs,
+                commit_refs=commit_refs,
+                result_message_id=recovered_ids[-1],
+                request_id=str(metadata.get("request_id") or "").strip() or None,
+                model=str(metadata.get("model") or "").strip() or None,
+                summary=str(message or "").splitlines()[0][:240],
+                meta={"reconciled_from_forge": True, "synthetic_chat": True},
+            )
+            change = final_change or change
+        return {"registered": True, "messages_recovered": len(recovered_ids), "change": change}
 
     def _publish_artifact(
         self,

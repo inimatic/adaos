@@ -436,6 +436,7 @@ class RootHttpClient:
         archive_b64: str,
         node_id: str | None,
         message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
         verify: str | bool | ssl.SSLContext = None,
         cert: tuple[str, str] | None = None,
         sha256: str | None = None,
@@ -447,6 +448,8 @@ class RootHttpClient:
             payload["sha256"] = sha256
         if message:
             payload["message"] = message
+        if metadata:
+            payload["metadata"] = dict(metadata)
         return dict(
             self._request("POST", "/v1/skills/draft", json=payload, verify=(self.verify if verify is None else verify), cert=(self.cert if cert is None else cert), timeout=120.0)
         )
@@ -796,6 +799,7 @@ class RootHttpClient:
         archive_b64: str,
         node_id: str | None,
         message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
         verify: str | bool | ssl.SSLContext = None,
         cert: tuple[str, str] | None = None,
         sha256: str | None = None,
@@ -807,6 +811,8 @@ class RootHttpClient:
             payload["sha256"] = sha256
         if message:
             payload["message"] = message
+        if metadata:
+            payload["metadata"] = dict(metadata)
         return dict(
             self._request(
                 "POST", "/v1/scenarios/draft", json=payload, verify=(self.verify if verify is None else verify), cert=(self.cert if cert is None else cert), timeout=120.0
