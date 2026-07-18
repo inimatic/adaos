@@ -173,6 +173,22 @@ def describe(kind: str, project_id: str) -> dict[str, Any]:
     }
 
 
+def find_scenario_root(project_id: str) -> Path | None:
+    """Find a scenario in the active DEV snapshot or another local snapshot."""
+
+    normalized_id = _project_id(project_id)
+    direct = _root("scenario", normalized_id, required=False)
+    if direct.is_dir():
+        return direct
+    _skills, scenarios = _roots()
+    dev_root = scenarios.parent.parent
+    for candidate in sorted(dev_root.glob(f"*/scenarios/{normalized_id}")):
+        resolved = candidate.resolve()
+        if resolved.is_dir():
+            return resolved
+    return None
+
+
 def _file(root: Path, relative_path: str) -> tuple[str, Path]:
     raw = str(relative_path or "").strip().replace("\\", "/")
     if not raw:
@@ -373,6 +389,7 @@ __all__ = [
     "create",
     "delete",
     "describe",
+    "find_scenario_root",
     "list_files",
     "list_projects",
     "list_templates",

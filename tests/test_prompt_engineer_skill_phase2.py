@@ -36,7 +36,7 @@ def test_prompt_create_dev_project_accepts_project_alias_payload(monkeypatch) ->
 
     monkeypatch.setattr(module, "RootDeveloperService", lambda: _Svc())
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(module, "bus_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "publish_event", lambda *args, **kwargs: None)
 
     result = module.prompt_create_dev_project(
         {
@@ -64,7 +64,7 @@ def test_prompt_create_dev_project_creates_skill(monkeypatch) -> None:
 
     monkeypatch.setattr(module, "RootDeveloperService", lambda: _Svc())
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(module, "bus_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "publish_event", lambda *args, **kwargs: None)
 
     result = module.prompt_create_dev_project(
         {
@@ -90,7 +90,7 @@ def test_prompt_create_dev_project_normalizes_selector_like_template_payload(mon
 
     monkeypatch.setattr(module, "RootDeveloperService", lambda: _Svc())
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(module, "bus_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "publish_event", lambda *args, **kwargs: None)
 
     result = module.prompt_create_dev_project(
         {
@@ -169,7 +169,7 @@ def test_prompt_llm_profile_options_and_selection(monkeypatch, tmp_path: Path) -
             return scenarios_root
 
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths(), bus=object()))
-    monkeypatch.setattr(module, "bus_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "publish_event", lambda *args, **kwargs: None)
 
     import adaos.sdk.llm.llm_client as llm_client
 
@@ -328,7 +328,11 @@ def test_prompt_save_project_file_updates_base_tz_state(monkeypatch, tmp_path: P
             return scenarios_root
 
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths(), bus=object()))
-    monkeypatch.setattr(module, "bus_emit", lambda bus, topic, payload, source: emitted.append((topic, payload, source)))
+    monkeypatch.setattr(
+        module,
+        "publish_event",
+        lambda topic, payload, **meta: emitted.append((topic, payload, str(meta.get("source") or ""))),
+    )
 
     result = module.prompt_save_project_file(
         {
@@ -351,22 +355,28 @@ def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
     emitted: list[tuple[str, dict, str]] = []
     bindings: list[dict[str, object]] = []
 
-    class _Workbench:
-        def set_active_draft(self, **kwargs):
-            bindings.append(dict(kwargs))
-            return {"ok": True}
-
-        def publish_projection_sync(self, *_args, **_kwargs):
-            return {"ok": True}
-
-    builder_pkg = types.ModuleType("adaos.services.builder")
-    workbench_module = types.ModuleType("adaos.services.builder.workbench")
-    workbench_module.BuilderWorkbenchService = lambda: _Workbench()
-    monkeypatch.setitem(sys.modules, "adaos.services.builder", builder_pkg)
-    monkeypatch.setitem(sys.modules, "adaos.services.builder.workbench", workbench_module)
-
     monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(module, "bus_emit", lambda bus, topic, payload, source: emitted.append((topic, payload, source)))
+    monkeypatch.setattr(
+        module,
+        "publish_event",
+        lambda topic, payload, **meta: emitted.append((topic, payload, str(meta.get("source") or ""))),
+    )
+
+    def _select_project(object_type, object_id, **kwargs):
+        bindings.append({"object_type": object_type, "object_id": object_id, **kwargs})
+        emitted.append(
+            (
+                "builder.preview.selected",
+                {
+                    "scenario_id": object_id,
+                    "source_webspace_id": kwargs["source_webspace_id"],
+                },
+                "sdk.builder.preview",
+            )
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(module.builder_preview, "select_project", _select_project)
 
     result = module.prompt_select_project(
         {
@@ -386,9 +396,11 @@ def test_prompt_select_project_emits_builder_preview(monkeypatch) -> None:
     assert emitted[1][1]["source_webspace_id"] == "desktop"
     assert bindings == [
         {
+            "object_type": "scenario",
+            "object_id": "demo_scenario",
             "source_webspace_id": "desktop",
-            "active_draft_id": None,
-            "runtime_scenario_id": "demo_scenario",
-            "persist_projection": True,
+            "ensure_ready": True,
+            "wait_for_rebuild": False,
+            "publish_event": True,
         }
     ]

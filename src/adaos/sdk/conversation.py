@@ -300,8 +300,17 @@ def list_development_changes(
     )
 
 
+def classify_action_risk(action: Mapping[str, Any] | str | None) -> dict[str, Any]:
+    """Classify one proposed action through the conversation safety policy."""
+
+    from adaos.services.conversation_safety import classify_action_risk as _classify
+
+    return dict(_classify(action) or {})
+
+
 __all__ = [
     "append",
+    "classify_action_risk",
     "context",
     "current",
     "delete",
