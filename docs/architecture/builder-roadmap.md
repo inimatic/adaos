@@ -12,6 +12,8 @@ cross-cutting source of truth for Builder readiness.
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
+- [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
+  dependency direction and tracks the functional replacement-control slice.
 - Checked items mean an implementation slice exists, not necessarily full
   product maturity.
 - Every checklist item carries a four-level MoSCoW-style priority label.
@@ -54,7 +56,7 @@ gate easy to read by priority.
 | 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, NLU Teacher candidate-confirmation, and initial service-supervisor runtime recovery slices exist; Builder/pairing/broader runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
-| 8. Product Experience | Partial: addressed Builder entrypoint, dedicated Builder conversation, paired Prompt IDE dev webspace, first phrase-level build flow, thread-aware embedded chat, and non-specialist draft summary exist; Prompt IDE as full Builder Workbench remains open. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
+| 8. Product Experience | Partial: the dedicated SDK-backed Builder scenario now provides live project, file, preview, change, dialog, automation-state, and release-dry-run surfaces; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Complete for the control slice: guided clarification and developer evidence views exist. | Open: catalog/scenario/skill history. | Open: autonomous reproduction and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
 
@@ -393,6 +395,21 @@ Primary references:
 
 Goal: a non-specialist can say what they want and safely become a creator.
 
+Current functional control milestone:
+
+- [x] `[must]` Run the dedicated `builder` scenario in DEV with explicit
+  `builder_skill` and `builder_sdk_control_skill` dependencies and no static
+  project/file/preview/lifecycle mocks.
+- [x] `[must]` Exercise live project browsing, bounded file save, Builder
+  Change evidence, synchronous preview materialization, Builder dialog,
+  automation state, and release dry-run through the runtime tool boundary.
+- [x] `[should]` Keep Builder control operations on the public `adaos.sdk`
+  plane and enforce the boundary with validation and tests.
+- [ ] `[deferred]` Recreate the control skill from an empty DEV project using
+  AdaOS autonomous programming and pass the same functional checks.
+- [ ] `[deferred]` Remove legacy Prompt IDE only after autonomous reproduction
+  and rollback procedures are proven.
+
 Open work:
 
 - [x] `[must]` Define the first user-facing Builder entrypoint: addressed
@@ -662,6 +679,8 @@ Open work:
 Builder is intentionally cross-cutting. Detailed work remains in:
 
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
+- [Builder SDK Boundary](builder-sdk-boundary.md): SDK ownership, functional
+  Builder control architecture, migration checklist, and local proof record
 - [Skill Factory and Isolated Dev Nodes](skill-factory.md): target remote
   realization layer for Root-managed dev queues, isolated dev nodes, forge
   task branches, task-scoped MCP, Codex execution packets, and User Hub
