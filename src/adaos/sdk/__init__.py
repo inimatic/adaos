@@ -4,11 +4,34 @@ from __future__ import annotations
 
 from importlib import import_module
 
-__all__ = ["chat", "control_plane", "conversation", "data", "manage", "memory", "status", "web", "validate_self"]
+__all__ = [
+    "builder",
+    "chat",
+    "control_plane",
+    "conversation",
+    "data",
+    "developer",
+    "manage",
+    "memory",
+    "status",
+    "web",
+    "validate_self",
+]
 
 
 def __getattr__(name: str):
-    if name in ("chat", "control_plane", "conversation", "data", "manage", "memory", "status", "web"):
+    if name in (
+        "builder",
+        "chat",
+        "control_plane",
+        "conversation",
+        "data",
+        "developer",
+        "manage",
+        "memory",
+        "status",
+        "web",
+    ):
         return import_module(f"{__name__}.{name}")
     if name == "validate_self":
         from .core.validation.skill import validate_self
