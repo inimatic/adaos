@@ -109,83 +109,50 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert result["trace_id"] == "trace-123"
 
 
-def test_builder_chat_routes_to_active_local_automation(monkeypatch) -> None:
+def test_builder_chat_is_dispatched_to_builder_skill_owner(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
-    class _Automation:
-        @classmethod
-        def from_context(cls):
-            return cls()
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
 
-        def find_active_session(self, *, webspace_id):
-            assert webspace_id == "prompt-dev"
-            return {"object_type": "scenario", "object_id": "recipes"}
+        def run_tool(self, skill_name, tool_name, payload, timeout=None):
+            calls.append(
+                {
+                    "skill": skill_name,
+                    "tool": tool_name,
+                    "payload": payload,
+                    "timeout": timeout,
+                }
+            )
+            return {"ok": True, "status": "automation_queued"}
 
-        def submit_turn(self, **kwargs):
-            calls.append(kwargs)
-            return {"ok": True, "handled": True, "status": "automation_queued"}
+    async def _allow_action(**_kwargs):
+        return None
 
-    import adaos.services.builder.automation as automation_module
-
-    monkeypatch.setattr(automation_module, "BuilderAutomationService", _Automation)
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _allow_action)
+    monkeypatch.setattr(tool_bridge_module, "_should_autosync_workspace_runtime", lambda **_kwargs: False)
 
     result = asyncio.run(
-        tool_bridge_module._route_builder_automation_chat(
-            tool_name="builder_skill:chat",
-            payload={"text": "Add a favorites filter"},
-            webspace_id="prompt-dev",
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="builder_skill:chat",
+                arguments={"text": "Add a favorites filter", "webspace_id": "prompt-dev"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
         )
     )
 
-    assert result["status"] == "automation_queued"
-    assert calls == [
-        {
-            "text": "Add a favorites filter",
-            "object_type": "scenario",
-            "object_id": "recipes",
-            "webspace_id": "prompt-dev",
-        }
-    ]
-
-
-def test_builder_chat_delegates_active_automation_to_runtime_skill(monkeypatch) -> None:
-    class _Automation:
-        @classmethod
-        def from_context(cls):
-            return cls()
-
-        def find_active_session(self, *, webspace_id):
-            assert webspace_id == "prompt-dev"
-            return {"object_type": "scenario", "object_id": "recipes"}
-
-    class _Manager:
-        def run_tool(self, skill, tool, payload):
-            assert (skill, tool) == ("builder_automation_skill", "chat")
-            assert payload["object_type"] == "scenario"
-            assert payload["object_id"] == "recipes"
-            assert payload["webspace_id"] == "prompt-dev"
-            return {
-                "ok": True,
-                "handled": True,
-                "status": "automation_queued",
-                "message": "Iteration queued.",
-            }
-
-    import adaos.services.builder.automation as automation_module
-
-    monkeypatch.setattr(automation_module, "BuilderAutomationService", _Automation)
-
-    result = asyncio.run(
-        tool_bridge_module._route_builder_automation_chat(
-            tool_name="builder_skill:chat",
-            payload={"text": "Add a favorites filter"},
-            webspace_id="prompt-dev",
-            manager=_Manager(),
-        )
-    )
-
-    assert result["status"] == "automation_queued"
-    assert result["message"] == "Iteration queued."
+    assert calls[0]["skill"] == "builder_skill"
+    assert calls[0]["tool"] == "chat"
+    assert calls[0]["payload"]["text"] == "Add a favorites filter"
+    assert result["result"]["status"] == "automation_queued"
 
 
 def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch) -> None:

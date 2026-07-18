@@ -1134,57 +1134,6 @@ class ToolCall(BaseModel):
     model_config = {"extra": "ignore"}
 
 
-async def _route_builder_automation_chat(
-    *,
-    tool_name: str,
-    payload: Mapping[str, Any],
-    webspace_id: str,
-    manager: Any | None = None,
-) -> dict[str, Any] | None:
-    if tool_name != "builder_skill:chat":
-        return None
-    text = str(payload.get("text") or payload.get("message") or "").strip()
-    if not text:
-        return None
-    from adaos.services.builder.automation import BuilderAutomationService
-
-    service = BuilderAutomationService.from_context()
-    session = service.find_active_session(webspace_id=webspace_id)
-    if not session:
-        return None
-    if manager is not None:
-        automation_payload = dict(payload)
-        automation_payload.update(
-            {
-                "text": text,
-                "object_type": str(session.get("object_type") or ""),
-                "object_id": str(session.get("object_id") or ""),
-                "webspace_id": webspace_id,
-            }
-        )
-        try:
-            return await anyio.to_thread.run_sync(
-                lambda: manager.run_tool(
-                    "builder_automation_skill",
-                    "chat",
-                    automation_payload,
-                )
-            )
-        except (FileNotFoundError, KeyError, RuntimeError):
-            _log.warning(
-                "builder automation skill unavailable; using compatibility route",
-                exc_info=True,
-            )
-    return await anyio.to_thread.run_sync(
-        lambda: service.submit_turn(
-            text=text,
-            object_type=str(session.get("object_type") or ""),
-            object_id=str(session.get("object_id") or ""),
-            webspace_id=webspace_id,
-        )
-    )
-
-
 @router.post("/tools/call", dependencies=[Depends(require_token)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     call_started_at = time.perf_counter()
@@ -1264,14 +1213,6 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         )
         proxied.setdefault("trace_id", trace)
         return proxied
-    automation_result = await _route_builder_automation_chat(
-        tool_name=body.tool,
-        payload=payload,
-        webspace_id=webspace_id,
-        manager=mgr,
-    )
-    if automation_result is not None:
-        return {"ok": True, "result": automation_result, "trace_id": trace}
     # Пробуем локально; если навык отсутствует на узле-хабе — проксируем на member
     try:
         started_at = time.perf_counter()
