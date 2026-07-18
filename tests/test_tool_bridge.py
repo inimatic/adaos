@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -222,6 +223,96 @@ def test_call_tool_blocks_high_risk_runtime_action_without_approval(monkeypatch)
     assert published[0]["kind"] == "runtime.action_approval"
     assert published[0]["allowed_actions"] == ["approve", "refuse", "postpone"]
     assert published[0]["domain_ref"]["tool"] == "files_skill:delete_file"
+
+
+def test_declared_local_write_does_not_treat_stored_url_as_network(tmp_path) -> None:
+    manifest_path = tmp_path / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps({"tools": {"add_recipe": {"side_effects": "local_write"}}}),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            return {"resolved_manifest": str(manifest_path)}
+
+    declared = tool_bridge_module._declared_tool_side_effects(
+        _Manager(),
+        skill_name="recipe_skill",
+        public_tool="add_recipe",
+        dev=True,
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="recipe_skill:add_recipe",
+        dev=True,
+        arguments={"image": "https://example.test/pudding.jpg", "title": "Pudding"},
+    )
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="recipe_skill",
+        public_tool="add_recipe",
+        payload=dict(body.arguments or {}),
+        forced_side_effect_class=declared,
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
+def test_webspace_runtime_resolution_uses_registered_kind(monkeypatch) -> None:
+    from adaos.services.workspaces import index as workspace_index
+
+    monkeypatch.setattr(
+        workspace_index,
+        "get_workspace",
+        lambda webspace_id: SimpleNamespace(is_dev=webspace_id == "dev2-dev"),
+    )
+
+    assert tool_bridge_module._webspace_uses_dev_runtime({"webspace_id": "dev2-dev"}) is True
+    assert tool_bridge_module._webspace_uses_dev_runtime({"webspace_id": "desktop"}) is False
+
+
+def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            raise RuntimeError("metadata is optional for this legacy test skill")
+
+        def run_dev_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout=None):
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+        def run_tool(self, *_args, **_kwargs):
+            raise AssertionError("registered DEV webspace must not use the installed runtime")
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda payload: True)
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="recipe_skill:list_recipes",
+                arguments={"webspace_id": "dev2-dev"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["recipe_skill:list_recipes"]
 
 
 @pytest.mark.parametrize(

@@ -162,6 +162,49 @@ def _looks_local_write_tool(tool_name: str, public_tool: str) -> bool:
     return full in _LOCAL_WRITE_TOOL_NAMES
 
 
+def _webspace_uses_dev_runtime(payload: Mapping[str, Any]) -> bool:
+    """Resolve DEV execution from authoritative webspace metadata."""
+    webspace_id = _resolve_tool_webspace_id(payload)
+    if not webspace_id:
+        return False
+    try:
+        from adaos.services.workspaces import index as workspace_index
+
+        manifest = workspace_index.get_workspace(webspace_id)
+        return bool(manifest and manifest.is_dev)
+    except Exception:
+        _log.debug("failed to resolve runtime space for webspace=%s", webspace_id, exc_info=True)
+        return False
+
+
+def _declared_tool_side_effects(
+    manager: Any,
+    *,
+    skill_name: str,
+    public_tool: str,
+    dev: bool,
+) -> str:
+    """Read trusted side-effect metadata from the active resolved manifest."""
+    try:
+        status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
+        manifest_path = Path(str(status.get("resolved_manifest") or ""))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tools = manifest.get("tools") if isinstance(manifest, dict) else {}
+        spec = tools.get(public_tool) if isinstance(tools, dict) else {}
+        if not isinstance(spec, dict):
+            return ""
+        governance = spec.get("yjs_governance") if isinstance(spec.get("yjs_governance"), dict) else {}
+        return str(
+            governance.get("side_effects")
+            or spec.get("side_effects")
+            or spec.get("sideEffects")
+            or spec.get("effects")
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+
+
 def _explicit_risk_class(payload: Dict[str, Any], context: Dict[str, Any] | None = None) -> str:
     meta = _mapping(payload.get("_meta"))
     ctx = _mapping(context)
@@ -193,7 +236,8 @@ def _runtime_action_risk(
     explicit = _explicit_risk_class(payload, body.context)
     tool_name = str(body.tool or "").strip()
     effective_target = str(target_node_id or _resolve_target_node_id(payload) or "").strip()
-    side_effect_class = forced_side_effect_class or explicit
+    trusted_side_effect_class = str(forced_side_effect_class or "").strip()
+    side_effect_class = trusted_side_effect_class or explicit
     include_node_targets = True
     readonly_tool = _is_readonly_snapshot_tool(tool_name) or _looks_readonly_tool(public_tool)
     local_write_tool = _looks_local_write_tool(tool_name, public_tool)
@@ -219,7 +263,17 @@ def _runtime_action_risk(
         include_node_targets = False
     normalized_side_effect = str(side_effect_class or "").strip().lower().replace("-", "_")
     ignore_freeform = normalized_side_effect in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}
-    if normalized_side_effect in {"safe", "read_only", "readonly"}:
+    if trusted_side_effect_class and normalized_side_effect in {
+        "safe",
+        "none",
+        "read",
+        "read_only",
+        "readonly",
+        "local_write",
+        "ui_navigation",
+    }:
+        action = {"side_effect_class": side_effect_class}
+    elif normalized_side_effect in {"safe", "read_only", "readonly"}:
         action = {"side_effect_class": "safe"}
     elif local_write_tool and normalized_side_effect == "local_write":
         action = {"side_effect_class": "local_write"}
@@ -1145,6 +1199,10 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         raise HTTPException(status_code=400, detail="invalid tool spec")
 
     # Используем общий путь исполнения как в CLI (SkillManager.run_tool)
+    payload: Dict[str, Any] = dict(body.arguments or {})
+    if not body.dev and _webspace_uses_dev_runtime(payload):
+        body = body.model_copy(update={"dev": True})
+
     mgr = SkillManager(
         repo=ctx.skills_repo,
         registry=SqliteSkillRegistry(ctx.sql),
@@ -1157,7 +1215,6 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
 
     trace = attach_http_trace_headers(request.headers, response.headers)
     setup_done_at = time.perf_counter()
-    payload: Dict[str, Any] = dict(body.arguments or {})
     meta = _mapping(payload.get("_meta"))
     context = _mapping(body.context)
     action_source = _first_text(meta.get("action_source"), context.get("action_source"))
@@ -1179,6 +1236,16 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         payload=payload,
         target_node_id=target_node_id,
         local_node_id=local_node_id,
+        forced_side_effect_class=(
+            ""
+            if _looks_readonly_tool(public_tool)
+            else _declared_tool_side_effects(
+                mgr,
+                skill_name=skill_name,
+                public_tool=public_tool,
+                dev=bool(body.dev),
+            )
+        ),
         ctx=ctx,
     )
     gate_done_at = time.perf_counter()
