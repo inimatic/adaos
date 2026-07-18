@@ -306,12 +306,20 @@ def _normalize_kind(value: Any) -> Optional[str]:
     return None
 
 
+def _is_dev_workspace_id(value: Any) -> bool:
+    token = str(value or "").strip().lower()
+    default_dev_id = str(dev_webspace_id() or "").strip().lower()
+    return bool(token and (token == default_dev_id or token.endswith("-dev")))
+
+
 def _infer_kind(workspace_id: str, display_name: Optional[str], kind: Optional[str]) -> str:
+    # The paired dev webspace contract reserves the -dev suffix. Repair stale
+    # rows before honoring their explicitly persisted workspace classification.
+    if _is_dev_workspace_id(workspace_id):
+        return KIND_DEV
     explicit = _normalize_kind(kind)
     if explicit:
         return explicit
-    if str(workspace_id or "").strip() == dev_webspace_id():
-        return KIND_DEV
     if _is_dev_display_name(display_name):
         return KIND_DEV
     return KIND_WORKSPACE
@@ -325,10 +333,12 @@ def _normalize_source_mode(value: Any) -> Optional[str]:
 
 
 def _infer_source_mode(source_mode: Optional[str], *, kind: str) -> str:
+    if kind == KIND_DEV:
+        return SOURCE_MODE_DEV
     explicit = _normalize_source_mode(source_mode)
     if explicit:
         return explicit
-    return SOURCE_MODE_DEV if kind == KIND_DEV else SOURCE_MODE_WORKSPACE
+    return SOURCE_MODE_WORKSPACE
 
 
 def _default_display_name(workspace_id: str, *, kind: str) -> str:

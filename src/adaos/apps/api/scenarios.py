@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+from pathlib import Path
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -16,6 +17,8 @@ from adaos.services.scenario.manager import (
     dependency_failure_message,
 )
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+from adaos.services.scenarios import loader as scenarios_loader
+from adaos.services.workspaces import index as workspace_index
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.operations import submit_install_operation, submit_update_operation
 from adaos.services.yjs.webspace import default_webspace_id
@@ -86,6 +89,67 @@ def _node_label_from_directory(node: Dict[str, Any]) -> str:
     return str(node_display_from_directory_node(node).get("node_label") or "").strip() or str(node.get("node_id") or "").strip() or "hub"
 
 
+def _webspace_uses_dev_scenarios(webspace_id: str | None) -> bool:
+    token = str(webspace_id or "").strip()
+    if not token:
+        return False
+    try:
+        row = workspace_index.get_workspace(token)
+    except Exception:
+        return False
+    return bool(
+        row
+        and (
+            bool(getattr(row, "is_dev", False))
+            or str(getattr(row, "effective_source_mode", "") or "").strip().lower() == "dev"
+        )
+    )
+
+
+def _local_dev_scenario_items(
+    ctx: AgentContext,
+    *,
+    node_id: str,
+    node_display: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    try:
+        root = Path(ctx.paths.dev_scenarios_dir())
+        entries = sorted((entry for entry in root.iterdir() if entry.is_dir()), key=lambda entry: entry.name.lower())
+    except Exception:
+        return []
+
+    items: list[Dict[str, Any]] = []
+    for entry in entries:
+        manifest = scenarios_loader.read_manifest(entry.name, space="dev")
+        if not manifest and not (entry / "scenario.json").is_file():
+            continue
+        scenario_id = str(manifest.get("id") or manifest.get("name") or entry.name).strip()
+        if not scenario_id:
+            continue
+        raw_title = manifest.get("title") or manifest.get("display_name") or scenario_id
+        title = str(raw_title).strip() if isinstance(raw_title, str) else scenario_id
+        items.append(
+            {
+                "id": scenario_id,
+                "name": scenario_id,
+                "title": title or scenario_id,
+                "version": str(manifest.get("version") or "").strip() or None,
+                "updated_at": str(manifest.get("updated_at") or "").strip() or None,
+                "path": str(entry),
+                "node_id": node_id,
+                "node_label": str(node_display.get("node_label") or _local_node_label()),
+                "node_compact_label": node_display.get("node_compact_label"),
+                "node_index": node_display.get("node_index"),
+                "node_color": node_display.get("node_color"),
+                "source": "local_dev",
+                "source_mode": "dev",
+                "space": "dev",
+                "dev": True,
+            }
+        )
+    return items
+
+
 # --- API (тонкий фасад CLI) --------------------------------------------------
 class InstallReq(BaseModel):
     name: str
@@ -111,10 +175,16 @@ class UninstallReq(BaseModel):
 
 
 @router.get("/list")
-async def list_scenarios(fs: bool = False, mgr: ScenarioManager = Depends(_get_manager)):
+async def list_scenarios(
+    fs: bool = False,
+    webspace_id: str | None = None,
+    mgr: ScenarioManager = Depends(_get_manager),
+    ctx: AgentContext = Depends(get_ctx),
+):
     rows = mgr.list_installed()
     items: list[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+    positions: dict[tuple[str, str], int] = {}
     local_node_id = _local_node_id()
     local_node_display = node_display_from_config(load_config())
     for row in rows or []:
@@ -134,7 +204,18 @@ async def list_scenarios(fs: bool = False, mgr: ScenarioManager = Depends(_get_m
         item["node_index"] = local_node_display.get("node_index")
         item["node_color"] = local_node_display.get("node_color")
         item["source"] = "local_installed"
+        positions[key] = len(items)
         items.append(item)
+    if _webspace_uses_dev_scenarios(webspace_id):
+        for item in _local_dev_scenario_items(ctx, node_id=local_node_id, node_display=local_node_display):
+            scenario_id = str(item.get("id") or "").strip()
+            key = (local_node_id, scenario_id)
+            if key in positions:
+                items[positions[key]] = item
+                continue
+            seen.add(key)
+            positions[key] = len(items)
+            items.append(item)
     try:
         conf = load_config()
         if str(getattr(conf, "role", "") or "").strip().lower() == "hub":
@@ -156,6 +237,7 @@ async def list_scenarios(fs: bool = False, mgr: ScenarioManager = Depends(_get_m
                     if key in seen:
                         continue
                     seen.add(key)
+                    positions[key] = len(items)
                     items.append({
                         **scenario,
                         "id": scenario_id,
@@ -172,7 +254,11 @@ async def list_scenarios(fs: bool = False, mgr: ScenarioManager = Depends(_get_m
     result: Dict[str, Any] = {"items": items}
     if fs:
         present = {_meta_id(m) for m in mgr.list_present()}
-        desired = {(i.get("name") or i.get("id") or i.get("repr")) for i in items}
+        desired = {
+            (i.get("name") or i.get("id") or i.get("repr"))
+            for i in items
+            if i.get("source") != "local_dev"
+        }
         missing = sorted(desired - present)
         extra = sorted(present - desired)
         result["fs"] = {

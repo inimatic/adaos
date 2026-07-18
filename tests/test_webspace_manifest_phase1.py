@@ -495,6 +495,46 @@ def test_get_workspace_backfills_legacy_manifest_defaults() -> None:
     assert stored == ("dev", "dev")
 
 
+def test_get_workspace_repairs_dev_suffix_manifest_classification() -> None:
+    webspace_id = "source-dev"
+    ctx = get_ctx()
+
+    with ctx.sql.connect() as con:
+        workspace_index_module._ensure_schema(con)
+        con.execute("DELETE FROM y_workspaces WHERE workspace_id=?", (webspace_id,))
+        con.execute(
+            """
+            INSERT INTO y_workspaces(
+                workspace_id, path, created_at, display_name, kind, source_mode
+            ) VALUES(?,?,?,?,?,?)
+            """,
+            (
+                webspace_id,
+                "state/ystores/source-dev.sqlite3",
+                123456,
+                "Source development",
+                "workspace",
+                "workspace",
+            ),
+        )
+        con.commit()
+
+    row = get_workspace(webspace_id)
+
+    assert row is not None
+    assert row.kind == "dev"
+    assert row.source_mode == "dev"
+    assert row.is_dev is True
+
+    with ctx.sql.connect() as con:
+        stored = con.execute(
+            "SELECT kind, source_mode FROM y_workspaces WHERE workspace_id=?",
+            (webspace_id,),
+        ).fetchone()
+
+    assert stored == ("dev", "dev")
+
+
 def test_get_workspace_repairs_stale_ystore_path() -> None:
     webspace_id = "legacy-path-manifest"
     ctx = get_ctx()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from dataclasses import dataclass
@@ -325,6 +326,46 @@ def test_scenario_api_matches_service_surface() -> None:
     assert resp.json()["revision"] == "cafebabe"
 
     assert any(call.startswith("push:") for call in scenario_mgr.calls)
+
+
+def test_scenario_list_includes_dev_artifacts_only_for_dev_webspace(monkeypatch, tmp_path) -> None:
+    dev_root = tmp_path / "dev" / "scenarios"
+    (dev_root / "dev_recipe").mkdir(parents=True)
+    (dev_root / "dev_recipe" / "scenario.json").write_text('{"id":"dev_recipe"}', encoding="utf-8")
+    ctx = SimpleNamespace(paths=SimpleNamespace(dev_scenarios_dir=lambda: dev_root))
+    mgr = _FakeScenarioManager()
+
+    monkeypatch.setattr(
+        scenarios.workspace_index,
+        "get_workspace",
+        lambda webspace_id: SimpleNamespace(
+            is_dev=webspace_id == "desktop-dev",
+            effective_source_mode="dev" if webspace_id == "desktop-dev" else "workspace",
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios.scenarios_loader,
+        "read_manifest",
+        lambda scenario_id, **_kwargs: {
+            "id": scenario_id,
+            "title": "Dev Recipe",
+            "version": "0.1.0",
+        },
+    )
+    monkeypatch.setattr(scenarios, "load_config", lambda: SimpleNamespace(role="node", node_id="node-local"))
+    monkeypatch.setattr(
+        scenarios,
+        "node_display_from_config",
+        lambda _config: {"node_label": "Node", "node_compact_label": "N", "node_index": 1},
+    )
+
+    dev_result = asyncio.run(scenarios.list_scenarios(webspace_id="desktop-dev", mgr=mgr, ctx=ctx))
+    workspace_result = asyncio.run(scenarios.list_scenarios(webspace_id="desktop", mgr=mgr, ctx=ctx))
+
+    dev_item = next(item for item in dev_result["items"] if item["id"] == "dev_recipe")
+    assert dev_item["source"] == "local_dev"
+    assert dev_item["source_mode"] == "dev"
+    assert all(item["id"] != "dev_recipe" for item in workspace_result["items"])
 
 
 def test_scenario_api_blocks_failed_dependencies_before_projection() -> None:
