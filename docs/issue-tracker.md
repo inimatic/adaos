@@ -4190,6 +4190,9 @@ Actions:
   structural golden fixture.
 - [ ] `[should]` Move the remaining legacy Prompt IDE DEV file lifecycle onto
   `adaos.sdk.developer.projects` before legacy retirement.
+- [ ] `[should]` Repair Forge draft POST acknowledgement: the archive is stored
+  correctly, but nginx returns `504` and draft commit metadata remains stale;
+  use file-for-file archive read-back as the temporary publication gate.
 - [ ] `[deferred]` Recreate the control skill from an empty project through
   AdaOS autonomous programming and pass the same checks.
 - [ ] `[deferred]` Decompose large Builder and Prompt Engineer modules under a

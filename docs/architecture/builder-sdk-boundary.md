@@ -228,6 +228,9 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
   the same checks.
 - [x] `[should]` Add the control fixture to a repeatable local smoke command.
+- [ ] `[should]` Make Forge draft publication return the durable commit
+  acknowledgement instead of an nginx `504`; retain archive read-back parity
+  as the acceptance gate until that service fix lands.
 - [x] `[could]` Add a golden structural fixture that compares revision `030`
   with `029` and rejects layout, widget-type, area, and modal loss.
 
