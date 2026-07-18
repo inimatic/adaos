@@ -317,9 +317,14 @@ Builder scenario selected as its DEV runtime home.
 
 Activated migration versions for this pass are `builder_skill 0.2.113`,
 `builder_automation_skill 0.1.1`, `prompt_engineer_skill 0.6.8`, and
-`builder_sdk_control_skill 0.1.9`. The functional Builder scenario is on the
-`0.2.2` version. Runtime self-tests and live materialization use dedicated
+`builder_sdk_control_skill 0.1.10`. The functional Builder scenario is on the
+`0.2.3` version. Runtime self-tests and live materialization use dedicated
 webspaces and do not change the operator's Prompt IDE selection.
+
+Forge draft archives were read back after publication and match the local
+control-skill and scenario archives file-for-file (6/6 and 14/14 files). The
+draft POST currently finishes server-side but returns an nginx `504`; therefore
+read-back parity, rather than the POST status alone, is the publication gate.
 
 The next proof is intentionally outside this pass: recreate the control skill
 from an empty DEV project through AdaOS autonomous programming, run the same
