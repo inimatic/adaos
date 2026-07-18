@@ -122,6 +122,32 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert len(status["session"]["task_history"]) == 2
 
 
+def test_followup_turn_clears_stale_terminal_projection(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    previous = service.get_session("scenario", "recipes")
+    assert previous is not None
+    previous["completion_readiness"] = {"ok": True, "completed_at": "before"}
+    previous["completion_notified_task_id"] = previous["current_task_id"]
+    service._save_session(previous)
+
+    turn = service.submit_turn(
+        text="Add filtering by cooking time.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    assert turn["automation"]["summary"] is None
+    assert "completion_readiness" not in turn["session"]
+    assert turn["session"]["completion_history"][0]["completed_at"] == "before"
+
+
 def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
@@ -316,7 +342,9 @@ def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, m
 
     assert calls == ["checkpoint", "activate:recipes_skill", "ensure", "reload", "notify"]
     assert saved[-1]["completion_readiness"]["ok"] is True
+    assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
     assert saved[-1]["completion_readiness"]["vcs_checkpoints"][0]["commit"] == "forge-1"
+    assert saved[-1]["status"] == "completed"
 
 
 def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: Path, monkeypatch) -> None:

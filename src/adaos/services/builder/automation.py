@@ -264,6 +264,33 @@ class BuilderAutomationService:
             session.setdefault("turns", []).append(
                 {"iteration": session["iteration"], "text": instruction, "created_at": _now_iso()}
             )
+            previous_readiness = session.get("completion_readiness")
+            if isinstance(previous_readiness, Mapping):
+                history = [
+                    dict(item)
+                    for item in session.get("completion_history") or []
+                    if isinstance(item, Mapping)
+                ]
+                history.append(
+                    {
+                        "task_id": str(session.get("current_task_id") or "").strip() or None,
+                        "iteration": max(0, int(session.get("iteration") or 1) - 1),
+                        **dict(previous_readiness),
+                    }
+                )
+                session["completion_history"] = history[-20:]
+            for stale_key in (
+                "completion_readiness",
+                "completion_notified_task_id",
+                "completion_notified_at",
+                "finalizing_task_id",
+                "last_result",
+                "last_failure",
+                "local_run",
+                "progress",
+                "task",
+            ):
+                session.pop(stale_key, None)
             submitted = self._submit(session, iteration_instruction=instruction)
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
@@ -451,7 +478,13 @@ class BuilderAutomationService:
         task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), None)
         if not task:
             return current
-        current["status"] = task.get("status")
+        task_status = task.get("status")
+        current["status"] = (
+            "commit_ready"
+            if task_status == "completed"
+            and str(current.get("finalizing_task_id") or "").strip() == task_id
+            else task_status
+        )
         current["task"] = task
         current["updated_at"] = task.get("updated_at") or _now_iso()
         run_dir = Path(self.runs_root) / _safe_token(task_id)
@@ -563,17 +596,33 @@ class BuilderAutomationService:
                     message,
                 )
             worker_result = worker.run_once()
+            should_finalize = False
+            finalizing_projection: dict[str, Any] | None = None
             with _LOCK:
                 session = self._find_session_by_id(session_id)
                 if session:
                     session = self.refresh_session(session)
-            if (
-                session
-                and isinstance(worker_result, Mapping)
-                and worker_result.get("ok")
-                and session.get("status") == "completed"
-                and self.materialize_on_completion
-            ):
+                    should_finalize = bool(
+                        isinstance(worker_result, Mapping)
+                        and worker_result.get("ok")
+                        and session.get("status") == "completed"
+                        and self.materialize_on_completion
+                    )
+                    if should_finalize:
+                        session["status"] = "commit_ready"
+                        session["finalizing_task_id"] = str(session.get("current_task_id") or "").strip() or None
+                        session["progress"] = {
+                            "task_id": session.get("current_task_id"),
+                            "status": "commit_ready",
+                            "message": "Finalizing DEV activation and Forge checkpoints",
+                            "updated_at": _now_iso(),
+                        }
+                        session["updated_at"] = session["progress"]["updated_at"]
+                        self._save_session(session)
+                        finalizing_projection = self.project_session(session)
+            if should_finalize and session:
+                if self.event_sink and finalizing_projection:
+                    self.event_sink(finalizing_projection)
                 self._finalize_completed_session(session)
 
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
@@ -584,6 +633,8 @@ class BuilderAutomationService:
         webspace_id = str(session.get("webspace_id") or "desktop").strip() or "desktop"
         readiness: dict[str, Any] = {
             "ok": False,
+            "task_id": str(session.get("current_task_id") or "").strip() or None,
+            "iteration": int(session.get("iteration") or 0),
             "skill": None,
             "materialization": None,
             "vcs_checkpoints": [],
@@ -633,13 +684,17 @@ class BuilderAutomationService:
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
+            current["status"] = "completed"
+            current.pop("finalizing_task_id", None)
             current.pop("last_failure", None)
+            current["updated_at"] = readiness["completed_at"]
             self._save_session(current)
         except Exception as exc:
             readiness["error"] = f"{type(exc).__name__}: {exc}"
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
             current["status"] = "failed"
+            current.pop("finalizing_task_id", None)
             current["last_failure"] = {
                 "stage": "live_readiness",
                 "message": readiness["error"],
