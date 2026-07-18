@@ -17,9 +17,16 @@ for trusted operator development and debugging on the AdaOS host.
 4. Prompt IDE switches to the virtual `automation` workflow state.
 5. `LocalSkillFactoryWorker` polls the existing Skill Factory queue and runs
    Codex against a disposable git workspace.
-6. A validated result is committed on the task branch and synchronized to the
-   selected DEV scenario/skill roots.
-7. Later `builder_skill:chat` turns for the same Prompt IDE webspace are routed
+6. The worker removes generated service files, validates the result, commits it
+   on the task branch, and synchronizes it to the selected DEV scenario/skill
+   roots.
+7. The Builder automation orchestrator prepares and activates the companion
+   DEV skill, invalidates stale runtime/materialization state, and forcibly
+   rematerializes the paired dev webspace even when its scenario pointer did
+   not change.
+8. The orchestrator publishes the terminal success message only after the DEV
+   skill is active and the paired webspace reports a successful reload.
+9. Later `builder_skill:chat` turns for the same Prompt IDE webspace are routed
    to new local Codex iterations instead of the remote Builder LLM.
 
 The standard Execute call remains the boundary between prototype authoring and
@@ -47,6 +54,16 @@ docs/requirements/<scenario-id>/
 The companion skill starts from the current AdaOS skill template.  Template
 identity, conversation ownership, tools, tests, and prompt references are
 rewritten from `new_skill` to the generated skill id before Codex starts.
+
+The task also receives a read-only reference bundle for the exact runtime it is
+targeting: current skill/scenario schemas, accepted browser action types,
+expression roots, datasource contracts, and small known-good examples. The
+project envelope remains the only writable area. For the current browser ABI,
+this means generated UI must use runtime-supported operations such as
+`callSkill`, use supported expression roots such as `$state`, `$event`,
+`$client`, and `$data`, and must not invent transport fields such as an
+arbitrary action `resultPath`. The validator, not the prompt alone, enforces
+this ABI.
 
 ## Run artifacts
 
@@ -89,10 +106,48 @@ Before synchronization the worker enforces:
 - dependency-file changes are recorded for review;
 - bytecode and pytest caches are removed.
 
+Cleanup is an orchestrator/worker responsibility and runs before validation,
+diff calculation, and commit. Codex may explain unexpected generated files,
+but it is never asked to execute a recursive cleanup command. This makes the
+same behavior enforceable in a container and avoids coupling correctness to an
+LLM shell-policy decision.
+
+> Это хороший сигнал для будущего контейнерного worker: очистку служебных файлов должен выполнять сам orchestrator, а не LLM-команда.
+
 If deterministic validation fails, Codex receives one repair turn containing
 the exact errors.  The task is reported as failed only when the repair still
 does not pass.  Failed workspaces and sanitized diagnostics remain available;
 they are not copied into DEV.
+
+The instruction packet and every subsequent chat turn are UTF-8 artifacts with
+a recorded SHA-256 digest. The orchestrator must reject or retry a packet when
+decoding fails, the digest changes, or suspicious replacement-character/
+question-mark corruption is detected; silently running a damaged Russian turn
+is not acceptable.
+
+## Completion and live readiness
+
+A Codex commit is evidence of implementation, not the terminal state of the
+user workflow. After sync, the host orchestrator owns this sequence:
+
+```text
+cleanup generated files
+  -> validate and commit
+  -> sync package-owned artifacts to DEV
+  -> prepare companion skill version
+  -> activate DEV slot and reload handlers
+  -> invalidate skill resolver and webspace materialization caches
+  -> force paired-webspace rematerialization
+  -> run bounded runtime smoke probes
+  -> publish terminal Builder chat message
+```
+
+Package-owned files include `skill.yaml`, handlers, tests, scenario files, and
+`webui.json`. Prepared slots, active-version markers, handler reload state,
+cache invalidation, and webspace projections are orchestration-owned state and
+must not be encoded or repaired by the generated skill. A failure after sync is
+reported as a distinct `live_readiness` failure with evidence and can seed the
+next autonomous Codex iteration; it must not be presented as success.
 
 ## Local security profile
 

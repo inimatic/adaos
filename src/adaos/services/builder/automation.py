@@ -498,27 +498,116 @@ class BuilderAutomationService:
                 self._finalize_completed_session(session)
 
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
-        """Make a validated local result visible in the paired UI and chat."""
+        """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
+        current = dict(session)
         object_type = str(session.get("object_type") or "").strip()
         object_id = str(session.get("object_id") or "").strip()
         webspace_id = str(session.get("webspace_id") or "desktop").strip() or "desktop"
-        if object_type == "scenario" and object_id:
-            try:
-                from adaos.services.builder.workbench import BuilderWorkbenchService
+        readiness: dict[str, Any] = {
+            "ok": False,
+            "skill": None,
+            "materialization": None,
+            "completed_at": None,
+        }
+        try:
+            companion_skill_id = str(session.get("companion_skill_id") or "").strip()
+            if companion_skill_id:
+                readiness["skill"] = self._prepare_and_activate_dev_skill(
+                    companion_skill_id,
+                    webspace_id=webspace_id,
+                )
 
-                asyncio.run(
+            if object_type == "scenario" and object_id:
+                from adaos.services.builder.workbench import BuilderWorkbenchService
+                from adaos.services.builder.workbench import dev_webspace_id_for_source
+                from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario
+
+                binding = asyncio.run(
                     BuilderWorkbenchService(state_dir=self.state_dir).ensure_dev_webspace(
                         webspace_id,
                         runtime_scenario_id=object_id,
                         wait_for_rebuild=True,
                     )
                 )
-            except Exception:
-                # The durable completion remains valid; the user can retry the
-                # projection without rerunning Codex.
-                pass
+                dev_webspace_id = (
+                    str(binding.get("dev_webspace_id") or "").strip()
+                    or dev_webspace_id_for_source(webspace_id)
+                )
+                readiness["materialization"] = asyncio.run(
+                    reload_webspace_from_scenario(
+                        dev_webspace_id,
+                        scenario_id=object_id,
+                        action="reload",
+                        event_payload={
+                            "source": "builder.automation",
+                            "_meta": {"cmd_id": f"automation:{session.get('current_task_id') or object_id}"},
+                        },
+                    )
+                )
+                if not bool(readiness["materialization"].get("ok", True)):
+                    raise RuntimeError(
+                        str(readiness["materialization"].get("error") or "dev webspace reload failed")
+                    )
 
-        self._notify_completed_session(session)
+            readiness["ok"] = True
+            readiness["completed_at"] = _now_iso()
+            current["completion_readiness"] = readiness
+            current.pop("last_failure", None)
+            self._save_session(current)
+        except Exception as exc:
+            readiness["error"] = f"{type(exc).__name__}: {exc}"
+            readiness["completed_at"] = _now_iso()
+            current["completion_readiness"] = readiness
+            current["status"] = "failed"
+            current["last_failure"] = {
+                "stage": "live_readiness",
+                "message": readiness["error"],
+                "updated_at": readiness["completed_at"],
+            }
+            current["updated_at"] = readiness["completed_at"]
+            self._save_session(current)
+            if self.event_sink:
+                self.event_sink(self.project_session(current))
+            return
+
+        self._notify_completed_session(current)
+
+    def _prepare_and_activate_dev_skill(self, skill_id: str, *, webspace_id: str) -> dict[str, Any]:
+        """Run package-external DEV lifecycle steps owned by the orchestrator."""
+        from adaos.adapters.db import SqliteSkillRegistry
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.builder.workbench import dev_webspace_id_for_source
+        from adaos.services.skill.manager import SkillManager
+
+        ctx = get_ctx()
+        manager = SkillManager(
+            repo=ctx.skills_repo,
+            registry=SqliteSkillRegistry(ctx.sql),
+            git=ctx.git,
+            paths=ctx.paths,
+            bus=getattr(ctx, "bus", None),
+            caps=ctx.caps,
+            settings=ctx.settings,
+        )
+        prepared = manager.prepare_dev_runtime(skill_id, run_tests=False)
+        slot = manager.activate_for_space(
+            skill_id,
+            version=prepared.version,
+            slot=prepared.slot,
+            space="dev",
+            webspace_id=dev_webspace_id_for_source(webspace_id),
+            defer_webspace_rebuild=True,
+        )
+        status = manager.dev_runtime_status(skill_id)
+        if not bool(status.get("ready")) or not bool(status.get("active")):
+            raise RuntimeError(f"DEV skill {skill_id!r} did not become active")
+        return {
+            "ok": True,
+            "id": skill_id,
+            "version": prepared.version,
+            "slot": slot,
+            "resolved_manifest": str(prepared.resolved_manifest),
+        }
 
     def _notify_completed_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         """Publish one idempotent terminal Builder message for a local task."""

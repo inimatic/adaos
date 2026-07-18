@@ -193,3 +193,87 @@ def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, m
     assert "Локальный Codex завершил работу" in published[0]["response"]["message"]
     assert published[0]["thread_id"] == "prompt-project:scenario:recipes"
     assert second["completion_notified_task_id"] == "task.1"
+
+
+def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.materialize_on_completion = True
+    calls: list[str] = []
+    saved: list[dict] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, skill_id, **kwargs: calls.append(f"activate:{skill_id}")
+        or {"ok": True, "slot": "B"},
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
+            calls.append("ensure")
+            return {"dev_webspace_id": "desktop-dev"}
+
+    async def fake_reload(webspace_id, **kwargs):  # noqa: ARG001
+        calls.append("reload")
+        return {"ok": True, "webspace_id": webspace_id}
+
+    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.services.scenario.webspace_runtime.reload_webspace_from_scenario",
+        fake_reload,
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: calls.append("notify") or dict(value),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "status": "completed",
+        }
+    )
+
+    assert calls == ["activate:recipes_skill", "ensure", "reload", "notify"]
+    assert saved[-1]["completion_readiness"]["ok"] is True
+
+
+def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    notified: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("activation failed")),
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: notified.append(dict(value)) or dict(value),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "status": "completed",
+        }
+    )
+
+    assert saved[-1]["status"] == "failed"
+    assert saved[-1]["last_failure"]["stage"] == "live_readiness"
+    assert notified == []

@@ -122,6 +122,12 @@ set, commits results to a task branch, reports completion, and cleans up local
 artifacts. The User Hub remains responsible for final validation, staging,
 approval, and installation.
 
+The task snapshot includes a versioned, read-only target-runtime reference
+bundle in addition to product requirements. It carries schema versions,
+browser action/data-expression ABI, manifest examples, and validation commands.
+This prevents a model from producing syntactically valid descriptors for an
+action vocabulary that the installed client does not implement.
+
 ## Core Entities
 
 ### Prompt IDE / Builder
@@ -205,6 +211,12 @@ task lifecycle:
 - status reporting
 - cleanup
 
+The worker/orchestrator performs cleanup itself before validation and commit;
+cleanup is not delegated to a generated LLM shell command. It also preserves
+the UTF-8 bytes and digest of the original user turn from Prompt IDE through
+the assignment packet, so a localized request cannot degrade into a different
+instruction without a transport failure being reported.
+
 This skill is not installed in the user's runtime and is not a marketplace
 skill. It is a controlled development worker component.
 
@@ -252,6 +264,28 @@ Denied operations:
 - publishing directly
 - modifying user runtime state
 - broad repository or filesystem browsing outside the task scope
+
+## Realization Versus Runtime Readiness
+
+The generated repository tree owns source artifacts. The User Hub orchestrator
+owns prepared runtime slots, activation markers, handler reload, resolver and
+materialization cache invalidation, paired-webspace reload, and runtime smoke
+evidence. A dev-node result is therefore not user-visible completion merely
+because it committed and synchronized successfully.
+
+For a scenario with a companion skill, the acceptance pipeline is:
+
+```text
+dev result -> host validation -> DEV sync -> prepare -> activate
+           -> handler/cache refresh -> forced scenario rematerialization
+           -> bounded tool/UI smoke -> terminal chat success
+```
+
+The forced rematerialization is required even if the current scenario id is
+unchanged, because its `webui.json`, companion manifest, or handler contract may
+have changed under the same identity. Any failure in this host-owned tail is a
+`live_readiness` failure and returns evidence to Builder instead of producing a
+false success message.
 
 ## Security Threat Model And Risk Register
 
