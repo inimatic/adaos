@@ -172,6 +172,7 @@ def describe(kind: str, project_id: str) -> dict[str, Any]:
         "name": str(manifest.get("name") or manifest.get("id") or root.name),
         "title": str(manifest.get("title") or manifest.get("name") or manifest.get("id") or root.name),
         "description": str(manifest.get("description") or ""),
+        "project_type": str(manifest.get("type") or normalized_kind),
         "version": str(manifest.get("version") or ""),
         "depends": list(manifest.get("depends") or []),
         "manifest": manifest_path.name if manifest_path else None,
@@ -203,19 +204,32 @@ def update_metadata(
     root = _root(normalized_kind, normalized_id)
     if title is not None and not str(title).strip():
         raise DeveloperProjectError("title must not be empty")
+    manifests = [
+        root / name
+        for name in (
+            ("scenario.yaml", "scenario.yml", "scenario.json")
+            if normalized_kind == "scenario"
+            else ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
+        )
+        if (root / name).is_file()
+    ]
+    if not manifests:
+        raise ProjectNotFoundError(f"manifest for {normalized_kind} '{normalized_id}' was not found")
+    if project_type is not None:
+        requested_type = str(project_type).strip()
+        current_types = {
+            str(_read_manifest(path).get("type") or normalized_kind).strip()
+            for path in manifests
+        }
+        if not requested_type or current_types != {requested_type}:
+            current = ", ".join(sorted(current_types)) or normalized_kind
+            raise DeveloperProjectError(
+                f"project_type is immutable after creation (current: {current})"
+            )
     values = {
         "title": str(title).strip() if title is not None else None,
         "description": str(description).strip() if description is not None else None,
-        "type": str(project_type).strip() if project_type is not None else None,
     }
-    names = (
-        ("scenario.yaml", "scenario.yml", "scenario.json")
-        if normalized_kind == "scenario"
-        else ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
-    )
-    manifests = [root / name for name in names if (root / name).is_file()]
-    if not manifests:
-        raise ProjectNotFoundError(f"manifest for {normalized_kind} '{normalized_id}' was not found")
     updated: list[str] = []
     for path in manifests:
         payload = _read_manifest(path)

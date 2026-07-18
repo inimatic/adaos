@@ -119,6 +119,21 @@ def test_update_metadata_preserves_scenario_json_ui(dev_roots) -> None:
     assert json_manifest["ui"]["application"]["desktop"]["pageSchema"]["id"] == "builder"
 
 
+def test_update_metadata_rejects_project_type_change(dev_roots) -> None:
+    _skills, scenarios = dev_roots
+    root = scenarios / "builder"
+    root.mkdir()
+    (root / "scenario.json").write_text(
+        '{"id":"builder","type":"desktop","version":"0.1.0"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(projects.DeveloperProjectError, match="immutable after creation"):
+        projects.update_metadata("scenario", "builder", project_type="mobile")
+
+    assert projects.describe("scenario", "builder")["project_type"] == "desktop"
+
+
 @dataclass
 class _Result:
     name: str
