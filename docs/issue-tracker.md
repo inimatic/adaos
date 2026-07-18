@@ -4171,8 +4171,9 @@ criteria are maintained in
 
 #### BUILDER-SDK-001: Move Prompt IDE and Builder skills onto the SDK plane
 
-Status: functional control slice complete; autonomous reproduction and legacy
-retirement remain deferred.
+Status: functional control slice and revision `032` live-binding remediation
+complete; projection-identity hardening, autonomous reproduction, and legacy
+retirement remain open/deferred as tagged below.
 
 Actions:
 
@@ -4184,8 +4185,18 @@ Actions:
   breaking the legacy Prompt IDE rollback path.
 - [x] `[must]` Add and run an SDK-only Builder control skill in the DEV
   snapshot.
-- [x] `[must]` Preserve prototype `029` as functional revision `030` and map
-  the complete Prompt IDE capability surface to SDK-backed controls.
+- [x] `[must]` Preserve prototype `029` as functional revisions `030`/`032`,
+  preserve user revision `031`, and map the complete Prompt IDE capability
+  surface to SDK-backed controls.
+- [x] `[must]` Correct canonical source/DEV preview binding, native new-window
+  navigation, and local QR rendering; verify `dev1-dev-dev` is not touched.
+- [x] `[must]` Correct the canonical Builder conversation/project-thread
+  binding so ledger history survives view changes and reconnects.
+- [x] `[must]` Make project type immutable in the developer SDK, render
+  metadata through structured fields, resolve the local Codex worker
+  executable, and flatten Automation failure diagnostics/evidence for UI.
+- [x] `[must]` Publish complete Builder `ru`/`en` resource dictionaries and
+  localize both declarative controls and dynamic SDK list/tree projections.
 - [x] `[should]` Enforce the boundary for migrated/new skills and add a `029`
   structural golden fixture.
 - [ ] `[should]` Move the remaining legacy Prompt IDE DEV file lifecycle onto
@@ -4193,6 +4204,12 @@ Actions:
 - [ ] `[should]` Repair Forge draft POST acknowledgement: the archive is stored
   correctly, but nginx returns `504` and draft commit metadata remains stale;
   use file-for-file archive read-back as the temporary publication gate.
+- [ ] `[should]` Stop no-op semantic reloads from replacing coarse
+  `ui.application`, `data.catalog`, `data.desktop`, and `data.webio` branches;
+  the new branch-diff path is reusable for real changes, but repeated no-op
+  reload still falls back to replacement. Cover fingerprint convergence and
+  reconnect/reload stability with a browser soak test.
+- [ ] `[could]` Add governed open/copy actions for Automation evidence files.
 - [ ] `[deferred]` Recreate the control skill from an empty project through
   AdaOS autonomous programming and pass the same checks.
 - [ ] `[deferred]` Decompose large Builder and Prompt Engineer modules under a

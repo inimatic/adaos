@@ -1,7 +1,8 @@
 # Builder SDK Boundary And Migration Roadmap
 
-Status: functional SDK-backed Builder proof completed locally; autonomous
-from-zero development is intentionally deferred to the next phase.
+Status: functional SDK-backed Builder proof and live-binding remediation
+completed locally in revision `032`; autonomous from-zero development is
+intentionally deferred to the next phase.
 
 This document defines the public SDK boundary required by Prompt IDE, Builder,
 and autonomous Builder development. It complements `builder.md` and
@@ -35,6 +36,8 @@ of SDK operations into tool responses.
 - resolve a project without exposing runtime path-provider internals;
 - list, read, and write allowlisted project files with bounded payloads;
 - update bounded project metadata without losing scenario UI payloads;
+- expose the initialized project type and reject attempts to change it after
+  creation;
 - list templates and create projects;
 - push, update, publish, and delete projects;
 - return plain JSON-compatible results and public SDK errors.
@@ -62,6 +65,10 @@ stored directly by Prompt IDE handlers:
 - ensure or open its dev webspace;
 - read the current source-to-dev-webspace binding;
 - reload or materialize a validated Builder revision.
+
+Source identity is canonical: receiving `desktop-dev` as the current Builder
+webspace resolves back to source `desktop`, and its paired preview remains
+`desktop-dev`. SDK consumers must never derive `desktop-dev-dev`.
 
 Skills do not persist workbench bindings or call webspace runtime services.
 
@@ -108,10 +115,13 @@ Builder scenario UI (prototype 029 geometry)
   `-- dialog stream + revision restore             -> builder_skill
 ```
 
-Revision `030` is derived from approved prototype `029`; it preserves the
-three-pane layout, the 14 original widget IDs/types/areas, and the five original
-modal contracts. The scenario contains no static project, file, preview, or
-lifecycle mocks. Project discovery, project composition, nested files,
+Revision `030` first derived the functional surface from approved prototype
+`029`. Revision `031` records the user-requested immutable project-type
+requirement. Revision `032` keeps the approved three-pane geometry and modal
+contracts while correcting runtime bindings for preview, conversation,
+metadata, and Automation diagnostics. The scenario contains no static project,
+file, preview, or lifecycle mocks. Project discovery, project composition,
+nested files,
 technical specification and addenda, metadata, LLM selection, workflow state,
 preview, Builder Change evidence, automation, Forge operations, publication,
 archive/restore, and revision rollback are skill-backed. Real publication and
@@ -131,7 +141,22 @@ Prompt IDE project operations map directly to public control tools:
 | base TZ and addenda | `get_prompt_context`, `save_prompt_context`, `append_prompt_addendum` |
 | LLM and workflow state | `get_llm_options`, `set_llm_profile`, `set_workflow_state` |
 | VCS log/push/update/publish/delete | `list_changes`, `push_project`, `update_project`, `publish_project`, `delete_project` |
-| lifecycle, automation, archive, preview | `get_lifecycle`, `start_automation`, `submit_automation`, `get_automation`, `archive_project`, `get_preview` |
+| lifecycle, automation, archive, preview | `get_lifecycle`, `start_automation`, `submit_automation`, `get_automation`, `archive_project`, `select_preview`, `get_preview` |
+
+The three preview affordances intentionally use different browser/runtime
+contracts over one binding: Compare calls `select_preview`, Open uses native
+`openWorkspace` in a new window, and QR renders the `get_preview.qr_text` value
+locally. Builder chat uses `conv.skill.builder_skill.default` plus the stable
+`prompt-project:<kind>:<id>` thread; the transcript is ledger-backed and must
+not live only in page state.
+
+Localization is also a boundary contract. Scenario-owned static copy uses a
+plain fallback field plus its semantic `*_i18n` sibling; `assets/i18n/en.json`
+and `assets/i18n/ru.json` are published through `ui.application.resources`
+with `role=i18n`. SDK presentation adapters return the same form for dynamic
+project type, stage, synchronization, and lifecycle values. The browser
+localizes both declarative widget configuration and data-source payloads, so a
+skill does not branch its tool response by the current browser locale.
 
 The control skill is deliberately an application adapter rather than a second
 core API. It shapes SDK results for browser widgets and declares trusted
@@ -178,6 +203,8 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Add bounded project metadata updates and
   `adaos.sdk.developer.prompt_context` for TZ, addenda, LLM, workflow, and
   archive state.
+- [x] `[must]` Expose initialized project type and reject post-creation type
+  changes in `adaos.sdk.developer.projects`.
 - [x] `[must]` Add contract tests that mock services below the SDK boundary.
 - [x] `[should]` Add `adaos.sdk.builder.artifacts` checkpoint operations.
 - [x] `[should]` Add Builder Change operations to the conversation SDK.
@@ -208,7 +235,8 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Replace static Builder mock data with live project, file,
   preview, change, automation, and release skill bindings.
 - [x] `[must]` Restore the approved `029` three-pane prototype as the visual
-  baseline and store the functional result as real revision `030`.
+  baseline and store the functional result as revisions `030` and `032`, while
+  preserving user-generated revision `031` as immutable input evidence.
 - [x] `[must]` Map every Prompt IDE project/TZ/LLM/VCS/workflow capability to a
   Builder control data source or action without importing Prompt IDE code.
 - [x] `[must]` Keep YAML and JSON scenario descriptors version-aligned during
@@ -223,6 +251,16 @@ Tags indicate priority, not implementation order:
   dialog against a dedicated webspace.
 - [x] `[must]` Render a project with no Automation session as a valid `idle`
   projection without starting autonomous work.
+- [x] `[must]` Canonicalize source/DEV preview identity, use native new-window
+  navigation, and render QR locally without a third-party QR endpoint.
+- [x] `[must]` Restore chat from the canonical conversation/project thread and
+  surface Automation terminal diagnostics and evidence paths without requiring
+  raw projection inspection.
+- [x] `[must]` Resolve an installed Codex CLI for the server worker from
+  explicit configuration, PATH, or the current VS Code extension bundle.
+- [x] `[must]` Publish complete `ru`/`en` Builder dictionaries, add WebUI ABI
+  support for localized action-button labels, and localize dynamic list/tree
+  data returned by SDK adapters.
 - [ ] `[deferred]` Recreate the control skill from zero by AdaOS autonomous
   programming without importing Prompt IDE implementation code.
 - [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
@@ -231,8 +269,14 @@ Tags indicate priority, not implementation order:
 - [ ] `[should]` Make Forge draft publication return the durable commit
   acknowledgement instead of an nginx `504`; retain archive read-back parity
   as the acceptance gate until that service fix lands.
-- [x] `[could]` Add a golden structural fixture that compares revision `030`
-  with `029` and rejects layout, widget-type, area, and modal loss.
+- [ ] `[should]` Preserve widget identity on no-op semantic reloads instead of
+  replacing coarse `ui.application` and desktop/catalog/webio branches. The
+  available branch-diff path handled the first changed reload, but the next
+  unchanged reload still fell back to replacement; add fingerprint-convergence
+  coverage and a browser reconnect/reload soak fixture.
+- [x] `[could]` Add a golden structural fixture that compares functional
+  revisions with `029` and rejects layout, widget-type, area, and modal loss.
+- [ ] `[could]` Add governed open/copy controls for Automation evidence files.
 
 ### Phase 4: enforcement and cleanup
 
@@ -256,7 +300,7 @@ Tags indicate priority, not implementation order:
 ## Exit Criteria
 
 The functional-prototype gate for this phase is complete: the Builder scenario
-loads from DEV, materializes the approved `029` structure as revision `030`,
+loads from DEV, materializes the approved `029` structure as revision `032`,
 resolves its declared skills, exposes the full Prompt IDE capability surface,
 reads and saves bounded files, records evidence, exposes idle automation state,
 and keeps release/destructive actions governed.
@@ -290,17 +334,19 @@ The functional Builder pass was verified on the development machine on
 - live `/api/tools/call` execution for all first-paint Builder data sources,
   same-content bounded file save, publication dry-run, and deterministic
   `builder_skill.chat` project lookup;
-- synchronous materialization of `builder-sdk-control-dev`, reporting
-  `ready=true`, `current_scenario=builder`, revision `030`, 18 page widgets,
-  and the original `left/center/right` split;
+- synchronous materialization of `dev1-dev`, reporting `ready=true`,
+  `current_scenario=builder`, revision `032`, 19 page widgets, and the original
+  `left/center/right` split;
 - live HTTP execution of all 12 read routes used by the interface, including
   project composition, nested file tree, TZ state, lifecycle, LLM options,
   templates, Automation idle state, Builder Changes, and preview binding;
-- 27 focused scenario/control/SDK tests, including the `029` structural golden
-  fixture and complete Prompt IDE capability mapping.
+- focused scenario/control/SDK and browser tests, including the `029`
+  structural golden fixture, complete Prompt IDE capability mapping, immutable
+  project type, canonical preview identity, local QR rendering, executable
+  discovery, and render-safe Automation diagnostics.
 
-The final smoke uses a dedicated source webspace so it does not change the
-operator's Prompt IDE selection. On PowerShell:
+The repeatable isolated smoke uses a dedicated source webspace so it does not
+change the operator's Prompt IDE selection. On PowerShell:
 
 ```powershell
 $payload = '{"webspace_id":"builder-sdk-control"}'.Replace('"', '\"')
@@ -318,14 +364,15 @@ This also covers the later Builder-service change that classifies paired
 verified pair is `builder-sdk-control` / `builder-sdk-control-dev`, with the
 Builder scenario selected as its DEV runtime home.
 
-Activated migration versions for this pass are `builder_skill 0.2.113`,
-`builder_automation_skill 0.1.1`, `prompt_engineer_skill 0.6.8`, and
-`builder_sdk_control_skill 0.1.10`. The functional Builder scenario is on the
-`0.2.3` version. Runtime self-tests and live materialization use dedicated
-webspaces and do not change the operator's Prompt IDE selection.
+The active control fixture is `builder_sdk_control_skill 0.1.13`; the
+functional Builder scenario archive is `0.2.9`. Runtime verification used the
+existing `dev1` / `dev1-dev` pair and confirmed that the obsolete
+`dev1-dev-dev` store was not touched.
 
 Forge draft archives were read back after publication and match the local
-control-skill and scenario archives file-for-file (6/6 and 14/14 files). The
+control-skill and current localized scenario archives file-for-file (6/6 and
+19/19 files). Live materialization published both 144-entry dictionaries and
+loaded them by content-addressed URL. The
 draft POST currently finishes server-side but returns an nginx `504`; therefore
 read-back parity, rather than the POST status alone, is the publication gate.
 

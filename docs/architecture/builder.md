@@ -127,8 +127,9 @@ capabilities through `adaos.sdk` and do not import or construct
 Builder scenario UI -> skill tools -> adaos.sdk -> adaos.services -> adapters
 ```
 
-The functional replacement control is Builder UI revision `030`, derived from
-the approved three-pane prototype `029`. `builder_sdk_control_skill` owns the
+The functional replacement control is Builder UI revision `032`, derived from
+the approved three-pane prototype `029` while preserving user-generated
+revision `031`. `builder_sdk_control_skill` owns the
 SDK-backed project, technical-specification, LLM, workflow, preview,
 Automation, and Forge presentation adapters; `builder_skill` continues to own
 the dialog stream and UI-revision restore operation. The detailed capability
@@ -537,7 +538,22 @@ Examples: `desktop` maps to `desktop-dev`; `lab` maps to `lab-dev`.
 `safe_source_webspace_id` is the normalized, UI-safe source id already used by
 the runtime for webspace identity. Builder must not create a new dev webspace
 for every draft. Draft switching changes the active draft binding inside the
-same paired dev webspace.
+same paired dev webspace. When a control is invoked from the paired DEV
+webspace, the SDK first canonicalizes it back to its source id; appending a
+second `-dev` suffix is invalid.
+
+Preview controls share this binding but keep their native responsibilities:
+Compare/select materializes through `adaos.sdk.builder.preview`, Open uses the
+browser workspace-navigation action in a new window, and QR renders the same
+relative workspace URL locally. No external QR service is part of the Builder
+contract.
+
+Builder copy is locale-neutral at the SDK boundary. Static widget and modal
+fields carry semantic `*_i18n` references backed by scenario-owned `ru` and
+`en` resources. Dynamic SDK projections use the same sibling-field convention
+for project and lifecycle labels; the browser resolves them after loading the
+data source. Tool handlers therefore return one stable payload shape rather
+than locale-specific response schemas.
 
 The source webspace owns the user's conversation and requirements context. The
 paired dev webspace owns the visual workbench and live mockup projection. The

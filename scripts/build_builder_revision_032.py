@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,135 @@ WEBUI = SCENARIO / "webui.json"
 SCENARIO_JSON = SCENARIO / "scenario.json"
 CURRENT = SCENARIO / "ui_revisions" / "current.txt"
 CONTROL = "builder_sdk_control_skill"
+TEXT_FIELDS = {
+    "title",
+    "label",
+    "placeholder",
+    "help",
+    "content",
+    "submitLabel",
+    "emptyText",
+}
+RU_EN = {
+    "Builder — рабочее место разработки": "Builder — development workspace",
+    "Dev‑пространство": "DEV workspace",
+    "Forge и публикация": "Forge and publication",
+    "ID проекта": "Project ID",
+    "QR для открытия preview": "QR to open preview",
+    "QR для просмотра": "Preview QR",
+    "Автоматизация Builder": "Builder Automation",
+    "Адрес preview пока недоступен": "Preview address is not available yet",
+    "Артефакты": "Artifacts",
+    "Архивация скрывает проект из активных и сохраняет его историю.": "Archiving hides the project from active projects and preserves its history.",
+    "Архивация скрывает проект из активных. Будет создана резервная копия и доступна кнопка восстановления.": "Archiving hides the project from active projects. A backup will be created and the restore action will remain available.",
+    "Архивирование": "Archive",
+    "Архивирование и восстановление": "Archive and restore",
+    "Архивировать": "Archive",
+    "Базовое техническое задание": "Base technical specification",
+    "Будет опубликована новая версия выбранного проекта.": "A new version of the selected project will be published.",
+    "Версия": "Version",
+    "Версия и среда": "Version and environment",
+    "Внешнее изменение": "External change",
+    "Восстановить": "Restore",
+    "Восстановление": "Restore",
+    "Выбор проекта": "Select project",
+    "Выбор файла": "Select file",
+    "Выбрать проект": "Choose project",
+    "Выбрать файл": "Choose file",
+    "Голосовой ввод": "Voice input",
+    "Действия": "Actions",
+    "Дерево файлов": "File tree",
+    "Добавить": "Add",
+    "Добавить уточнение": "Add clarification",
+    "Дополнение к ТЗ": "Specification addendum",
+    "Дополнения": "Addenda",
+    "Дополнения к ТЗ": "Specification addenda",
+    "Жизненный цикл": "Lifecycle",
+    "Журнал stderr": "stderr log",
+    "Журнал событий": "Event log",
+    "Закрыть": "Close",
+    "Запуск автономной разработки": "Start autonomous development",
+    "Запустить": "Start",
+    "История изменений": "Change history",
+    "История уточнений": "Clarification history",
+    "Исходное пространство": "Source workspace",
+    "К автоматизации": "Move to Automation",
+    "К публикации": "Move to publication",
+    "Контекст разработки": "Development context",
+    "Локальный": "Local",
+    "Модель": "Model",
+    "Можно повторить": "Retryable",
+    "Навык": "Skill",
+    "Название": "Title",
+    "Настройки разработки": "Development settings",
+    "Необратимое изменение Forge": "Irreversible Forge change",
+    "Новое уточнение": "New clarification",
+    "Новый DEV-проект": "New DEV project",
+    "Обзор": "Overview",
+    "Обзор проекта и стабильность": "Project overview and stability",
+    "Обновить": "Update",
+    "Обновлено": "Updated",
+    "Описание": "Description",
+    "Опишите, что нужно изменить или сгенерировать…": "Describe what should be changed or generated…",
+    "Опубликовать": "Publish",
+    "Открыть просмотр в новом окне": "Open preview in a new window",
+    "Отмена": "Cancel",
+    "Отправить новую итерацию": "Submit a new iteration",
+    "Ошибка": "Error",
+    "Подтвердите архивирование": "Confirm archive",
+    "Подтверждение публикации": "Confirm publication",
+    "Последнее сообщение": "Latest message",
+    "Представления": "Views",
+    "Применить": "Apply",
+    "Провайдер": "Provider",
+    "Проверить релиз": "Validate release",
+    "Проект": "Project",
+    "Проект: Builder": "Project: Builder",
+    "Проекты": "Projects",
+    "Просмотр dev‑пространства": "DEV workspace preview",
+    "Просмотр защищенного файла": "Protected file preview",
+    "Профиль LLM": "LLM profile",
+    "Публикация": "Publication",
+    "Рабочее место для сценариев Builder": "Workspace for Builder scenarios",
+    "Разговор": "Conversation",
+    "Разговор — Builder": "Conversation — Builder",
+    "Редактор/просмотр файла": "File editor/preview",
+    "Сверить": "Compare",
+    "Сделать текущей": "Make current",
+    "Синхронизация": "Synchronization",
+    "Сканируйте на другом устройстве": "Scan on another device",
+    "Создать": "Create",
+    "Создать проект": "Create project",
+    "Сообщение": "Message",
+    "Состав проекта": "Project contents",
+    "Состояние": "State",
+    "Состояние проекции": "Projection state",
+    "Сохранить": "Save",
+    "Ссылка на итерацию": "Iteration reference",
+    "Стабилизировать": "Stabilize",
+    "Стадия ошибки": "Failure stage",
+    "Стандартный": "Standard",
+    "Статус": "Status",
+    "Строгий": "Strict",
+    "Сценарий": "Scenario",
+    "ТЗ": "Specification",
+    "Творческий": "Creative",
+    "Текст": "Text",
+    "Тип": "Type",
+    "Тип задаётся при создании проекта и после этого не изменяется.": "The type is set when the project is created and cannot be changed later.",
+    "Тип проекта": "Project type",
+    "Удаление проекта": "Delete project",
+    "Удалить": "Delete",
+    "Удалить проект в Forge? Локальная DEV-копия будет сохранена.": "Delete the project in Forge? The local DEV copy will be preserved.",
+    "Утверждённый implementation brief": "Approved implementation brief",
+    "Уточнение или повтор после ошибки": "Clarification or retry after an error",
+    "Файлы проекта": "Project files",
+    "Что делать": "What to do",
+    "Что произойдет": "What will happen",
+    "Шаблон": "Template",
+    "Этап": "Stage",
+    "Этап выполнения": "Execution phase",
+}
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -24,6 +155,7 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -31,9 +163,51 @@ def _source(name: str, **params: Any) -> dict[str, Any]:
     return {"kind": "skill", "name": f"{CONTROL}.{name}", "params": params}
 
 
+def _translation_key(text: str, english: str, used: dict[str, str]) -> str:
+    slug = re.sub(r"[^a-z0-9]+", ".", english.lower()).strip(".")[:72] or "text"
+    key = f"builder.text.{slug}"
+    if key in used and used[key] != text:
+        key = f"{key}.{hashlib.sha1(text.encode('utf-8')).hexdigest()[:8]}"
+    used[key] = text
+    return key
+
+
+def _add_i18n(application: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
+    ru: dict[str, str] = {}
+    en: dict[str, str] = {}
+    used: dict[str, str] = {}
+    text_keys: dict[str, str] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        for field, raw in list(value.items()):
+            if field == "initialState" or field.endswith("_i18n"):
+                continue
+            if field in TEXT_FIELDS and isinstance(raw, str) and raw and not raw.startswith("$"):
+                english = RU_EN.get(raw, raw)
+                if any(ord(char) > 127 for char in raw) and raw not in RU_EN:
+                    raise ValueError(f"missing Builder en translation: {raw!r}")
+                key = text_keys.get(raw)
+                if not key:
+                    key = _translation_key(raw, english, used)
+                    text_keys[raw] = key
+                    ru[key] = raw
+                    en[key] = english
+                value[f"{field}_i18n"] = {"key": key}
+            visit(raw)
+
+    visit(application)
+    return ru, en
+
+
 def build() -> None:
     base = _read(REVISION_031)
-    before = _read(WEBUI)
+    before = copy.deepcopy(base["after_webui"])
     webui = copy.deepcopy(base["after_webui"])
     webui["generated_by"] = CONTROL
     app = webui["ui"]["application"]
@@ -185,6 +359,66 @@ def build() -> None:
             "builderThreadId": "prompt-project:$event.object_type:$event.object_id",
         }
     )
+
+    ru, en = _add_i18n(app)
+    ru.update(
+        {
+            "scenario.builder.title": "Builder — рабочее место разработки",
+            "builder.project_type.scenario": "Сценарий",
+            "builder.project_type.skill": "Навык",
+            "builder.project_stage.archive": "Архив",
+            "builder.project_stage.prototype": "Прототип",
+            "builder.project_sync.current": "Текущий",
+            "builder.project_sync.available_dev": "Доступен в DEV",
+            "builder.lifecycle.status.current": "текущая",
+            "builder.lifecycle.status.previous": "предыдущая",
+            "builder.lifecycle.status.active": "активна",
+            "builder.lifecycle.status.not_started": "не начата",
+            "builder.lifecycle.stage.prototype": "Прототип",
+            "builder.lifecycle.stage.automation": "Автоматизация",
+            "builder.lifecycle.stage.publication": "Публикация",
+        }
+    )
+    en.update(
+        {
+            "scenario.builder.title": "Builder — development workspace",
+            "builder.project_type.scenario": "Scenario",
+            "builder.project_type.skill": "Skill",
+            "builder.project_stage.archive": "Archive",
+            "builder.project_stage.prototype": "Prototype",
+            "builder.project_sync.current": "Current",
+            "builder.project_sync.available_dev": "Available in DEV",
+            "builder.lifecycle.status.current": "current",
+            "builder.lifecycle.status.previous": "previous",
+            "builder.lifecycle.status.active": "active",
+            "builder.lifecycle.status.not_started": "not started",
+            "builder.lifecycle.stage.prototype": "Prototype",
+            "builder.lifecycle.stage.automation": "Automation",
+            "builder.lifecycle.stage.publication": "Publication",
+        }
+    )
+    resources = {
+        "builder.i18n.en": {
+            "kind": "data",
+            "role": "i18n",
+            "locale": "en",
+            "path": "assets/i18n/en.json",
+            "mime": "application/json",
+            "delivery": "core",
+        },
+        "builder.i18n.ru": {
+            "kind": "data",
+            "role": "i18n",
+            "locale": "ru",
+            "path": "assets/i18n/ru.json",
+            "mime": "application/json",
+            "delivery": "core",
+        },
+    }
+    webui["resources"] = copy.deepcopy(resources)
+    app["resources"] = copy.deepcopy(resources)
+    _write(SCENARIO / "assets" / "i18n" / "ru.json", ru)
+    _write(SCENARIO / "assets" / "i18n" / "en.json", en)
 
     scenario = _read(SCENARIO_JSON)
     scenario["ui"] = copy.deepcopy(webui["ui"])

@@ -59,6 +59,21 @@
       "minLength": 1,
       "description": "Identifier; may include ':' for synthetic ids (e.g. 'scenario:<id>')."
     },
+    "i18nTextSpec": {
+      "description": "Locale-independent text reference resolved by the browser with the sibling field as fallback.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["key"],
+          "properties": {
+            "key": { "type": "string", "minLength": 1 },
+            "params": { "type": "object", "additionalProperties": true }
+          }
+        }
+      ]
+    },
     "nluDescriptor": {
       "type": "object",
       "additionalProperties": true,
@@ -1359,6 +1374,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "label": { "type": "string" },
+        "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
         "icon": { "type": "string" },
         "kind": {
           "type": "string",
