@@ -178,6 +178,55 @@ def describe(kind: str, project_id: str) -> dict[str, Any]:
     }
 
 
+def _write_manifest(path: Path, payload: Mapping[str, Any]) -> None:
+    if path.suffix.lower() == ".json":
+        text = json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = yaml.safe_dump(dict(payload), sort_keys=False, allow_unicode=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
+def update_metadata(
+    kind: str,
+    project_id: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    project_type: str | None = None,
+) -> dict[str, Any]:
+    """Update bounded manifest metadata while preserving scenario UI payloads."""
+
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    root = _root(normalized_kind, normalized_id)
+    if title is not None and not str(title).strip():
+        raise DeveloperProjectError("title must not be empty")
+    values = {
+        "title": str(title).strip() if title is not None else None,
+        "description": str(description).strip() if description is not None else None,
+        "type": str(project_type).strip() if project_type is not None else None,
+    }
+    names = (
+        ("scenario.yaml", "scenario.yml", "scenario.json")
+        if normalized_kind == "scenario"
+        else ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
+    )
+    manifests = [root / name for name in names if (root / name).is_file()]
+    if not manifests:
+        raise ProjectNotFoundError(f"manifest for {normalized_kind} '{normalized_id}' was not found")
+    updated: list[str] = []
+    for path in manifests:
+        payload = _read_manifest(path)
+        for key, value in values.items():
+            if value is not None:
+                payload[key] = value
+        _write_manifest(path, payload)
+        updated.append(path.name)
+    return {**describe(normalized_kind, normalized_id), "updated_manifests": updated}
+
+
 def find_scenario_root(project_id: str) -> Path | None:
     """Find a scenario in the active DEV snapshot or another local snapshot."""
 
@@ -403,5 +452,6 @@ __all__ = [
     "push",
     "read_file",
     "update",
+    "update_metadata",
     "write_file",
 ]

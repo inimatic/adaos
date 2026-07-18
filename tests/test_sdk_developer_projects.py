@@ -89,6 +89,36 @@ def test_read_file_reports_truncation(dev_roots) -> None:
     assert result["editable"] is False
 
 
+def test_update_metadata_preserves_scenario_json_ui(dev_roots) -> None:
+    _skills, scenarios = dev_roots
+    root = scenarios / "builder"
+    root.mkdir()
+    (root / "scenario.yaml").write_text(
+        "id: builder\ntitle: Old\ndescription: before\ntype: desktop\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (root / "scenario.json").write_text(
+        '{"id":"builder","title":"Old","description":"before","type":"desktop",'
+        '"version":"0.1.0","ui":{"application":{"desktop":{"pageSchema":{"id":"builder"}}}}}\n',
+        encoding="utf-8",
+    )
+
+    result = projects.update_metadata(
+        "scenario",
+        "builder",
+        title="Builder Workbench",
+        description="SDK-backed",
+        project_type="desktop",
+    )
+
+    json_manifest = projects._read_manifest(root / "scenario.json")
+    yaml_manifest = projects._read_manifest(root / "scenario.yaml")
+    assert result["title"] == "Builder Workbench"
+    assert result["updated_manifests"] == ["scenario.yaml", "scenario.json"]
+    assert yaml_manifest["description"] == "SDK-backed"
+    assert json_manifest["ui"]["application"]["desktop"]["pageSchema"]["id"] == "builder"
+
+
 @dataclass
 class _Result:
     name: str

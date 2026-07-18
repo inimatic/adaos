@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from . import projects
+from . import projects, prompt_context
 
-__all__ = ["projects"]
+__all__ = ["projects", "prompt_context"]
