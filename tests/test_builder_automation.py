@@ -255,6 +255,36 @@ def test_completed_iteration_clears_stale_failure_from_session(tmp_path: Path) -
     assert "last_failure" not in refreshed
 
 
+def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "task.1",
+                    "status": "completed",
+                    "updated_at": "2026-07-18T00:00:00+00:00",
+                    "progress": [{"status": "commit_ready", "message": "worker commit"}],
+                }
+            ]
+        }
+    )
+
+    refreshed = service.refresh_session(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "current_task_id": "task.1",
+            "finalizing_task_id": "task.1",
+            "status": "commit_ready",
+            "progress": {"status": "commit_ready", "message": "Forge finalization"},
+        }
+    )
+
+    assert refreshed["status"] == "commit_ready"
+    assert refreshed["progress"]["message"] == "Forge finalization"
+
+
 def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     published: list[dict] = []
@@ -381,6 +411,41 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     assert saved[-1]["status"] == "failed"
     assert saved[-1]["last_failure"]["stage"] == "live_readiness"
     assert notified == []
+
+
+def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    activations: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: [
+            {"ok": False, "kind": "scenario", "name": "recipes", "error": "504"}
+        ],
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, skill_id, **kwargs: activations.append(skill_id) or {"ok": True},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+
+    service._finalize_completed_session(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "webspace_id": "prompt-dev",
+            "current_task_id": "task.1",
+            "iteration": 1,
+        }
+    )
+
+    assert saved[-1]["status"] == "failed"
+    assert saved[-1]["completion_readiness"]["ok"] is False
+    assert "Forge checkpoint failed" in saved[-1]["completion_readiness"]["error"]
+    assert activations == []
 
 
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:

@@ -501,7 +501,8 @@ class BuilderAutomationService:
             current["last_failure"] = task.get("failure_history")[-1]
             current.pop("last_result", None)
         task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
-        if task_progress and isinstance(task_progress[-1], Mapping):
+        finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
+        if task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:
             current["progress"] = dict(task_progress[-1])
         if current.get("status") == "failed" and isinstance(current.get("last_failure"), Mapping):
             failure = current["last_failure"]
@@ -642,6 +643,17 @@ class BuilderAutomationService:
         }
         try:
             readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
+            failed_checkpoints = [
+                item
+                for item in readiness["vcs_checkpoints"]
+                if not bool(item.get("ok"))
+            ]
+            if failed_checkpoints:
+                failed_refs = ", ".join(
+                    f"{item.get('kind') or 'artifact'}:{item.get('name') or '?'}"
+                    for item in failed_checkpoints
+                )
+                raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
             companion_skill_id = str(session.get("companion_skill_id") or "").strip()
             if companion_skill_id:
                 readiness["skill"] = self._prepare_and_activate_dev_skill(
