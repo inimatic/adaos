@@ -1,6 +1,7 @@
 # Builder Automation Skill
 
-Status: first local runtime slice (`builder_automation_skill` v0.1).
+Status: local SDK-backed runtime slice with chat follow-ups, atomic
+finalization, and Forge checkpoint gating.
 
 `builder_automation_skill` is the system adapter between the Builder product
 surface and the implementation executor. It owns the Automation-stage tool
@@ -54,10 +55,25 @@ Automation session, so `workspace`, `implementation`, `verification`, and
 `result` can advance without UI polling. Unchanged state reads do not emit a
 new event.
 
-During migration, an active Automation session addressed through
-`builder_skill.chat` is delegated to the installed
-`builder_automation_skill.chat`. A direct service call remains only as a
-compatibility fallback when the new runtime skill is not installed yet.
+Ordinary UI chat is always dispatched to `builder_skill.chat`. That skill owns
+the selected Builder project/thread, checks its workflow state, and uses
+`adaos.sdk.builder.automation` for `get_state` / `submit`. The HTTP tool
+transport has no Builder-specific service interception and therefore cannot
+route a message using an unrelated stale Automation session.
+
+Worker completion is not the terminal Automation state. The session remains
+`commit_ready` while it:
+
+1. checkpoints the companion skill and scenario in Forge;
+2. verifies current commit/task metadata;
+3. prepares and activates the DEV skill;
+4. rematerializes the paired DEV scenario.
+
+Only then does it become `completed`. Any unconfirmed checkpoint becomes a
+terminal `forge_checkpoint` failure before activation. A follow-up turn moves
+the preceding readiness into bounded history and clears summary, failure,
+task, and progress fields so navigation/reconnect cannot resurrect the old
+terminal projection.
 
 ## First-Revision Limits
 
@@ -68,6 +84,11 @@ compatibility fallback when the new runtime skill is not installed yet.
   intentionally not invented in the skill before their core contracts exist;
 - the projection is a backend contract; the final Builder Automation screen
   may compose it with chat, artifacts, tests, and dev-preview status.
+- the Root scenario-draft endpoint still needs a durable asynchronous or
+  idempotent commit acknowledgement: the archive may update while nginx returns
+  `504` and Redis commit metadata remains stale. The client retries one
+  transient failure, but Automation correctly remains failed if the current
+  commit cannot be confirmed.
 
 Primary references:
 

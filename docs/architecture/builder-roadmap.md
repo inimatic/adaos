@@ -52,9 +52,9 @@ gate easy to read by priority.
 | 1. Context | Complete: Root MCP context, schemas, hints, redaction, descriptor sets. | Complete: descriptor freshness/provenance in task context. | None. | None. |
 | 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
 | 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates, dev lifecycle CLI facade. | Complete: scenario-specific Builder guidance and artifact listing ergonomics. | None. | None. |
-| 4. Validation/Preview | Complete: preview bundle, static checks, route-budget validation, Builder validation facade. | Complete: blast radius, webui preview, scenario dependency bootstrap, Forge push facade. | None. | None. |
+| 4. Validation/Preview | Partial: preview bundle, static checks, route-budget validation, dependency-aware push/publish preflight, and Builder validation facade are complete; durable scenario Forge acknowledgement is open. | Complete: blast radius, webui preview, scenario dependency bootstrap, Forge push facade, and bounded transient retry. | None. | None. |
 | 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, NLU Teacher candidate-confirmation, and initial service-supervisor runtime recovery slices exist; Builder/pairing/broader runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
-| 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
+| 6. Activation | Open: release record, post-activation repair routing, and setup-plan contract. | Open: durable operation recovery, rollback UX, and governed setup execution. | Optional setup-assistant UX. | Automatic setup authoring/execution is postponed until Publication owns its contract. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
@@ -255,6 +255,20 @@ Open work:
 - [x] `[must]` Apply the checkpoint contract to completed automation output as
   well as UI-only turns. Scenario automation pushes both the scenario and its
   companion skill with the terminal result summary before runtime preparation.
+- [x] `[must]` Make `dev skill|scenario push` and `publish` fail closed on
+  validation errors before mutating the artifact version. Skill preflight runs
+  static validation plus handler/tool probing; scenario preflight validates
+  the JSON Schema and declared dependency tool routes.
+- [x] `[must]` Keep Automation finalization non-terminal until every required
+  Forge checkpoint is confirmed. A false checkpoint result now stops DEV
+  activation/materialization and projects a `forge_checkpoint` failure.
+- [x] `[should]` Retry the same archive once for transient Forge transport
+  failures without applying another semantic version bump; require a commit
+  and current allowlisted metadata in the success response.
+- [ ] `[must]` Repair the Root `/v1/scenarios/draft` durable-commit path. The
+  isolated smoke stores scenario version `0.2.3` but repeatedly returns nginx
+  `504` and stale commit/task metadata, while the matching skill draft commits
+  successfully. Archive parity alone must not satisfy this gate.
 - [x] `[must]` Remove worker-owned DEV scaffolding. Builder chat and automation
   create missing scenarios, skills, and companion skills through the core
   developer service; workers only modify artifacts already created in DEV.
@@ -359,6 +373,31 @@ Open work:
 - [ ] `[must]` Add post-activation checks that can route failures back to Builder repair
   tasks.
 
+### Publication-owned setup design
+
+Setup authoring and setup execution are separate operations. Publication is
+the right stage to make setup part of the immutable release contract, but it
+must not execute credentials, network calls, or host changes while publishing.
+
+- [ ] `[must]` Define a versioned declarative setup-plan contract describing
+  required inputs/secrets, capabilities, side-effect classes, preconditions,
+  idempotency keys, verification, and rollback/compensation evidence.
+- [ ] `[must]` Add a Publication authoring gate that detects setup needs,
+  generates or updates the skill-owned `setup` tool and focused tests, validates
+  the plan, and includes its hash in the release record before registry push.
+- [ ] `[should]` Execute an approved setup plan only after install/activation as
+  a separate durable operation or Pending Action. Support dry-run, restart
+  recovery, bounded logs, idempotent retry, and explicit partial-failure state.
+- [ ] `[should]` Reuse the existing `adaos skill setup` runtime entrypoint as the
+  executor adapter instead of teaching Publication to call skill internals.
+- [ ] `[could]` Add a Builder setup assistant that renders missing inputs,
+  secret references, capability review, and verification results from the
+  declarative plan.
+- [ ] `[deferred]` Implement automatic setup programming or execution in the
+  current refactor. First stabilize the Publication release record and
+  scenario Forge acknowledgement, then validate setup authoring with an
+  isolated fixture.
+
 Primary references:
 
 - [Skill Runtime Lifecycle](../skill_runtime.md)
@@ -429,6 +468,14 @@ Current functional control milestone:
 - [x] `[must]` Publish Builder-owned `ru` and `en` dictionaries as scenario
   resources, attach semantic `*_i18n` keys to prototype copy and SDK
   projections, and localize dynamic list/tree payloads in the browser.
+- [x] `[must]` Route Automation follow-ups through ordinary
+  `builder_skill:chat`, increment both scenario and companion DEV versions,
+  retain focused test evidence, and keep previous completion evidence in
+  bounded history rather than the active projection.
+- [x] `[must]` Verify real workspace Publication for an isolated skill/scenario
+  pair, including semantic version increment, workspace registry metadata,
+  commit/push to `origin/main`, and a clean shared monorepo after repeated
+  scenario publication.
 - [ ] `[should]` Avoid replacing `ui.application`, `data.catalog`,
   `data.desktop`, and `data.webio` during a semantic reload when their
   user-visible projection is unchanged. The newer branch-diff path is usable
@@ -682,9 +729,10 @@ Current implementation slices:
   `BuilderAutomationService`, exposes `start`, `chat`, and `get_state`, and
   publishes the ABI-validated `adaos.builder.automation_projection.v1`
   lifecycle without duplicating executor state in the skill.
-- [x] `[must]` Route Prompt IDE Builder chat through the installed Automation
-  skill while a project automation session is active, retaining the direct
-  local service route only as migration fallback.
+- [x] `[must]` Route ordinary Builder chat through the `builder_skill` owner;
+  the skill selects the current project/workflow and calls the public Builder
+  Automation SDK. Remove the generic HTTP transport's Builder-specific service
+  interception so transport code cannot choose a stale session.
 
 Open work:
 

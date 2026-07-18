@@ -1,8 +1,10 @@
 # Builder SDK Boundary And Migration Roadmap
 
-Status: functional SDK-backed Builder proof and live-binding remediation
-completed locally in revision `032`; autonomous from-zero development is
-intentionally deferred to the next phase.
+Status: functional SDK-backed Builder proof and live-binding remediation are
+complete locally in revision `032`. Chat-driven Automation and real
+Publication have been exercised with an isolated control project. Durable
+Forge acknowledgement for scenario drafts remains an explicit blocker;
+autonomous from-zero development is intentionally deferred to the next phase.
 
 This document defines the public SDK boundary required by Prompt IDE, Builder,
 and autonomous Builder development. It complements `builder.md` and
@@ -256,6 +258,23 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Restore chat from the canonical conversation/project thread and
   surface Automation terminal diagnostics and evidence paths without requiring
   raw projection inspection.
+- [x] `[must]` Dispatch ordinary Builder chat to `builder_skill`, then let the
+  selected project and workflow state route Automation through
+  `adaos.sdk.builder.automation`; the generic HTTP transport no longer owns a
+  Builder-specific service fallback.
+- [x] `[must]` Keep Automation non-terminal while Forge checkpoints, DEV
+  activation, and scenario materialization are finalizing. Clear stale
+  readiness on a follow-up turn and fail the session before activation when
+  any required checkpoint is unconfirmed.
+- [x] `[must]` Run dependency-aware scenario validation and skill validation
+  with handler probing before `dev skill|scenario push` and `publish`. Scenario
+  validation resolves routes through declared DEV skill dependencies and uses
+  `scenario.json` as the canonical Builder manifest when legacy YAML is also
+  present.
+- [x] `[must]` Exercise real Publication with an isolated companion skill and
+  scenario. The workspace registry commits were pushed to `origin/main`; the
+  scenario scaffold now reuses the shared workspace repository instead of
+  creating `scenarios/scenarios` state.
 - [x] `[must]` Resolve an installed Codex CLI for the server worker from
   explicit configuration, PATH, or the current VS Code extension bundle.
 - [x] `[must]` Publish complete `ru`/`en` Builder dictionaries, add WebUI ABI
@@ -266,9 +285,14 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
   the same checks.
 - [x] `[should]` Add the control fixture to a repeatable local smoke command.
-- [ ] `[should]` Make Forge draft publication return the durable commit
-  acknowledgement instead of an nginx `504`; retain archive read-back parity
-  as the acceptance gate until that service fix lands.
+- [ ] `[must]` Make the Root scenario-draft endpoint return a durable Forge
+  commit acknowledgement instead of an nginx `504`. Archive read-back proves
+  that files arrived but is not a Git acceptance gate: commit metadata can
+  remain stale after the archive changes. Automation must stay failed until a
+  current commit and task metadata are confirmed.
+- [x] `[should]` Retry the exact same archive once after transient Forge
+  `500/502/503/504` failures without applying a second version bump, and reject
+  success responses that omit a commit or return stale task metadata.
 - [ ] `[should]` Preserve widget identity on no-op semantic reloads instead of
   replacing coarse `ui.application` and desktop/catalog/webio branches. The
   available branch-diff path handled the first changed reload, but the next
@@ -315,8 +339,10 @@ Prompt IDE can be retired only when:
 5. legacy Prompt IDE remains a tested rollback path until the replacement has
    completed an autonomous from-zero implementation run.
 
-Criteria 1-4 are now satisfied by the control slice. Criterion 5 remains
-intentionally deferred; no legacy removal is authorized by this phase.
+Criteria 1-3 are satisfied by the control slice. Criterion 4 is satisfied for
+the skill checkpoint and workspace Publication path, but remains open for the
+Root scenario-draft commit acknowledgement. Criterion 5 remains intentionally
+deferred; no legacy removal is authorized by this phase.
 
 ## Local Verification Record
 
@@ -369,12 +395,32 @@ functional Builder scenario archive is `0.2.9`. Runtime verification used the
 existing `dev1` / `dev1-dev` pair and confirmed that the obsolete
 `dev1-dev-dev` store was not touched.
 
-Forge draft archives were read back after publication and match the local
-control-skill and current localized scenario archives file-for-file (6/6 and
-19/19 files). Live materialization published both 144-entry dictionaries and
-loaded them by content-addressed URL. The
-draft POST currently finishes server-side but returns an nginx `504`; therefore
-read-back parity, rather than the POST status alone, is the publication gate.
+The isolated pipeline fixture is
+`builder_pipeline_smoke_1784408500` / `_skill`. Ordinary
+`builder_skill:chat` produced successive DEV versions `0.2.1`, `0.2.2`, and
+`0.2.3`; the last tool result is `{ok: true, marker: "verified"}` and its five
+focused tests pass. Follow-up submission clears the previous readiness, and
+the projection remains `commit_ready` during finalization instead of briefly
+reporting a stale `completed` state.
+
+Real workspace Publication was also verified. The skill published as `0.0.1`
+and the scenario as `0.0.2`; workspace `origin/main` matched local commit
+`b3aacca7efef7654c80016140e15969692a62601`, and `registry.json` records the
+scenario's required companion skill from canonical `scenario.json`. The
+legacy nested scenario checkout and lock produced by the first run were
+removed after the shared-repository scaffold fix, and the repeated real
+publication left the workspace clean.
+
+Forge draft verification is deliberately stricter than archive parity. The
+skill retry confirmed commit `5d4f1fc45faf864dbd00ca56a4a6652808c7df40`
+for task `task.01KXVJMDV0AVAES3TAY17EC5FG`. The scenario archive contains
+version `0.2.3`, but the endpoint repeatedly returned `504` and still reports
+the older commit/task metadata. This is recorded as `forge_checkpoint` failure
+and blocks a successful Automation terminal state until the Root service
+contract is repaired.
+
+Live materialization otherwise published both 144-entry dictionaries and
+loaded them by content-addressed URL.
 
 The next proof is intentionally outside this pass: recreate the control skill
 from an empty DEV project through AdaOS autonomous programming, run the same
