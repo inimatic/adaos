@@ -54,6 +54,11 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _safe_path_token(value: Any) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
+    return token or "draft"
+
+
 def _binding_semantic_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
     keys = (
         "source_webspace_id",
@@ -467,7 +472,7 @@ class BuilderWorkbenchService:
                         "status": draft.get("status"),
                         "kind": artifact.get("kind"),
                         "id": artifact.get("id"),
-                        "root": artifact.get("root"),
+                        "root": artifact.get("draft_root") or artifact.get("root"),
                         "source_idea": metadata.get("source_idea"),
                         "active": draft.get("draft_id") == binding.get("active_draft_id"),
                         "updated_at": draft.get("updated_at") or draft.get("created_at"),
@@ -487,19 +492,85 @@ class BuilderWorkbenchService:
             return {"ok": False, "error": "draft_not_found", "draft_id": token}
         draft = _read_json(draft_dir / "builder.draft.json")
         artifact = draft.get("artifact") if isinstance(draft.get("artifact"), dict) else {}
-        artifact_root = Path(str(artifact.get("root") or "")).expanduser()
-        shutil.rmtree(draft_dir)
+        raw_artifact_root = str(artifact.get("draft_root") or artifact.get("root") or "").strip()
+        if not raw_artifact_root:
+            return {"ok": False, "error": "artifact_root_missing", "draft_id": token}
+
+        candidate = Path(raw_artifact_root).expanduser()
+        artifact_root = (candidate if candidate.is_absolute() else draft_dir / candidate).resolve()
+        artifact_id = str(artifact.get("id") or "").strip()
+        artifact_kind = str(artifact.get("kind") or "").strip()
+        expected_parent = {"scenario": "scenarios", "skill": "skills"}.get(artifact_kind)
+        if (
+            not artifact_id
+            or expected_parent is None
+            or artifact_root.name != artifact_id
+            or artifact_root.parent.name != expected_parent
+            or artifact_root == root
+            or root in artifact_root.parents
+            or artifact_root in root.parents
+        ):
+            return {
+                "ok": False,
+                "error": "unsafe_artifact_root",
+                "draft_id": token,
+                "artifact_root": str(artifact_root),
+            }
+
+        archive_root = Path(self.state_dir or current_state_dir()) / "builder" / "archive"
+        archive_dir = archive_root / f"{int(_now() * 1000)}-{_safe_path_token(token)}"
+        archive_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            shutil.copytree(draft_dir, archive_dir / "draft")
+            artifact_exists = artifact_root.exists()
+            if artifact_exists:
+                shutil.copytree(artifact_root, archive_dir / "artifact")
+            _write_json(
+                archive_dir / "archive.json",
+                {
+                    "schema": "adaos.builder.archive.v1",
+                    "draft_id": token,
+                    "source_webspace_id": source_id,
+                    "artifact": dict(artifact),
+                    "original_draft_root": str(draft_dir),
+                    "original_artifact_root": str(artifact_root),
+                    "artifact_existed": artifact_exists,
+                    "archived_at": _now(),
+                },
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": "draft_archive_failed",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "draft_id": token,
+                "archive_root": str(archive_dir),
+            }
+
         removed_artifact = False
-        if artifact_root and artifact_root.exists():
-            try:
-                shutil.rmtree(artifact_root.resolve())
+        try:
+            if artifact_root.exists():
+                shutil.rmtree(artifact_root)
                 removed_artifact = True
-            except Exception:
-                removed_artifact = False
+            shutil.rmtree(draft_dir)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": "draft_delete_failed",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "draft_id": token,
+                "archive_root": str(archive_dir),
+                "removed_artifact": removed_artifact,
+            }
         binding = self.get_workspace_binding(source_id)
         if binding.get("active_draft_id") == token:
             self.set_active_draft(source_webspace_id=source_id, active_draft_id=None, persist_projection=False)
-        return {"ok": True, "draft_id": token, "removed_artifact": removed_artifact}
+        return {
+            "ok": True,
+            "draft_id": token,
+            "removed_artifact": removed_artifact,
+            "archive_root": str(archive_dir),
+        }
 
     def snapshot(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         source_id = safe_source_webspace_id(source_webspace_id)
