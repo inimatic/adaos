@@ -480,7 +480,7 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 1. Inspect all existing files under the target paths before editing.
 2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
 3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
-4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible.
+4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: either keep `ui.application` in `scenario.json`, or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
 6. Run relevant bounded checks. Fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {', '.join(allowed)}.
@@ -568,6 +568,52 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         checks.append({"kind": "webui.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
             except Exception as exc:
                 errors.append(f"webui schema validation setup failed: {type(exc).__name__}: {exc}")
+
+        scenario_schema_path = self.repo_root / "src" / "adaos" / "abi" / "scenario.schema.json"
+        if scenario_schema_path.exists():
+            try:
+                from jsonschema import Draft202012Validator
+
+                validator = Draft202012Validator(_read_json(scenario_schema_path))
+                for path in sorted(workspace.glob("scenarios/*/scenario.json")):
+                    payload = _read_json(path)
+                    validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
+                    if validation_errors:
+                        errors.extend(
+                            f"{path.relative_to(workspace)}: scenario schema: {item.message}"
+                            for item in validation_errors[:20]
+                        )
+                    else:
+                        checks.append({"kind": "scenario.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
+                    ui = payload.get("ui") if isinstance(payload.get("ui"), Mapping) else {}
+                    application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
+                    manifest_name = str(ui.get("manifest") or "").strip()
+                    if application:
+                        continue
+                    adjacent_webui_path = path.parent / "webui.json"
+                    try:
+                        adjacent_webui = _read_json(adjacent_webui_path) if adjacent_webui_path.is_file() else {}
+                    except Exception:
+                        adjacent_webui = {}
+                    adjacent_ui = adjacent_webui.get("ui") if isinstance(adjacent_webui.get("ui"), Mapping) else {}
+                    adjacent_application = (
+                        adjacent_ui.get("application") if isinstance(adjacent_ui.get("application"), Mapping) else {}
+                    )
+                    if not adjacent_application:
+                        continue
+                    manifest_path = path.parent / manifest_name if manifest_name else None
+                    try:
+                        manifest = _read_json(manifest_path) if manifest_path and manifest_path.is_file() else {}
+                    except Exception:
+                        manifest = {}
+                    manifest_ui = manifest.get("ui") if isinstance(manifest.get("ui"), Mapping) else {}
+                    if not isinstance(manifest_ui.get("application"), Mapping) or not manifest_ui.get("application"):
+                        errors.append(
+                            f"{path.relative_to(workspace)}: scenario UI is not renderable; "
+                            "provide ui.application or ui.manifest pointing to a complete adjacent webui.json"
+                        )
+            except Exception as exc:
+                errors.append(f"scenario schema validation setup failed: {type(exc).__name__}: {exc}")
 
         target = dict(assignment.get("target") or {})
         target_id = _safe_token(target.get("id"), fallback="generated_skill")

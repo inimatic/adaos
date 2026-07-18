@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator
 
@@ -44,6 +45,7 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         runs_root=tmp_path / "runs",
         worker_factory=worker_factory,
         background=False,
+        materialize_on_completion=False,
     )
 
 
@@ -160,3 +162,34 @@ def test_completed_iteration_clears_stale_failure_from_session(tmp_path: Path) -
 
     assert refreshed["status"] == "completed"
     assert "last_failure" not in refreshed
+
+
+def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    published: list[dict] = []
+    monkeypatch.setattr(
+        "adaos.services.agent_context.get_ctx",
+        lambda: SimpleNamespace(bus=object()),
+    )
+    monkeypatch.setattr(
+        "adaos.services.conversation_response.materialize_response",
+        lambda response, **kwargs: published.append({"response": response, **kwargs}) or {"ok": True},
+    )
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "webspace_id": "desktop",
+        "conversation_id": "conv.builder.recipes",
+        "current_task_id": "task.1",
+        "last_result": {"summary": "Implemented filters."},
+    }
+
+    first = service._notify_completed_session(session)
+    second = service._notify_completed_session(first)
+
+    assert len(published) == 1
+    assert "Локальный Codex завершил работу" in published[0]["response"]["message"]
+    assert published[0]["thread_id"] == "prompt-project:scenario:recipes"
+    assert second["completion_notified_task_id"] == "task.1"

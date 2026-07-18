@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from pathlib import Path
@@ -137,16 +138,70 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
         if not path.exists():
             continue
         _log.debug("reading scenario '%s' content from %s", scenario_id, path)
-        return _read_cached_mapping_file(
+        content = _read_cached_mapping_file(
             cache=_CONTENT_CACHE,
             key=key,
             path=path,
             reader=json.loads,
             encoding="utf-8-sig",
         )
+        return _resolve_ui_manifest(content, scenario_root=root)
     _log.debug("scenario '%s' has no scenario.json in any candidate roots", scenario_id)
     _CONTENT_CACHE.pop(key, None)
     return {}
+
+
+def _resolve_ui_manifest(content: Dict[str, Any], *, scenario_root: Path) -> Dict[str, Any]:
+    """Resolve a Builder-owned scenario ``webui.json`` into runtime content.
+
+    Builder keeps the complete editable UI descriptor next to ``scenario.json``.
+    A realized scenario may reference it with ``ui.manifest``; the runtime still
+    consumes the ordinary scenario ``ui`` and ``data`` branches, so resolve the
+    reference here instead of silently materializing an empty desktop.
+    """
+    ui = content.get("ui") if isinstance(content.get("ui"), dict) else {}
+    manifest_name = str(ui.get("manifest") or "").strip()
+    if not manifest_name:
+        return content
+
+    manifest_path = (scenario_root / manifest_name).resolve()
+    root = scenario_root.resolve()
+    if manifest_path.parent != root or not manifest_path.is_file():
+        _log.warning("scenario UI manifest is missing or unsafe: %s", manifest_path)
+        return content
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        _log.warning("failed to read scenario UI manifest %s", manifest_path, exc_info=True)
+        return content
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("ui"), dict):
+        _log.warning("scenario UI manifest must contain an object ui branch: %s", manifest_path)
+        return content
+
+    resolved = copy.deepcopy(content)
+    resolved["ui"] = copy.deepcopy(manifest["ui"])
+    for key in ("registry", "catalog", "webio"):
+        if key not in resolved and isinstance(manifest.get(key), dict):
+            resolved[key] = copy.deepcopy(manifest[key])
+
+    defaults = manifest.get("ydoc_defaults")
+    if isinstance(defaults, dict):
+        data = resolved.setdefault("data", {})
+        if isinstance(data, dict):
+            for raw_path, value in defaults.items():
+                parts = [part for part in str(raw_path).strip("/").split("/") if part]
+                if not parts or parts[0] != "data" or any(part in {".", ".."} for part in parts):
+                    continue
+                cursor = data
+                for part in parts[1:-1]:
+                    child = cursor.get(part)
+                    if not isinstance(child, dict):
+                        child = {}
+                        cursor[part] = child
+                    cursor = child
+                if len(parts) > 1 and parts[-1] not in cursor:
+                    cursor[parts[-1]] = copy.deepcopy(value)
+    return resolved
 
 
 def scenario_exists(scenario_id: str, *, space: str = "workspace") -> bool:

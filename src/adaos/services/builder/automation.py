@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
@@ -92,6 +93,7 @@ class BuilderAutomationService:
     worker_factory: Callable[[], LocalSkillFactoryWorker] | None = None
     event_sink: Callable[[Mapping[str, Any]], None] | None = None
     background: bool = True
+    materialize_on_completion: bool = True
     factory: SkillFactoryService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -234,6 +236,8 @@ class BuilderAutomationService:
         if not session:
             return {"ok": False, "error": "automation_session_not_found"}
         current = self.refresh_session(session)
+        if current.get("status") == "completed":
+            current = self._notify_completed_session(current)
         return {"ok": True, "session": current, "automation": self.project_session(current)}
 
     def projection(
@@ -255,6 +259,8 @@ class BuilderAutomationService:
                 "automation": self.empty_projection(webspace_id=webspace_id),
             }
         current = self.refresh_session(session)
+        if current.get("status") == "completed":
+            current = self._notify_completed_session(current)
         return {"ok": True, "session": current, "automation": self.project_session(current)}
 
     @staticmethod
@@ -477,11 +483,89 @@ class BuilderAutomationService:
                     status,
                     message,
                 )
-            worker.run_once()
+            worker_result = worker.run_once()
             with _LOCK:
                 session = self._find_session_by_id(session_id)
                 if session:
-                    self.refresh_session(session)
+                    session = self.refresh_session(session)
+            if (
+                session
+                and isinstance(worker_result, Mapping)
+                and worker_result.get("ok")
+                and session.get("status") == "completed"
+                and self.materialize_on_completion
+            ):
+                self._finalize_completed_session(session)
+
+    def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
+        """Make a validated local result visible in the paired UI and chat."""
+        object_type = str(session.get("object_type") or "").strip()
+        object_id = str(session.get("object_id") or "").strip()
+        webspace_id = str(session.get("webspace_id") or "desktop").strip() or "desktop"
+        if object_type == "scenario" and object_id:
+            try:
+                from adaos.services.builder.workbench import BuilderWorkbenchService
+
+                asyncio.run(
+                    BuilderWorkbenchService(state_dir=self.state_dir).ensure_dev_webspace(
+                        webspace_id,
+                        runtime_scenario_id=object_id,
+                        wait_for_rebuild=True,
+                    )
+                )
+            except Exception:
+                # The durable completion remains valid; the user can retry the
+                # projection without rerunning Codex.
+                pass
+
+        self._notify_completed_session(session)
+
+    def _notify_completed_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
+        """Publish one idempotent terminal Builder message for a local task."""
+        current = dict(session)
+        task_id = str(current.get("current_task_id") or "").strip()
+        if task_id and str(current.get("completion_notified_task_id") or "").strip() == task_id:
+            return current
+
+        conversation_id = str(current.get("conversation_id") or "").strip()
+        if not conversation_id:
+            return current
+        try:
+            from adaos.services.agent_context import get_ctx
+            from adaos.services.conversation_response import materialize_response
+
+            result = current.get("last_result") if isinstance(current.get("last_result"), Mapping) else {}
+            object_type = str(current.get("object_type") or "").strip()
+            object_id = str(current.get("object_id") or "").strip()
+            webspace_id = str(current.get("webspace_id") or "desktop").strip() or "desktop"
+            summary = str(result.get("summary") or "").strip()
+            message = f"Локальный Codex завершил работу над {object_id}. Проверки пройдены."
+            if summary:
+                message += f" {summary}"
+            materialize_response(
+                {"message": message, "render_targets": ["text_tail"]},
+                webspace_id=webspace_id,
+                conversation_id=conversation_id,
+                channel_id="builder",
+                owner="skill:builder_skill",
+                bus=get_ctx().bus,
+                route_id="voice_chat",
+                actor_id="agent:builder_skill:builder",
+                actor_label="Конструктор",
+                thread_id=f"prompt-project:scenario:{object_id}" if object_type == "scenario" else None,
+                meta={
+                    "automation_session_id": current.get("session_id"),
+                    "task_id": task_id or None,
+                    "automation_status": "completed",
+                },
+                source="builder.automation",
+            )
+            current["completion_notified_task_id"] = task_id or None
+            current["completion_notified_at"] = _now_iso()
+            self._save_session(current)
+        except Exception:
+            pass
+        return current
 
     def _on_worker_progress(self, session_id: str, task_id: str, status: str, message: str) -> None:
         with _LOCK:
