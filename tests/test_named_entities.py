@@ -805,11 +805,15 @@ async def test_project_named_entity_registry_stays_pending_without_live_room(mon
     named_entity_projection.reset_named_entity_projection_diagnostics()
     named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
     named_entities.clear_named_entity_registry(webspace_id=webspace_id)
-    monkeypatch.setattr(
-        named_entity_projection,
-        "_apply_snapshot_to_live_room",
-        lambda _snapshot: {"accepted": False, "written": False, "payload": {}},
-    )
+    async def _pending_room(_snapshot):
+        return {
+            "accepted": False,
+            "written": False,
+            "payload": {},
+            "command": {"reason": "room_not_ready"},
+        }
+
+    monkeypatch.setattr(named_entity_projection, "_apply_snapshot_to_live_room", _pending_room)
 
     payload = await named_entity_projection.project_named_entity_registry(webspace_id=webspace_id)
 
@@ -845,11 +849,20 @@ async def test_subnet_alias_change_projects_named_entities_to_current_and_defaul
     )
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
     monkeypatch.setattr(named_entity_projection, "default_webspace_id", lambda: default_id)
-    monkeypatch.setattr(
-        named_entity_projection,
-        "_apply_snapshot_to_live_room",
-        lambda snapshot: {"accepted": True, "written": True, "payload": dict(snapshot.payload)},
-    )
+    async def _applied(snapshot):
+        return {
+            "accepted": True,
+            "written": True,
+            "payload": dict(snapshot.payload),
+            "command": {
+                "accepted": True,
+                "applied": True,
+                "changed": True,
+                "reason": "applied",
+            },
+        }
+
+    monkeypatch.setattr(named_entity_projection, "_apply_snapshot_to_live_room", _applied)
     named_entity_projection.clear_named_entity_projection_reconciler()
     named_entities.clear_named_entity_registry()
 

@@ -31,6 +31,78 @@ _LIVE_MAP_VALUE_SAFE_KEYS = {
     ("ui", "current_scenario"),
     ("runtime", "environment"),
 }
+_EMPTY_Y_UPDATE = b"\x00\x00"
+_LIVE_ROOM_COMMAND_DIAGNOSTICS_LOCK = threading.RLock()
+_LIVE_ROOM_COMMAND_DIAGNOSTICS: dict[str, Any] = {
+    "submitted_total": 0,
+    "applied_total": 0,
+    "unchanged_total": 0,
+    "pending_room_total": 0,
+    "rejected_total": 0,
+    "error_total": 0,
+    "direct_total": 0,
+    "owner_handoff_total": 0,
+    "last_result": None,
+}
+
+
+def _elapsed_ms(started: float) -> float:
+    return round(max(0.0, time.perf_counter() - started) * 1000.0, 3)
+
+
+def reset_live_room_command_diagnostics() -> None:
+    with _LIVE_ROOM_COMMAND_DIAGNOSTICS_LOCK:
+        _LIVE_ROOM_COMMAND_DIAGNOSTICS.update(
+            {
+                "submitted_total": 0,
+                "applied_total": 0,
+                "unchanged_total": 0,
+                "pending_room_total": 0,
+                "rejected_total": 0,
+                "error_total": 0,
+                "direct_total": 0,
+                "owner_handoff_total": 0,
+                "last_result": None,
+            }
+        )
+
+
+def live_room_command_diagnostics_snapshot() -> dict[str, Any]:
+    with _LIVE_ROOM_COMMAND_DIAGNOSTICS_LOCK:
+        result = dict(_LIVE_ROOM_COMMAND_DIAGNOSTICS)
+        last_result = result.get("last_result")
+        result["last_result"] = dict(last_result) if isinstance(last_result, dict) else None
+    result["schema"] = "adaos.yjs.live-room-command-diagnostics.v1"
+    result["updated_at"] = time.time()
+    return result
+
+
+def _record_live_room_command(result: dict[str, Any]) -> None:
+    public_result = {
+        key: value
+        for key, value in result.items()
+        if key not in {"mutator_result"}
+    }
+    with _LIVE_ROOM_COMMAND_DIAGNOSTICS_LOCK:
+        diagnostics = _LIVE_ROOM_COMMAND_DIAGNOSTICS
+        diagnostics["submitted_total"] = int(diagnostics.get("submitted_total") or 0) + 1
+        if result.get("applied"):
+            counter = "applied_total" if result.get("changed") else "unchanged_total"
+            diagnostics[counter] = int(diagnostics.get(counter) or 0) + 1
+        elif result.get("reason") == "room_not_ready":
+            diagnostics["pending_room_total"] = int(diagnostics.get("pending_room_total") or 0) + 1
+        elif result.get("reason") == "error":
+            diagnostics["error_total"] = int(diagnostics.get("error_total") or 0) + 1
+        else:
+            diagnostics["rejected_total"] = int(diagnostics.get("rejected_total") or 0) + 1
+        handoff = str(result.get("handoff") or "")
+        if handoff == "direct":
+            diagnostics["direct_total"] = int(diagnostics.get("direct_total") or 0) + 1
+        elif handoff == "owner_loop":
+            diagnostics["owner_handoff_total"] = int(
+                diagnostics.get("owner_handoff_total") or 0
+            ) + 1
+        diagnostics["last_result"] = public_result
 
 
 def _cacheable_live_map_value(value: Any) -> bool:
@@ -848,9 +920,231 @@ async def async_read_ydoc(
         yield ydoc
 
 
+def _execute_live_room_mutation(
+    room: Any,
+    webspace_id: str,
+    mutator: Callable[[Y.YDoc, Any], Any],
+    *,
+    root_names: list[str] | None,
+    source: str,
+    owner: str | None,
+    channel: str,
+    governed: bool,
+    update_callback: Callable[[dict[str, Any]], None] | None,
+    submitted_at: float,
+    handoff: str,
+) -> dict[str, Any]:
+    execution_started = time.perf_counter()
+    owner_token = owner or _resolve_yjs_write_owner()
+    result: dict[str, Any] = {
+        "accepted": True,
+        "applied": False,
+        "changed": False,
+        "reason": "error",
+        "webspace_id": webspace_id,
+        "source": source,
+        "owner": owner_token,
+        "channel": channel,
+        "root_names": list(root_names or []),
+        "handoff": handoff,
+        "queue_ms": round(max(0.0, execution_started - submitted_at) * 1000.0, 3),
+        "apply_ms": 0.0,
+        "total_ms": 0.0,
+        "update_bytes": 0,
+        "encode_mode": "transaction_diff",
+        "mutator_result": None,
+        "error": None,
+    }
+    try:
+        from adaos.services.yjs.governance import govern_primary_doc_write_sync
+
+        if not governed and not govern_primary_doc_write_sync(
+            webspace_id=webspace_id,
+            owner=owner_token,
+            root_names=list(root_names or []),
+            path=(
+                ",".join(
+                    str(item or "").strip()
+                    for item in list(root_names or [])
+                    if str(item or "").strip()
+                )
+                or "primary_shared_doc"
+            ),
+            source=source,
+            channel=channel,
+        ):
+            result["reason"] = "governance_rejected"
+            result["total_ms"] = _elapsed_ms(submitted_at)
+            return result
+    except Exception:
+        _log.debug(
+            "failed to apply live-room YJS primary-doc governance webspace=%s",
+            webspace_id,
+            exc_info=True,
+        )
+
+    apply_started = time.perf_counter()
+    before: bytes | None = None
+    update: bytes | None = None
+    try:
+        with ystore_write_metadata_sync(
+            root_names=list(root_names or []),
+            source=source,
+            owner=owner_token,
+            channel=channel,
+            governed=True,
+        ):
+            with room.ydoc.begin_transaction() as txn:
+                diff_v1 = getattr(txn, "diff_v1", None)
+                if not callable(diff_v1):
+                    result["encode_mode"] = "state_vector_fallback"
+                    before = Y.encode_state_vector(room.ydoc)
+                result["mutator_result"] = mutator(room.ydoc, txn)
+                if callable(diff_v1):
+                    update = bytes(diff_v1() or b"")
+        if result["encode_mode"] == "state_vector_fallback":
+            update = _encode_diff(room.ydoc, before)
+        if bytes(update or b"") == _EMPTY_Y_UPDATE:
+            update = None
+        result["update_bytes"] = len(update or b"")
+        result["changed"] = bool(update)
+        result["applied"] = True
+        result["reason"] = "applied" if update else "unchanged"
+        if update:
+            if update_callback is not None:
+                try:
+                    update_callback(
+                        {
+                            "webspace_id": webspace_id,
+                            "update_bytes": len(update),
+                            "source": source,
+                            "owner": owner_token,
+                            "channel": channel,
+                            "root_names": list(root_names or []),
+                            "live_room": True,
+                        }
+                    )
+                except Exception:
+                    _log.debug("live-room command update callback failed", exc_info=True)
+            mark_backend_room_update(
+                webspace_id,
+                update,
+                source=source,
+                owner=owner_token,
+                channel=channel,
+                root_names=list(root_names or []),
+                already_persisted=False,
+                governed=True,
+            )
+            _invalidate_live_map_value_cache_for_roots(webspace_id, root_names)
+    except Exception as exc:
+        result["reason"] = "error"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        _log.warning(
+            "live-room YJS command failed webspace=%s source=%s: %s",
+            webspace_id,
+            source,
+            exc,
+            exc_info=True,
+        )
+    result["apply_ms"] = _elapsed_ms(apply_started)
+    result["total_ms"] = _elapsed_ms(submitted_at)
+    return result
+
+
+async def submit_live_room_mutation(
+    webspace_id: str,
+    mutator: Callable[[Y.YDoc, Any], Any],
+    *,
+    root_names: list[str] | None = None,
+    source: str = "yjs.doc.submit_live_room_mutation",
+    owner: str | None = None,
+    channel: str = "core.yjs.live_room.command",
+    governed: bool = False,
+    update_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Submit a mutation to the active room owner and await its completion."""
+    submitted_at = time.perf_counter()
+    room = _resolve_live_room(webspace_id)
+    if not _live_room_pipeline_ready(room):
+        result = {
+            "accepted": False,
+            "applied": False,
+            "changed": False,
+            "reason": "room_not_ready",
+            "webspace_id": webspace_id,
+            "source": source,
+            "owner": owner,
+            "channel": channel,
+            "root_names": list(root_names or []),
+            "handoff": "none",
+            "queue_ms": 0.0,
+            "apply_ms": 0.0,
+            "total_ms": _elapsed_ms(submitted_at),
+            "update_bytes": 0,
+            "encode_mode": "none",
+            "mutator_result": None,
+            "error": None,
+        }
+        _record_live_room_command(result)
+        return result
+
+    owner_thread = getattr(room, "_thread_id", None)
+    owner_loop = getattr(room, "_loop", None)
+    current_thread = threading.get_ident()
+    current_loop = asyncio.get_running_loop()
+    direct = owner_thread in {None, current_thread} and owner_loop in {None, current_loop}
+
+    def _execute(handoff: str) -> dict[str, Any]:
+        return _execute_live_room_mutation(
+            room,
+            webspace_id,
+            mutator,
+            root_names=root_names,
+            source=source,
+            owner=owner,
+            channel=channel,
+            governed=governed,
+            update_callback=update_callback,
+            submitted_at=submitted_at,
+            handoff=handoff,
+        )
+
+    if direct:
+        result = _execute("direct")
+    elif owner_loop is not None and owner_loop.is_running():
+        async def _execute_on_owner() -> dict[str, Any]:
+            return _execute("owner_loop")
+
+        future = asyncio.run_coroutine_threadsafe(_execute_on_owner(), owner_loop)
+        result = await asyncio.wrap_future(future)
+    else:
+        result = {
+            "accepted": False,
+            "applied": False,
+            "changed": False,
+            "reason": "owner_loop_not_running",
+            "webspace_id": webspace_id,
+            "source": source,
+            "owner": owner,
+            "channel": channel,
+            "root_names": list(root_names or []),
+            "handoff": "none",
+            "queue_ms": 0.0,
+            "apply_ms": 0.0,
+            "total_ms": _elapsed_ms(submitted_at),
+            "update_bytes": 0,
+            "encode_mode": "none",
+            "mutator_result": None,
+            "error": "owner_loop_not_running",
+        }
+    _record_live_room_command(result)
+    return result
+
+
 def mutate_live_room(
     webspace_id: str,
-    mutator: Callable[[Y.YDoc, Any], None],
+    mutator: Callable[[Y.YDoc, Any], Any],
     *,
     root_names: list[str] | None = None,
     source: str = "yjs.doc.mutate_live_room",
@@ -868,66 +1162,19 @@ def mutate_live_room(
         return False
 
     def _apply() -> None:
-        owner_token = owner or _resolve_yjs_write_owner()
-        before: bytes | None = None
-        try:
-            from adaos.services.yjs.governance import govern_primary_doc_write_sync
-
-            if not governed and not govern_primary_doc_write_sync(
-                webspace_id=webspace_id,
-                owner=owner_token,
-                root_names=list(root_names or []),
-                path=",".join(str(item or "").strip() for item in list(root_names or []) if str(item or "").strip()) or "primary_shared_doc",
-                source=source,
-                channel=channel,
-            ):
-                return
-        except Exception:
-            _log.debug("failed to apply live-room YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
-        try:
-            try:
-                before = Y.encode_state_vector(room.ydoc)
-            except Exception:
-                before = None
-            with ystore_write_metadata_sync(
-                root_names=list(root_names or []),
-                source=source,
-                owner=owner_token,
-                channel=channel,
-                governed=True,
-            ):
-                with room.ydoc.begin_transaction() as txn:
-                    mutator(room.ydoc, txn)
-            update = _encode_diff(room.ydoc, before)
-            if update:
-                if update_callback is not None:
-                    try:
-                        update_callback(
-                            {
-                                "webspace_id": webspace_id,
-                                "update_bytes": len(update or b""),
-                                "source": source,
-                                "owner": owner_token,
-                                "channel": channel,
-                                "root_names": list(root_names or []),
-                                "live_room": True,
-                            }
-                        )
-                    except Exception:
-                        _log.debug("mutate_live_room update callback failed", exc_info=True)
-                mark_backend_room_update(
-                    webspace_id,
-                    update,
-                    source=source,
-                    owner=owner_token,
-                    channel=channel,
-                    root_names=list(root_names or []),
-                    already_persisted=False,
-                    governed=True,
-                )
-                _invalidate_live_map_value_cache_for_roots(webspace_id, root_names)
-        except Exception:
-            pass
+        _execute_live_room_mutation(
+            room,
+            webspace_id,
+            mutator,
+            root_names=root_names,
+            source=source,
+            owner=owner,
+            channel=channel,
+            governed=governed,
+            update_callback=update_callback,
+            submitted_at=time.perf_counter(),
+            handoff="legacy_schedule",
+        )
 
     return _run_on_room_thread(room, _apply)
 
@@ -984,6 +1231,9 @@ __all__ = [
     "async_read_ydoc",
     "try_read_live_map_value",
     "invalidate_live_map_value_cache",
+    "live_room_command_diagnostics_snapshot",
     "mutate_live_room",
+    "reset_live_room_command_diagnostics",
+    "submit_live_room_mutation",
     "apply_update_to_live_room",
 ]

@@ -229,6 +229,7 @@ def _new_reconcile_state(webspace_id: str) -> dict[str, Any]:
         "last_reason": None,
         "last_outcome": None,
         "last_error": None,
+        "last_command": None,
         "last_updated_at": None,
         "task": None,
     }
@@ -278,16 +279,17 @@ def clear_named_entity_projection_reconciler(*, webspace_id: str | None = None) 
                 task.cancel()
 
 
-def _apply_snapshot_to_live_room(snapshot: named_entities.NamedEntityRegistrySnapshot) -> dict[str, Any]:
-    from adaos.services.yjs.doc import mutate_live_room
+async def _apply_snapshot_to_live_room(
+    snapshot: named_entities.NamedEntityRegistrySnapshot,
+) -> dict[str, Any]:
+    from adaos.services.yjs.doc import submit_live_room_mutation
 
     payload = dict(snapshot.payload)
-    changed = {"value": False}
 
-    def _apply(ydoc: Any, txn: Any) -> None:
-        changed["value"] = _write_payload_to_doc(ydoc, txn, payload)
+    def _apply(ydoc: Any, txn: Any) -> bool:
+        return _write_payload_to_doc(ydoc, txn, payload)
 
-    accepted = mutate_live_room(
+    command = await submit_live_room_mutation(
         snapshot.webspace_id,
         _apply,
         root_names=["registry"],
@@ -296,9 +298,10 @@ def _apply_snapshot_to_live_room(snapshot: named_entities.NamedEntityRegistrySna
         channel="core.named_entities.live_room",
     )
     return {
-        "accepted": bool(accepted),
-        "written": bool(changed["value"]) if accepted else False,
+        "accepted": bool(command.get("applied")),
+        "written": bool(command.get("mutator_result")) if command.get("applied") else False,
         "payload": payload,
+        "command": command,
     }
 
 
@@ -328,8 +331,11 @@ async def _run_reconciler(webspace_id: str) -> None:
             timings_ms = {"snapshot_build": _elapsed_ms(build_started)}
             payload_bytes = _payload_size_bytes(snapshot.payload)
             apply_started = time.perf_counter()
-            result = _apply_snapshot_to_live_room(snapshot)
+            result = await _apply_snapshot_to_live_room(snapshot)
             timings_ms["live_room_apply"] = _elapsed_ms(apply_started)
+            command = result.get("command") if isinstance(result.get("command"), Mapping) else {}
+            timings_ms["command_queue"] = float(command.get("queue_ms") or 0.0)
+            timings_ms["command_apply"] = float(command.get("apply_ms") or 0.0)
             timings_ms["total"] = _elapsed_ms(total_started)
             with _RECONCILE_LOCK:
                 state = _reconcile_state(webspace_id)
@@ -337,24 +343,52 @@ async def _run_reconciler(webspace_id: str) -> None:
                 state["desired_revision"] = snapshot.revision
                 state["desired_fingerprint"] = snapshot.fingerprint
                 state["last_updated_at"] = time.time()
+                state["last_command"] = {
+                    key: command.get(key)
+                    for key in (
+                        "accepted",
+                        "applied",
+                        "changed",
+                        "reason",
+                        "handoff",
+                        "queue_ms",
+                        "apply_ms",
+                        "total_ms",
+                        "update_bytes",
+                        "encode_mode",
+                        "error",
+                    )
+                    if key in command
+                }
                 if result["accepted"]:
                     state["applied_revision"] = snapshot.revision
                     state["applied_fingerprint"] = snapshot.fingerprint
                     state["pending"] = False
                     state["last_outcome"] = "written" if result["written"] else "unchanged"
+                    state["last_error"] = None
                 else:
                     state["pending"] = True
-                    state["last_outcome"] = "pending_room"
+                    command_reason = str(command.get("reason") or "room_not_ready")
+                    state["last_outcome"] = (
+                        "pending_room" if command_reason == "room_not_ready" else "command_rejected"
+                    )
+                    state["last_error"] = (
+                        None
+                        if command_reason == "room_not_ready"
+                        else str(command.get("error") or command_reason)
+                    )
                 more_work = (
                     int(state["requested_generation"]) > target_generation
                     or bool(state["refresh_required"])
                 )
             with _DIAGNOSTICS_LOCK:
                 _DIAGNOSTICS["reconcile_total"] = int(_DIAGNOSTICS.get("reconcile_total") or 0) + 1
+            command_reason = str(command.get("reason") or "room_not_ready")
             _record_projection_attempt(
                 webspace_id=webspace_id,
                 outcome=(
-                    "pending"
+                    "pending" if not result["accepted"] and command_reason == "room_not_ready"
+                    else "error"
                     if not result["accepted"]
                     else "live_room"
                     if result["written"]

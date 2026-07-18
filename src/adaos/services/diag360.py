@@ -118,6 +118,31 @@ def _try_runtime_snapshots(webspace_id: str | None) -> dict[str, Any]:
     except Exception as exc:
         out["yjs_store"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     try:
+        from adaos.services.yjs.doc import live_room_command_diagnostics_snapshot
+
+        out["yjs_live_room_commands"] = redact(live_room_command_diagnostics_snapshot())
+    except Exception as exc:
+        out["yjs_live_room_commands"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        from adaos.services.named_entity_projection import (
+            named_entity_projection_diagnostics_snapshot,
+            named_entity_projection_reconciler_snapshot,
+        )
+
+        out["named_entity_projection"] = redact(
+            {
+                "diagnostics": named_entity_projection_diagnostics_snapshot(),
+                "reconciler": named_entity_projection_reconciler_snapshot(
+                    webspace_id=webspace_id,
+                ),
+            }
+        )
+    except Exception as exc:
+        out["named_entity_projection"] = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    try:
         from adaos.services.scenario.webspace_runtime import member_snapshot_rebuild_runtime_snapshot
 
         out["member_snapshot_rebuild"] = redact(member_snapshot_rebuild_runtime_snapshot(limit=25))

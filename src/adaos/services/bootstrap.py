@@ -2469,6 +2469,42 @@ class BootstrapService:
                                             )
                                 except Exception:
                                     pass
+                                try:
+                                    from adaos.services.yjs.doc import (
+                                        live_room_command_diagnostics_snapshot,
+                                    )
+
+                                    command_diag = live_room_command_diagnostics_snapshot()
+                                    last_command = command_diag.get("last_result")
+                                    if isinstance(last_command, dict):
+                                        lines.append(
+                                            "- yjs.live_room_command "
+                                            f"source={last_command.get('source')} "
+                                            f"webspace={last_command.get('webspace_id')} "
+                                            f"reason={last_command.get('reason')} "
+                                            f"handoff={last_command.get('handoff')} "
+                                            f"queue={last_command.get('queue_ms')}ms "
+                                            f"apply={last_command.get('apply_ms')}ms "
+                                            f"bytes={last_command.get('update_bytes')}"
+                                        )
+                                except Exception:
+                                    pass
+                                try:
+                                    from adaos.services.named_entity_projection import (
+                                        named_entity_projection_diagnostics_snapshot,
+                                    )
+
+                                    projection_diag = named_entity_projection_diagnostics_snapshot()
+                                    last_timings = projection_diag.get("last_timings_ms")
+                                    lines.append(
+                                        "- named_entities.projection "
+                                        f"webspace={projection_diag.get('last_webspace_id')} "
+                                        f"outcome={projection_diag.get('last_outcome')} "
+                                        f"payload={projection_diag.get('last_payload_bytes')}B "
+                                        f"timings={last_timings}"
+                                    )
+                                except Exception:
+                                    pass
                                 if lines:
                                     dump = "\n".join(lines)
                                     print("[diag] loop lag dump:\n" + dump)

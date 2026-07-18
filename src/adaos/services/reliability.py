@@ -4852,6 +4852,26 @@ def yjs_sync_runtime_snapshot(
     except Exception:
         weather_observer = {}
     try:
+        from adaos.services.yjs.doc import live_room_command_diagnostics_snapshot
+
+        live_room_commands = live_room_command_diagnostics_snapshot()
+    except Exception:
+        live_room_commands = {}
+    try:
+        from adaos.services.named_entity_projection import (
+            named_entity_projection_diagnostics_snapshot,
+            named_entity_projection_reconciler_snapshot,
+        )
+
+        named_entity_projection = {
+            "diagnostics": named_entity_projection_diagnostics_snapshot(),
+            "reconciler": named_entity_projection_reconciler_snapshot(
+                webspace_id=selected_webspace_id or None,
+            ),
+        }
+    except Exception:
+        named_entity_projection = {}
+    try:
         from adaos.services.yjs.load_mark import yjs_load_mark_snapshot
 
         load_mark = yjs_load_mark_snapshot(
@@ -5110,6 +5130,8 @@ def yjs_sync_runtime_snapshot(
         "action_overrides": action_overrides,
         "recovery_playbook": recovery_playbook,
         "recovery_guidance": recovery_guidance,
+        "live_room_commands": live_room_commands,
+        "named_entity_projection": named_entity_projection,
         "load_mark": load_mark,
         "selected_webspace": {
             **selected_webspace,

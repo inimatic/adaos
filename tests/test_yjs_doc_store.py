@@ -876,3 +876,131 @@ async def test_mutate_live_room_invalidates_cached_current_scenario(monkeypatch)
         True,
         "new_scenario",
     )
+
+
+async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypatch) -> None:
+    webspace_id = "live-room-command-direct"
+    room_doc = Y.YDoc()
+    room = type(
+        "Room",
+        (),
+        {
+            "ydoc": room_doc,
+            "ystore": object(),
+            "_task_group": object(),
+            "_thread_id": threading.get_ident(),
+            "_loop": asyncio.get_running_loop(),
+        },
+    )()
+    marked: list[bytes] = []
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
+    monkeypatch.setattr(
+        ydoc_module,
+        "mark_backend_room_update",
+        lambda _webspace_id, update, **_kwargs: marked.append(bytes(update)),
+    )
+
+    def _unexpected_full_doc_encode(*_args, **_kwargs):
+        raise AssertionError("live-room command should use the transaction diff")
+
+    monkeypatch.setattr(ydoc_module.Y, "encode_state_vector", _unexpected_full_doc_encode)
+    ydoc_module.reset_live_room_command_diagnostics()
+
+    result = await ydoc_module.submit_live_room_mutation(
+        webspace_id,
+        lambda ydoc, txn: (
+            ydoc.get_map("registry").set(txn, "revision", 1)
+            or True
+        ),
+        root_names=["registry"],
+        governed=True,
+    )
+
+    assert result["accepted"] is True
+    assert result["applied"] is True
+    assert result["changed"] is True
+    assert result["mutator_result"] is True
+    assert result["handoff"] == "direct"
+    assert result["encode_mode"] == "transaction_diff"
+    assert result["update_bytes"] == len(marked[0])
+    assert room_doc.get_map("registry").get("revision") == 1
+    diagnostics = ydoc_module.live_room_command_diagnostics_snapshot()
+    assert diagnostics["submitted_total"] == 1
+    assert diagnostics["applied_total"] == 1
+    assert diagnostics["direct_total"] == 1
+
+
+async def test_submit_live_room_mutation_hands_off_to_room_owner_loop(monkeypatch) -> None:
+    webspace_id = "live-room-command-owner-loop"
+    ready = threading.Event()
+    shared: dict[str, object] = {}
+
+    def _run_owner_loop() -> None:
+        class _OwnerRoom:
+            pass
+
+        owner_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(owner_loop)
+        room = _OwnerRoom()
+        room.ydoc = Y.YDoc()
+        room.ystore = object()
+        room._task_group = object()
+        room._thread_id = threading.get_ident()
+        room._loop = owner_loop
+        shared["loop"] = owner_loop
+        shared["thread_id"] = threading.get_ident()
+        shared["room"] = room
+        ready.set()
+        owner_loop.run_forever()
+        shared.pop("room", None)
+        del room
+        owner_loop.close()
+
+    owner_thread = threading.Thread(target=_run_owner_loop, name="test-yjs-room-owner")
+    owner_thread.start()
+    assert await asyncio.to_thread(ready.wait, 2.0)
+    owner_loop = shared["loop"]
+    mutation_threads: list[int] = []
+    observed_revisions: list[int] = []
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: shared["room"])
+    monkeypatch.setattr(ydoc_module, "mark_backend_room_update", lambda *_args, **_kwargs: None)
+
+    def _mutate(ydoc, txn) -> bool:
+        mutation_threads.append(threading.get_ident())
+        ydoc.get_map("registry").set(txn, "revision", 2)
+        observed_revisions.append(ydoc.get_map("registry").get("revision"))
+        return True
+
+    try:
+        result = await ydoc_module.submit_live_room_mutation(
+            webspace_id,
+            _mutate,
+            root_names=["registry"],
+            governed=True,
+        )
+        assert result["applied"] is True
+        assert result["handoff"] == "owner_loop"
+        assert mutation_threads == [shared["thread_id"]]
+        assert observed_revisions == [2]
+    finally:
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        await asyncio.to_thread(owner_thread.join, 2.0)
+    assert owner_thread.is_alive() is False
+
+
+async def test_submit_live_room_mutation_reports_pending_room(monkeypatch) -> None:
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: None)
+    ydoc_module.reset_live_room_command_diagnostics()
+
+    result = await ydoc_module.submit_live_room_mutation(
+        "live-room-command-pending",
+        lambda _ydoc, _txn: True,
+        root_names=["registry"],
+        governed=True,
+    )
+
+    assert result["accepted"] is False
+    assert result["applied"] is False
+    assert result["reason"] == "room_not_ready"
+    diagnostics = ydoc_module.live_room_command_diagnostics_snapshot()
+    assert diagnostics["pending_room_total"] == 1
