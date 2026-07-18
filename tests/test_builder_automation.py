@@ -203,6 +203,11 @@ def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, m
 
     monkeypatch.setattr(
         BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: calls.append("checkpoint") or [{"ok": True, "commit": "forge-1"}],
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
         "_prepare_and_activate_dev_skill",
         lambda self, skill_id, **kwargs: calls.append(f"activate:{skill_id}")
         or {"ok": True, "slot": "B"},
@@ -244,14 +249,20 @@ def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, m
         }
     )
 
-    assert calls == ["activate:recipes_skill", "ensure", "reload", "notify"]
+    assert calls == ["checkpoint", "activate:recipes_skill", "ensure", "reload", "notify"]
     assert saved[-1]["completion_readiness"]["ok"] is True
+    assert saved[-1]["completion_readiness"]["vcs_checkpoints"][0]["commit"] == "forge-1"
 
 
 def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     saved: list[dict] = []
     notified: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: [{"ok": True, "commit": "forge-1"}],
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_prepare_and_activate_dev_skill",
@@ -277,3 +288,44 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     assert saved[-1]["status"] == "failed"
     assert saved[-1]["last_failure"]["stage"] == "live_readiness"
     assert notified == []
+
+
+def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"], "commit": f"{kwargs['kind']}-sha"}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "last_result": {"summary": "Implemented recipe filters and details."},
+        }
+    )
+
+    assert calls == [
+        {
+            "kind": "skill",
+            "artifact_id": "recipes_skill",
+            "message": "Implemented recipe filters and details.",
+        },
+        {
+            "kind": "scenario",
+            "artifact_id": "recipes",
+            "message": "Implemented recipe filters and details.",
+        },
+    ]
+    assert [item["commit"] for item in checkpoints] == ["skill-sha", "scenario-sha"]

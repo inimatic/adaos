@@ -507,9 +507,11 @@ class BuilderAutomationService:
             "ok": False,
             "skill": None,
             "materialization": None,
+            "vcs_checkpoints": [],
             "completed_at": None,
         }
         try:
+            readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
             companion_skill_id = str(session.get("companion_skill_id") or "").strip()
             if companion_skill_id:
                 readiness["skill"] = self._prepare_and_activate_dev_skill(
@@ -571,6 +573,46 @@ class BuilderAutomationService:
             return
 
         self._notify_completed_session(current)
+
+    def _checkpoint_completed_artifacts(self, session: Mapping[str, Any]) -> list[dict[str, Any]]:
+        from adaos.services.builder.workspace import BuilderWorkspaceService
+
+        result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
+        message = " ".join(
+            str(
+                result.get("summary")
+                or result.get("message")
+                or session.get("implementation_brief")
+                or "Builder automation completed"
+            ).split()
+        )[:240]
+        object_type = str(session.get("object_type") or "").strip().lower().rstrip("s")
+        object_id = str(session.get("object_id") or "").strip()
+        companion_skill_id = str(session.get("companion_skill_id") or "").strip()
+        artifacts: list[tuple[str, str]] = []
+        if companion_skill_id:
+            artifacts.append(("skill", companion_skill_id))
+        if object_type in {"skill", "scenario"} and object_id and (object_type, object_id) not in artifacts:
+            artifacts.append((object_type, object_id))
+
+        service = BuilderWorkspaceService.from_context()
+        checkpoints: list[dict[str, Any]] = []
+        for kind, artifact_id in artifacts:
+            try:
+                checkpoints.append(
+                    dict(service.checkpoint_artifact(kind=kind, artifact_id=artifact_id, message=message) or {})
+                )
+            except Exception as exc:
+                checkpoints.append(
+                    {
+                        "ok": False,
+                        "kind": kind,
+                        "name": artifact_id,
+                        "message": message,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        return checkpoints
 
     def _prepare_and_activate_dev_skill(self, skill_id: str, *, webspace_id: str) -> dict[str, Any]:
         """Run package-external DEV lifecycle steps owned by the orchestrator."""

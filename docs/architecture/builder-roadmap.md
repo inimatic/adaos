@@ -241,6 +241,9 @@ Open work:
   Normalize the LLM `comment` as the commit message and persist commit SHA,
   digest, remote path, version, and failure evidence in the UI revision. Keep
   a valid local revision intact when the remote checkpoint fails.
+- [x] `[must]` Apply the checkpoint contract to completed automation output as
+  well as UI-only turns. Scenario automation pushes both the scenario and its
+  companion skill with the terminal result summary before runtime preparation.
 
 Primary references:
 

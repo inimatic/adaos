@@ -449,6 +449,10 @@ files from a successful LLM turn are written and validated, it calls
 message, Forge commit, digest, and remote path. A remote push failure is
 reported but does not erase or invalidate the already validated local
 revision; retry and recovery remain possible from the dev workspace.
+Automation completion applies the same rule to every materialized artifact:
+a scenario and its companion skill receive separate Forge checkpoints using
+the terminal implementation-result summary as their commit message before
+runtime preparation begins.
 
 This facade is intentionally not a new storage layer. It exists so Builder
 work can be driven from one command branch while source ownership remains in
