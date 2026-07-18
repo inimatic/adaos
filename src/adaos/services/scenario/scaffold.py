@@ -88,6 +88,17 @@ def _maybe_init_repo(root: Path, url: Optional[str], branch: Optional[str]) -> b
     return (root / ".git").exists()
 
 
+def _shared_workspace_repo(scenarios_root: Path, ctx: AgentContext) -> Path | None:
+    workspace = Path(ctx.paths.workspace_dir()).resolve()
+    if not (workspace / ".git").exists():
+        return None
+    try:
+        scenarios_root.resolve().relative_to(workspace)
+    except ValueError:
+        return None
+    return workspace
+
+
 def create(
     name: str,
     template: str = "template",
@@ -108,7 +119,12 @@ def create(
     scenarios_root = ctx.paths.scenarios_dir()
     scenarios_root.mkdir(parents=True, exist_ok=True)
 
-    repo_ready = _maybe_init_repo(scenarios_root, getattr(ctx.settings, "scenarios_monorepo_url", None), getattr(ctx.settings, "scenarios_monorepo_branch", None))
+    shared_workspace = _shared_workspace_repo(scenarios_root, ctx)
+    repo_ready = shared_workspace is not None or _maybe_init_repo(
+        scenarios_root,
+        getattr(ctx.settings, "scenarios_monorepo_url", None),
+        getattr(ctx.settings, "scenarios_monorepo_branch", None),
+    )
 
     target = _safe_subdir(scenarios_root, name)
     if target.exists():
@@ -134,7 +150,17 @@ def create(
     is_testing = os.getenv("ADAOS_TESTING") == "1"
     if repo_ready and not is_testing and registry is not None:
         git = getattr(ctx, "git", None)
-        if git and hasattr(git, "sparse_init") and hasattr(git, "sparse_set"):
+        if shared_workspace is not None and git and hasattr(git, "sparse_add"):
+            try:
+                git.sparse_add(str(shared_workspace), f"scenarios/{name}")
+            except Exception as exc:  # pragma: no cover
+                emit(
+                    ctx.bus,
+                    "scenario.warn",
+                    {"warn": f"sparse_add_failed: {exc!r}", "id": name},
+                    "scenario.scaffold",
+                )
+        elif git and hasattr(git, "sparse_init") and hasattr(git, "sparse_set"):
             try:
                 names = [r.name for r in registry.list()]
                 if name not in names:
