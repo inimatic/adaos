@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 from adaos.services import conversation_context, conversation_store
@@ -205,3 +206,112 @@ def context(
         allow_cross_owner_memory=allow_cross_owner_memory,
         budgets=budgets,
     )
+
+
+def ensure_builder_topic(
+    *,
+    webspace_id: str | None = None,
+    active_draft_id: str | None = None,
+    scenario_id: str | None = None,
+    dev_webspace_id: str | None = None,
+    project_id: str | None = None,
+    title: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ensure the canonical Builder conversation and one project topic."""
+
+    from adaos.services.conversation_links import ensure_builder_topic as _ensure
+
+    return dict(
+        _ensure(
+            webspace_id,
+            active_draft_id=active_draft_id,
+            scenario_id=scenario_id,
+            dev_webspace_id=dev_webspace_id,
+            project_id=project_id,
+            title=title,
+            meta=meta,
+        )
+        or {}
+    )
+
+
+def upsert_development_change(
+    *,
+    change_id: str,
+    conversation_id: str,
+    thread_id: str | None = None,
+    topic_id: str | None = None,
+    status: str = "accepted",
+    source_message_ids: Sequence[str] | None = None,
+    source_refs: Mapping[str, Any] | None = None,
+    artifact_refs: Sequence[Mapping[str, Any]] | None = None,
+    revision_refs: Sequence[Mapping[str, Any] | str] | None = None,
+    commit_refs: Sequence[Mapping[str, Any] | str] | None = None,
+    result_message_id: str | None = None,
+    request_id: str | None = None,
+    model: str | None = None,
+    summary: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Create or update the durable join for one Builder artifact change."""
+
+    return conversation_store.upsert_development_change(
+        change_id=change_id,
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        topic_id=topic_id,
+        status=status,
+        source_message_ids=source_message_ids,
+        source_refs=source_refs,
+        artifact_refs=artifact_refs,
+        revision_refs=revision_refs,
+        commit_refs=commit_refs,
+        result_message_id=result_message_id,
+        request_id=request_id,
+        model=model,
+        summary=summary,
+        meta=meta,
+    )
+
+
+def get_development_change(change_id: str) -> dict[str, Any] | None:
+    """Return one Builder Change aggregate by stable change id."""
+
+    return conversation_store.get_development_change(change_id)
+
+
+def list_development_changes(
+    *,
+    conversation_id: str | None = None,
+    topic_id: str | None = None,
+    artifact_kind: str | None = None,
+    artifact_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List bounded Builder Change aggregates."""
+
+    return conversation_store.list_development_changes(
+        conversation_id=conversation_id,
+        topic_id=topic_id,
+        artifact_kind=artifact_kind,
+        artifact_id=artifact_id,
+        limit=limit,
+    )
+
+
+__all__ = [
+    "append",
+    "context",
+    "current",
+    "delete",
+    "ensure_builder_topic",
+    "export",
+    "get",
+    "get_development_change",
+    "list_development_changes",
+    "open",
+    "redact",
+    "start_thread",
+    "upsert_development_change",
+]
