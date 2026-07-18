@@ -4715,13 +4715,23 @@ class SkillManager:
         slot_paths = env.build_slot_paths(target_version, target_slot)
         slot_meta = metadata.get("slots", {}).get(target_slot, {})
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
-        if not manifest_path.exists():
-            # prepare from DEV sources when missing
+        slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
+        slot_source_root = slot_paths.src_dir / "skills" / name
+        needs_prepare = (
+            not manifest_path.exists()
+            or slot_version != str(target_version).strip()
+            or not slot_source_root.exists()
+            or not any(slot_source_root.iterdir())
+        )
+        if needs_prepare:
+            # Prepare from DEV sources when the slot is absent, incomplete, or
+            # belongs to another patch version in the same runtime bucket.
             self.prepare_dev_runtime(name, version_override=target_version, run_tests=False, preferred_slot=target_slot)
             metadata = env.read_version_metadata(target_version)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
-            if not manifest_path.exists():
+            slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
+            if not manifest_path.exists() or slot_version != str(target_version).strip():
                 raise RuntimeError(f"slot {target_slot} of version {target_version} is not prepared")
 
         target_manifest = self._read_json_dict(manifest_path)
