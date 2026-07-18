@@ -87,7 +87,8 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
 7. **VCS checkpoint**: after a complete validated LLM result is materialized,
    Builder invokes the core `adaos dev skill|scenario push` service contract.
    The LLM `comment` is normalized into the Forge commit message, and the
-   returned commit SHA is attached to the local revision evidence.
+   returned commit SHA is attached to the local revision evidence and the
+   turn's Builder Change.
 8. **Preview**: AdaOS runs phrase probes, action previews, UI/materialization
    previews, and install/test dry-runs where available.
 9. **Review gate**: a human, policy rule, or narrower auto-apply profile
@@ -462,6 +463,35 @@ ownership on the core `adaos dev scenario|skill create` lifecycle.
 This facade is intentionally not a new storage layer. It exists so Builder
 work can be driven from one command branch while source ownership remains in
 the current dev workspace and lifecycle tools.
+
+## Conversation, Change, And Forge
+
+Builder uses one canonical conversation:
+`conv.skill.builder_skill.default`. Project isolation is provided by a stable
+topic/thread (`prompt-project:scenario:<id>` or
+`prompt-project:skill:<id>`), not by webspace-specific conversations. Prompt
+IDE, Voice, API, and other entrypoints therefore expose the same transcript
+when they select the same project.
+
+Each artifact-changing turn creates a Builder Change record. The record is the
+join between source messages, the Root LLM job, UI revisions, affected
+artifacts, and Forge commits. A single automation change may contain both a
+scenario commit and companion-skill commit. UI revision JSON stores the
+`change_id`; the conversation store keeps the complete aggregate.
+
+Forge commits contain:
+
+- a short human title derived from the validated LLM result or request;
+- allowlisted `AdaOS-Change-Id`, conversation/topic/thread, revision, model,
+  request/result, and source-message trailers.
+
+Forge never stores the full transcript as commit metadata. During
+`adaos dev scenario|skill update`, core resolves the latest commit for the
+artifact path, parses these trailers, and reconciles the local Builder Change.
+If the referenced project thread is empty, core may recover a request/result
+pair from `ui_revisions/NNN.json`; recovered messages are explicitly marked
+`source=forge_recovery` and are idempotent. Existing chat always wins over this
+fallback.
 
 ## Prompt IDE And Dev Webspace
 

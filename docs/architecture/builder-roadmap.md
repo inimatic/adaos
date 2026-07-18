@@ -241,6 +241,15 @@ Open work:
   Normalize the LLM `comment` as the commit message and persist commit SHA,
   digest, remote path, version, and failure evidence in the UI revision. Keep
   a valid local revision intact when the remote checkpoint fails.
+- [x] `[must]` Link each artifact-changing turn through a durable Builder
+  Change aggregate: source messages, project topic, LLM job/model, UI revision,
+  affected artifacts, terminal response, and one or more Forge commits.
+- [x] `[must]` Use one canonical Builder conversation across webspaces and
+  transports. Keep project history isolated by stable topic/thread and migrate
+  legacy webspace-specific Builder conversations without dropping messages.
+- [x] `[must]` Add allowlisted Builder Change trailers to Forge commits and
+  reconcile them on `dev update`. Recover synthetic chat from revision evidence
+  only when the project thread is empty; never duplicate a surviving transcript.
 - [x] `[must]` Apply the checkpoint contract to completed automation output as
   well as UI-only turns. Scenario automation pushes both the scenario and its
   companion skill with the terminal result summary before runtime preparation.
@@ -491,7 +500,7 @@ Open work:
 - [x] `[must]` Add a first-idea preview/correction golden fixture. It covers
   phrase-level Builder entry, draft preview, `webui.json` evidence, and a
   follow-up `change_view_representation` patch in the same Builder topic.
-- [ ] `[must]` Treat `builder_skill` as the semantic owner of Builder
+- [x] `[must]` Treat `builder_skill` as the semantic owner of Builder
   conversations across browser, Voice/global dialog, Telegram, and Prompt IDE.
 - [ ] `[must]` Make `builder_skill` consume conversation context packets,
   retrieved evidence refs, scoped memory, and Pending Actions instead of raw

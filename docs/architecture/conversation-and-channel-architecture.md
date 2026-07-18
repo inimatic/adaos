@@ -958,6 +958,17 @@ Why:
 
 Target behavior:
 
+- Builder has one canonical node-local conversation,
+  `conv.skill.builder_skill.default`, shared by browser, Voice, Prompt IDE,
+  API, and future transports. A webspace is a projection/entry context, not a
+  conversation identity boundary.
+- Every development object has a stable project topic. Scenarios use
+  `prompt-project:scenario:<id>`; skills use `prompt-project:skill:<id>`.
+  The topic is also the conversation `thread_id`, so selecting another project
+  changes the history filter without creating a second transcript.
+- Legacy `conv.skill.builder_skill.default.<webspace>` conversations are merged
+  into the canonical conversation. Message ids, project threads, turn traces,
+  and development-change links are preserved.
 - A user can enter Builder through browser, Telegram, or another transport.
 - Addressed messages to `builder` / `Builder` / `Строитель` / `строитель`
   resolve to the Builder channel. The runtime strips the agent address before
@@ -975,6 +986,26 @@ Target behavior:
   drafts opened from that source webspace.
 - Approval and apply decisions use Pending Actions, not plain chat messages as
   the durable decision source.
+
+### Builder Change
+
+A Builder turn that changes a development artifact creates one durable
+`adaos.conversation.development_change.v1` aggregate. It links:
+
+- source user/API message ids and request/turn refs;
+- the canonical conversation and project topic/thread;
+- LLM request, job, model, and terminal result message;
+- affected scenario/skill refs and UI revision refs;
+- one or more Forge commit refs when a change materializes several artifacts.
+
+The conversation ledger remains the source of the transcript. Git stores a
+short human commit title plus allowlisted `AdaOS-*` trailers containing link
+ids; it does not copy prompt or response bodies. A dev `update` reads the
+artifact-path commit, reconciles the Builder Change, and only reconstructs
+clearly marked synthetic chat messages from revision evidence when the target
+project thread has no surviving messages. Selecting an old revision, retrying,
+or rolling back creates a new Builder Change linked to the previous evidence;
+existing conversation and commit history are immutable.
 
 ## SDK Contract
 
