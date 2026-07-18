@@ -317,12 +317,12 @@ def test_builder_draft_create_and_checkpoint_delegate_to_core_dev_service(tmp_pa
 
     service = BuilderWorkspaceService(
         state_dir=tmp_path / "state",
-        repo_root=tmp_path,
+        repo_root=None,
         workspace_root=tmp_path / "workspace",
         skills_root=tmp_path / "workspace" / "skills",
         scenarios_root=tmp_path / "workspace" / "scenarios",
-        dev_skills_root=tmp_path / "dev" / "test-subnet" / "skills",
-        dev_scenarios_root=dev_scenarios,
+        dev_skills_root=None,
+        dev_scenarios_root=None,
         developer_service=_CoreDeveloperService(),
     )
 

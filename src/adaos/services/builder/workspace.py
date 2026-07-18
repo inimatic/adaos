@@ -434,8 +434,11 @@ class BuilderWorkspaceService:
         template_id = template_id or ("skill_default" if kind == "skill" else "scenario_default")
         draft_id = self._new_draft_id(artifact_id)
         draft_dir = self.drafts_dir() / draft_id
-        expected_artifact_root = self._dev_artifact_root(kind, artifact_id)
-        if expected_artifact_root.exists():
+        try:
+            expected_artifact_root = self._dev_artifact_root(kind, artifact_id)
+        except ValueError:
+            expected_artifact_root = None
+        if expected_artifact_root is not None and expected_artifact_root.exists():
             raise ValueError(
                 f"{kind} '{artifact_id}' already exists in DEV workspace at {expected_artifact_root}; "
                 "use descriptor_fix or remove/rename the DEV artifact first"
@@ -447,7 +450,7 @@ class BuilderWorkspaceService:
             else developer_service.create_scenario(artifact_id, template=template_id)
         )
         artifact_root = Path(getattr(created, "path", "")).expanduser().resolve()
-        if artifact_root != expected_artifact_root:
+        if expected_artifact_root is not None and artifact_root != expected_artifact_root:
             raise RuntimeError(
                 f"Core developer service created {kind} at unexpected path {artifact_root}; "
                 f"expected {expected_artifact_root}"
