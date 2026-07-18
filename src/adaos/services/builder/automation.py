@@ -500,6 +500,32 @@ class BuilderAutomationService:
         if task.get("failure_history"):
             current["last_failure"] = task.get("failure_history")[-1]
             current.pop("last_result", None)
+        readiness = current.get("completion_readiness")
+        if (
+            task_status == "completed"
+            and isinstance(readiness, Mapping)
+            and str(readiness.get("task_id") or "").strip() == task_id
+        ):
+            checkpoints = [
+                item
+                for item in readiness.get("vcs_checkpoints") or []
+                if isinstance(item, Mapping)
+            ]
+            failed_checkpoints = [item for item in checkpoints if not bool(item.get("ok"))]
+            if failed_checkpoints:
+                failed_refs = ", ".join(
+                    f"{item.get('kind') or 'artifact'}:{item.get('name') or '?'}"
+                    for item in failed_checkpoints
+                )
+                error = f"Forge checkpoint failed for {failed_refs}"
+                readiness = {**dict(readiness), "ok": False, "error": error}
+                current["completion_readiness"] = readiness
+                current["status"] = "failed"
+                current["last_failure"] = {
+                    "stage": "forge_checkpoint",
+                    "message": error,
+                    "updated_at": readiness.get("completed_at") or current.get("updated_at"),
+                }
         task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
         finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:

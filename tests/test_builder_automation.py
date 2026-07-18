@@ -285,6 +285,43 @@ def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_pat
     assert refreshed["progress"]["message"] == "Forge finalization"
 
 
+def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "task.1",
+                    "status": "completed",
+                    "updated_at": "2026-07-18T00:00:00+00:00",
+                    "result": {"summary": "code complete"},
+                    "progress": [],
+                }
+            ]
+        }
+    )
+
+    refreshed = service.refresh_session(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "current_task_id": "task.1",
+            "status": "completed",
+            "completion_readiness": {
+                "ok": True,
+                "task_id": "task.1",
+                "vcs_checkpoints": [
+                    {"ok": False, "kind": "scenario", "name": "recipes", "error": "504"}
+                ],
+            },
+        }
+    )
+
+    assert refreshed["status"] == "failed"
+    assert refreshed["completion_readiness"]["ok"] is False
+    assert refreshed["last_failure"]["stage"] == "forge_checkpoint"
+
+
 def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     published: list[dict] = []
