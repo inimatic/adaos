@@ -4866,7 +4866,7 @@ class SkillManager:
                 skill_env_path = local_env
 
         # Запускаем тесты: источник — каталог навыка; pytest сам найдёт tests/**/*.py
-        return run_tests(
+        return run_skill_tests(
             skill_dir,  # skill_source
             log_path=log_path,
             interpreter=interpreter,  # sys.executable или из манифеста

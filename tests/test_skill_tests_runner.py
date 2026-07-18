@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import io
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 
 from adaos.services.skill import tests_runner as mod
+from adaos.services.skill import manager as manager_mod
 
 
 def test_run_suite_does_not_write_completed_process_to_stdout(tmp_path, monkeypatch, capsys) -> None:
@@ -33,3 +36,49 @@ def test_run_suite_does_not_write_completed_process_to_stdout(tmp_path, monkeypa
     assert result.status == "passed"
     assert captured.out == ""
     assert "test stdout" in log.getvalue()
+
+
+def test_run_dev_skill_tests_calls_imported_runner_alias(tmp_path, monkeypatch) -> None:
+    dev_dir = tmp_path / "dev" / "sn_test"
+    skill_dir = dev_dir / "skills" / "control_skill"
+    skill_dir.mkdir(parents=True)
+    captured: dict = {}
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return dev_dir / "skills"
+
+        def dev_dir(self) -> Path:
+            return dev_dir
+
+        def package_dir(self):
+            return None
+
+        def package_path(self) -> Path:
+            return tmp_path / "src"
+
+    class _Environment:
+        def ensure_base(self) -> None:
+            return None
+
+        def data_root(self) -> Path:
+            return tmp_path / "runtime-data"
+
+    fake = SimpleNamespace(
+        caps=SimpleNamespace(require=lambda *args: None),
+        ctx=SimpleNamespace(paths=_Paths()),
+        _load_manifest=lambda _path: {"version": "0.1.0", "runtime": {}},
+        _runtime_env_dev=lambda _name: _Environment(),
+    )
+
+    def _run(skill_source, **kwargs):
+        captured.update({"skill_source": skill_source, **kwargs})
+        return {"pytest": mod.TestResult(name="pytest", status="passed")}
+
+    monkeypatch.setattr(manager_mod, "run_skill_tests", _run)
+
+    result = manager_mod.SkillManager.run_dev_skill_tests(fake, "control_skill")
+
+    assert result["pytest"].status == "passed"
+    assert captured["skill_source"] == skill_dir.resolve()
+    assert captured["dev_mode"] is True
