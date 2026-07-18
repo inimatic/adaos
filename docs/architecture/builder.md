@@ -117,6 +117,24 @@ before choosing Yjs, streams, tools/details, skill-local storage, or disk
 diagnostics. Runtime guards may warn, throttle, block, or quarantine unsafe
 routes, but they should not silently redesign a skill.
 
+## Builder Skill SDK Boundary
+
+Builder and Prompt IDE skills are application code. They consume stable
+capabilities through `adaos.sdk` and do not import or construct
+`adaos.services` implementations:
+
+```text
+Builder scenario UI -> skill tools -> adaos.sdk -> adaos.services -> adapters
+```
+
+The functional replacement control is Builder UI revision `030`, derived from
+the approved three-pane prototype `029`. `builder_sdk_control_skill` owns the
+SDK-backed project, technical-specification, LLM, workflow, preview,
+Automation, and Forge presentation adapters; `builder_skill` continues to own
+the dialog stream and UI-revision restore operation. The detailed capability
+mapping, migration checklist, and deferred granularity work live in
+[Builder SDK Boundary](builder-sdk-boundary.md).
+
 ## Relationship To Scenarios
 
 Scenarios remain the orchestration and desktop/workflow unit.

@@ -56,7 +56,7 @@ gate easy to read by priority.
 | 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, NLU Teacher candidate-confirmation, and initial service-supervisor runtime recovery slices exist; Builder/pairing/broader runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
-| 8. Product Experience | Partial: the dedicated SDK-backed Builder scenario now provides live project, file, preview, change, dialog, automation-state, and release-dry-run surfaces; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Complete for the control slice: guided clarification and developer evidence views exist. | Open: catalog/scenario/skill history. | Open: autonomous reproduction and legacy Prompt IDE retirement. |
+| 8. Product Experience | Partial: revision 030 preserves prototype 029 and provides the complete SDK-backed Prompt IDE project/TZ/LLM/VCS/workflow surface; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Complete for the control slice: structural golden checks, project context, Automation, and developer evidence views exist. | Open: richer cross-project history. | Open: autonomous reproduction and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
 
@@ -403,6 +403,12 @@ Current functional control milestone:
 - [x] `[must]` Exercise live project browsing, bounded file save, Builder
   Change evidence, synchronous preview materialization, Builder dialog,
   automation state, and release dry-run through the runtime tool boundary.
+- [x] `[must]` Preserve approved Builder prototype `029` in functional revision
+  `030`, including its three-pane layout and original widget/modal contracts.
+- [x] `[must]` Reflect the complete Prompt IDE project, technical-specification,
+  LLM, workflow, and VCS tool surface through SDK-backed Builder controls.
+- [x] `[should]` Protect the visual baseline and capability parity with focused
+  golden and browser-contract tests.
 - [x] `[should]` Keep Builder control operations on the public `adaos.sdk`
   plane and enforce the boundary with validation and tests.
 - [ ] `[deferred]` Recreate the control skill from an empty DEV project using

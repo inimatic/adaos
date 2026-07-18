@@ -34,12 +34,25 @@ of SDK operations into tool responses.
 - list and describe skill/scenario projects;
 - resolve a project without exposing runtime path-provider internals;
 - list, read, and write allowlisted project files with bounded payloads;
+- update bounded project metadata without losing scenario UI payloads;
 - list templates and create projects;
 - push, update, publish, and delete projects;
 - return plain JSON-compatible results and public SDK errors.
 
 Direct recursive deletion and construction of `.adaos/dev` paths do not belong
 in skills.
+
+### Prompt project context
+
+`adaos.sdk.developer.prompt_context` owns the development context formerly
+stored directly by Prompt IDE handlers:
+
+- read and atomically replace the base technical specification;
+- append bounded, immutable specification addenda;
+- persist the selected development LLM, provider, workflow state, and archive
+  marker;
+- keep the managed state file and base specification synchronized without
+  exposing DEV paths to skills.
 
 ### Builder preview
 
@@ -89,19 +102,36 @@ The Builder prototype is the migration control fixture. Its control skill must:
 The current control slice separates presentation from platform capabilities:
 
 ```text
-Builder scenario UI
-  |-- project/files/preview/automation/release -> builder_sdk_control_skill
-  |                                               -> adaos.sdk.*
-  `-- dialog stream                          -> builder_skill
+Builder scenario UI (prototype 029 geometry)
+  |-- project/files/TZ/preview/automation/release -> builder_sdk_control_skill
+  |                                                  -> adaos.sdk.*
+  `-- dialog stream + revision restore             -> builder_skill
 ```
 
-The scenario contains no static project, file, preview, or lifecycle mocks.
-Project discovery, bounded file editing, preview selection, Builder Change
-evidence, automation projection, Forge checkpointing, and publication dry-run
-are skill-backed. Real publication remains behind the runtime Action approval
-policy. Starting autonomous implementation is available in the UI, but is not
-part of the current functional smoke because it would introduce the second
-variable that this phase is intended to exclude.
+Revision `030` is derived from approved prototype `029`; it preserves the
+three-pane layout, the 14 original widget IDs/types/areas, and the five original
+modal contracts. The scenario contains no static project, file, preview, or
+lifecycle mocks. Project discovery, project composition, nested files,
+technical specification and addenda, metadata, LLM selection, workflow state,
+preview, Builder Change evidence, automation, Forge operations, publication,
+archive/restore, and revision rollback are skill-backed. Real publication and
+deletion remain behind explicit confirmation and runtime Action policy.
+Starting autonomous implementation is available in the UI, but is not part of
+the current functional smoke because it would introduce the second variable
+that this phase is intended to exclude.
+
+Prompt IDE compatibility is semantic rather than handler-for-handler. The
+Builder Change timeline replaces Prompt IDE's private `git/log.json`; all other
+Prompt IDE project operations map directly to public control tools:
+
+| Prompt IDE capability | Builder SDK control surface |
+| --- | --- |
+| project list/select/create and templates | `list_projects`, `select_preview`, `create_project`, `list_templates` |
+| project metadata, composition, files | `get_project`, `update_project_metadata`, `list_project_objects`, `list_project_file_tree`, `read_project_file`, `save_project_file` |
+| base TZ and addenda | `get_prompt_context`, `save_prompt_context`, `append_prompt_addendum` |
+| LLM and workflow state | `get_llm_options`, `set_llm_profile`, `set_workflow_state` |
+| VCS log/push/update/publish/delete | `list_changes`, `push_project`, `update_project`, `publish_project`, `delete_project` |
+| lifecycle, automation, archive, preview | `get_lifecycle`, `start_automation`, `submit_automation`, `get_automation`, `archive_project`, `get_preview` |
 
 The control skill is deliberately an application adapter rather than a second
 core API. It shapes SDK results for browser widgets and declares trusted
@@ -145,6 +175,9 @@ Tags indicate priority, not implementation order:
   operations.
 - [x] `[must]` Add `adaos.sdk.developer.projects` lifecycle operations with
   plain result contracts.
+- [x] `[must]` Add bounded project metadata updates and
+  `adaos.sdk.developer.prompt_context` for TZ, addenda, LLM, workflow, and
+  archive state.
 - [x] `[must]` Add contract tests that mock services below the SDK boundary.
 - [x] `[should]` Add `adaos.sdk.builder.artifacts` checkpoint operations.
 - [x] `[should]` Add Builder Change operations to the conversation SDK.
@@ -174,6 +207,10 @@ Tags indicate priority, not implementation order:
   JSON manifests.
 - [x] `[must]` Replace static Builder mock data with live project, file,
   preview, change, automation, and release skill bindings.
+- [x] `[must]` Restore the approved `029` three-pane prototype as the visual
+  baseline and store the functional result as real revision `030`.
+- [x] `[must]` Map every Prompt IDE project/TZ/LLM/VCS/workflow capability to a
+  Builder control data source or action without importing Prompt IDE code.
 - [x] `[must]` Keep YAML and JSON scenario descriptors version-aligned during
   DEV push without replacing their UI content.
 - [x] `[must]` Make DEV activation select the source manifest version by
@@ -191,7 +228,8 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
   the same checks.
 - [x] `[should]` Add the control fixture to a repeatable local smoke command.
-- [ ] `[could]` Retain a compact golden fixture after Prompt IDE removal.
+- [x] `[could]` Add a golden structural fixture that compares revision `030`
+  with `029` and rejects layout, widget-type, area, and modal loss.
 
 ### Phase 4: enforcement and cleanup
 
@@ -215,10 +253,10 @@ Tags indicate priority, not implementation order:
 ## Exit Criteria
 
 The functional-prototype gate for this phase is complete: the Builder scenario
-loads from DEV, materializes into a paired webspace, resolves its declared
-skills, reads and saves bounded files, records evidence, exposes idle
-automation state, performs publication dry-run, and answers a deterministic
-Builder dialog turn through the live HTTP runtime.
+loads from DEV, materializes the approved `029` structure as revision `030`,
+resolves its declared skills, exposes the full Prompt IDE capability surface,
+reads and saves bounded files, records evidence, exposes idle automation state,
+and keeps release/destructive actions governed.
 
 Prompt IDE can be retired only when:
 
@@ -249,9 +287,14 @@ The functional Builder pass was verified on the development machine on
 - live `/api/tools/call` execution for all first-paint Builder data sources,
   same-content bounded file save, publication dry-run, and deterministic
   `builder_skill.chat` project lookup;
-- synchronous materialization of `builder-http-smoke-dev`, reporting
-  `ready=true` and preserving all seven skill data sources and six
-  `callSkill` actions in the effective desktop projection.
+- synchronous materialization of `builder-sdk-control-dev`, reporting
+  `ready=true`, `current_scenario=builder`, revision `030`, 18 page widgets,
+  and the original `left/center/right` split;
+- live HTTP execution of all 12 read routes used by the interface, including
+  project composition, nested file tree, TZ state, lifecycle, LLM options,
+  templates, Automation idle state, Builder Changes, and preview binding;
+- 27 focused scenario/control/SDK tests, including the `029` structural golden
+  fixture and complete Prompt IDE capability mapping.
 
 The final smoke uses a dedicated source webspace so it does not change the
 operator's Prompt IDE selection. On PowerShell:
@@ -274,7 +317,7 @@ Builder scenario selected as its DEV runtime home.
 
 Activated migration versions for this pass are `builder_skill 0.2.113`,
 `builder_automation_skill 0.1.1`, `prompt_engineer_skill 0.6.8`, and
-`builder_sdk_control_skill 0.1.7`. The functional Builder scenario is on the
+`builder_sdk_control_skill 0.1.9`. The functional Builder scenario is on the
 `0.2.2` version. Runtime self-tests and live materialization use dedicated
 webspaces and do not change the operator's Prompt IDE selection.
 

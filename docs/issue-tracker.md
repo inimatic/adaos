@@ -4171,17 +4171,26 @@ criteria are maintained in
 
 #### BUILDER-SDK-001: Move Prompt IDE and Builder skills onto the SDK plane
 
-Status: in progress.
+Status: functional control slice complete; autonomous reproduction and legacy
+retirement remain deferred.
 
 Actions:
 
 - [x] `[must]` Document target SDK ownership and migration constraints.
-- [ ] `[must]` Land Builder preview, automation, and developer-project SDK
+- [x] `[must]` Land Builder preview, automation, developer-project, metadata,
+  and prompt-context SDK
   operations with contract tests.
-- [ ] `[must]` Migrate Prompt IDE and Builder Automation consumers without
+- [x] `[must]` Migrate Prompt IDE preview/event and Builder Automation consumers without
   breaking the legacy Prompt IDE rollback path.
-- [ ] `[must]` Add and run an SDK-only Builder control skill in the DEV
+- [x] `[must]` Add and run an SDK-only Builder control skill in the DEV
   snapshot.
-- [ ] `[should]` Enforce the boundary for migrated/new skills.
+- [x] `[must]` Preserve prototype `029` as functional revision `030` and map
+  the complete Prompt IDE capability surface to SDK-backed controls.
+- [x] `[should]` Enforce the boundary for migrated/new skills and add a `029`
+  structural golden fixture.
+- [ ] `[should]` Move the remaining legacy Prompt IDE DEV file lifecycle onto
+  `adaos.sdk.developer.projects` before legacy retirement.
+- [ ] `[deferred]` Recreate the control skill from an empty project through
+  AdaOS autonomous programming and pass the same checks.
 - [ ] `[deferred]` Decompose large Builder and Prompt Engineer modules under a
   separate characterization-test plan.
