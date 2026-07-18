@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
@@ -1921,6 +1922,168 @@ def compact_registry_payload(
     }
 
 
+@dataclass(frozen=True)
+class NamedEntityRegistrySnapshot:
+    webspace_id: str
+    revision: int
+    fingerprint: str
+    payload: Mapping[str, Any]
+    records_by_ref: Mapping[str, Mapping[str, Any]]
+    changed_refs: tuple[str, ...] = field(default_factory=tuple)
+    built_at: float = 0.0
+
+    def to_dict(self, *, include_payload: bool = True) -> dict[str, Any]:
+        result = {
+            "schema": "adaos.named-entity-registry.snapshot.v1",
+            "webspace_id": self.webspace_id,
+            "revision": self.revision,
+            "fingerprint": self.fingerprint,
+            "record_total": len(self.records_by_ref),
+            "changed_refs": list(self.changed_refs),
+            "built_at": self.built_at,
+        }
+        if include_payload:
+            result["payload"] = dict(self.payload)
+        return result
+
+
+class NamedEntityRegistry:
+    """Versioned canonical snapshots for resolver and projection consumers."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._snapshots: dict[str, NamedEntityRegistrySnapshot] = {}
+        self._refresh_total = 0
+        self._changed_total = 0
+        self._unchanged_total = 0
+
+    @staticmethod
+    def _records_by_ref(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        return {
+            str(item.get("canonical_ref") or "").strip(): dict(item)
+            for item in items
+            if isinstance(item, Mapping) and str(item.get("canonical_ref") or "").strip()
+        }
+
+    @staticmethod
+    def _changed_refs(
+        previous: Mapping[str, Mapping[str, Any]],
+        current: Mapping[str, Mapping[str, Any]],
+    ) -> tuple[str, ...]:
+        changed = set(previous).symmetric_difference(current)
+        for canonical_ref in set(previous).intersection(current):
+            if previous[canonical_ref].get("fingerprint") != current[canonical_ref].get("fingerprint"):
+                changed.add(canonical_ref)
+        return tuple(sorted(changed))
+
+    def refresh(
+        self,
+        *,
+        webspace_id: str | None = None,
+        service: NamedEntityService | None = None,
+    ) -> NamedEntityRegistrySnapshot:
+        webspace = _text(webspace_id) or "desktop"
+        payload = compact_registry_payload(webspace_id=webspace, service=service)
+        summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+        fingerprint = str(summary.get("fingerprint") or "")
+        records_by_ref = self._records_by_ref(payload)
+        built_at = time.time()
+        with self._lock:
+            self._refresh_total += 1
+            previous = self._snapshots.get(webspace)
+            if previous is not None and previous.fingerprint == fingerprint:
+                self._unchanged_total += 1
+                return previous
+            revision = int(previous.revision if previous is not None else 0) + 1
+            changed_refs = self._changed_refs(previous.records_by_ref if previous is not None else {}, records_by_ref)
+            projected_payload = dict(payload)
+            projected_summary = dict(summary)
+            projected_summary["registry_revision"] = revision
+            projected_payload["summary"] = projected_summary
+            snapshot = NamedEntityRegistrySnapshot(
+                webspace_id=webspace,
+                revision=revision,
+                fingerprint=fingerprint,
+                payload=projected_payload,
+                records_by_ref=records_by_ref,
+                changed_refs=changed_refs,
+                built_at=built_at,
+            )
+            self._snapshots[webspace] = snapshot
+            self._changed_total += 1
+            return snapshot
+
+    def get(
+        self,
+        *,
+        webspace_id: str | None = None,
+        service: NamedEntityService | None = None,
+    ) -> NamedEntityRegistrySnapshot:
+        webspace = _text(webspace_id) or "desktop"
+        with self._lock:
+            snapshot = self._snapshots.get(webspace)
+        return snapshot if snapshot is not None else self.refresh(webspace_id=webspace, service=service)
+
+    def clear(self, *, webspace_id: str | None = None) -> None:
+        webspace = _text(webspace_id)
+        with self._lock:
+            if webspace:
+                self._snapshots.pop(webspace, None)
+            else:
+                self._snapshots.clear()
+                self._refresh_total = 0
+                self._changed_total = 0
+                self._unchanged_total = 0
+
+    def diagnostics_snapshot(self, *, webspace_id: str | None = None) -> dict[str, Any]:
+        webspace = _text(webspace_id)
+        with self._lock:
+            snapshots = list(self._snapshots.values())
+            if webspace:
+                snapshots = [item for item in snapshots if item.webspace_id == webspace]
+            return {
+                "schema": "adaos.named-entity-registry.diagnostics.v1",
+                "webspace_id": webspace or None,
+                "refresh_total": self._refresh_total,
+                "changed_total": self._changed_total,
+                "unchanged_total": self._unchanged_total,
+                "snapshot_total": len(snapshots),
+                "snapshots": [item.to_dict(include_payload=False) for item in snapshots],
+                "updated_at": time.time(),
+            }
+
+
+_REGISTRY = NamedEntityRegistry()
+
+
+def get_named_entity_registry() -> NamedEntityRegistry:
+    return _REGISTRY
+
+
+def refresh_named_entity_registry_snapshot(
+    *,
+    webspace_id: str | None = None,
+    service: NamedEntityService | None = None,
+) -> NamedEntityRegistrySnapshot:
+    return _REGISTRY.refresh(webspace_id=webspace_id, service=service)
+
+
+def named_entity_registry_snapshot(
+    *,
+    webspace_id: str | None = None,
+    refresh: bool = False,
+    service: NamedEntityService | None = None,
+) -> NamedEntityRegistrySnapshot:
+    if refresh:
+        return _REGISTRY.refresh(webspace_id=webspace_id, service=service)
+    return _REGISTRY.get(webspace_id=webspace_id, service=service)
+
+
+def clear_named_entity_registry(*, webspace_id: str | None = None) -> None:
+    _REGISTRY.clear(webspace_id=webspace_id)
+
+
 def entity_event_payload(
     *,
     entity_ref: str,
@@ -1974,21 +2137,27 @@ __all__ = [
     "EntityResolutionMatch",
     "EntityResolutionResult",
     "NamedEntityRecord",
+    "NamedEntityRegistry",
+    "NamedEntityRegistrySnapshot",
     "NamedEntityService",
     "apply_alias_deprecate",
     "apply_alias_add",
     "apply_alias_remove",
     "canonical_device_ref",
+    "clear_named_entity_registry",
     "compatibility_device_ref",
     "compact_registry_payload",
     "device_entity_lifecycle_event_envelopes",
     "entity_event_payload",
     "get_named_entity_service",
+    "get_named_entity_registry",
     "list_entities",
     "normalize_entity_label",
+    "named_entity_registry_snapshot",
     "propose_alias_deprecate",
     "propose_alias_add",
     "propose_alias_remove",
     "resolve_display_label",
     "resolve_text",
+    "refresh_named_entity_registry_snapshot",
 ]

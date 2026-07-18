@@ -381,7 +381,7 @@ def _updated(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
-_ENTITY_REGISTRY_FIELDS = {
+_ENTITY_LIFECYCLE_FIELDS = {
     "access_class",
     "aliases",
     "browser_family",
@@ -400,14 +400,43 @@ _ENTITY_REGISTRY_FIELDS = {
     "user_agent",
 }
 
+# Only fields represented by NamedEntityRecord.fingerprint belong here.
+# Transport/session facts still emit lifecycle events, but must not invalidate
+# the compact registry projection by themselves.
+_ENTITY_REGISTRY_FIELDS = {
+    "aliases",
+    "browser_family",
+    "display_name",
+    "device_display_name",
+    "form_factor",
+    "hostname",
+    "labels",
+    "last_webspace_id",
+    "node_names",
+    "os_name",
+}
+
 
 def _entity_registry_view(entry: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(entry, Mapping):
         return {}
     kind_token = str(entry.get("kind") or "").strip()
-    kind: LinkKind = "redevice" if kind_token == "redevice" else ("member" if kind_token == "member" else "browser")
+    kind: LinkKind = (
+        "redevice" if kind_token == "redevice" else ("member" if kind_token == "member" else "browser")
+    )
     normalized = _normalize_entry(kind, str(entry.get("id") or ""), entry)
     return {key: normalized.get(key) for key in sorted(_ENTITY_REGISTRY_FIELDS)}
+
+
+def _entity_lifecycle_view(entry: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        return {}
+    kind_token = str(entry.get("kind") or "").strip()
+    kind: LinkKind = (
+        "redevice" if kind_token == "redevice" else ("member" if kind_token == "member" else "browser")
+    )
+    normalized = _normalize_entry(kind, str(entry.get("id") or ""), entry)
+    return {key: normalized.get(key) for key in sorted(_ENTITY_LIFECYCLE_FIELDS)}
 
 
 def _entity_registry_fields_changed(
@@ -423,6 +452,7 @@ def _emit_entity_registry_changed(
     current: Mapping[str, Any],
     *,
     reason: str,
+    registry_changed: bool,
 ) -> None:
     try:
         from adaos.services import named_entities
@@ -433,8 +463,8 @@ def _emit_entity_registry_changed(
         if not entry_id:
             return
         webspace_id = str(current.get("last_webspace_id") or "").strip()
-        previous_view = _entity_registry_view(previous)
-        current_view = _entity_registry_view(current)
+        previous_view = _entity_lifecycle_view(previous)
+        current_view = _entity_lifecycle_view(current)
         events = list(
             named_entities.device_entity_lifecycle_event_envelopes(
                 kind=kind,
@@ -445,20 +475,21 @@ def _emit_entity_registry_changed(
                 reason=reason,
             )
         )
-        payload = named_entities.entity_event_payload(
-            entity_ref=f"device:{kind}:{entry_id}",
-            entity_kind=f"device.{kind}",
-            source="access_links",
-            scope={
-                "device_id": entry_id,
-                "link_kind": kind,
-                **({"webspace_id": webspace_id} if webspace_id else {}),
-            },
-            previous=previous_view,
-            current=current_view,
-            reason=reason,
-        )
-        events.append({"topic": named_entities.ENTITY_REGISTRY_CHANGED, "payload": payload})
+        if registry_changed:
+            payload = named_entities.entity_event_payload(
+                entity_ref=f"device:{kind}:{entry_id}",
+                entity_kind=f"device.{kind}",
+                source="access_links",
+                scope={
+                    "device_id": entry_id,
+                    "link_kind": kind,
+                    **({"webspace_id": webspace_id} if webspace_id else {}),
+                },
+                previous=_entity_registry_view(previous),
+                current=_entity_registry_view(current),
+                reason=reason,
+            )
+            events.append({"topic": named_entities.ENTITY_REGISTRY_CHANGED, "payload": payload})
         bus = get_ctx().bus
         for event in events:
             topic = str(event.get("topic") or "").strip()
@@ -477,8 +508,16 @@ def _emit_entity_registry_changed_if_needed(
     *,
     reason: str,
 ) -> None:
-    if _entity_registry_fields_changed(previous, current):
-        _emit_entity_registry_changed(kind, previous, current, reason=reason)
+    registry_changed = _entity_registry_fields_changed(previous, current)
+    lifecycle_changed = _entity_lifecycle_view(previous) != _entity_lifecycle_view(current)
+    if registry_changed or lifecycle_changed:
+        _emit_entity_registry_changed(
+            kind,
+            previous,
+            current,
+            reason=reason,
+            registry_changed=registry_changed,
+        )
 
 
 def _emit_entity_event_envelopes(events: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]) -> None:

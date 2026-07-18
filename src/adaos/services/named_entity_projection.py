@@ -150,7 +150,8 @@ async def project_named_entity_registry(*, webspace_id: str | None = None) -> di
     total_started = time.perf_counter()
     webspace = webspace_id or default_webspace_id()
     build_started = time.perf_counter()
-    payload = named_entities.compact_registry_payload(webspace_id=webspace)
+    snapshot = named_entities.refresh_named_entity_registry_snapshot(webspace_id=webspace)
+    payload = dict(snapshot.payload)
     timings_ms = {"snapshot_build": _elapsed_ms(build_started)}
     payload_bytes = _payload_size_bytes(payload)
     changed = {"value": False}

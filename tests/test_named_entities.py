@@ -444,6 +444,32 @@ def test_compact_registry_payload_reports_conflicts_per_locale() -> None:
     }
 
 
+def test_named_entity_registry_snapshot_revisions_only_change_with_content() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    registry = named_entities.NamedEntityRegistry()
+
+    first = registry.refresh(webspace_id="desktop", service=service)
+    second = registry.refresh(webspace_id="desktop", service=service)
+
+    assert first.revision == 1
+    assert second is first
+    assert first.changed_refs == ("skill:browsers_skill",)
+    diagnostics = registry.diagnostics_snapshot(webspace_id="desktop")
+    assert diagnostics["refresh_total"] == 2
+    assert diagnostics["changed_total"] == 1
+    assert diagnostics["unchanged_total"] == 1
+
+
 def test_entity_event_payload_carries_locale_metadata() -> None:
     payload = named_entities.entity_event_payload(
         entity_ref="device:member:node-1",

@@ -27,11 +27,12 @@ def test_browser_session_metadata_updates_emit_named_entity_invalidation(monkeyp
     _patch_registry_store(monkeypatch)
     events: list[dict[str, object]] = []
 
-    def _emit(kind, previous, current, *, reason):
+    def _emit(kind, previous, current, *, reason, registry_changed):
         events.append(
             {
                 "kind": kind,
                 "reason": reason,
+                "registry_changed": registry_changed,
                 "previous": dict(previous or {}),
                 "current": dict(current or {}),
             }
@@ -307,6 +308,7 @@ def test_access_links_emits_specific_lifecycle_events_before_registry_invalidati
             "last_webspace_id": "desktop",
         },
         reason="browser_session.changed",
+        registry_changed=True,
     )
 
     assert [topic for topic, _payload in emitted] == [
@@ -315,6 +317,22 @@ def test_access_links_emits_specific_lifecycle_events_before_registry_invalidati
         named_entities.ENTITY_REGISTRY_CHANGED,
     ]
     assert emitted[1][1]["current"]["draft_name"] == "Edge on Windows"
+
+
+def test_transport_metadata_emits_lifecycle_without_registry_invalidation(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    calls: list[dict[str, object]] = []
+
+    def _emit(_kind, _previous, _current, *, reason, registry_changed):
+        calls.append({"reason": reason, "registry_changed": registry_changed})
+
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed", _emit)
+    access_links.touch_browser_session("dev-browser", webspace_id="desktop", browser_family="Edge")
+    calls.clear()
+
+    access_links.touch_browser_session("dev-browser", user_agent="Mozilla/5.0 Edg/999")
+
+    assert calls == [{"reason": "browser_session.changed", "registry_changed": False}]
 
 
 def test_add_browser_alias_persists_label_and_updates_named_entity_resolution(monkeypatch) -> None:
