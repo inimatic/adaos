@@ -11,7 +11,7 @@ from jsonschema import Draft7Validator
 from adaos.sdk.scenarios.runtime import ActionRegistry, ScenarioModel, ScenarioRuntime, default_registry
 
 
-_SCENARIO_MANIFESTS = ("scenario.yaml", "scenario.yml", "scenario.json")
+_SCENARIO_MANIFESTS = ("scenario.json", "scenario.yaml", "scenario.yml")
 _SKILL_MANIFESTS = ("skill.yaml", "skill.yml")
 
 

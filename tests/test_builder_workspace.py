@@ -556,7 +556,7 @@ def test_root_dev_scenario_manifest_update_keeps_yaml_and_json_versions_aligned(
 
     yaml_payload = yaml.safe_load((target / "scenario.yaml").read_text(encoding="utf-8"))
     json_payload = json.loads((target / "scenario.json").read_text(encoding="utf-8"))
-    assert metadata["version"] != "0.2.0"
+    assert metadata["version"] == "0.2.0"
     assert yaml_payload["version"] == json_payload["version"] == metadata["version"]
     assert yaml_payload["updated_at"] == json_payload["updated_at"]
     assert json_payload["ui"] == {"application": {}}

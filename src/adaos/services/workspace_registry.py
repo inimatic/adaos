@@ -370,7 +370,7 @@ def _find_existing_registry_entry(
 
 
 def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, dict[str, Any]]:
-    candidates = ("skill.yaml",) if kind == "skills" else ("scenario.yaml", "scenario.yml", "scenario.json")
+    candidates = ("skill.yaml",) if kind == "skills" else ("scenario.json", "scenario.yaml", "scenario.yml")
     for candidate in candidates:
         path = directory / candidate
         if not path.exists():

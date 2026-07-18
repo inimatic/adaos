@@ -1223,7 +1223,7 @@ def _resolve_dev_scenario_file(name: str, base: Path) -> Path | None:
     for root in search_roots:
         if not root.exists():
             continue
-        for filename in ("scenario.yaml", "scenario.yml", "scenario.json"):
+        for filename in ("scenario.json", "scenario.yaml", "scenario.yml"):
             candidate = root / filename
             if candidate.exists():
                 return candidate

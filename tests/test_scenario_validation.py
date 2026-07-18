@@ -77,6 +77,24 @@ def test_scenario_validation_rejects_undeclared_or_missing_routes(tmp_path: Path
     }
 
 
+def test_scenario_json_is_canonical_when_legacy_yaml_is_also_present(tmp_path: Path) -> None:
+    scenario = _write_scenario(
+        tmp_path,
+        "dual_manifest",
+        depends=["missing_skill"],
+        route="missing_skill.check",
+    )
+    (scenario / "scenario.yaml").write_text(
+        "id: dual_manifest\nversion: 0.1.0\nsteps: []\n",
+        encoding="utf-8",
+    )
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is False
+    assert any(issue.code == "scenario.dependency.missing" for issue in report.issues)
+
+
 def test_root_push_preflight_uses_dependency_aware_scenario_validation(tmp_path: Path) -> None:
     _write_skill(tmp_path, "smoke_skill", "check")
     valid = _write_scenario(
