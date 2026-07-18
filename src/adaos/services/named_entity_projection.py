@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from typing import Any, Mapping
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services import named_entities
+from adaos.services.yjs.json_merge import set_map_value_if_changed
 from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.named_entities.projection")
@@ -137,19 +139,75 @@ def _resolve_webspace_id(payload: Mapping[str, Any] | None = None) -> str:
     return default_webspace_id()
 
 
+NAMED_ENTITIES_V2_KEY = "namedEntitiesV2"
+NAMED_ENTITIES_V2_SCHEMA = "adaos.named-entities.projection.v2"
+
+
+def _legacy_projection_enabled() -> bool:
+    return str(os.getenv("ADAOS_NAMED_ENTITY_LEGACY_PROJECTION") or "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _v2_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
+    entities = {
+        str(item.get("canonical_ref") or "").strip(): dict(item)
+        for item in items
+        if isinstance(item, Mapping) and str(item.get("canonical_ref") or "").strip()
+    }
+    conflicts_by_key: dict[str, Any] = {}
+    for index, item in enumerate(conflicts):
+        if not isinstance(item, Mapping):
+            continue
+        locale = str(item.get("locale") or "und")
+        identity = str(item.get("normalized") or item.get("label") or index)
+        conflicts_by_key[f"{locale}:{identity}"] = dict(item)
+    return {
+        "meta": {
+            "schema": NAMED_ENTITIES_V2_SCHEMA,
+            "version": 2,
+            "webspace_id": str(payload.get("webspace_id") or ""),
+            "revision": int(summary.get("registry_revision") or 0),
+            "fingerprint": str(summary.get("fingerprint") or ""),
+            "count": len(entities),
+            "conflict_count": len(conflicts_by_key),
+            "updated_at": summary.get("updated_at"),
+        },
+        "entities": entities,
+        "conflicts": conflicts_by_key,
+    }
+
+
+def _remove_map_key(y_map: Any, txn: Any, key: str) -> bool:
+    try:
+        if y_map.get(key) is None:
+            return False
+        y_map.pop(txn, key)
+        return True
+    except Exception:
+        return False
+
+
 def _write_payload_to_doc(ydoc: Any, txn: Any, payload: Mapping[str, Any]) -> bool:
     registry_map = ydoc.get_map("registry")
-    current = registry_map.get("named_entities")
-    current_summary = current.get("summary") if isinstance(current, Mapping) else {}
-    next_summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
-    if (
-        isinstance(current_summary, Mapping)
-        and current_summary.get("fingerprint")
-        and current_summary.get("fingerprint") == next_summary.get("fingerprint")
-    ):
-        return False
-    registry_map.set(txn, "named_entities", dict(payload))
-    return True
+    changed, _mode = set_map_value_if_changed(registry_map, txn, NAMED_ENTITIES_V2_KEY, _v2_payload(payload))
+    if _legacy_projection_enabled():
+        legacy_changed, _legacy_mode = set_map_value_if_changed(
+            registry_map,
+            txn,
+            "named_entities",
+            dict(payload),
+        )
+        changed = changed or legacy_changed
+    else:
+        changed = _remove_map_key(registry_map, txn, "named_entities") or changed
+    return changed
 
 
 _RECONCILE_LOCK = threading.RLock()

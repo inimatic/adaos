@@ -875,3 +875,96 @@ async def test_subnet_alias_change_projects_named_entities_to_current_and_defaul
     assert default_current["states"][0]["applied_revision"] == 1
     assert current["pending_total"] == 0
     assert default_current["pending_total"] == 0
+
+
+def test_named_entity_projection_v2_is_keyed_and_idempotent(monkeypatch) -> None:
+    import json
+
+    import y_py as Y
+
+    from adaos.services import named_entity_projection
+
+    monkeypatch.delenv("ADAOS_NAMED_ENTITY_LEGACY_PROJECTION", raising=False)
+    ydoc = Y.YDoc()
+    payload = {
+        "webspace_id": "desktop",
+        "items": [
+            {
+                "canonical_ref": "device:member:node-1",
+                "kind": "device.member",
+                "display_name": "Kitchen Display",
+            },
+            {
+                "canonical_ref": "skill:browsers_skill",
+                "kind": "skill",
+                "display_name": "Browsers Skill",
+            },
+        ],
+        "summary": {
+            "registry_revision": 7,
+            "fingerprint": "registry-v7",
+            "updated_at": 123.0,
+        },
+        "conflicts": [
+            {
+                "locale": "en",
+                "normalized": "screen",
+                "canonical_refs": ["device:member:node-1", "skill:browsers_skill"],
+            }
+        ],
+    }
+
+    with ydoc.begin_transaction() as txn:
+        assert named_entity_projection._write_payload_to_doc(ydoc, txn, payload) is True
+
+    registry = ydoc.get_map("registry")
+    v2 = registry.get(named_entity_projection.NAMED_ENTITIES_V2_KEY)
+    assert isinstance(v2, Y.YMap)
+    assert isinstance(v2.get("entities"), Y.YMap)
+    assert isinstance(v2.get("conflicts"), Y.YMap)
+    assert registry.get("named_entities") is None
+    rendered = json.loads(v2.to_json())
+    assert rendered["meta"]["revision"] == 7
+    assert rendered["entities"]["device:member:node-1"]["display_name"] == "Kitchen Display"
+    assert rendered["conflicts"]["en:screen"]["locale"] == "en"
+
+    with ydoc.begin_transaction() as txn:
+        assert named_entity_projection._write_payload_to_doc(ydoc, txn, payload) is False
+
+    changed = dict(payload)
+    changed["items"] = [dict(item) for item in payload["items"]]
+    changed["items"][0]["display_name"] = "Kitchen Screen"
+    changed["summary"] = {
+        **payload["summary"],
+        "registry_revision": 8,
+        "fingerprint": "registry-v8",
+    }
+    with ydoc.begin_transaction() as txn:
+        assert named_entity_projection._write_payload_to_doc(ydoc, txn, changed) is True
+
+    rendered = json.loads(v2.to_json())
+    assert rendered["meta"]["revision"] == 8
+    assert rendered["entities"]["device:member:node-1"]["display_name"] == "Kitchen Screen"
+    assert rendered["entities"]["skill:browsers_skill"]["display_name"] == "Browsers Skill"
+
+
+def test_named_entity_projection_can_dual_write_legacy_payload(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services import named_entity_projection
+
+    monkeypatch.setenv("ADAOS_NAMED_ENTITY_LEGACY_PROJECTION", "1")
+    ydoc = Y.YDoc()
+    payload = {
+        "webspace_id": "desktop",
+        "items": [{"canonical_ref": "skill:browsers_skill", "kind": "skill"}],
+        "summary": {"registry_revision": 1, "fingerprint": "registry-v1"},
+        "conflicts": [],
+    }
+
+    with ydoc.begin_transaction() as txn:
+        assert named_entity_projection._write_payload_to_doc(ydoc, txn, payload) is True
+
+    registry = ydoc.get_map("registry")
+    assert isinstance(registry.get(named_entity_projection.NAMED_ENTITIES_V2_KEY), Y.YMap)
+    assert isinstance(registry.get("named_entities"), Y.YMap)
