@@ -198,8 +198,46 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     # webui.json (optional): validate declarative WebUI contributions and
     # cross-link the public skill interface with modal routes/actions.
     issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
+    issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
+    return issues
+
+
+def _sdk_only_import_issues(skill_dir: Path, *, manifest: Dict[str, Any]) -> List[Issue]:
+    """Enforce the opt-in SDK boundary for runtime skill code."""
+
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    if runtime.get("sdk_only") is not True:
+        return []
+
+    issues: List[Issue] = []
+    for path in sorted(skill_dir.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        rel = _relative_to(path, skill_dir)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                modules.append(node.module)
+            for module in modules:
+                if module == "adaos.sdk" or module.startswith("adaos.sdk."):
+                    continue
+                if module == "adaos" or module.startswith("adaos."):
+                    issues.append(
+                        Issue(
+                            "error",
+                            "runtime.sdk_only_import",
+                            f"runtime.sdk_only permits only adaos.sdk imports; found {module}",
+                            rel,
+                        )
+                    )
     return issues
 
 

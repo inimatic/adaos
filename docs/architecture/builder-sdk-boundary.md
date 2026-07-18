@@ -1,6 +1,6 @@
 # Builder SDK Boundary And Migration Roadmap
 
-Status: in progress.
+Status: SDK boundary implemented; autonomous from-zero proof remains in progress.
 
 This document defines the public SDK boundary required by Prompt IDE, Builder,
 and autonomous Builder development. It complements `builder.md` and
@@ -106,32 +106,32 @@ Tags indicate priority, not implementation order:
 
 - [x] `[must]` Record the target dependency direction and SDK ownership.
 - [x] `[must]` Identify direct service imports in Prompt IDE/Builder skills.
-- [ ] `[must]` Keep this checklist synchronized with landed implementation.
+- [x] `[must]` Keep this checklist synchronized with landed implementation.
 - [ ] `[should]` Publish an SDK compatibility/version marker consumable by
   skill manifests.
 - [ ] `[could]` Expose the boundary audit in operator diagnostics.
 
 ### Phase 1: minimal public SDK
 
-- [ ] `[must]` Add `adaos.sdk.builder.preview` with selection, binding, ensure,
+- [x] `[must]` Add `adaos.sdk.builder.preview` with selection, binding, ensure,
   open, reload, and revision materialization operations.
-- [ ] `[must]` Add `adaos.sdk.builder.automation` with start, submit, and state
+- [x] `[must]` Add `adaos.sdk.builder.automation` with start, submit, and state
   operations.
-- [ ] `[must]` Add `adaos.sdk.developer.projects` lifecycle operations with
+- [x] `[must]` Add `adaos.sdk.developer.projects` lifecycle operations with
   plain result contracts.
-- [ ] `[must]` Add contract tests that mock services below the SDK boundary.
-- [ ] `[should]` Add `adaos.sdk.builder.artifacts` checkpoint operations.
-- [ ] `[should]` Add Builder Change operations to the conversation SDK.
+- [x] `[must]` Add contract tests that mock services below the SDK boundary.
+- [x] `[should]` Add `adaos.sdk.builder.artifacts` checkpoint operations.
+- [x] `[should]` Add Builder Change operations to the conversation SDK.
 - [ ] `[should]` Replace the Root developer class re-export with a real facade
   while retaining the old import as a compatibility alias.
 
 ### Phase 2: skill migration
 
-- [ ] `[must]` Migrate `prompt_engineer_skill` event and preview calls to SDK.
-- [ ] `[must]` Migrate `builder_automation_skill` to SDK.
-- [ ] `[must]` Remove all `adaos.services` imports from the Builder control
+- [x] `[must]` Migrate `prompt_engineer_skill` event and preview calls to SDK.
+- [x] `[must]` Migrate `builder_automation_skill` to SDK.
+- [x] `[must]` Remove all `adaos.services` imports from the Builder control
   fixture.
-- [ ] `[should]` Migrate Builder operations used by the replacement UI away
+- [x] `[should]` Migrate Builder operations used by the replacement UI away
   from direct service imports.
 - [ ] `[should]` Move Prompt IDE DEV file lifecycle behind developer projects
   SDK operations.
@@ -140,24 +140,25 @@ Tags indicate priority, not implementation order:
 
 ### Phase 3: control fixture and replacement proof
 
-- [ ] `[must]` Create a new DEV control skill for
+- [x] `[must]` Create a new DEV control skill for
   `.adaos/dev/sn_6acf0c01/scenarios/builder`.
-- [ ] `[must]` Declare actual Builder scenario dependencies in both YAML and
+- [x] `[must]` Declare actual Builder scenario dependencies in both YAML and
   JSON manifests.
-- [ ] `[must]` Run control-skill import, validation, tool, and focused runtime
+- [x] `[must]` Run control-skill import, validation, tool, and focused runtime
   tests on the development machine.
 - [ ] `[must]` Prove the control skill can be recreated from zero by AdaOS
   autonomous programming without importing Prompt IDE implementation code.
-- [ ] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
+- [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
   the same checks.
 - [ ] `[should]` Add the control fixture to a repeatable local smoke command.
 - [ ] `[could]` Retain a compact golden fixture after Prompt IDE removal.
 
 ### Phase 4: enforcement and cleanup
 
-- [ ] `[must]` Add an SDK-only import guard for the migrated skills.
-- [ ] `[should]` Support an opt-in manifest marker for new SDK-only skills,
-  then make it the template default.
+- [x] `[must]` Add an SDK-only import guard for the migrated skills.
+- [x] `[should]` Support `runtime.sdk_only: true` as an opt-in manifest marker.
+- [ ] `[should]` Make `runtime.sdk_only` the default in new skill templates
+  after the remaining templates are migrated.
 - [ ] `[should]` Remove compatibility aliases after all consumers migrate.
 - [ ] `[could]` Extend the guard to all workspace skills.
 - [ ] `[deferred]` Split the large Prompt Engineer handler by project,
@@ -180,3 +181,21 @@ Prompt IDE can be retired only when:
    checkpoint evidence work through SDK operations;
 5. legacy Prompt IDE remains a tested rollback path until the replacement has
    completed an autonomous from-zero implementation run.
+
+## Local Verification Record
+
+The first migration pass was verified on the development machine on
+2026-07-18 with:
+
+- SDK contract tests for Builder preview, automation, artifacts, developer
+  projects, conversation/change evidence, and workbench integration;
+- the complete local `builder_skill` test module and focused Prompt Engineer
+  and Builder Automation tests;
+- strict DEV validation with tool probing for `builder_sdk_control_skill`;
+- source and activated-runtime tests for the control skill;
+- live `get_state` and `get_automation` tool calls against the current Builder
+  scenario and the completed Builder conversation/change services.
+
+The remaining blocking proof is intentionally external to this pass: recreate
+the control skill from an empty DEV project through AdaOS autonomous
+programming, run the same checks, and only then plan Prompt IDE removal.

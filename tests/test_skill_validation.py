@@ -109,6 +109,57 @@ def ping():
     assert conversation_codes == set()
 
 
+def test_skill_validation_enforces_opt_in_sdk_only_imports(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+from adaos.services.builder.workbench import BuilderWorkbenchService
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True, "service": BuilderWorkbenchService.__name__}
+""",
+        manifest_extra=[
+            "runtime:",
+            "  python: '3.11'",
+            "  sdk_only: true",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    sdk_issues = [issue for issue in report.issues if issue.code == "runtime.sdk_only_import"]
+    assert report.ok is False
+    assert len(sdk_issues) == 1
+    assert "adaos.services.builder.workbench" in sdk_issues[0].message
+    assert sdk_issues[0].where == "handlers/main.py"
+
+
+def test_skill_validation_allows_sdk_only_skill_to_use_sdk(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.builder import preview
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True, "operation": preview.get_binding.__name__}
+""",
+        manifest_extra=[
+            "runtime:",
+            "  python: '3.11'",
+            "  sdk_only: true",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is True
+    assert not any(issue.code == "runtime.sdk_only_import" for issue in report.issues)
+
+
 def test_skill_validation_allows_declared_stream_receiver_and_bounded_state(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

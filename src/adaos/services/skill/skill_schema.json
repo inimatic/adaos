@@ -14,13 +14,14 @@
 			"$ref": "#/$defs/authoringHints",
 			"description": "Builder-readable NLU hints for aliases, examples, slot schemas, entities, and owner routing."
 		},
-		"runtime": {
-			"type": "object",
-			"properties": {
-				"python": { "type": "string" }
-			},
-			"additionalProperties": true
-		},
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "python": { "type": "string" },
+        "sdk_only": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
 		"dependencies": {
 			"type": "array",
 			"items": { "type": "string", "minLength": 1 },
