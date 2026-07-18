@@ -150,7 +150,7 @@ Tags indicate priority, not implementation order:
   autonomous programming without importing Prompt IDE implementation code.
 - [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
   the same checks.
-- [ ] `[should]` Add the control fixture to a repeatable local smoke command.
+- [x] `[should]` Add the control fixture to a repeatable local smoke command.
 - [ ] `[could]` Retain a compact golden fixture after Prompt IDE removal.
 
 ### Phase 4: enforcement and cleanup
@@ -195,6 +195,28 @@ The first migration pass was verified on the development machine on
 - source and activated-runtime tests for the control skill;
 - live `get_state` and `get_automation` tool calls against the current Builder
   scenario and the completed Builder conversation/change services.
+
+The final smoke uses a dedicated source webspace so it does not change the
+operator's Prompt IDE selection. On PowerShell:
+
+```powershell
+$payload = '{"webspace_id":"builder-sdk-control"}'.Replace('"', '\"')
+$env:PYTHONPATH = 'src'
+.venv\Scripts\python.exe -m adaos.apps.cli.app dev skill validate builder_sdk_control_skill --strict --probe-tools --json
+.venv\Scripts\python.exe -m adaos.apps.cli.app dev skill test builder_sdk_control_skill --runtime --json
+.venv\Scripts\python.exe -m adaos.apps.cli.app dev skill run builder_sdk_control_skill select_preview --json $payload --timeout 60
+.venv\Scripts\python.exe -m adaos.apps.cli.app dev skill run builder_sdk_control_skill get_state --json $payload --timeout 30
+```
+
+This also covers the later Builder-service change that classifies paired
+`*-dev` workspaces as DEV sources and exposes local DEV scenarios there. The
+verified pair is `builder-sdk-control` / `builder-sdk-control-dev`, with the
+Builder scenario selected as its DEV runtime home.
+
+Activated migration versions for this pass are `builder_skill 0.2.113`,
+`builder_automation_skill 0.1.1`, `prompt_engineer_skill 0.6.8`, and
+`builder_sdk_control_skill 0.1.1`. Runtime self-tests are isolated from the
+operator's persisted Builder sessions.
 
 The remaining blocking proof is intentionally external to this pass: recreate
 the control skill from an empty DEV project through AdaOS autonomous
