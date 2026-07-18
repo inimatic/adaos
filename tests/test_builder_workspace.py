@@ -532,6 +532,36 @@ def test_root_dev_scenario_manifest_update_sets_id_to_artifact_name(tmp_path: Pa
     assert payload["name"] == "builder_scene"
 
 
+def test_root_dev_scenario_manifest_update_keeps_yaml_and_json_versions_aligned(tmp_path: Path) -> None:
+    target = tmp_path / "scenarios" / "builder_scene"
+    target.mkdir(parents=True)
+    (target / "scenario.yaml").write_text(
+        "id: builder_scene\nname: builder_scene\nversion: 0.2.0\n",
+        encoding="utf-8",
+    )
+    (target / "scenario.json").write_text(
+        json.dumps({"id": "builder_scene", "name": "builder_scene", "version": "0.1.0", "ui": {"application": {}}}),
+        encoding="utf-8",
+    )
+    service = object.__new__(RootDeveloperService)
+
+    metadata = service._update_manifest(
+        "scenarios",
+        target,
+        "builder_scene",
+        None,
+        version_bump_index=1,
+        set_prototype=False,
+    )
+
+    yaml_payload = yaml.safe_load((target / "scenario.yaml").read_text(encoding="utf-8"))
+    json_payload = json.loads((target / "scenario.json").read_text(encoding="utf-8"))
+    assert metadata["version"] != "0.2.0"
+    assert yaml_payload["version"] == json_payload["version"] == metadata["version"]
+    assert yaml_payload["updated_at"] == json_payload["updated_at"]
+    assert json_payload["ui"] == {"application": {}}
+
+
 def test_dev_scenario_loader_accepts_builder_json_manifest(tmp_path: Path) -> None:
     scenario_dir = tmp_path / "dev" / "sn_test" / "scenarios" / "json_scene"
     scenario_dir.mkdir(parents=True)

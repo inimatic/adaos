@@ -2255,6 +2255,7 @@ class RootDeveloperService:
         set_prototype: bool,
         explicit_version: str | None = None,
     ) -> dict[str, str] | None:
+        manifest_meta: dict[str, str] | None = None
         for candidate in self._manifest_candidates(kind):
             manifest_path = target / candidate
             if not manifest_path.exists():
@@ -2266,21 +2267,26 @@ class RootDeveloperService:
             if set_prototype and prototype is not None:
                 data["prototype"] = prototype
 
-            existing_version = data.get("version") if isinstance(data.get("version"), str) else None
-            if explicit_version is not None:
-                data["version"] = explicit_version
-            elif version_bump_index is not None:
-                data["version"] = bump_version(existing_version, version_bump_index)
-
-            timestamp = _current_timestamp()
+            if manifest_meta is None:
+                existing_version = data.get("version") if isinstance(data.get("version"), str) else None
+                if explicit_version is not None:
+                    data["version"] = explicit_version
+                elif version_bump_index is not None:
+                    data["version"] = bump_version(existing_version, version_bump_index)
+                timestamp = _current_timestamp()
+                manifest_meta = {
+                    "version": data.get("version") if isinstance(data.get("version"), str) else None,
+                    "updated_at": timestamp,
+                }
+            else:
+                data["version"] = manifest_meta.get("version")
+                timestamp = str(manifest_meta.get("updated_at") or _current_timestamp())
             data["updated_at"] = timestamp
 
             _write_manifest(manifest_path, data)
-            return {
-                "version": data.get("version") if isinstance(data.get("version"), str) else None,
-                "updated_at": timestamp,
-            }
-        return None
+            if kind != "scenarios":
+                break
+        return manifest_meta
 
     def _manifest_candidates(self, kind: Literal["skills", "scenarios"]) -> list[str]:
         if kind == "skills":
