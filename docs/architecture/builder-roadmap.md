@@ -244,6 +244,9 @@ Open work:
 - [x] `[must]` Apply the checkpoint contract to completed automation output as
   well as UI-only turns. Scenario automation pushes both the scenario and its
   companion skill with the terminal result summary before runtime preparation.
+- [x] `[must]` Remove worker-owned DEV scaffolding. Builder chat and automation
+  create missing scenarios, skills, and companion skills through the core
+  developer service; workers only modify artifacts already created in DEV.
 
 Primary references:
 

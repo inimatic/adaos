@@ -453,6 +453,11 @@ Automation completion applies the same rule to every materialized artifact:
 a scenario and its companion skill receive separate Forge checkpoints using
 the terminal implementation-result summary as their commit message before
 runtime preparation begins.
+Before automation starts, every missing DEV target (including a scenario's
+companion skill) is scaffolded through `RootDeveloperService.create_scenario`
+or `create_skill`. The worker consumes existing DEV sources and must not copy a
+template directly into DEV; this keeps creation events, validation, paths, and
+ownership on the core `adaos dev scenario|skill create` lifecycle.
 
 This facade is intentionally not a new storage layer. It exists so Builder
 work can be driven from one command branch while source ownership remains in

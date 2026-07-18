@@ -92,6 +92,7 @@ class BuilderAutomationService:
     runs_root: Path | None = None
     worker_factory: Callable[[], LocalSkillFactoryWorker] | None = None
     event_sink: Callable[[Mapping[str, Any]], None] | None = None
+    workspace_service: BuilderWorkspaceService | None = None
     background: bool = True
     materialize_on_completion: bool = True
     factory: SkillFactoryService = field(init=False)
@@ -116,6 +117,7 @@ class BuilderAutomationService:
             dev_skills_root=Path(dev_skills),
             dev_scenarios_root=Path(dev_scenarios),
             event_sink=_publish_automation_changed,
+            workspace_service=workspace,
             background=background,
         )
 
@@ -149,6 +151,11 @@ class BuilderAutomationService:
                     "session": refreshed,
                     "automation": self.project_session(refreshed),
                 }
+            created_artifacts = self._ensure_automation_artifacts_created(
+                kind=kind,
+                project_id=project_id,
+                implementation_brief=brief,
+            )
             session = {
                 "schema": AUTOMATION_SESSION_SCHEMA,
                 "session_id": f"automation.{kind}.{project_id}",
@@ -164,6 +171,7 @@ class BuilderAutomationService:
                 "iteration": 0,
                 "turns": [],
                 "task_history": [],
+                "created_artifacts": created_artifacts,
                 "created_at": _now_iso(),
                 "updated_at": _now_iso(),
             }
@@ -180,6 +188,43 @@ class BuilderAutomationService:
             "task": submitted["task"],
             "automation": self.project_session(session),
         }
+
+    def _ensure_automation_artifacts_created(
+        self,
+        *,
+        kind: str,
+        project_id: str,
+        implementation_brief: str,
+    ) -> list[dict[str, Any]]:
+        service = self.workspace_service or BuilderWorkspaceService.from_context()
+        artifacts = [(kind, project_id)]
+        if kind == "scenario":
+            artifacts.append(("skill", f"{project_id}_skill"))
+
+        created: list[dict[str, Any]] = []
+        for artifact_kind, artifact_id in artifacts:
+            root = (
+                self.dev_scenarios_root / artifact_id
+                if artifact_kind == "scenario"
+                else self.dev_skills_root / artifact_id
+            )
+            if root.exists():
+                continue
+            result = service.create_draft(
+                kind=artifact_kind,
+                artifact_id=artifact_id,
+                source_idea=implementation_brief,
+                template_id="scenario_default" if artifact_kind == "scenario" else "skill_default",
+            )
+            created.append(
+                {
+                    "kind": artifact_kind,
+                    "name": artifact_id,
+                    "draft_id": str((result.get("draft") or {}).get("draft_id") or "") or None,
+                    "artifact_root": str(result.get("artifact_root") or root),
+                }
+            )
+        return created
 
     def submit_turn(
         self,

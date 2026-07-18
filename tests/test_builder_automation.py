@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator
 
 from adaos.services.builder.automation import BuilderAutomationService
+from adaos.services.builder.workspace import BuilderWorkspaceService
+from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
 
 
@@ -21,6 +24,31 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         json.dumps({"id": "recipes", "version": "0.1.0", "depends": []}), encoding="utf-8"
     )
     (scenario / "webui.json").write_text(json.dumps({"schema": "adaos.webui.v1"}), encoding="utf-8")
+
+    class _DeveloperService:
+        def create_skill(self, name: str, template: str | None = None):
+            source = repo_root / "src" / "adaos" / "skills_templates" / str(template or "skill_default")
+            target = dev_skills / name
+            shutil.copytree(source, target)
+            _rewrite_skill_template_identity(target, name)
+            return SimpleNamespace(path=target, name=name)
+
+        def create_scenario(self, name: str, template: str | None = None):
+            source = repo_root / "src" / "adaos" / "scenario_templates" / str(template or "scenario_default")
+            target = dev_scenarios / name
+            shutil.copytree(source, target)
+            return SimpleNamespace(path=target, name=name)
+
+    workspace_service = BuilderWorkspaceService(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        workspace_root=tmp_path / "workspace",
+        skills_root=tmp_path / "workspace" / "skills",
+        scenarios_root=tmp_path / "workspace" / "scenarios",
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        developer_service=_DeveloperService(),
+    )
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         handler = workspace / "skills" / "recipes_skill" / "handlers" / "main.py"
@@ -44,6 +72,7 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         dev_scenarios_root=dev_scenarios,
         runs_root=tmp_path / "runs",
         worker_factory=worker_factory,
+        workspace_service=workspace_service,
         background=False,
         materialize_on_completion=False,
     )
@@ -64,7 +93,12 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     status = service.status(object_type="scenario", object_id="recipes")
     assert status["session"]["status"] == "completed"
     assert status["session"]["standard_prompt_version"].startswith("adaos-skill-realization/")
+    assert status["session"]["created_artifacts"][0]["kind"] == "skill"
+    assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     assert (service.dev_skills_root / "recipes_skill" / "skill.yaml").exists()
+    assert "new_skill" not in (service.dev_skills_root / "recipes_skill" / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 

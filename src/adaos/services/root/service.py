@@ -621,6 +621,18 @@ def _copy_template(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
+def _rewrite_skill_template_identity(root: Path, name: str) -> None:
+    label = name.replace("_", " ").replace("-", " ").title()
+    text_suffixes = {".py", ".yaml", ".yml", ".json", ".md", ".intent", ".txt"}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        text = path.read_text(encoding="utf-8")
+        rewritten = text.replace("new_skill", name).replace("New Skill", label)
+        if rewritten != text:
+            path.write_text(rewritten, encoding="utf-8")
+
+
 def _ensure_keep_file(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     keep = directory / ".keep"
@@ -1874,6 +1886,8 @@ class RootDeveloperService:
 
         template_path, prototype_value = self._resolve_template(kind, template)
         _copy_template(template_path, target)
+        if kind == "skills":
+            _rewrite_skill_template_identity(target, name)
         manifest_meta = self._update_manifest(
             kind,
             target,

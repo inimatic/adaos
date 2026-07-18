@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
+from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker, SubprocessCodexExecutor
 
@@ -32,6 +34,13 @@ def _scenario(root: Path, scenario_id: str) -> Path:
     return target
 
 
+def _core_created_skill_fixture(repo_root: Path, root: Path, skill_id: str) -> Path:
+    target = root / skill_id
+    shutil.copytree(repo_root / "src" / "adaos" / "skills_templates" / "skill_default", target)
+    _rewrite_skill_template_identity(target, skill_id)
+    return target
+
+
 def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
@@ -39,6 +48,7 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     dev_scenarios = tmp_path / "dev" / "scenarios"
     dev_skills.mkdir(parents=True)
     _scenario(dev_scenarios, "recipe_book")
+    _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
 
     factory = SkillFactoryService(state_dir=state_dir)
     submitted = factory.submit_realize_request(
@@ -102,6 +112,7 @@ def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
     dev_scenarios = tmp_path / "dev" / "scenarios"
     dev_skills.mkdir(parents=True)
     _scenario(dev_scenarios, "recipe_book")
+    _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     factory = SkillFactoryService(state_dir=state_dir)
     factory.submit_realize_request(
         {
@@ -152,6 +163,7 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
     dev_scenarios = tmp_path / "dev" / "scenarios"
     dev_skills.mkdir(parents=True)
     _scenario(dev_scenarios, "recipe_book")
+    _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     factory = SkillFactoryService(state_dir=state_dir)
     factory.submit_realize_request(
         {

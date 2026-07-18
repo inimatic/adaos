@@ -391,41 +391,21 @@ class LocalSkillFactoryWorker:
             skill_id = self._companion_skill_id(assignment)
             skill_source = self.dev_skills_root / skill_id
             skill_destination = workspace / "skills" / skill_id
-            if skill_source.exists():
-                shutil.copytree(skill_source, skill_destination)
-            else:
-                template = self.repo_root / "src" / "adaos" / "skills_templates" / "skill_default"
-                shutil.copytree(template, skill_destination)
-                self._patch_skill_scaffold(skill_destination, skill_id, target_id)
+            if not skill_source.exists():
+                raise FileNotFoundError(
+                    f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
+                )
+            shutil.copytree(skill_source, skill_destination)
         elif target_type == "skill":
             source = self.dev_skills_root / target_id
             destination = workspace / "skills" / target_id
-            if source.exists():
-                shutil.copytree(source, destination)
-            else:
-                template = self.repo_root / "src" / "adaos" / "skills_templates" / "skill_default"
-                shutil.copytree(template, destination)
-                self._patch_skill_scaffold(destination, target_id, target_id)
+            if not source.exists():
+                raise FileNotFoundError(
+                    f"DEV skill not found: {source}; create it through the core developer lifecycle first"
+                )
+            shutil.copytree(source, destination)
         else:
             raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
-
-    def _patch_skill_scaffold(self, root: Path, skill_id: str, source_id: str) -> None:
-        text_suffixes = {".py", ".yaml", ".yml", ".json", ".md", ".intent", ".txt"}
-        for path in root.rglob("*"):
-            if not path.is_file() or path.suffix.lower() not in text_suffixes:
-                continue
-            text = path.read_text(encoding="utf-8")
-            if "new_skill" in text or "New Skill" in text:
-                path.write_text(
-                    text.replace("new_skill", skill_id).replace("New Skill", skill_id.replace("_", " ").title()),
-                    encoding="utf-8",
-                )
-        manifest_path = root / "skill.yaml"
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-        manifest["name"] = skill_id
-        manifest["version"] = "0.1.0"
-        manifest["description"] = f"Generated implementation skill for {source_id}."
-        manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
         request = dict(assignment.get("realize_request") or {})
