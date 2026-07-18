@@ -104,6 +104,29 @@ The useful signal is the active eventbus line:
 - topic and event type
 - duration so far
 
+Loop-lag dumps also include the most recent live-room command and named-entity
+projection phases: webspace, source/outcome, owner-loop handoff, queue/apply
+time, payload/update bytes, and projection stage timings. The same counters are
+available in Yjs reliability and `diag360` snapshots.
+
+### Named-Entity Projection Convergence
+
+The named-entity registry no longer treats every registry event as an
+instruction to load, mutate, encode, and persist an independent Yjs document.
+It now uses:
+
+- a canonical versioned snapshot per webspace
+- a level-triggered desired/applied revision reconciler
+- pending-until-room-ready behavior instead of detached YStore replay
+- keyed `registry.namedEntitiesV2.entities[canonical_ref]` materialization
+- an awaitable owner-loop mutation command with transaction-local Yjs diffs
+
+This distinction matters: coalescing is only burst control. It cannot hide a
+missed update because the reconciler converges state revisions rather than
+counting event deliveries. Source snapshot construction runs in a worker
+thread; the thread-affine live `YDoc` remains on its owner loop, but the command
+no longer performs a full-document state-vector/diff encode for a small patch.
+
 ### YStore Backup Reason Counters
 
 YStore diagnostics now separate backup attempts, writes, and skips by kind.
@@ -142,3 +165,6 @@ When diagnosing a rebuild lag incident:
    `live_room_refresh_deferred`.
 5. Check lazy skill activation policy for heavy skills that should not respond
    outside their active scenario.
+6. Correlate `named_entities.projection` with `yjs.live_room_command`; a large
+   snapshot-build value points to source aggregation, queue time points to
+   owner-loop contention, and apply time/update bytes point to Yjs mutation.

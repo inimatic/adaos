@@ -355,8 +355,16 @@ Target for the later block:
 
 Preparatory work that is allowed before that block starts:
 
-- reduce direct runtime dependencies on in-process live-room globals
-- introduce a shared Yjs runtime gateway abstraction that can later point to runtime-local or sidecar-owned session authority
+- [x] introduce an awaitable runtime-local live-room command boundary with
+  owner-loop handoff, completion semantics, transaction-local diffs, and
+  diagnostics; named-entity projection is the first consumer
+- [x] remove detached YStore/YDoc replay from named-entity projection and keep
+  desired revisions pending until its room is live
+- [ ] `[could]` reduce remaining direct runtime dependencies on in-process
+  live-room globals by migrating completion-sensitive writers to the command
+  boundary
+- [ ] `[could]` generalize the command boundary into a Yjs runtime gateway
+  interface that can point to runtime-local or sidecar-owned session authority
 - keep `YStore`/persistence semantics explicit so session ownership can move without smuggling hub business logic into sidecar
 - continue the current roadmap focus on public `"/yws"` transport cutover and communication prerequisites without claiming full Yjs session continuity yet
 

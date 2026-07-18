@@ -268,8 +268,11 @@ Current status:
 - [x] `yjs.cache_by_projection_key`: cache projection payloads by `projection_key`
 - [x] `yjs.reuse_cached_views`: reuse cached payloads when switching back to recently materialized views
 - [ ] `yjs.reduce_broad_observers`: avoid broad `observeDeep(data)` patterns where a stable nested projection path is available
-- [ ] `yjs.legacy_compat_rules`: document the compatibility rules for legacy plain-JSON projection branches during migration
-- [ ] `yjs.named_entity_registry_reference`: use `registry.named_entities` as an implemented read-only compatibility reference for projection fingerprinting and privacy limits
+- [x] `yjs.legacy_compat_rules`: document the compatibility rules for legacy plain-JSON projection branches during migration
+- [x] `yjs.named_entity_registry_reference`: use keyed `registry.namedEntitiesV2` as an implemented read-only reference for projection fingerprinting, revision convergence, and privacy limits
+- [x] `yjs.named_entity_live_reconciler`: keep desired/applied registry revisions in a level-triggered reconciler and retry on live-room readiness without detached YStore replay
+- [x] `yjs.awaitable_live_room_commands`: submit named-entity writes through an owner-loop command boundary with completion and phase diagnostics
+- [x] `yjs.transaction_local_diff`: generate live-room updates from the mutation transaction rather than a full-document state-vector scan
 
 Current status:
 
@@ -279,6 +282,12 @@ Current status:
 - `/api/node/projection-records/browser-cache` exposes demanded-only records
   with aggregate and per-entry ETags. The client-side adapter migration and
   observer reduction are still open.
+- The named-entity pilot now publishes keyed maps by `canonical_ref`. Its
+  coalescer is load shedding only; desired/applied revision convergence is the
+  correctness mechanism.
+- Browser named-entity consumers prefer V2 and keep a temporary read fallback
+  for mixed-version deployment. Legacy backend dual-write is disabled by
+  default and requires `ADAOS_NAMED_ENTITY_LEGACY_PROJECTION=1`.
 
 ### 7. Early Pilot Sequence
 
@@ -325,6 +334,21 @@ Harvest branch checkpoint:
 - [ ] `cleanup.test_multi_webspace_and_consumers`: add tests for multi-webspace demand routing and multiple simultaneous consumers
 - [ ] `cleanup.test_access_metadata_and_dev`: add tests for guest-visible access metadata and `dev` audience handling
 - [ ] `cleanup.test_platform_emitters`: add tests for platform-emitted diagnostics and error projections
+- [ ] `[could] cleanup.named_entity_legacy_projection`: remove the
+  `registry.named_entities` browser fallback and backend compatibility flag
+  after the mixed-version deployment window closes
+- [ ] `[could] cleanup.awaitable_command_migration`: migrate remaining direct
+  `mutate_live_room` callers to the awaitable command contract where their
+  callers require confirmed completion
+- [ ] `[could] cleanup.projection_record_detached_fallback`: move the generic
+  ProjectionRecord materializer from detached fallback writes to the same
+  desired/applied live-room reconciliation model
+- [ ] `[deferred] yjs.named_entity_detail_partition`: split large label or
+  conflict detail into demanded projections if keyed V2 payload measurements
+  still show material event-loop or replication pressure
+- [ ] `[deferred] yjs.sidecar_session_authority`: move live Yjs room/session
+  ownership and the command gateway into the realtime sidecar; keep the
+  current runtime-local owner-loop command as the migration boundary
 
 ## Priority Candidates and Critical Assessment
 

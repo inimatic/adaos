@@ -511,8 +511,9 @@ Target service:
   `sdk.data.entities.resolve_text`, `sdk.data.entities.propose_alias_add`,
   `propose_alias_remove`, `propose_alias_deprecate`, and the matching
   apply helpers.
-- Yjs may project a read-only compact registry under a path such as
-  `registry.named_entities` for UI and diagnostics.
+- Yjs projects the read-only registry as keyed V2 state under
+  `registry.namedEntitiesV2`; `registry.named_entities` is a temporary
+  opt-in compatibility branch only.
 - Root MCP should expose named-entity descriptors through governed read
   capability before allowing alias writes.
 
@@ -524,7 +525,8 @@ Current read surfaces:
   `remove_device_alias`, and `deprecate_device_alias`.
 - Registry items carry a stable `fingerprint` for optimistic concurrency on
   human/LLM-authored writes.
-- Yjs: compact read-only projection under `registry.named_entities`.
+- Yjs: keyed read-only projection under `registry.namedEntitiesV2`, with
+  `meta`, `entities[canonical_ref]`, and keyed `conflicts` maps.
 - Root MCP / AdaOSDevPlane: `adaos_dev.get_named_entity_registry`, exposed to
   Codex as `get_named_entity_registry`, returns the same compact registry as a
   descriptor payload and accepts optional `webspace_id` and `kind` filters.
@@ -539,6 +541,42 @@ Current read surfaces:
   They write through the governed access-link source, require
   `development.write.named_entities` / `ProfileOpsControl`, accept
   `base_fingerprint`, and emit domain audit records.
+
+### Implemented projection consistency boundary
+
+The named-entity projection is now a derived live-room view, not a durable
+writer that independently reloads and replays a detached `YDoc`.
+
+The implementation invariants are:
+
+- one versioned `NamedEntityRegistrySnapshot` is canonical per webspace;
+  its revision advances only when the content fingerprint changes
+- invalidation requests update desired state; a level-triggered reconciler
+  converges `applied_revision` to `desired_revision`
+- if the webspace has no live room, the desired revision remains pending and
+  is retried when the gateway reports the room ready
+- coalescing only reduces redundant wakeups; correctness comes from comparing
+  desired and applied revisions/fingerprints, so a hidden event cannot lose a
+  registry change
+- snapshot construction runs outside the asyncio event loop; the runtime no
+  longer opens a detached YStore-backed document for this projection
+- live-room mutation is submitted through an awaitable owner-loop command and
+  reports completion, queue time, apply time, update bytes, and errors
+- the live mutation uses the transaction's incremental diff instead of
+  encoding a state vector and rescanning the complete live `YDoc`
+- `registry.namedEntitiesV2.entities` is keyed by `canonical_ref`, so changing
+  one record produces a nested Yjs patch rather than replacement of the whole
+  registry payload
+
+Legacy behavior can be enabled temporarily with
+`ADAOS_NAMED_ENTITY_LEGACY_PROJECTION=1`. Browsers read V2 first and retain a
+legacy fallback for mixed-version deployments. The compatibility branch is
+not a second source of truth.
+
+Diagnostics are exposed in the Yjs reliability snapshot, `diag360`, and loop
+lag dumps. The important correlations are registry snapshot-build time,
+command queue/apply time, payload size, update bytes, desired/applied revision,
+and whether work is pending on room availability.
 
 ## UI behavior
 
@@ -769,7 +807,8 @@ action routing.
 - [x] Make the client node-display helper treat legacy `Node N` labels as
   fallback when registered or observed names are available.
 - [x] Enrich client catalog and modal-title node labels from
-  `registry.named_entities` when the local label is only fallback-like.
+  `registry.namedEntitiesV2` (with legacy fallback) when the local label is
+  only fallback-like.
 - [ ] Extend UI/device consumers to prefer user-confirmed display names before
   registered/observed names everywhere.
 - [x] Add locale metadata to compact registry labels while keeping legacy
@@ -782,6 +821,16 @@ action routing.
   aliases inside the same scope.
 - [x] Add a registry projection invalidation path driven by
   `entity.registry.changed`.
+- [x] Cache a canonical versioned registry snapshot per webspace and advance
+  its revision only on fingerprint changes.
+- [x] Reconcile desired/applied revisions against live rooms without detached
+  YStore replay or a hidden persistence fallback.
+- [x] Materialize the registry as keyed `registry.namedEntitiesV2` maps and
+  keep legacy dual-write behind an explicit compatibility flag.
+- [x] Route projection writes through the awaitable live-room command boundary
+  and use transaction-local Yjs diffs instead of full-document encoding.
+- [x] Expose projection/reconciler/command timings and outcomes through loop
+  lag dumps, reliability snapshots, and `diag360`.
 
 ### Phase 2 - NLU canonicalization
 
@@ -810,8 +859,9 @@ action routing.
 - [ ] Show ambiguity/conflict notifications in the Notifications surface.
 - [ ] Show why a displayed name was chosen: user name, observed hostname,
   browser draft, or fallback.
-- [x] Use `registry.named_entities` as a read-only UI enrichment source for the
-  first catalog/modal node-label consumers.
+- [x] Use `registry.namedEntitiesV2` as a read-only UI enrichment source for
+  the first catalog/modal node-label consumers, with a temporary legacy read
+  fallback.
 
 ### Phase 4 - SDK and skill migration
 
