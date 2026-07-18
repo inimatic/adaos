@@ -74,7 +74,7 @@ def get_state(
 ) -> dict[str, Any]:
     """Return the compact render-safe automation projection."""
 
-    return dict(
+    result = dict(
         _service().projection(
             object_type=object_type,
             object_id=object_id,
@@ -82,6 +82,15 @@ def get_state(
         )
         or {}
     )
+    if result.get("error") == "automation_session_not_found" and isinstance(
+        result.get("automation"), Mapping
+    ):
+        result["ok"] = True
+        result["session_present"] = False
+        result.pop("error", None)
+    elif result.get("ok"):
+        result.setdefault("session_present", True)
+    return result
 
 
 __all__ = ["get_state", "start", "submit"]

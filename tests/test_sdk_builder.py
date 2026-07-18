@@ -38,7 +38,36 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
     assert started["automation"]["status"] == "queued"
     assert submitted["automation"]["iteration"] == 2
     assert state["automation"]["status"] == "running"
+    assert state["session_present"] is True
     assert [name for name, _kwargs in service.calls] == ["start", "submit", "projection", "projection"]
+
+
+def test_automation_facade_treats_missing_session_as_idle_state(monkeypatch) -> None:
+    class _IdleAutomationService:
+        def projection(self, **kwargs):
+            return {
+                "ok": False,
+                "error": "automation_session_not_found",
+                "automation": {
+                    "schema": "adaos.builder.automation_projection.v1",
+                    "status": "idle",
+                    "phase": "idle",
+                    "webspace_id": kwargs["webspace_id"],
+                },
+            }
+
+    monkeypatch.setattr(automation, "_service", _IdleAutomationService)
+
+    state = automation.get_state(
+        object_type="scenario",
+        object_id="builder",
+        webspace_id="builder-dev",
+    )
+
+    assert state["ok"] is True
+    assert state["session_present"] is False
+    assert state["automation"]["status"] == "idle"
+    assert "error" not in state
 
 
 class _PreviewService:

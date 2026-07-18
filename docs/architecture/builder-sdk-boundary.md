@@ -58,7 +58,8 @@ Skills do not persist workbench bindings or call webspace runtime services.
 
 - start from an approved implementation brief;
 - submit one bounded follow-up turn;
-- read the compact automation projection.
+- read the compact automation projection, treating a project without an
+  Automation session as the valid `idle` state.
 
 The SDK returns the stable automation projection, not a
 `BuilderAutomationService` instance.
@@ -182,6 +183,8 @@ Tags indicate priority, not implementation order:
 - [x] `[must]` Prove live HTTP tool execution, synchronous Yjs
   materialization, bounded file save, Builder Change evidence, and Builder
   dialog against a dedicated webspace.
+- [x] `[must]` Render a project with no Automation session as a valid `idle`
+  projection without starting autonomous work.
 - [ ] `[deferred]` Recreate the control skill from zero by AdaOS autonomous
   programming without importing Prompt IDE implementation code.
 - [x] `[must]` Keep legacy Prompt IDE active until the recreated skill passes
@@ -257,6 +260,7 @@ $payload = '{"webspace_id":"builder-sdk-control"}'.Replace('"', '\"')
 $env:PYTHONPATH = 'src'
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill validate builder_sdk_control_skill --strict --probe-tools --json
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill test builder_sdk_control_skill --runtime --json
+.venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill activate builder_sdk_control_skill --version 0.1.7
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill run builder_sdk_control_skill select_preview --json $payload --timeout 120
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill run builder_sdk_control_skill get_state --json $payload --timeout 30
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" node yjs materialization --webspace builder-sdk-control-dev --json
@@ -269,7 +273,7 @@ Builder scenario selected as its DEV runtime home.
 
 Activated migration versions for this pass are `builder_skill 0.2.113`,
 `builder_automation_skill 0.1.1`, `prompt_engineer_skill 0.6.8`, and
-`builder_sdk_control_skill 0.1.6`. The functional Builder scenario is on the
+`builder_sdk_control_skill 0.1.7`. The functional Builder scenario is on the
 `0.2.2` version. Runtime self-tests and live materialization use dedicated
 webspaces and do not change the operator's Prompt IDE selection.
 
