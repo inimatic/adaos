@@ -786,11 +786,8 @@ def test_sdk_entities_alias_helpers_delegate_to_named_entity_service(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_project_named_entity_registry_writes_compact_yjs_branch(monkeypatch) -> None:
-    pytest.importorskip("y_py")
+async def test_project_named_entity_registry_stays_pending_without_live_room(monkeypatch) -> None:
     from adaos.services import named_entity_projection
-    from adaos.services.yjs.doc import async_get_ydoc
-    from adaos.services.yjs.store import reset_ystore_for_webspace
 
     webspace_id = f"named-entities-{uuid4().hex}"
     service = named_entities.NamedEntityService(
@@ -806,30 +803,32 @@ async def test_project_named_entity_registry_writes_compact_yjs_branch(monkeypat
     )
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
     named_entity_projection.reset_named_entity_projection_diagnostics()
+    named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
+    named_entities.clear_named_entity_registry(webspace_id=webspace_id)
+    monkeypatch.setattr(
+        named_entity_projection,
+        "_apply_snapshot_to_live_room",
+        lambda _snapshot: {"accepted": False, "written": False, "payload": {}},
+    )
 
-    try:
-        payload = await named_entity_projection.project_named_entity_registry(webspace_id=webspace_id)
+    payload = await named_entity_projection.project_named_entity_registry(webspace_id=webspace_id)
 
-        async with async_get_ydoc(webspace_id, read_only=True, load_mark_roots=["registry"]) as ydoc:
-            current = ydoc.get_map("registry").get("named_entities")
-        assert current["summary"]["fingerprint"] == payload["summary"]["fingerprint"]
-        assert current["items"][0]["canonical_ref"] == "skill:browsers_skill"
-        diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
-        assert diagnostics["attempt_total"] == 1
-        assert diagnostics["detached_total"] == 1
-        assert diagnostics["last_payload_bytes"] > 0
-        assert diagnostics["last_timings_ms"]["snapshot_build"] >= 0
-        assert diagnostics["last_timings_ms"]["detached_apply"] >= 0
-    finally:
-        reset_ystore_for_webspace(webspace_id)
+    assert payload["items"][0]["canonical_ref"] == "skill:browsers_skill"
+    reconcile = named_entity_projection.named_entity_projection_reconciler_snapshot(webspace_id=webspace_id)
+    assert reconcile["pending_total"] == 1
+    assert reconcile["states"][0]["desired_revision"] == 1
+    assert reconcile["states"][0]["applied_revision"] == 0
+    diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+    assert diagnostics["attempt_total"] == 1
+    assert diagnostics["pending_total"] == 1
+    assert diagnostics["detached_total"] == 0
+    assert diagnostics["last_payload_bytes"] > 0
+    assert diagnostics["last_timings_ms"]["snapshot_build"] >= 0
 
 
 @pytest.mark.anyio
 async def test_subnet_alias_change_projects_named_entities_to_current_and_default_webspaces(monkeypatch) -> None:
-    pytest.importorskip("y_py")
     from adaos.services import named_entity_projection
-    from adaos.services.yjs.doc import async_get_ydoc
-    from adaos.services.yjs.store import reset_ystore_for_webspace
 
     webspace_id = f"named-entities-{uuid4().hex}"
     default_id = f"named-default-{uuid4().hex}"
@@ -846,19 +845,33 @@ async def test_subnet_alias_change_projects_named_entities_to_current_and_defaul
     )
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
     monkeypatch.setattr(named_entity_projection, "default_webspace_id", lambda: default_id)
+    monkeypatch.setattr(
+        named_entity_projection,
+        "_apply_snapshot_to_live_room",
+        lambda snapshot: {"accepted": True, "written": True, "payload": dict(snapshot.payload)},
+    )
+    named_entity_projection.clear_named_entity_projection_reconciler()
+    named_entities.clear_named_entity_registry()
 
-    try:
-        await named_entity_projection.on_entity_registry_changed(
-            SimpleNamespace(type="subnet.alias.changed", payload={"webspace_id": webspace_id}),
-        )
+    await named_entity_projection.on_entity_registry_changed(
+        SimpleNamespace(type="subnet.alias.changed", payload={"webspace_id": webspace_id}),
+    )
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="test_wait",
+        refresh=False,
+        wait=True,
+    )
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=default_id,
+        reason="test_wait",
+        refresh=False,
+        wait=True,
+    )
 
-        async with async_get_ydoc(webspace_id, read_only=True, load_mark_roots=["registry"]) as ydoc:
-            current = ydoc.get_map("registry").get("named_entities")
-        assert current["items"][0]["display_label"] == "HomeAssistant"
-
-        async with async_get_ydoc(default_id, read_only=True, load_mark_roots=["registry"]) as ydoc:
-            default_current = ydoc.get_map("registry").get("named_entities")
-        assert default_current["items"][0]["display_label"] == "HomeAssistant"
-    finally:
-        reset_ystore_for_webspace(webspace_id)
-        reset_ystore_for_webspace(default_id)
+    current = named_entity_projection.named_entity_projection_reconciler_snapshot(webspace_id=webspace_id)
+    default_current = named_entity_projection.named_entity_projection_reconciler_snapshot(webspace_id=default_id)
+    assert current["states"][0]["applied_revision"] == 1
+    assert default_current["states"][0]["applied_revision"] == 1
+    assert current["pending_total"] == 0
+    assert default_current["pending_total"] == 0

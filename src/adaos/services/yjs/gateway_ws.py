@@ -5835,6 +5835,16 @@ class WorkspaceWebsocketServer(WebsocketServer):
             open_total_ms=(time.perf_counter() - room_open_started) * 1000.0,
             seed_result=seed_result,
         )
+        try:
+            from adaos.services.named_entity_projection import notify_named_entity_room_ready
+
+            await notify_named_entity_room_ready(webspace_id)
+        except Exception:
+            _ylog.debug(
+                "failed to schedule named-entity projection after YRoom open webspace=%s",
+                webspace_id,
+                exc_info=True,
+            )
         if _ylog.isEnabledFor(logging.DEBUG):
             try:
                 ui_map = room.ydoc.get_map("ui")

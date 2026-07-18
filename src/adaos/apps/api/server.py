@@ -1409,12 +1409,18 @@ async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
             default_webspace_id = named_entity_projection.default_webspace_id()
             if default_webspace_id not in webspace_ids:
                 webspace_ids.append(default_webspace_id)
+            projection_refreshed = True
             for webspace_id in webspace_ids:
-                await asyncio.wait_for(
-                    named_entity_projection.project_named_entity_registry(webspace_id=webspace_id),
+                reconcile = await asyncio.wait_for(
+                    named_entity_projection.request_named_entity_projection(
+                        webspace_id=webspace_id,
+                        reason="subnet.alias.changed",
+                        refresh=True,
+                        wait=True,
+                    ),
                     timeout=2.5,
                 )
-            projection_refreshed = True
+                projection_refreshed = projection_refreshed and not bool(reconcile.get("pending"))
         except Exception:
             projection_refreshed = False
         # broadcast over local event bus
