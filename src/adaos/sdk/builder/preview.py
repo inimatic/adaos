@@ -39,8 +39,16 @@ def dev_webspace_id(source_webspace_id: str | None = None) -> str:
     return dev_webspace_id_for_source(source_webspace_id)
 
 
+def canonical_source_webspace_id(webspace_id: str | None = None) -> str:
+    """Return the source id for either a source or its paired DEV webspace."""
+
+    from adaos.services.builder.workbench import source_webspace_id_for
+
+    return source_webspace_id_for(webspace_id)
+
+
 def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
-    return _plain(_service().get_workspace_binding(source_webspace_id))
+    return _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
 
 
 def set_active_draft(
@@ -52,7 +60,7 @@ def set_active_draft(
 ) -> dict[str, Any]:
     return _plain(
         _service().set_active_draft(
-            source_webspace_id=source_webspace_id,
+            source_webspace_id=canonical_source_webspace_id(source_webspace_id),
             active_draft_id=active_draft_id,
             runtime_scenario_id=runtime_scenario_id,
             persist_projection=persist_projection,
@@ -68,10 +76,11 @@ def ensure(
     preview_state: Mapping[str, Any] | None = None,
     wait_for_rebuild: bool = False,
 ) -> dict[str, Any]:
+    source = canonical_source_webspace_id(source_webspace_id)
     service = _service()
     result, scheduled = _complete(
         service.ensure_dev_webspace(
-            source_webspace_id or "desktop",
+            source,
             active_draft_id=active_draft_id,
             runtime_scenario_id=runtime_scenario_id,
             preview_state=preview_state,
@@ -82,8 +91,8 @@ def ensure(
         return {
             "ok": True,
             "scheduled": True,
-            "source_webspace_id": source_webspace_id or "desktop",
-            "dev_webspace_id": dev_webspace_id(source_webspace_id),
+            "source_webspace_id": source,
+            "dev_webspace_id": dev_webspace_id(source),
         }
     return _plain(result)
 
@@ -101,7 +110,7 @@ def select_project(
 
     kind = str(object_type or "").strip().lower().rstrip("s")
     project_id = str(object_id or "").strip()
-    source = str(source_webspace_id or "").strip() or "desktop"
+    source = canonical_source_webspace_id(source_webspace_id)
     if kind not in {"skill", "scenario"}:
         raise ValueError("object_type must be skill or scenario")
     if not project_id:
@@ -165,7 +174,8 @@ def select_project(
 
 
 def open_workspace(source_webspace_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
-    return _plain(_service().open_dev_webspace(source_webspace_id, base_url=base_url))
+    source = canonical_source_webspace_id(source_webspace_id)
+    return _plain(_service().open_dev_webspace(source, base_url=base_url))
 
 
 # Compatibility operation names used by the existing Builder tool surface.
@@ -179,19 +189,22 @@ def snapshot(
     *,
     preview_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _plain(_service().snapshot(source_webspace_id, preview_state=preview_state))
+    source = globals()["source_webspace_id"](source_webspace_id)
+    return _plain(_service().snapshot(source, preview_state=preview_state))
 
 
 def dialog_widget_config(source_webspace_id: str | None = None) -> dict[str, Any]:
-    return _plain(_service().dialog_widget_config(source_webspace_id))
+    return _plain(_service().dialog_widget_config(canonical_source_webspace_id(source_webspace_id)))
 
 
 def list_development_skills(source_webspace_id: str | None = None) -> dict[str, Any]:
-    return _plain(_service().list_development_skills(source_webspace_id))
+    return _plain(_service().list_development_skills(canonical_source_webspace_id(source_webspace_id)))
 
 
 def delete_development_skill(draft_id: str, source_webspace_id: str | None = None) -> dict[str, Any]:
-    return _plain(_service().delete_development_skill(draft_id, source_webspace_id))
+    return _plain(
+        _service().delete_development_skill(draft_id, canonical_source_webspace_id(source_webspace_id))
+    )
 
 
 def reload(
@@ -275,4 +288,5 @@ __all__ = [
     "select_project",
     "set_active_draft",
     "snapshot",
+    "canonical_source_webspace_id",
 ]

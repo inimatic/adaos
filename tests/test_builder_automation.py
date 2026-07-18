@@ -158,6 +158,37 @@ def test_empty_projection_disables_automation_input() -> None:
     assert projection["project"] is None
 
 
+def test_failed_projection_exposes_actionable_diagnostics_and_retry(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    session = {
+        "session_id": "automation.scenario.builder",
+        "object_type": "scenario",
+        "object_id": "builder",
+        "webspace_id": "dev1-dev",
+        "status": "failed",
+        "current_task_id": "task.1",
+        "last_failure": {
+            "message": "codex_executable_not_found",
+            "failure_id": "failure.task.1.cli",
+            "retryable": True,
+            "stage": "in_progress",
+        },
+        "local_run": {
+            "events_path": "run/codex-live.jsonl",
+            "stderr_path": "run/codex-live.stderr.log",
+            "result_path": "run/result.json",
+        },
+    }
+
+    projection = service.project_session(session)
+
+    assert projection["can_submit"] is True
+    assert projection["error"] == "codex_executable_not_found"
+    assert projection["failure_id"] == "failure.task.1.cli"
+    assert projection["retryable"] is True
+    assert projection["evidence"]["stderr_path"] == "run/codex-live.stderr.log"
+
+
 def test_projection_event_is_not_reemitted_for_unchanged_status_reads(tmp_path: Path) -> None:
     service = _service(tmp_path)
     events: list[dict] = []

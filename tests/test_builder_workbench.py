@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 
 from adaos.apps.api import builder as builder_api
 from adaos.apps.api.auth import require_token
-from adaos.services.builder.workbench import BuilderWorkbenchService, dev_webspace_id_for_source, safe_source_webspace_id
+from adaos.services.builder.workbench import (
+    BuilderWorkbenchService,
+    dev_webspace_id_for_source,
+    safe_source_webspace_id,
+    source_webspace_id_for,
+)
 
 
 def test_dev_webspace_id_uses_safe_source_suffix() -> None:
@@ -18,6 +23,8 @@ def test_dev_webspace_id_uses_safe_source_suffix() -> None:
     assert safe_source_webspace_id("Prompt IDE / Lab") == "Prompt-IDE-Lab"
     assert dev_webspace_id_for_source("desktop") == "desktop-dev"
     assert dev_webspace_id_for_source("Prompt IDE / Lab") == "Prompt-IDE-Lab-dev"
+    assert source_webspace_id_for("desktop-dev") == "desktop"
+    assert dev_webspace_id_for_source("desktop-dev") == "desktop-dev"
 
 
 @pytest.mark.asyncio

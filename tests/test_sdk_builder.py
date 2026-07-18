@@ -113,6 +113,18 @@ def test_preview_facade_selects_and_ensures_scenario(monkeypatch) -> None:
     ]
 
 
+def test_preview_facade_canonicalizes_current_dev_webspace(monkeypatch) -> None:
+    service = _PreviewService()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+
+    binding = preview.get_binding("dev1-dev")
+    opened = preview.open_workspace("dev1-dev")
+
+    assert preview.canonical_source_webspace_id("dev1-dev") == "dev1"
+    assert binding["source_webspace_id"] == "dev1"
+    assert opened["source_webspace_id"] == "dev1"
+
+
 def test_preview_facade_does_not_bind_skill_project(monkeypatch) -> None:
     monkeypatch.setattr(preview, "_service", lambda: (_ for _ in ()).throw(AssertionError("service must not load")))
 

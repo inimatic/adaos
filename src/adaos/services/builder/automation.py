@@ -338,6 +338,8 @@ class BuilderAutomationService:
         result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
         failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
         progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
+        local_run = session.get("local_run") if isinstance(session.get("local_run"), Mapping) else {}
+        error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
             "stage": "automation",
@@ -346,7 +348,7 @@ class BuilderAutomationService:
             "phase": BuilderAutomationService._phase_for_status(status),
             "busy": status in _ACTIVE_STATUSES,
             "terminal": status in _TERMINAL_STATUSES,
-            "can_submit": status == "completed",
+            "can_submit": status in {"completed", "failed", "cancelled", "expired"},
             "webspace_id": str(session.get("webspace_id") or "desktop"),
             "project": {
                 "type": str(session.get("object_type") or ""),
@@ -358,7 +360,22 @@ class BuilderAutomationService:
             "steps": BuilderAutomationService._step_projection(status),
             "progress": dict(progress) if progress else None,
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
-            "error": str(failure.get("error") or task.get("error") or "").strip() or None,
+            "error": error,
+            "failure_id": str(failure.get("failure_id") or "").strip() or None,
+            "failure_stage": str(failure.get("stage") or "").strip() or None,
+            "retryable": bool(failure.get("retryable")) if failure else None,
+            "diagnostic_hint": (
+                "Исправьте причину и отправьте уточнение в Автоматизации, чтобы запустить новую итерацию."
+                if error
+                else None
+            ),
+            "evidence": {
+                "events_path": str(local_run.get("events_path") or "").strip() or None,
+                "stderr_path": str(local_run.get("stderr_path") or "").strip() or None,
+                "result_path": str(local_run.get("result_path") or "").strip() or None,
+            }
+            if local_run
+            else None,
             "updated_at": session.get("updated_at"),
         }
 
@@ -450,6 +467,18 @@ class BuilderAutomationService:
         if task.get("failure_history"):
             current["last_failure"] = task.get("failure_history")[-1]
             current.pop("last_result", None)
+        task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
+        if task_progress and isinstance(task_progress[-1], Mapping):
+            current["progress"] = dict(task_progress[-1])
+        if current.get("status") == "failed" and isinstance(current.get("last_failure"), Mapping):
+            failure = current["last_failure"]
+            current["progress"] = {
+                "task_id": task_id,
+                "status": "failed",
+                "stage": failure.get("stage") or "failed",
+                "message": failure.get("message") or failure.get("error") or "Automation failed",
+                "updated_at": failure.get("reported_at") or current.get("updated_at"),
+            }
         self._save_session(current)
         return current
 

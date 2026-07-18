@@ -4,6 +4,8 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker, SubprocessCodexExecutor
@@ -154,6 +156,34 @@ def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkey
     assert environment["PATH"] == "C:/bin"
     assert "OPENAI_API_KEY" not in environment
     assert "ADAOS_TOKEN" not in environment
+
+
+def test_codex_executor_discovers_vscode_bundled_cli(monkeypatch, tmp_path: Path) -> None:
+    executable = (
+        tmp_path
+        / ".vscode"
+        / "extensions"
+        / "openai.chatgpt-26.7.0-win32-x64"
+        / "bin"
+        / "windows-x86_64"
+        / "codex.exe"
+    )
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("ADAOS_CODEX_EXECUTABLE", raising=False)
+    monkeypatch.setenv("PATH", "")
+
+    assert SubprocessCodexExecutor()._resolve_executable() == str(executable.resolve())
+
+
+def test_codex_executor_reports_actionable_missing_cli(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("ADAOS_CODEX_EXECUTABLE", raising=False)
+    monkeypatch.setenv("PATH", "")
+
+    with pytest.raises(RuntimeError, match="ADAOS_CODEX_EXECUTABLE"):
+        SubprocessCodexExecutor()._resolve_executable()
 
 
 def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> None:

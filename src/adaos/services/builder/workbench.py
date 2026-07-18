@@ -31,8 +31,17 @@ def safe_source_webspace_id(value: Any) -> str:
     return token or fallback
 
 
+def source_webspace_id_for(value: Any) -> str:
+    """Return the source id for either a source or its paired DEV webspace."""
+
+    token = safe_source_webspace_id(value)
+    if token.endswith("-dev") and len(token) > len("-dev"):
+        return token[: -len("-dev")]
+    return token
+
+
 def dev_webspace_id_for_source(source_webspace_id: Any) -> str:
-    return f"{safe_source_webspace_id(source_webspace_id)}-dev"
+    return f"{source_webspace_id_for(source_webspace_id)}-dev"
 
 
 def _now() -> float:

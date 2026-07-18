@@ -109,7 +109,7 @@ class SubprocessCodexExecutor:
         live_events_path = output_dir / "codex-live.jsonl"
         live_stderr_path = output_dir / "codex-live.stderr.log"
         command = [
-            self.executable,
+            self._resolve_executable(),
             "exec",
             "--json",
             "--ephemeral",
@@ -156,6 +156,31 @@ class SubprocessCodexExecutor:
             final_message=final_message,
             command=tuple(command),
         )
+
+    def _resolve_executable(self) -> str:
+        configured = str(os.getenv("ADAOS_CODEX_EXECUTABLE") or "").strip()
+        requested = configured or str(self.executable or "codex").strip() or "codex"
+        explicit = Path(requested).expanduser()
+        if explicit.is_file():
+            return str(explicit.resolve())
+        resolved = shutil.which(requested)
+        if resolved:
+            return str(Path(resolved).resolve())
+
+        candidates: list[Path] = []
+        user_profile = str(os.getenv("USERPROFILE") or "").strip()
+        if user_profile and requested.lower() in {"codex", "codex.exe"}:
+            profile = Path(user_profile)
+            for extensions_root in (profile / ".vscode" / "extensions", profile / ".vscode-insiders" / "extensions"):
+                candidates.extend(
+                    extensions_root.glob("openai.chatgpt-*-win32-x64/bin/windows-x86_64/codex.exe")
+                )
+        available = [path for path in candidates if path.is_file()]
+        if available:
+            return str(max(available, key=lambda path: (path.stat().st_mtime_ns, str(path))).resolve())
+
+        hint = "Set ADAOS_CODEX_EXECUTABLE to the absolute Codex CLI path."
+        raise RuntimeError(f"codex_executable_not_found: {requested!r} was not found. {hint}")
 
     @staticmethod
     def _bounded_environment() -> dict[str, str]:
