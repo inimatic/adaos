@@ -779,6 +779,7 @@ async def test_project_named_entity_registry_writes_compact_yjs_branch(monkeypat
         lookup_payload_provider=_empty_lookup_provider,
     )
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
+    named_entity_projection.reset_named_entity_projection_diagnostics()
 
     try:
         payload = await named_entity_projection.project_named_entity_registry(webspace_id=webspace_id)
@@ -787,6 +788,12 @@ async def test_project_named_entity_registry_writes_compact_yjs_branch(monkeypat
             current = ydoc.get_map("registry").get("named_entities")
         assert current["summary"]["fingerprint"] == payload["summary"]["fingerprint"]
         assert current["items"][0]["canonical_ref"] == "skill:browsers_skill"
+        diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+        assert diagnostics["attempt_total"] == 1
+        assert diagnostics["detached_total"] == 1
+        assert diagnostics["last_payload_bytes"] > 0
+        assert diagnostics["last_timings_ms"]["snapshot_build"] >= 0
+        assert diagnostics["last_timings_ms"]["detached_apply"] >= 0
     finally:
         reset_ystore_for_webspace(webspace_id)
 
