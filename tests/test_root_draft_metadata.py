@@ -12,7 +12,9 @@ from adaos.services.root.service import (
     _extract_zip_bytes,
     _normalize_draft_metadata,
     _parse_draft_commit_metadata,
+    _retry_transient_draft_push,
 )
+from adaos.services.root.client import RootHttpError
 
 
 def test_draft_metadata_is_allowlisted_and_round_trips_from_git_trailers() -> None:
@@ -110,3 +112,36 @@ def test_root_draft_archive_extraction_rejects_path_traversal(tmp_path) -> None:
         assert "escapes artifact root" in str(exc)
     else:
         raise AssertionError("path traversal archive must be rejected")
+
+
+def test_transient_draft_push_retries_the_same_operation() -> None:
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def operation():
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            raise RootHttpError("gateway timeout", status_code=504)
+        return {"stored_path": "scenarios/demo", "commit": "abc123"}
+
+    result = _retry_transient_draft_push(operation, attempts=2, sleep=sleeps.append)
+
+    assert result["commit"] == "abc123"
+    assert calls == [1, 2]
+    assert sleeps == [1.0]
+
+
+def test_non_transient_draft_push_error_is_not_retried() -> None:
+    calls: list[int] = []
+
+    def operation():
+        calls.append(1)
+        raise RootHttpError("invalid archive", status_code=400)
+
+    try:
+        _retry_transient_draft_push(operation, attempts=3, sleep=lambda _seconds: None)
+    except RootHttpError as exc:
+        assert exc.status_code == 400
+    else:
+        raise AssertionError("non-transient draft error must propagate")
+    assert calls == [1]

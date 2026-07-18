@@ -103,6 +103,38 @@ def _normalize_draft_commit_message(value: str | None) -> str | None:
     return text[:240]
 
 
+def _draft_push_attempts() -> int:
+    try:
+        value = int(str(os.getenv("ADAOS_FORGE_DRAFT_PUSH_ATTEMPTS") or "2").strip())
+    except ValueError:
+        value = 2
+    return max(1, min(value, 3))
+
+
+def _retry_transient_draft_push(
+    operation: Callable[[], Mapping[str, Any]],
+    *,
+    attempts: int | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    total = _draft_push_attempts() if attempts is None else max(1, int(attempts))
+    for attempt in range(1, total + 1):
+        try:
+            return dict(operation())
+        except RootHttpError as exc:
+            transient = exc.status_code in {0, 500, 502, 503, 504}
+            if not transient or attempt >= total:
+                raise
+            logger.warning(
+                "transient Forge draft push failure status=%s attempt=%s/%s; retrying the same archive",
+                exc.status_code,
+                attempt,
+                total,
+            )
+            sleep(float(attempt))
+    raise AssertionError("unreachable")
+
+
 _DRAFT_METADATA_TRAILERS = {
     "AdaOS-Change-Id": "change_id",
     "AdaOS-Conversation-Id": "conversation_id",
@@ -2396,30 +2428,42 @@ class RootDeveloperService:
         commit_message = _normalize_draft_commit_message(message)
         commit_metadata = _normalize_draft_metadata(metadata)
         if kind == "skills":
-            response = client.push_skill_draft(
-                name=name,
-                archive_b64=archive_b64,
-                node_id=node_id,
-                verify=verify,
-                cert=(cert_path, key_path),
-                sha256=digest,
-                message=commit_message,
-                metadata=commit_metadata,
+            response = _retry_transient_draft_push(
+                lambda: client.push_skill_draft(
+                    name=name,
+                    archive_b64=archive_b64,
+                    node_id=node_id,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                    sha256=digest,
+                    message=commit_message,
+                    metadata=commit_metadata,
+                )
             )
         else:
-            response = client.push_scenario_draft(
-                name=name,
-                archive_b64=archive_b64,
-                node_id=node_id,
-                verify=verify,
-                cert=(cert_path, key_path),
-                sha256=digest,
-                message=commit_message,
-                metadata=commit_metadata,
+            response = _retry_transient_draft_push(
+                lambda: client.push_scenario_draft(
+                    name=name,
+                    archive_b64=archive_b64,
+                    node_id=node_id,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                    sha256=digest,
+                    message=commit_message,
+                    metadata=commit_metadata,
+                )
             )
         stored = response.get("stored_path")
         if not isinstance(stored, str) or not stored:
             raise RootServiceError("Root did not return stored_path")
+        commit = str(response.get("commit") or "").strip()
+        if not commit:
+            raise RootServiceError("Root stored the draft archive but did not confirm a Forge commit")
+        response_metadata = _normalize_draft_metadata(
+            response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+        )
+        if commit_metadata and response_metadata != commit_metadata:
+            raise RootServiceError("Root returned stale Forge commit metadata for the draft archive")
         return ArtifactPushResult(
             kind=kind.rstrip("s"),
             name=name,
@@ -2428,7 +2472,7 @@ class RootDeveloperService:
             bytes_uploaded=len(archive_bytes),
             version=(manifest_meta or {}).get("version"),
             updated_at=(manifest_meta or {}).get("updated_at"),
-            commit=str(response.get("commit") or "").strip() or None,
+            commit=commit,
             message=commit_message,
             metadata=_normalize_draft_metadata(
                 response.get("metadata") if isinstance(response.get("metadata"), Mapping) else commit_metadata
