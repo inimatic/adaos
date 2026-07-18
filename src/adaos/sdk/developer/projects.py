@@ -37,6 +37,8 @@ _TEXT_SUFFIXES = {
 }
 _READONLY_NAMES = {"prompt_state.json", "prep_result.json"}
 _READONLY_PREFIXES = ("ui_revisions/", ".git/")
+_IGNORED_FILE_PARTS = {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
+_IGNORED_FILE_SUFFIXES = {".pyc", ".pyo"}
 
 
 class DeveloperProjectError(SdkError):
@@ -134,7 +136,10 @@ def list_projects(*, kind: str | None = None, limit: int = 500) -> list[dict[str
         parent = skills if current == "skill" else scenarios
         if not parent.is_dir():
             continue
-        for root in sorted((item for item in parent.iterdir() if item.is_dir()), key=lambda item: item.name.lower()):
+        for root in sorted(
+            (item for item in parent.iterdir() if item.is_dir() and not item.name.startswith((".", "_"))),
+            key=lambda item: item.name.lower(),
+        ):
             manifest_path = _manifest_path(current, root)
             manifest = _read_manifest(manifest_path)
             project_id = str(manifest.get("id") or manifest.get("name") or root.name)
@@ -224,7 +229,8 @@ def list_files(kind: str, project_id: str, *, limit: int = 500) -> list[dict[str
     items: list[dict[str, Any]] = []
     for full in sorted((path for path in root.rglob("*") if path.is_file()), key=lambda path: path.as_posix().lower()):
         relative = full.relative_to(root).as_posix()
-        if relative.startswith(".git/"):
+        relative_parts = set(Path(relative).parts)
+        if relative_parts & _IGNORED_FILE_PARTS or full.suffix.lower() in _IGNORED_FILE_SUFFIXES:
             continue
         stat = full.stat()
         editable, reason = _editable(relative, full)

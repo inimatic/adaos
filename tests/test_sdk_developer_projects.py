@@ -42,6 +42,28 @@ def test_local_project_discovery_and_bounded_file_access(dev_roots) -> None:
     assert after["content"] == "updated"
 
 
+def test_project_discovery_and_files_hide_runtime_artifacts(dev_roots) -> None:
+    skills, scenarios = dev_roots
+    (skills / ".runtime").mkdir()
+    (skills / "_scratch").mkdir()
+    root = scenarios / "builder"
+    root.mkdir()
+    (root / "scenario.yaml").write_text("id: builder\n", encoding="utf-8")
+    cache = root / "tests" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "test_builder.pyc").write_bytes(b"compiled")
+    pytest_cache = root / ".pytest_cache"
+    pytest_cache.mkdir()
+    (pytest_cache / "README.md").write_text("generated", encoding="utf-8")
+    (root / "tests" / "test_builder.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    listed_projects = projects.list_projects()
+    listed_files = projects.list_files("scenario", "builder")
+
+    assert [item["id"] for item in listed_projects] == ["builder"]
+    assert [item["path"] for item in listed_files] == ["scenario.yaml", "tests/test_builder.py"]
+
+
 def test_project_files_block_escape_managed_state_and_binary(dev_roots) -> None:
     _skills, scenarios = dev_roots
     (scenarios / "builder").mkdir()
