@@ -42,6 +42,8 @@ from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.validation import SkillValidationService
+from adaos.services.scenario.validation import validate_scenario_path
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
@@ -2347,6 +2349,7 @@ class RootDeveloperService:
         source = workspace / kind / name
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
+        self._validate_artifact_preflight(kind, name, source)
         source_payload = self._manifest_payload(source, kind)
         source_data = source_payload[1] if source_payload else {}
         publish_bump_index = (
@@ -2700,6 +2703,7 @@ class RootDeveloperService:
         source = workspace_root / kind / name
         if not source.exists() or not source.is_dir():
             raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
+        self._validate_artifact_preflight(kind, name, source)
 
         target = (self.ctx.paths.scenarios_dir() if kind == "scenarios" else self.ctx.paths.skills_dir()) / name
 
@@ -2831,6 +2835,48 @@ class RootDeveloperService:
             dry_run=False,
             warnings=tuple(warnings),
         )
+
+    def _validate_artifact_preflight(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        source: Path,
+    ) -> None:
+        if kind == "skills":
+            report = SkillValidationService(self.ctx).validate_path(
+                source,
+                name=name,
+                strict=False,
+                probe_tools=True,
+            )
+            issues = list(report.issues)
+            ok = report.ok
+        else:
+            report = validate_scenario_path(
+                source,
+                dependency_roots=(source.parent.parent / "skills", self.ctx.paths.skills_dir()),
+            )
+            issues = list(report.issues)
+            ok = report.ok
+
+        warnings = [issue for issue in issues if getattr(issue, "level", "") == "warning"]
+        for issue in warnings:
+            logger.warning(
+                "%s preflight warning for %s '%s': %s",
+                kind[:-1],
+                kind[:-1],
+                name,
+                getattr(issue, "message", issue),
+            )
+        if ok:
+            return
+        errors = [
+            f"{getattr(issue, 'code', 'validation.error')}: {getattr(issue, 'message', issue)}"
+            for issue in issues
+            if getattr(issue, "level", "error") == "error"
+        ]
+        detail = "; ".join(errors[:8]) or "unknown validation error"
+        raise RootServiceError(f"Validation failed for {kind[:-1]} '{name}': {detail}")
 
 
 __all__ = [

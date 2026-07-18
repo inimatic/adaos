@@ -8,11 +8,12 @@ from typing import Any
 
 import typer
 
-from adaos.apps.cli.commands.dev import _load_dev_scenario_model, _resolve_dev_scenario_file
+from adaos.apps.cli.commands.dev import _resolve_dev_scenario_file, _scenario_validation_roots
 from adaos.apps.cli.commands.skill import _mgr
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder import BuilderWorkbenchService, BuilderWorkspaceService
 from adaos.services.node_config import displayable_path
+from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.root.service import (
     ArtifactCreateResult,
     ArtifactListItem,
@@ -21,7 +22,6 @@ from adaos.services.root.service import (
     RootServiceError,
     TemplateResolutionError,
 )
-from adaos.sdk.scenarios.runtime import ScenarioRuntime
 
 
 app = typer.Typer(help="Builder authoring, draft, and preview workflows.")
@@ -386,21 +386,30 @@ def validate(
         typer.secho(f"Scenario file not found: {target}", fg=typer.colors.RED)
         raise typer.Exit(1)
     try:
-        model = _load_dev_scenario_model(scenario_file)
-        errors = ScenarioRuntime().validate(model)
+        report = validate_scenario_path(
+            scenario_file,
+            dependency_roots=_scenario_validation_roots(ctx),
+        )
+        errors = report.errors
     except Exception as exc:
         typer.secho(f"validate failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
     if json_output:
-        payload = {"ok": not bool(errors), "kind": "scenario", "scenario_id": model.id, "errors": errors}
+        payload = {
+            "ok": report.ok,
+            "kind": "scenario",
+            "scenario_id": report.scenario_id,
+            "errors": errors,
+            "issues": [asdict(issue) for issue in report.issues],
+        }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        raise typer.Exit(0 if not errors else 1)
+        raise typer.Exit(0 if report.ok else 1)
     if errors:
         typer.secho("Validation failed:", fg=typer.colors.RED)
         for err in errors:
             typer.echo(f"- {err}")
         raise typer.Exit(1)
-    typer.secho(f"Scenario '{model.id}' is valid.", fg=typer.colors.GREEN)
+    typer.secho(f"Scenario '{report.scenario_id}' is valid.", fg=typer.colors.GREEN)
 
 
 def _read_json_arg(value: str | None) -> dict[str, Any] | None:

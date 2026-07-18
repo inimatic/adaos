@@ -14,6 +14,7 @@ from adaos.apps.cli.commands.skill import _mgr
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import displayable_path
+from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.root.service import (
     DeviceAuthorization,
     ArtifactDeleteResult,
@@ -1243,6 +1244,19 @@ def _load_dev_scenario_model(path: Path) -> ScenarioModel:
     return ScenarioModel.from_payload(payload, fallback_id=fallback_id)
 
 
+def _scenario_validation_roots(ctx: Any) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    paths = getattr(ctx, "paths", None)
+    for name in ("dev_skills_dir", "skills_dir"):
+        resolve = getattr(paths, name, None)
+        if not callable(resolve):
+            continue
+        root = Path(resolve()).expanduser().resolve()
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
 @_run_safe
 @scenario_app.command("run")
 def scenario_run(
@@ -1280,14 +1294,21 @@ def scenario_validate(
         typer.secho(f"Scenario file not found: {target}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    model = _load_dev_scenario_model(scenario_file)
-    runtime = ScenarioRuntime()
-    errors = runtime.validate(model)
+    report = validate_scenario_path(
+        scenario_file,
+        dependency_roots=_scenario_validation_roots(ctx),
+    )
+    errors = report.errors
 
     if json_output:
-        payload = {"ok": not bool(errors), "errors": errors, "scenario_id": model.id}
+        payload = {
+            "ok": report.ok,
+            "errors": errors,
+            "issues": [asdict(issue) for issue in report.issues],
+            "scenario_id": report.scenario_id,
+        }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        raise typer.Exit(0 if not errors else 1)
+        raise typer.Exit(0 if report.ok else 1)
 
     if errors:
         typer.secho("Validation failed:", fg=typer.colors.RED)
@@ -1295,7 +1316,7 @@ def scenario_validate(
             typer.echo(f"- {err}")
         raise typer.Exit(1)
 
-    typer.secho(f"Scenario '{model.id}' is valid.", fg=typer.colors.GREEN)
+    typer.secho(f"Scenario '{report.scenario_id}' is valid.", fg=typer.colors.GREEN)
 
 
 @_run_safe
