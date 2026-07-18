@@ -4162,3 +4162,26 @@ Actions:
   through NLU without model retraining.
 - [ ] Add remaining regression tests for `Node N` fallback, hostname display,
   browser draft names, alias ambiguity, and renamed-device NLU resolution.
+
+## Builder SDK Boundary
+
+Detailed architecture, priority tags, progress checklist, and replacement exit
+criteria are maintained in
+[`architecture/builder-sdk-boundary.md`](architecture/builder-sdk-boundary.md).
+
+#### BUILDER-SDK-001: Move Prompt IDE and Builder skills onto the SDK plane
+
+Status: in progress.
+
+Actions:
+
+- [x] `[must]` Document target SDK ownership and migration constraints.
+- [ ] `[must]` Land Builder preview, automation, and developer-project SDK
+  operations with contract tests.
+- [ ] `[must]` Migrate Prompt IDE and Builder Automation consumers without
+  breaking the legacy Prompt IDE rollback path.
+- [ ] `[must]` Add and run an SDK-only Builder control skill in the DEV
+  snapshot.
+- [ ] `[should]` Enforce the boundary for migrated/new skills.
+- [ ] `[deferred]` Decompose large Builder and Prompt Engineer modules under a
+  separate characterization-test plan.
