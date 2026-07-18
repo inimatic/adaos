@@ -86,7 +86,9 @@ def test_preferred_activation_slot_skips_stale_patch_slot(tmp_path: Path) -> Non
     assert mgr._preferred_activation_slot(env, "0.1.8", metadata) == "B"
 
 
-def test_activate_dev_runtime_reprepares_stale_patch_slot(monkeypatch, tmp_path: Path) -> None:
+def test_activate_dev_runtime_uses_manifest_version_and_reprepares_stale_patch_slot(
+    monkeypatch, tmp_path: Path
+) -> None:
     skill_name = "dev_patch_skill"
     dev_root = tmp_path / "skills"
     skill_dir = dev_root / skill_name
@@ -149,7 +151,7 @@ def test_activate_dev_runtime_reprepares_stale_patch_slot(monkeypatch, tmp_path:
     monkeypatch.setattr(mgr, "_prune_runtime_history", lambda **_kwargs: None)
     monkeypatch.setattr(mgr, "_smoke_import", lambda **_kwargs: None)
 
-    activated_slot = mgr.activate_dev_runtime(skill_name, version="0.1.2")
+    activated_slot = mgr.activate_dev_runtime(skill_name)
 
     assert activated_slot == "B"
     assert prepared == [(skill_name, "0.1.2", "B")]

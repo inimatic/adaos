@@ -4699,14 +4699,18 @@ class SkillManager:
         if not skill_dir.exists():
             raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
 
-        target_version = version or env.resolve_active_version()
+        target_version = str(version or "").strip()
         if not target_version:
-            # derive version from manifest, default to 'dev'
+            # A source activation follows the DEV manifest by default. The
+            # active marker is only a fallback for legacy sources without a
+            # manifest version.
             try:
                 manifest = self._load_manifest(skill_dir)
             except FileNotFoundError:
                 manifest = {}
-            target_version = str(manifest.get("version") or "dev")
+            target_version = str(manifest.get("version") or "").strip()
+        if not target_version:
+            target_version = str(env.resolve_active_version() or "dev").strip() or "dev"
 
         # Ensure version layout exists and slot is prepared
         env.prepare_version(target_version)

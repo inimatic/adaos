@@ -176,8 +176,9 @@ Tags indicate priority, not implementation order:
   preview, change, automation, and release skill bindings.
 - [x] `[must]` Keep YAML and JSON scenario descriptors version-aligned during
   DEV push without replacing their UI content.
-- [x] `[must]` Make DEV activation verify the requested patch version instead
-  of reusing a stale slot from the same runtime bucket.
+- [x] `[must]` Make DEV activation select the source manifest version by
+  default and verify its patch version instead of reusing a stale slot from
+  the same runtime bucket.
 - [x] `[must]` Run control-skill import, validation, tool, and focused runtime
   tests on the development machine.
 - [x] `[must]` Prove live HTTP tool execution, synchronous Yjs
@@ -260,7 +261,7 @@ $payload = '{"webspace_id":"builder-sdk-control"}'.Replace('"', '\"')
 $env:PYTHONPATH = 'src'
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill validate builder_sdk_control_skill --strict --probe-tools --json
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill test builder_sdk_control_skill --runtime --json
-.venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill activate builder_sdk_control_skill --version 0.1.7
+.venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill activate builder_sdk_control_skill
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill run builder_sdk_control_skill select_preview --json $payload --timeout 120
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" dev skill run builder_sdk_control_skill get_state --json $payload --timeout 30
 .venv\Scripts\python.exe -c "from adaos.apps.cli.app import app; app()" node yjs materialization --webspace builder-sdk-control-dev --json
