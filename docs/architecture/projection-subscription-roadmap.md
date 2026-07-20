@@ -273,6 +273,10 @@ Current status:
 - [x] `yjs.named_entity_live_reconciler`: keep desired/applied registry revisions in a level-triggered reconciler and retry on live-room readiness without detached YStore replay
 - [x] `yjs.awaitable_live_room_commands`: submit named-entity writes through an owner-loop command boundary with completion and phase diagnostics
 - [x] `yjs.transaction_local_diff`: generate live-room updates from the mutation transaction rather than a full-document state-vector scan
+- [x] `yjs.named_entity_source_admission`: cache static, subnet, device, and lookup sources independently and use complete event-carried fingerprints before loading an invalidated source
+- [x] `yjs.named_entity_room_generation`: bind applied fingerprint state to the current live-room generation and skip commands only for that exact room instance
+- [x] `yjs.named_entity_changed_refs`: patch directly consecutive registry revisions by `changed_refs` and fall back to full materialization for new or lagged rooms
+- [x] `yjs.named_entity_benchmark`: keep a repeatable no-op/full/incremental/source-admission convergence benchmark under `tools/`
 
 Current status:
 
@@ -284,7 +288,9 @@ Current status:
   observer reduction are still open.
 - The named-entity pilot now publishes keyed maps by `canonical_ref`. Its
   coalescer is load shedding only; desired/applied revision convergence is the
-  correctness mechanism.
+  correctness mechanism. Source invalidation and entity fingerprints are the
+  work-admission layer, and the applied state is scoped to a live-room
+  generation.
 - Browser named-entity consumers prefer V2 and keep a temporary read fallback
   for mixed-version deployment. Legacy backend dual-write is disabled by
   default and requires `ADAOS_NAMED_ENTITY_LEGACY_PROJECTION=1`.
@@ -343,6 +349,15 @@ Harvest branch checkpoint:
 - [ ] `[could] cleanup.projection_record_detached_fallback`: move the generic
   ProjectionRecord materializer from detached fallback writes to the same
   desired/applied live-room reconciliation model
+- [ ] `[could] yjs.named_entity_emitter_fingerprints`: add canonical entity
+  fingerprints to every registry invalidation emitter so all duplicate events,
+  not only complete governed events, can take the pre-load admission path
+- [ ] `[could] yjs.named_entity_conflict_index`: maintain an incremental label
+  conflict index if unhinted source refresh benchmarks remain material after
+  source caching
+- [ ] `[could] yjs.named_entity_authority_audit`: add a bounded periodic or
+  room-ready audit that compares the read-only Yjs projection meta fingerprint
+  with reconciler state and repairs unauthorized client-side drift
 - [ ] `[deferred] yjs.named_entity_detail_partition`: split large label or
   conflict detail into demanded projections if keyed V2 payload measurements
   still show material event-loop or replication pressure

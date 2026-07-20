@@ -551,6 +551,10 @@ The implementation invariants are:
 
 - one versioned `NamedEntityRegistrySnapshot` is canonical per webspace;
   its revision advances only when the content fingerprint changes
+- source material is cached independently for `static`, `subnet`, `devices`,
+  and `lookups`; an invalidation rebuilds only its owning sources, while an
+  entity fingerprint carried by the event can reject a duplicate before any
+  source is loaded
 - invalidation requests update desired state; a level-triggered reconciler
   converges `applied_revision` to `desired_revision`
 - if the webspace has no live room, the desired revision remains pending and
@@ -558,15 +562,19 @@ The implementation invariants are:
 - coalescing only reduces redundant wakeups; correctness comes from comparing
   desired and applied revisions/fingerprints, so a hidden event cannot lose a
   registry change
+- applied state includes the process-local live-room generation; an unchanged
+  fingerprint skips Yjs work only while the same room instance remains live
 - snapshot construction runs outside the asyncio event loop; the runtime no
   longer opens a detached YStore-backed document for this projection
 - live-room mutation is submitted through an awaitable owner-loop command and
   reports completion, queue time, apply time, update bytes, and errors
-- the live mutation uses the transaction's incremental diff instead of
-  encoding a state vector and rescanning the complete live `YDoc`
+- the live mutation captures `txn.state_vector_v1()` before the mutator and
+  passes it to `txn.diff_v1(before_vector)`; calling `diff_v1()` without this
+  vector would encode the complete document rather than the transaction delta
 - `registry.namedEntitiesV2.entities` is keyed by `canonical_ref`, so changing
-  one record produces a nested Yjs patch rather than replacement of the whole
-  registry payload
+  one record after the directly preceding revision visits only
+  `snapshot.changed_refs`; a new room or a room that missed revisions receives
+  a full convergent materialization
 
 Legacy behavior can be enabled temporarily with
 `ADAOS_NAMED_ENTITY_LEGACY_PROJECTION=1`. Browsers read V2 first and retain a
@@ -576,7 +584,22 @@ not a second source of truth.
 Diagnostics are exposed in the Yjs reliability snapshot, `diag360`, and loop
 lag dumps. The important correlations are registry snapshot-build time,
 command queue/apply time, payload size, update bytes, desired/applied revision,
-and whether work is pending on room availability.
+room generation, patch mode, and whether work is pending on room availability.
+
+### Repeatable local performance check
+
+`python tools/named_entity_projection_benchmark.py` runs a deterministic
+in-process comparison of full and `changed_refs` reconciliation, verifies a
+zero-byte no-op delta, exercises source-scoped invalidation, and runs a burst
+of pre-load fingerprint checks. It fails when the incremental and full YDocs
+do not converge or when any admission invariant regresses.
+
+The 2026-07-20 reference run used 500 entities, 40 sequential changes, and a
+500-request fingerprint burst. On that machine, the formerly unbounded no-op
+encode was 335,108 bytes and the corrected delta was zero. Full reconciliation
+had 400.642 ms p95 versus 5.953 ms for `changed_refs`; both documents converged.
+Fingerprint admission had 0.007 ms p95. These numbers are local synthetic
+evidence, not a substitute for post-deploy event-loop soak measurements.
 
 ## UI behavior
 
@@ -823,12 +846,22 @@ action routing.
   `entity.registry.changed`.
 - [x] Cache a canonical versioned registry snapshot per webspace and advance
   its revision only on fingerprint changes.
+- [x] Cache registry sources independently and route registry events to the
+  owning `static`, `subnet`, `devices`, or `lookups` invalidation set.
+- [x] Check event-carried entity fingerprints before source loading when the
+  emitter provides a complete fingerprint hint.
 - [x] Reconcile desired/applied revisions against live rooms without detached
   YStore replay or a hidden persistence fallback.
+- [x] Bind applied fingerprints to the live-room generation and skip an
+  already-applied snapshot without submitting a Yjs command.
 - [x] Materialize the registry as keyed `registry.namedEntitiesV2` maps and
   keep legacy dual-write behind an explicit compatibility flag.
 - [x] Route projection writes through the awaitable live-room command boundary
   and use transaction-local Yjs diffs instead of full-document encoding.
+- [x] Apply directly consecutive revisions by `changed_refs`, with full
+  materialization retained for new or revision-lagged rooms.
+- [x] Add a repeatable convergence/performance benchmark for no-op, full,
+  incremental, source-scoped, and fingerprint-burst paths.
 - [x] Expose projection/reconciler/command timings and outcomes through loop
   lag dumps, reliability snapshots, and `diag360`.
 

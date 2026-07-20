@@ -119,13 +119,28 @@ It now uses:
 - a level-triggered desired/applied revision reconciler
 - pending-until-room-ready behavior instead of detached YStore replay
 - keyed `registry.namedEntitiesV2.entities[canonical_ref]` materialization
-- an awaitable owner-loop mutation command with transaction-local Yjs diffs
+- per-source registry invalidation with pre-load entity fingerprint admission
+- live-room-generation admission and `changed_refs` patches
+- an awaitable owner-loop mutation command with state-vector-bounded Yjs diffs
 
 This distinction matters: coalescing is only burst control. It cannot hide a
 missed update because the reconciler converges state revisions rather than
 counting event deliveries. Source snapshot construction runs in a worker
-thread; the thread-affine live `YDoc` remains on its owner loop, but the command
-no longer performs a full-document state-vector/diff encode for a small patch.
+thread, and unchanged sources are reused from the canonical snapshot. The
+thread-affine live `YDoc` remains on its owner loop. Its state vector is captured
+immediately before mutation and supplied to `txn.diff_v1`, so a no-op produces
+no replication update; a consecutive revision visits only changed entity refs.
+
+The repeatable local check is:
+
+```text
+python tools/named_entity_projection_benchmark.py
+```
+
+It validates full/incremental convergence, no-op update suppression,
+source-scoped refresh, and a bounded fingerprint burst. Treat its timing output
+as synthetic regression evidence and confirm deployment behavior from loop-lag
+and reliability diagnostics.
 
 ### YStore Backup Reason Counters
 
@@ -168,3 +183,5 @@ When diagnosing a rebuild lag incident:
 6. Correlate `named_entities.projection` with `yjs.live_room_command`; a large
    snapshot-build value points to source aggregation, queue time points to
    owner-loop contention, and apply time/update bytes point to Yjs mutation.
+7. Check `last_snapshot_mode`, `projection_patch_mode`, room generation, and
+   `fingerprint_skip_total` before attributing repeated events to coalescing.

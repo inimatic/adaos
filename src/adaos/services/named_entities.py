@@ -2033,11 +2033,16 @@ class NamedEntityRegistry:
         entity_service = service or get_named_entity_service()
         with self._lock:
             previous = self._snapshots.get(webspace)
-        requested_sources = {
-            _text(source)
-            for source in dirty_sources
-            if _text(source) in REGISTRY_SOURCES
-        } if dirty_sources is not None else set(REGISTRY_SOURCES)
+        raw_sources = (
+            tuple(_text(source) for source in dirty_sources if _text(source))
+            if dirty_sources is not None
+            else ()
+        )
+        requested_sources = (
+            set(REGISTRY_SOURCES)
+            if dirty_sources is None or any(source not in REGISTRY_SOURCES for source in raw_sources)
+            else set(raw_sources)
+        )
         if (
             previous is None
             or previous.service_identity != id(entity_service)

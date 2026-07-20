@@ -508,8 +508,15 @@ def test_named_entity_registry_refresh_rebuilds_only_dirty_sources(
         {"skill:browsers_skill": entity_fingerprint},
         webspace_id="desktop",
     )
+    third = registry.refresh(
+        webspace_id="desktop",
+        service=service,
+        dirty_sources=("unknown-source",),
+    )
+    assert third is first
+    assert calls == {"static": 2, "subnet": 2, "devices": 3, "lookups": 2}
     diagnostics = registry.diagnostics_snapshot(webspace_id="desktop")
-    assert diagnostics["source_build_total"] == 5
+    assert diagnostics["source_build_total"] == 9
     assert diagnostics["source_reuse_total"] == 3
     assert diagnostics["fingerprint_hit_total"] == 1
 
