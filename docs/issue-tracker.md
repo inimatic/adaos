@@ -3,6 +3,12 @@
 This document is the single living issue tracker for active AdaOS stabilization
 and delivery work.
 
+This Markdown file is a repository execution and evidence log. It is not the
+target AdaOS Issue aggregate, Support Agent store, or product-development
+registry described by [Governed Evolution](architecture/governed-evolution.md).
+Until that contract exists, references to an `AdaOS Issue` must not be inferred
+from headings or checkboxes in this file.
+
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 

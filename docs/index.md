@@ -29,7 +29,14 @@ The current implementation is centered around local and private deployments:
 - [MVP Roadmap](mvp_roadmap.md): current milestone checklist for finishing the
   MVP across runtime, skills, browser, conversations, endpoints, and release
   evidence
-- [Roadmap Inventory](architecture/roadmap-inventory.md): current target-architecture coverage, implementation statuses, and documentation gaps
+- [Governed Evolution](architecture/governed-evolution.md): long-term product
+  and architecture model connecting human intent, durable issues, Builder,
+  publication, runtime evidence, and repair
+- [Governed Evolution Roadmap](architecture/governed-evolution-roadmap.md):
+  cross-domain milestones and proof gates; detailed implementation work remains
+  in the domain roadmaps
+- [Roadmap Inventory](architecture/roadmap-inventory.md): authority map and
+  index of the domain architecture and roadmap documents
 - [CLI](cli/index.md): command groups and operational workflows
 - [SDK](sdk/index.md): public Python-facing building blocks
 - [Skills](skills.md): skill lifecycle and runtime behavior
@@ -41,4 +48,8 @@ The current implementation is centered around local and private deployments:
 
 ## Current scope
 
-AdaOS already includes real operational features such as node roles, autostart, core update orchestration, service supervision, monitoring, and Yjs webspace control. At the same time, some documents in this repository still describe target-state ideas. The pages outside `Roadmap` and `Concepts` are focused here on the implementation that exists in `src/adaos` today.
+AdaOS already includes real operational features such as node roles, autostart,
+core update orchestration, service supervision, monitoring, and Yjs webspace
+control. Target-state architecture and implementation status are deliberately
+separate: start with the [roadmap authority map](architecture/roadmap-inventory.md)
+before interpreting a checklist or design proposal as current behavior.

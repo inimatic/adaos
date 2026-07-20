@@ -152,6 +152,9 @@ nav:
       - Member Node Onboarding: onboarding/member-node-phase1.md
   - Architecture:
       - Overview: architecture/index.md
+      - Governed Evolution: architecture/governed-evolution.md
+      - Governed Evolution Roadmap: architecture/governed-evolution-roadmap.md
+      - Roadmap Inventory and Authority Map: architecture/roadmap-inventory.md
       - Runtime Overview: architecture/overview.md
       - Product Terminology: architecture/product-terminology.md
       - Layers: architecture/layers.md
@@ -160,6 +163,7 @@ nav:
       - Infrascope: architecture/infrascope.md
       - UI Addressing: architecture/ui-addressing.md
       - Web UI Architecture: architecture/web-ui-architecture.md
+      - Observability Map: monitoring/observability.md
       - Version Observability: architecture/version-observability.md
       - Operational Event Model: architecture/operational-event-model.md
       - Operational Event Model Reference Plan: architecture/operational-event-model-reference-plan.md
@@ -170,6 +174,8 @@ nav:
       - Root MCP Foundation: architecture/root-mcp-foundation.md
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
       - Skill Factory: architecture/skill-factory.md
+      - Builder: architecture/builder.md
+      - Builder Roadmap: architecture/builder-roadmap.md
       - Builder SDK Boundary: architecture/builder-sdk-boundary.md
       - Infrascope Roadmap: architecture/infrascope-roadmap.md
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
@@ -206,9 +212,11 @@ nav:
   - Scenarios: scenarios.md
   - DevPortal: devportal.md
   - Roadmap:
-      - Overview: roadmap.md
+      - Planning Authority: architecture/roadmap-inventory.md
+      - Governed Evolution: architecture/governed-evolution-roadmap.md
       - MVP Roadmap: mvp_roadmap.md
-      - LLM Skill Creation: llm-skill-creation-roadmap.md
+      - Historical Roadmap (2025): roadmap.md
+      - Historical LLM Skill Creation: llm-skill-creation-roadmap.md
   - Changelog: changelog.md
   - Concepts:
       - Codebase: concepts/codeflow.md
