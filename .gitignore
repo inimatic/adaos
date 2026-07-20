@@ -28,7 +28,7 @@ tmp/
 example
 example2
 example3
-examples
+/examples/
 .ssh
 .codex-diagnostics
 .gitignore
