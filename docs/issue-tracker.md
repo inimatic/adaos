@@ -57,6 +57,14 @@ Local verification completed on the Windows development machine:
 - `git diff --check`: passed before each implementation commit
 - Ruff was not present in the project virtual environment; this is recorded as
   unavailable rather than silently treated as a pass
+- repository-wide `pytest` is inconclusive on this machine: collection order
+  lets older tests replace `sys.modules["nats"]`, so
+  `tests/test_nats_ws_transport.py` later sees a non-package stub; its standalone
+  run had `38` passes and one heartbeat timing failure, and that exact failure
+  passed on immediate focused rerun
+- a follow-up broad run excluding the NATS file was externally interrupted by
+  Windows status `0xc000013a` before pytest produced a result; it is not counted
+  as a pass or a failure of this wave
 
 Residual risks and next gate:
 
@@ -66,6 +74,8 @@ Residual risks and next gate:
 - packaging/activation metadata guarantees, registry-miss diagnostics, direct
   write linting, broad legacy-observer reduction, and per-skill shim removal
   remain open roadmap items
+- isolate NATS module stubs and the heartbeat timing test before using one
+  repository-wide pytest command as release evidence
 - do not start broad Infrascope migration solely from this local checkpoint
 
 ## Platform Stabilization Stand Checkpoint 2026-05-28
