@@ -102,6 +102,26 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    scenario = service.dev_scenarios_root / "recipes" / "scenario.json"
+    scenario.write_text(
+        json.dumps(
+            {
+                "id": "recipes",
+                "version": "0.1.0",
+                "depends": ["recipes_control_skill"],
+                "runtime": {"skills": {"required": ["recipes_control_skill"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    companion = service._resolve_companion_skill_id("scenario", "recipes")
+
+    assert companion == "recipes_control_skill"
+
+
 def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
@@ -120,6 +140,39 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert status["session"]["iteration"] == 1
     assert status["session"]["turns"][0]["text"] == "Add filtering by cooking time."
     assert len(status["session"]["task_history"]) == 2
+
+
+def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "companion_skill_id": "recipes_skill",
+        "webspace_id": "prompt-dev",
+        "status": "queued",
+        "current_task_id": "task.queued",
+    }
+    service._save_session(session)
+    service.factory = SimpleNamespace(snapshot=lambda **_kwargs: {"tasks": []})
+    launched: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_launch_worker",
+        lambda self, session_id: launched.append(session_id),
+    )
+
+    result = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+
+    assert result["duplicate"] is True
+    assert result["worker_relaunched"] is True
+    assert launched == ["automation.scenario.recipes"]
 
 
 def test_followup_turn_clears_stale_terminal_projection(tmp_path: Path) -> None:
@@ -169,6 +222,7 @@ def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> N
         "id": "recipes",
         "companion_skill_id": "recipes_skill",
     }
+    assert projection["result_branch"] == result["session"]["last_result"]["branch"]
     assert projection["steps"][-1]["state"] == "completed"
 
     schema_path = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi" / "builder.automation_projection.v1.schema.json"

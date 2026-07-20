@@ -39,6 +39,7 @@
     },
     "iteration": { "type": "integer", "minimum": 0 },
     "task_id": { "type": ["string", "null"] },
+    "result_branch": { "type": ["string", "null"] },
     "steps": {
       "type": "array",
       "items": {

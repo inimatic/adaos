@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+import yaml
+
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
@@ -146,15 +148,25 @@ class BuilderAutomationService:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
                 refreshed = self.refresh_session(current)
-                return {
+                result = {
                     "ok": True,
                     "duplicate": True,
                     "session": refreshed,
                     "automation": self.project_session(refreshed),
                 }
+                # A queued task may outlive the short-lived caller that created
+                # it (for example a CLI tool invocation).  A persistent Builder
+                # caller can safely recover that task because it has not been
+                # assigned to any worker yet.
+                if refreshed.get("status") == "queued":
+                    self._launch_worker(str(refreshed.get("session_id") or ""))
+                    result["worker_relaunched"] = True
+                return result
+            companion_skill_id = self._resolve_companion_skill_id(kind, project_id)
             created_artifacts = self._ensure_automation_artifacts_created(
                 kind=kind,
                 project_id=project_id,
+                companion_skill_id=companion_skill_id,
                 implementation_brief=brief,
             )
             session = {
@@ -162,7 +174,7 @@ class BuilderAutomationService:
                 "session_id": f"automation.{kind}.{project_id}",
                 "object_type": kind,
                 "object_id": project_id,
-                "companion_skill_id": f"{project_id}_skill" if kind == "scenario" else project_id,
+                "companion_skill_id": companion_skill_id,
                 "webspace_id": str(webspace_id or "desktop"),
                 "conversation_id": str(conversation_id or "").strip() or None,
                 "topic_id": f"prompt-project:{kind}:{project_id}",
@@ -199,12 +211,13 @@ class BuilderAutomationService:
         *,
         kind: str,
         project_id: str,
+        companion_skill_id: str,
         implementation_brief: str,
     ) -> list[dict[str, Any]]:
         service = self.workspace_service or BuilderWorkspaceService.from_context()
         artifacts = [(kind, project_id)]
         if kind == "scenario":
-            artifacts.append(("skill", f"{project_id}_skill"))
+            artifacts.append(("skill", companion_skill_id))
 
         created: list[dict[str, Any]] = []
         for artifact_kind, artifact_id in artifacts:
@@ -230,6 +243,54 @@ class BuilderAutomationService:
                 }
             )
         return created
+
+    def _resolve_companion_skill_id(self, kind: str, project_id: str) -> str:
+        """Prefer a scenario's declared runtime skill over a name convention."""
+        if kind != "scenario":
+            return project_id
+
+        scenario_root = self.dev_scenarios_root / project_id
+        manifest: Mapping[str, Any] = {}
+        for name in ("scenario.json", "scenario.yaml", "scenario.yml"):
+            path = scenario_root / name
+            if not path.is_file():
+                continue
+            try:
+                if path.suffix.lower() == ".json":
+                    value = json.loads(path.read_text(encoding="utf-8-sig"))
+                else:
+                    value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+            except (OSError, ValueError, yaml.YAMLError):
+                continue
+            if isinstance(value, Mapping):
+                manifest = value
+                break
+
+        candidates: list[str] = []
+
+        def add(values: Any) -> None:
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, (list, tuple)):
+                return
+            for value in values:
+                token = _safe_token(value, fallback="")
+                if token and token not in candidates:
+                    candidates.append(token)
+
+        runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
+        runtime_skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+        skills = manifest.get("skills") if isinstance(manifest.get("skills"), Mapping) else {}
+        add(runtime_skills.get("required"))
+        add(skills.get("required"))
+        add(manifest.get("depends"))
+
+        conventional = f"{project_id}_skill"
+        if conventional in candidates:
+            return conventional
+        if candidates:
+            return candidates[0]
+        return conventional
 
     def submit_turn(
         self,
@@ -363,6 +424,7 @@ class BuilderAutomationService:
         status = str(session.get("status") or "starting").strip() or "starting"
         task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
         result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
+        forge = task.get("forge") if isinstance(task.get("forge"), Mapping) else {}
         failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
         progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
         local_run = session.get("local_run") if isinstance(session.get("local_run"), Mapping) else {}
@@ -384,6 +446,7 @@ class BuilderAutomationService:
             },
             "iteration": int(session.get("iteration") or 0),
             "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
+            "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
             "steps": BuilderAutomationService._step_projection(status),
             "progress": dict(progress) if progress else None,
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
