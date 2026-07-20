@@ -58,7 +58,7 @@ This roadmap defines one implementation order across all those branches.
 
 ## Roadmap Ownership
 
-Snapshot date: 2026-05-29.
+Snapshot date: 2026-07-21.
 
 This document is the single authoritative delivery track for the operational
 event model.
@@ -392,11 +392,17 @@ Primary sources:
 - [x] `[MVP]` `phase4.full_overwrite_model`: make the browser write full active subscription sets
 - [x] `[MVP]` `phase4.multi_projection_consumers`: support concurrent page, widget, modal, and panel consumers
 - [x] `[MVP]` `phase4.node_multiplicity_visible`: prepare the client to consume node multiplicity from shared Yjs
-- [ ] `[MVP]` `phase4.lifecycle_consumption`: consume `pending/refreshing/ready/stale/error` as first-class projection state
+- [x] `[MVP]` `phase4.lifecycle_consumption`: consume `pending/refreshing/ready/stale/error` as first-class projection state
 - [x] `[MVP]` `phase4.cache_by_projection_key`: cache projection payloads by `projection_key`
 
-Current checkpoint as of 2026-05-02:
+Current checkpoint as of 2026-07-21:
 
+- the Angular page runtime now exposes `kind: projection` as a first-class data
+  source, ref-counts demand with the existing full-overwrite registry, and
+  reads canonical records from `data/projectionRecords`
+- consumers can select the whole lifecycle envelope, payload data, or lifecycle
+  metadata; missing/loading/failed records normalize to the shared five-state
+  contract while retaining stale data when the record carries it
 - browser page runtime now supports node-aware stream receiver hints
   (`nodeId`, `transport`) in addition to the existing transport-independent
   receiver abstraction
@@ -412,9 +418,9 @@ Current checkpoint as of 2026-05-02:
 - semantic reload/reset events are now mirrored to members so they can
   self-refresh their subnet snapshot contribution after desktop rebuilds
   instead of depending on a purely hub-pulled recovery loop
-- this partially advances `phase4.node_multiplicity_visible`, but the general
-  subscription registry and projection lifecycle ABI for all consumers are not
-  complete yet
+- node multiplicity and projection lifecycle now share the same adapter and
+  demand path; surface-by-surface removal of legacy data sources remains later
+  migration work rather than an ABI blocker
 
 Next gate:
 
@@ -426,10 +432,9 @@ Next gate:
 - MVP implementation checkpoint: server-side full-session demand writes,
   browser-state mapping, session touch/delete, `runtime/clients` Yjs
   materialization/restore, browser-cache ETags, per-entry lifecycle/cache
-  metadata, and the Angular YDoc demand registry hookup exist. The remaining
-  Phase 4 gap is full UI consumption of lifecycle state as the active rendering
-  source across all surfaces; this stays open until the client reads
-  `data/projectionRecords` as the primary cache path.
+  metadata, and the Angular ProjectionRecord adapter exist. New projection
+  consumers can use the canonical cache path; converting every legacy surface
+  is rollout work and is not implied by this contract-level completion.
 
 Primary source:
 
@@ -479,13 +484,23 @@ Primary sources:
 
 - [x] `phase6.status_cards_pilot`: implement shared status cards as the first small platform-emitter family
 - [x] `[MVP]` `phase6.status_card_live_dispatch`: refresh demanded status-card ProjectionRecords automatically from status-card change events
-- [ ] `[MVP]` `phase6.notifications_pilot`: migrate minimal notifications through the shared projection contract
+- [x] `[MVP]` `phase6.notifications_pilot`: migrate minimal notifications through the shared projection contract
 - [x] `[MVP]` `phase6.diagnostics_pilot`: migrate minimal diagnostics and operator-visible failures through the shared projection contract
 - [ ] `[deferred]` `phase6.workspace_manager_pilot`: migrate shared workspace-manager and similar platform surfaces
-- [ ] `[MVP]` `phase6.emitter_validation`: validate that platform emitters exercise the architecture before one heavy skill is migrated
+- [x] `[MVP]` `phase6.emitter_validation`: validate that platform emitters exercise the architecture before one heavy skill is migrated
 
-Current checkpoint as of 2026-05-15:
+Current checkpoint as of 2026-07-21:
 
+- the core operations path now publishes bounded `platform:notifications`
+  records, emits `adaos.platform.notifications.changed`, and uses the same
+  demand selection, dispatcher, fingerprinted registry, and Yjs materializer as
+  status cards
+- browser notification history demands and consumes the canonical notification
+  record; `runtime/notifications` and `data/desktop/toasts` remain explicit
+  compatibility mirrors during rollout
+- `tests/test_projection_platform_acceptance.py` validates runtime status,
+  guard status, and notifications through the core-owned operator path without
+  `infrastate_skill`; this closes local emitter validation only
 - `web_desktop` now acts as an early node-aware platform pilot:
   workspace manager surfaces show node ownership,
   home-scenario choices can surface scenarios seen across node-owned webspaces,
@@ -516,9 +531,9 @@ Current checkpoint as of 2026-05-15:
 - `Infrastructure State` now also exposes a hub-side `forget_subnet` action so
   stale experimental members can be cleared from the subnet directory and
   active members can republish their snapshot contribution
-- this means the pilot has started, but the roadmap item should remain open
-  until the same semantics are emitted through the shared dispatcher/projection
-  ABI instead of compatibility-era catalog/runtime branches
+- the platform emitter gate is accepted locally for status cards and minimal
+  notifications. Workspace-manager migration remains deferred, and real stand
+  browser/event/Yjs validation remains an open rollout gate
 - the `STATUS-*` issue-tracker track should be executed here, not as a separate
   monitoring-only roadmap: status cards are the smallest useful platform-owned
   projections and should prove fingerprinting, versioning, thin reads, and
@@ -527,8 +542,8 @@ Current checkpoint as of 2026-05-15:
   materialized through the existing `StatusRegistry`, and live status-card
   change events now auto-refresh demanded projections through the dispatcher and
   Yjs materializer. Runtime diagnostics have a reserved `platform/nodes`
-  branch. Minimal notification projection payload migration remains the main
-  platform-emitter follow-up; workspace-manager migration is deferred.
+  branch. Minimal notifications now use the same shared path. Stand acceptance,
+  workspace-manager migration, and broad legacy-mirror cleanup remain open.
 
 Why this comes first:
 
@@ -554,8 +569,9 @@ Primary source:
 
 Harvest branch note: PR #87 included an Infrascope status-card adapter, but this
 branch deliberately does not carry it forward yet. The pilot readiness contract
-marks Infrascope as blocked until the platform status-card emitter and browser
-ProjectionRecord cache are accepted.
+now marks Infrascope eligible for local pilot work because the platform emitter
+and browser ProjectionRecord cache are locally accepted; deployed stand
+acceptance remains required before broad rollout.
 
 ### Phase 8. Follow-Up Pilots
 

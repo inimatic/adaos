@@ -12,6 +12,62 @@ from headings or checkboxes in this file.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## Wave 0–1 Local MVP Checkpoint 2026-07-21
+
+Status: implementation and deterministic local acceptance passed. Deployed
+stand acceptance remains open.
+
+Scope:
+
+- Wave 0: publish a developer surface-to-authority map, freeze the MVP release
+  evidence-bundle shape, and keep execution/evidence in this tracker.
+- Wave 1: close the core synchronous projection bridge, browser lifecycle
+  consumption, minimal platform notifications, and local platform-emitter
+  validation without beginning the Infrascope heavy-skill migration.
+
+Implemented evidence:
+
+- client commit `18379d2` adds a first-class `kind: projection` source backed by
+  ref-counted full-set demand and canonical `data/projectionRecords`; lifecycle
+  states normalize to `pending`, `refreshing`, `ready`, `stale`, or `error`
+- core commit `7e9816ce` adds `ProjectionService.apply_sync(...)`, routes normal
+  synchronous SDK writes through it, and rejects blocking use from an active
+  event-loop thread in favor of the explicit async API
+- the operations path emits bounded `platform:notifications` state through
+  `adaos.platform.notifications.changed`; the event bridge selects active
+  demand, refreshes through the shared dispatcher, and materializes the
+  ProjectionRecord into Yjs
+- notification history consumes the canonical record while retaining
+  `runtime/notifications` and `data/desktop/toasts` as compatibility mirrors
+- pilot readiness reports local acceptance separately from
+  `stand_acceptance=false`; `tests/test_projection_platform_acceptance.py`
+  proves runtime and guard status cards plus notifications remain visible
+  through core-owned records without `infrastate_skill`
+
+Local verification completed on the Windows development machine:
+
+- focused Python projection/service/SDK/platform acceptance command: passed
+- focused Angular page-data and notification-log command: `94 SUCCESS`
+- expanded projection/runtime suite: `117` tests passed
+- Angular production build: passed; existing SCSS budget and `qrcode`
+  CommonJS optimization warnings remain non-blocking
+- strict MkDocs build: passed for English and Russian output after keeping the
+  configured revision-date fallback informational
+- Python compilation of changed runtime modules: passed
+- `git diff --check`: passed before each implementation commit
+- Ruff was not present in the project virtual environment; this is recorded as
+  unavailable rather than silently treated as a pass
+
+Residual risks and next gate:
+
+- verify real browser demand, event delivery, Yjs readback, status visibility,
+  and version convergence on the target stand before claiming deployed
+  acceptance
+- packaging/activation metadata guarantees, registry-miss diagnostics, direct
+  write linting, broad legacy-observer reduction, and per-skill shim removal
+  remain open roadmap items
+- do not start broad Infrascope migration solely from this local checkpoint
+
 ## Platform Stabilization Stand Checkpoint 2026-05-28
 
 Target stand:

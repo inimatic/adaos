@@ -108,6 +108,11 @@ plugins:
       enable_creation_date: true
       enable_git_follow: false
       fallback_to_build_date: true
+      # This repository contains paths whose retained Git history does not
+      # produce a revision entry for the plugin's rename-excluding query.
+      # Keep the configured build-date fallback informational so MkDocs strict
+      # mode remains a gate for documentation warnings it can act on.
+      strict: false
       type: date
 
 watch:
@@ -155,6 +160,8 @@ nav:
       - Governed Evolution: architecture/governed-evolution.md
       - Governed Evolution Roadmap: architecture/governed-evolution-roadmap.md
       - Roadmap Inventory and Authority Map: architecture/roadmap-inventory.md
+      - Developer Surface Map: architecture/developer-surface-map.md
+      - MVP Release Evidence: architecture/mvp-release-evidence.md
       - Runtime Overview: architecture/overview.md
       - Product Terminology: architecture/product-terminology.md
       - Layers: architecture/layers.md

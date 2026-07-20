@@ -79,6 +79,10 @@ the acceptance records required by the owning roadmap.
 These pages are useful inputs but do not independently own cross-domain
 sequence:
 
+- [Developer Surface Map](developer-surface-map.md) routes common code changes
+  to the owning contracts, roadmaps, and minimum verification surfaces.
+- [MVP Release Evidence](mvp-release-evidence.md) defines the minimum local and
+  rollout evidence-bundle shape without replacing domain acceptance criteria.
 - [SDK IO](../sdk/io.md) and [WebIO](../interfaces/webio.md) describe public IO
   surfaces used by conversation, transport, and browser domains.
 - [UI Runtime Diagnostics](ui-runtime-diagnostics.md) describes diagnostic

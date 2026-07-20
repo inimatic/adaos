@@ -15,7 +15,7 @@ The skill-facing SDK/core rails are defined in
 
 ## Ownership Rule
 
-Snapshot date: 2026-05-15.
+Snapshot date: 2026-07-21.
 
 This document no longer owns an independent priority order.
 It expands the projection-specific parts of the master
@@ -164,8 +164,8 @@ Current status:
 - [x] `runtime.event_envelope_abi`: align with the master roadmap's shared event envelope before adding projection-specific metadata
 - [x] `runtime.core_skill_contract`: define the core-to-skill invalidation and refresh contract before browser-specific consumption logic
 - [x] `runtime.ownership_split`: define which runtime transitions are core-owned and which projection rebuilds are skill-owned
-- [ ] `runtime.platform_emitters_defined`: define platform-emitted projections for notifications, warnings, diagnostics, and system errors
-- [ ] `runtime.restore_demand_from_yjs`: define startup restoration rules for core and skills reading active demand from Yjs
+- [x] `runtime.platform_emitters_defined`: define platform-emitted projections for notifications, warnings, diagnostics, and system errors
+- [x] `runtime.restore_demand_from_yjs`: define startup restoration rules for core and skills reading active demand from Yjs
 
 Current status:
 
@@ -175,10 +175,12 @@ Current status:
   the event envelope or dispatcher ABI
 - status-card ABI should be treated as the first platform-emitter family and
   kept aligned with this projection contract
-- Harvest branch checkpoint: event envelope helpers, runtime ownership,
-  dispatcher memory boundary, and core-to-skill refresh contract snapshots now
-  exist. Platform emitters are implemented only for the status-card projection
-  family; notifications and diagnostics still need migration.
+- 2026-07-21 checkpoint: event envelope helpers, runtime ownership, dispatcher
+  memory boundary, and core-to-skill refresh contract snapshots exist. Status
+  cards and bounded `platform:notifications` records are real platform-emitter
+  families; warnings/errors use those compact families and runtime diagnostics
+  retains its reserved platform branch. Yjs demand materialization and startup
+  restoration are covered by deterministic tests.
 
 ### 3. Projection ABI
 
@@ -225,12 +227,12 @@ Current status:
 - node-qualified Yjs demand topics are supported as
   `webio.yjs.<webspace>.nodes.<node_id>.<projection>` for compatibility with
   shared desktop node views
-- the full-subscription-overwrite/Yjs-persisted registry remains a future
-  hardening step; the current MVP is a live control-plane registry owned by
-  connection lifecycle
-- Harvest branch checkpoint: server APIs accept full active subscription sets
-  and browser-state lifecycle snapshots. This does not yet mean the Angular
-  adapter has switched to the new read/write path.
+- the browser sends its complete ref-counted active demand set on change;
+  server-side client records are materialized to Yjs and can be restored after
+  runtime restart, while stale-client cleanup remains a separate sanitation
+  concern
+- 2026-07-21 checkpoint: the Angular adapter uses this demand path for both
+  legacy `kind: y` sources and first-class `kind: projection` records.
 
 ### 5. Skill, Scenario, and Platform Dispatcher
 
@@ -264,7 +266,7 @@ Current status:
 
 ### 6. Yjs Granularity and Client Adapter
 
-- [ ] `yjs.adapter_projection_records`: update the client-side Yjs adapter to read projection records instead of one giant scenario snapshot
+- [x] `yjs.adapter_projection_records`: update the client-side Yjs adapter to read projection records instead of one giant scenario snapshot
 - [x] `yjs.cache_by_projection_key`: cache projection payloads by `projection_key`
 - [x] `yjs.reuse_cached_views`: reuse cached payloads when switching back to recently materialized views
 - [ ] `yjs.reduce_broad_observers`: avoid broad `observeDeep(data)` patterns where a stable nested projection path is available
@@ -284,8 +286,9 @@ Current status:
   ProjectionRecord registry with a node-aware envelope and projection-keyed
   records.
 - `/api/node/projection-records/browser-cache` exposes demanded-only records
-  with aggregate and per-entry ETags. The client-side adapter migration and
-  observer reduction are still open.
+  with aggregate and per-entry ETags. The client-side adapter now reads the
+  projection-keyed Yjs cache and exposes lifecycle/data selections. Broad
+  observer reduction across older consumers is still open.
 - The named-entity pilot now publishes keyed maps by `canonical_ref`. Its
   coalescer is load shedding only; desired/applied revision convergence is the
   correctness mechanism. Source invalidation and entity fingerprints are the
@@ -302,7 +305,7 @@ Current status:
   enough that a managed runtime restart/memory-profile incident is visible from
   the thin operator plane without falling back to full diagnostics
 - [ ] `pilot.platform_surfaces_first`: prepare `web_desktop` and the shared platform surfaces first: notifications, diagnostics, workspace manager, and related modals
-- [ ] `pilot.platform_emitter_validated`: validate platform-as-emitter semantics before migrating one heavy skill
+- [x] `pilot.platform_emitter_validated`: validate platform-as-emitter semantics before migrating one heavy skill
 - [ ] `pilot.infrascope_after_prereqs`: migrate `Infrascope` only after the core/runtime and client projection contracts are in place
 - [ ] `pilot.infrastate_aligned`: align `infrastate`-style shared operational overlays with the same contract
 - [ ] `pilot.dev_scenario_followup`: choose one dev-oriented scenario such as `prompt_engineer_scenario` as the first non-operator follow-up
@@ -313,9 +316,13 @@ Harvest branch checkpoint:
 - Status cards now materialize into canonical ProjectionRecords through the
   existing `services.status` registry and the `status-card:*` dispatcher
   handler.
+- Bounded `platform:notifications` records now travel through the same event,
+  demand, dispatcher, registry, and Yjs materialization path. Local acceptance
+  covers runtime/guard cards and notifications without `infrastate_skill`;
+  deployed stand acceptance remains open.
 - The Infrascope-specific adapter from donor PR #87 is intentionally not
-  accepted into this branch yet; it remains gated behind platform-emitter and
-  browser-cache validation.
+  accepted into this branch yet. The shared prerequisites are locally accepted,
+  but the heavy-skill pilot and stand rollout are separate follow-up work.
 
 ### 8. Infrascope Migration Slice
 

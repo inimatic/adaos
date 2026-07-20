@@ -71,8 +71,8 @@ The target state is:
 - [x] Added client tolerance for node-prefixed modal ids.
 - [x] Changed the Browsers desktop action to open the modal in the current node
   context.
-- [x] Identified sync `ctx_subnet.set(...)` fire-and-forget behavior as a core
-  durability hazard for short tool calls.
+- [x] Added a first-class `ProjectionService.apply_sync(...)` bridge for short
+  synchronous handlers; async handlers must await `apply(...)` explicitly.
 
 ## Transition Shims
 
@@ -87,7 +87,7 @@ architecture:
 
 ## Core Roadmap
 
-- [ ] Add a first-class `ProjectionService.apply_sync(...)` or equivalent SDK
+- [x] Add a first-class `ProjectionService.apply_sync(...)` or equivalent SDK
   bridge so sync skill handlers can durably publish without per-skill executors.
 - [ ] Implement the shared projection runtime SDK described in
   [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md), starting with
@@ -132,12 +132,13 @@ The tracked `infrastate` migration route plan lives in
 
 ## Current Progress
 
-Overall status: stabilization in progress.
+Overall status: core sync bridge implemented; skill migration and shim removal
+remain in progress.
 
 Approximate split:
 
-- Target-aligned architecture: 60%.
-- Transition shims still present: 40%.
+- Target-aligned architecture: 65%.
+- Transition shims still present: 35%.
 
 Do not treat the current per-skill fallback code as the final design. It is a
 deliberate stabilizer so the stand remains observable while the core projection

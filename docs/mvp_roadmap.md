@@ -2,7 +2,7 @@
 
 Status: active planning document.
 
-Snapshot date: 2026-06-30.
+Snapshot date: 2026-07-21.
 
 This roadmap summarizes the remaining work to reach the current AdaOS MVP
 definition. It does not replace the detailed architecture roadmaps. Its role is
@@ -75,16 +75,18 @@ Checklist:
   authority and routing map and avoid duplicating detailed checklists here.
 - [x] Label old broad planning material such as [Roadmap](roadmap.md) as
   historical or secondary when it conflicts with current architecture roadmaps.
-- [ ] Add a short developer map from common code surfaces to required
+- [x] Add a short developer map from common code surfaces to required
   architecture docs before editing them.
-- [ ] Define one MVP release evidence bundle shape: commands, browser checks,
+- [x] Define one MVP release evidence bundle shape: commands, browser checks,
   stand checks, logs, metrics, and known residual risks.
-- [ ] Keep [Issue Tracker](issue-tracker.md) as the place for live stand
+- [x] Keep [Issue Tracker](issue-tracker.md) as the place for live stand
   evidence and incident closure.
 
 Related docs:
 
 - [Roadmap Inventory](architecture/roadmap-inventory.md)
+- [Developer Surface Map](architecture/developer-surface-map.md)
+- [MVP Release Evidence](architecture/mvp-release-evidence.md)
 - [Post-Deploy E2E Testing](architecture/post-deploy-e2e-testing.md)
 - [Runtime Guarding](architecture/runtime-guarding.md)
 - [Version Observability](architecture/version-observability.md)
@@ -110,18 +112,35 @@ Checklist:
   declarations for installed skill artifacts.
 - [ ] Skill activation loads `data_projections`, `data_routes`, and stream
   receiver metadata before tools, subscriptions, or startup refreshes run.
-- [ ] Add a first-class `ProjectionService.apply_sync(...)` or equivalent SDK
+- [x] Add a first-class `ProjectionService.apply_sync(...)` or equivalent SDK
   bridge for short synchronous handlers.
 - [ ] Emit diagnostics when a skill returns success but no projection rule
   exists for the slot it attempted to publish.
-- [ ] Browser runtime consumes projection lifecycle states:
+- [x] Browser runtime consumes projection lifecycle states:
   `pending`, `refreshing`, `ready`, `stale`, and `error`.
-- [ ] Minimal notifications use the shared projection contract instead of only
+- [x] Minimal notifications use the shared projection contract instead of only
   legacy desktop toast branches.
-- [ ] Keep arbitrary runtime `ProjectionRecord` write surfaces unavailable to
+- [x] Keep arbitrary runtime `ProjectionRecord` write surfaces unavailable to
   browser/API callers.
 - [ ] Add lint or validation warnings for direct skill-owned browser projection
   writes outside the approved SDK path.
+
+Local implementation checkpoint, 2026-07-21:
+
+- synchronous handlers now enter the durable core bridge through
+  `ProjectionService.apply_sync(...)`; an active event-loop thread must use the
+  async API explicitly
+- the browser has a first-class `kind: projection` data source backed by
+  demanded `data/projectionRecords` and the five-state lifecycle contract
+- `platform:notifications` is emitted by the core operations path, refreshed by
+  the shared dispatcher, materialized into Yjs, and consumed by the browser;
+  legacy notification branches remain compatibility mirrors
+- deterministic local acceptance proves runtime and guard status cards plus
+  notifications remain visible through the core-owned path without depending
+  on `infrastate_skill`
+- these are local code/test claims only. Deployed stand validation and the
+  remaining packaging, activation, registry-miss diagnostics, and lint items
+  stay open.
 
 Related docs:
 
