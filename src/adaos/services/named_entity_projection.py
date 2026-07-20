@@ -30,6 +30,7 @@ _DIAGNOSTICS: dict[str, Any] = {
     "coalesced_total": 0,
     "error_total": 0,
     "fingerprint_skip_total": 0,
+    "room_generation_retry_total": 0,
     "last_webspace_id": None,
     "last_outcome": None,
     "last_snapshot_mode": None,
@@ -68,6 +69,7 @@ def _record_projection_attempt(
             "detached": "detached_total",
             "pending": "pending_total",
             "error": "error_total",
+            "retry": "room_generation_retry_total",
         }.get(outcome)
         if counter:
             _DIAGNOSTICS[counter] = int(_DIAGNOSTICS.get(counter) or 0) + 1
@@ -114,6 +116,7 @@ def reset_named_entity_projection_diagnostics() -> None:
                 "coalesced_total": 0,
                 "error_total": 0,
                 "fingerprint_skip_total": 0,
+                "room_generation_retry_total": 0,
                 "last_webspace_id": None,
                 "last_outcome": None,
                 "last_snapshot_mode": None,
@@ -407,6 +410,7 @@ async def _apply_snapshot_to_live_room(
     snapshot: named_entities.NamedEntityRegistrySnapshot,
     *,
     changed_refs: Iterable[str] | None = None,
+    expected_room_generation: int | str | None = None,
 ) -> dict[str, Any]:
     from adaos.services.yjs.doc import submit_live_room_mutation
 
@@ -428,6 +432,7 @@ async def _apply_snapshot_to_live_room(
         source="named_entity_projection",
         owner="core:named_entities",
         channel="core.named_entities.live_room",
+        expected_room_generation=expected_room_generation,
     )
     command["projection_patch_mode"] = "incremental" if selected_refs is not None else "full"
     command["changed_ref_total"] = len(selected_refs or ())
@@ -460,6 +465,7 @@ def _already_applied_result(
             "reason": "already_applied",
             "handoff": "skipped",
             "room_generation": room_generation,
+            "expected_room_generation": room_generation,
             "queue_ms": 0.0,
             "apply_ms": 0.0,
             "total_ms": 0.0,
@@ -545,9 +551,11 @@ async def _run_reconciler(webspace_id: str) -> None:
                 result = await _apply_snapshot_to_live_room(
                     snapshot,
                     changed_refs=incremental_refs,
+                    expected_room_generation=room_generation,
                 )
             timings_ms["live_room_apply"] = _elapsed_ms(apply_started)
             command = result.get("command") if isinstance(result.get("command"), Mapping) else {}
+            command_reason = str(command.get("reason") or "room_not_ready")
             timings_ms["command_queue"] = float(command.get("queue_ms") or 0.0)
             timings_ms["command_apply"] = float(command.get("apply_ms") or 0.0)
             timings_ms["total"] = _elapsed_ms(total_started)
@@ -567,6 +575,7 @@ async def _run_reconciler(webspace_id: str) -> None:
                         "reason",
                         "handoff",
                         "room_generation",
+                        "expected_room_generation",
                         "queue_ms",
                         "apply_ms",
                         "total_ms",
@@ -593,9 +602,12 @@ async def _run_reconciler(webspace_id: str) -> None:
                     state["last_error"] = None
                 else:
                     state["pending"] = True
-                    command_reason = str(command.get("reason") or "room_not_ready")
                     state["last_outcome"] = (
-                        "pending_room" if command_reason == "room_not_ready" else "command_rejected"
+                        "pending_room"
+                        if command_reason == "room_not_ready"
+                        else "room_generation_changed"
+                        if command_reason == "room_generation_changed"
+                        else "command_rejected"
                     )
                     state["last_error"] = (
                         None
@@ -605,14 +617,16 @@ async def _run_reconciler(webspace_id: str) -> None:
                 more_work = (
                     int(state["requested_generation"]) > target_generation
                     or bool(state["refresh_required"])
+                    or command_reason == "room_generation_changed"
                 )
             with _DIAGNOSTICS_LOCK:
                 _DIAGNOSTICS["reconcile_total"] = int(_DIAGNOSTICS.get("reconcile_total") or 0) + 1
-            command_reason = str(command.get("reason") or "room_not_ready")
             _record_projection_attempt(
                 webspace_id=webspace_id,
                 outcome=(
                     "pending" if not result["accepted"] and command_reason == "room_not_ready"
+                    else "retry"
+                    if not result["accepted"] and command_reason == "room_generation_changed"
                     else "error"
                     if not result["accepted"]
                     else "already_applied"

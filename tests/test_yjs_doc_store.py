@@ -948,6 +948,46 @@ async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypa
     assert diagnostics["direct_total"] == 2
 
 
+async def test_submit_live_room_mutation_rejects_stale_room_generation(monkeypatch) -> None:
+    webspace_id = "live-room-command-stale-generation"
+    room_doc = Y.YDoc()
+    room = type(
+        "Room",
+        (),
+        {
+            "ydoc": room_doc,
+            "ystore": object(),
+            "_task_group": object(),
+            "_thread_id": threading.get_ident(),
+            "_loop": asyncio.get_running_loop(),
+        },
+    )()
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
+    generation = ydoc_module.live_room_generation(webspace_id)
+    assert isinstance(generation, int)
+    mutated: list[bool] = []
+    ydoc_module.reset_live_room_command_diagnostics()
+
+    result = await ydoc_module.submit_live_room_mutation(
+        webspace_id,
+        lambda _ydoc, _txn: mutated.append(True),
+        root_names=["registry"],
+        governed=True,
+        expected_room_generation=generation + 1,
+    )
+
+    assert result["accepted"] is False
+    assert result["applied"] is False
+    assert result["changed"] is False
+    assert result["reason"] == "room_generation_changed"
+    assert result["room_generation"] == generation
+    assert result["expected_room_generation"] == generation + 1
+    assert mutated == []
+    diagnostics = ydoc_module.live_room_command_diagnostics_snapshot()
+    assert diagnostics["submitted_total"] == 1
+    assert diagnostics["rejected_total"] == 1
+
+
 async def test_submit_live_room_mutation_hands_off_to_room_owner_loop(monkeypatch) -> None:
     webspace_id = "live-room-command-owner-loop"
     ready = threading.Event()

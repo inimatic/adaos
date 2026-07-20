@@ -564,6 +564,9 @@ The implementation invariants are:
   registry change
 - applied state includes the process-local live-room generation; an unchanged
   fingerprint skips Yjs work only while the same room instance remains live
+- the owner-loop command rechecks that generation immediately before mutation;
+  a room replacement rejects the stale command and makes the reconciler retry
+  against the new room with a full materialization
 - snapshot construction runs outside the asyncio event loop; the runtime no
   longer opens a detached YStore-backed document for this projection
 - live-room mutation is submitted through an awaitable owner-loop command and

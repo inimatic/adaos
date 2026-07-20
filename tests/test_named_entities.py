@@ -898,6 +898,7 @@ async def test_named_entity_projection_skips_applied_fingerprint_until_room_chan
         lookup_payload_provider=_empty_lookup_provider,
     )
     room_generation = [1]
+    reject_incremental_once = [True]
     applied: list[tuple[int, int, tuple[str, ...] | None]] = []
 
     async def _applied(snapshot, **kwargs):
@@ -909,6 +910,23 @@ async def test_named_entity_projection_skips_applied_fingerprint_until_room_chan
                 tuple(changed_refs) if changed_refs is not None else None,
             )
         )
+        if changed_refs is not None and reject_incremental_once[0]:
+            reject_incremental_once[0] = False
+            expected_generation = room_generation[0]
+            room_generation[0] += 1
+            return {
+                "accepted": False,
+                "written": False,
+                "payload": dict(snapshot.payload),
+                "command": {
+                    "accepted": False,
+                    "applied": False,
+                    "changed": False,
+                    "reason": "room_generation_changed",
+                    "room_generation": room_generation[0],
+                    "expected_room_generation": expected_generation,
+                },
+            }
         return {
             "accepted": True,
             "written": True,
@@ -990,7 +1008,15 @@ async def test_named_entity_projection_skips_applied_fingerprint_until_room_chan
         (1, 1, None),
         (1, 2, None),
         (2, 2, ("skill:browsers_skill",)),
+        (2, 3, None),
     ]
+    diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+    assert diagnostics["room_generation_retry_total"] == 1
+    assert diagnostics["error_total"] == 0
+    reconcile = named_entity_projection.named_entity_projection_reconciler_snapshot(
+        webspace_id=webspace_id
+    )
+    assert reconcile["states"][0]["applied_room_generation"] == 3
 
 
 @pytest.mark.anyio

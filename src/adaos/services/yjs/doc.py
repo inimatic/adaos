@@ -963,6 +963,7 @@ def _execute_live_room_mutation(
     update_callback: Callable[[dict[str, Any]], None] | None,
     submitted_at: float,
     handoff: str,
+    expected_room_generation: int | str | None,
 ) -> dict[str, Any]:
     execution_started = time.perf_counter()
     owner_token = owner or _resolve_yjs_write_owner()
@@ -978,6 +979,7 @@ def _execute_live_room_mutation(
         "root_names": list(root_names or []),
         "handoff": handoff,
         "room_generation": _live_room_generation(room),
+        "expected_room_generation": expected_room_generation,
         "queue_ms": round(max(0.0, execution_started - submitted_at) * 1000.0, 3),
         "apply_ms": 0.0,
         "total_ms": 0.0,
@@ -986,6 +988,19 @@ def _execute_live_room_mutation(
         "mutator_result": None,
         "error": None,
     }
+    current_room = _resolve_live_room(webspace_id)
+    if (
+        current_room is not room
+        or not _live_room_pipeline_ready(room)
+        or (
+            expected_room_generation is not None
+            and result["room_generation"] != expected_room_generation
+        )
+    ):
+        result["accepted"] = False
+        result["reason"] = "room_generation_changed"
+        result["total_ms"] = _elapsed_ms(submitted_at)
+        return result
     try:
         from adaos.services.yjs.governance import govern_primary_doc_write_sync
 
@@ -1096,6 +1111,7 @@ async def submit_live_room_mutation(
     channel: str = "core.yjs.live_room.command",
     governed: bool = False,
     update_callback: Callable[[dict[str, Any]], None] | None = None,
+    expected_room_generation: int | str | None = None,
 ) -> dict[str, Any]:
     """Submit a mutation to the active room owner and await its completion."""
     submitted_at = time.perf_counter()
@@ -1113,6 +1129,7 @@ async def submit_live_room_mutation(
             "root_names": list(root_names or []),
             "handoff": "none",
             "room_generation": None,
+            "expected_room_generation": expected_room_generation,
             "queue_ms": 0.0,
             "apply_ms": 0.0,
             "total_ms": _elapsed_ms(submitted_at),
@@ -1143,6 +1160,7 @@ async def submit_live_room_mutation(
             update_callback=update_callback,
             submitted_at=submitted_at,
             handoff=handoff,
+            expected_room_generation=expected_room_generation,
         )
 
     if direct:
@@ -1166,6 +1184,7 @@ async def submit_live_room_mutation(
             "root_names": list(root_names or []),
             "handoff": "none",
             "room_generation": None,
+            "expected_room_generation": expected_room_generation,
             "queue_ms": 0.0,
             "apply_ms": 0.0,
             "total_ms": _elapsed_ms(submitted_at),
@@ -1210,6 +1229,7 @@ def mutate_live_room(
             update_callback=update_callback,
             submitted_at=time.perf_counter(),
             handoff="legacy_schedule",
+            expected_room_generation=None,
         )
 
     return _run_on_room_thread(room, _apply)
