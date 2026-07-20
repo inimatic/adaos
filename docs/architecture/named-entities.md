@@ -597,9 +597,11 @@ do not converge or when any admission invariant regresses.
 The 2026-07-20 reference run used 500 entities, 40 sequential changes, and a
 500-request fingerprint burst. On that machine, the formerly unbounded no-op
 encode was 335,108 bytes and the corrected delta was zero. Full reconciliation
-had 400.642 ms p95 versus 5.953 ms for `changed_refs`; both documents converged.
-Fingerprint admission had 0.007 ms p95. These numbers are local synthetic
-evidence, not a substitute for post-deploy event-loop soak measurements.
+had 495.589 ms p95 versus 5.292 ms for `changed_refs`; both documents converged.
+Fingerprint admission had 0.005 ms p95. All 500 concurrent duplicate requests
+were reduced to one reconciler pass (`coalesced=499`) with no Yjs apply after
+the initial materialization. These numbers are local synthetic evidence, not a
+substitute for post-deploy event-loop soak measurements.
 
 ## UI behavior
 

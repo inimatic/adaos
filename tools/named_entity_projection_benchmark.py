@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import statistics
@@ -10,6 +11,7 @@ from typing import Any
 import y_py as Y
 
 from adaos.services import named_entities
+from adaos.services import named_entity_projection
 from adaos.services.named_entity_projection import _write_payload_to_doc
 
 
@@ -190,6 +192,96 @@ def _benchmark_source_admission(
     }
 
 
+async def _benchmark_reconciler_burst(*, burst: int) -> dict[str, Any]:
+    webspace_id = "named-entity-projection-benchmark"
+    service = named_entities.NamedEntityService(
+        static_entities=[_record(0)],
+        device_inventory_service=_EmptyDeviceInventory(),
+        lookup_payload_provider=lambda **_kwargs: {"lookups": {}},
+    )
+    original_service = named_entities._SERVICE  # noqa: SLF001
+    original_generation = named_entity_projection._current_live_room_generation  # noqa: SLF001
+    original_apply = named_entity_projection._apply_snapshot_to_live_room  # noqa: SLF001
+    apply_calls = 0
+
+    async def _apply(snapshot, **_kwargs):
+        nonlocal apply_calls
+        apply_calls += 1
+        await asyncio.sleep(0)
+        return {
+            "accepted": True,
+            "written": True,
+            "payload": dict(snapshot.payload),
+            "command": {
+                "accepted": True,
+                "applied": True,
+                "changed": True,
+                "reason": "applied",
+                "room_generation": 1,
+                "projection_patch_mode": "full",
+                "changed_ref_total": len(snapshot.changed_refs),
+            },
+        }
+
+    try:
+        named_entities._SERVICE = service  # noqa: SLF001
+        named_entity_projection._current_live_room_generation = lambda _webspace_id: 1  # noqa: SLF001
+        named_entity_projection._apply_snapshot_to_live_room = _apply  # noqa: SLF001
+        named_entities.clear_named_entity_registry(webspace_id=webspace_id)
+        named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
+        named_entity_projection.reset_named_entity_projection_diagnostics()
+        await named_entity_projection.request_named_entity_projection(
+            webspace_id=webspace_id,
+            reason="benchmark_initial",
+            refresh=True,
+            wait=True,
+        )
+        snapshot = named_entities.named_entity_registry_snapshot(webspace_id=webspace_id)
+        sample_ref = "skill:synthetic_0"
+        sample_fingerprint = str(snapshot.records_by_ref[sample_ref]["fingerprint"])
+        before = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+        started = time.perf_counter()
+        await asyncio.gather(
+            *(
+                named_entity_projection.request_named_entity_projection(
+                    webspace_id=webspace_id,
+                    reason="benchmark_duplicate",
+                    refresh=True,
+                    wait=False,
+                    dirty_sources=("static",),
+                    fingerprint_hints={sample_ref: sample_fingerprint},
+                )
+                for _ in range(burst)
+            )
+        )
+        with named_entity_projection._RECONCILE_LOCK:  # noqa: SLF001
+            task = named_entity_projection._RECONCILE_STATES[webspace_id].get("task")  # noqa: SLF001
+        if isinstance(task, asyncio.Task):
+            await asyncio.shield(task)
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        after = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+        state = named_entity_projection.named_entity_projection_reconciler_snapshot(
+            webspace_id=webspace_id
+        )["states"][0]
+        return {
+            "requests": burst,
+            "elapsed_ms": round(elapsed_ms, 3),
+            "reconcile_delta": int(after["reconcile_total"]) - int(before["reconcile_total"]),
+            "coalesced_delta": int(after["coalesced_total"]) - int(before["coalesced_total"]),
+            "fingerprint_skip_delta": int(after["fingerprint_skip_total"])
+            - int(before["fingerprint_skip_total"]),
+            "yjs_apply_calls_total": apply_calls,
+            "pending": bool(state["pending"]),
+            "converged": state["desired_fingerprint"] == state["applied_fingerprint"],
+        }
+    finally:
+        named_entity_projection._current_live_room_generation = original_generation  # noqa: SLF001
+        named_entity_projection._apply_snapshot_to_live_room = original_apply  # noqa: SLF001
+        named_entities._SERVICE = original_service  # noqa: SLF001
+        named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
+        named_entities.clear_named_entity_registry(webspace_id=webspace_id)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Synthetic named-entity registry/Yjs projection benchmark")
     parser.add_argument("--entities", type=int, default=500)
@@ -207,6 +299,7 @@ def main() -> int:
         burst=burst,
         lookup_delay_ms=max(0.0, float(args.lookup_delay_ms)),
     )
+    reconciler_burst = asyncio.run(_benchmark_reconciler_burst(burst=burst))
     incremental_p95 = float(yjs["incremental_reconcile"]["p95_ms"])
     full_p95 = float(yjs["full_reconcile"]["p95_ms"])
     checks = {
@@ -215,6 +308,9 @@ def main() -> int:
         "incremental_apply_is_faster": incremental_p95 < full_p95,
         "scoped_refresh_skips_lookups": admission["lookup_calls"] == 1,
         "unchanged_snapshot_reused": bool(admission["unchanged_snapshot_reused"]),
+        "burst_converges": bool(reconciler_burst["converged"]),
+        "burst_avoids_yjs_apply": reconciler_burst["yjs_apply_calls_total"] == 1,
+        "burst_is_coalesced": reconciler_burst["reconcile_delta"] < burst,
     }
     report = {
         "schema": "adaos.named-entity-projection-benchmark.v1",
@@ -226,10 +322,18 @@ def main() -> int:
         },
         "yjs": yjs,
         "source_admission": admission,
+        "reconciler_burst": reconciler_burst,
         "checks": checks,
         "passed": all(checks.values()),
         "report_fingerprint": hashlib.sha256(
-            json.dumps({"yjs": yjs, "source_admission": admission}, sort_keys=True).encode("utf-8")
+            json.dumps(
+                {
+                    "yjs": yjs,
+                    "source_admission": admission,
+                    "reconciler_burst": reconciler_burst,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
         ).hexdigest(),
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
