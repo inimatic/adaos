@@ -119,3 +119,94 @@ def test_root_push_preflight_uses_dependency_aware_scenario_validation(tmp_path:
         assert "scenario.route.unknown" in str(exc)
     else:
         raise AssertionError("invalid scenario route must block push preflight")
+
+
+def test_scenario_validation_cross_checks_webui_skill_data_sources(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "smoke_skill", "check")
+    scenario = _write_scenario(
+        tmp_path,
+        "webui_broken",
+        depends=["smoke_skill"],
+        route="smoke_skill.check",
+    )
+    (scenario / "webui.json").write_text(
+        json.dumps(
+            {
+                "widgets": [
+                    {
+                        "id": "status",
+                        "type": "item.details",
+                        "dataSource": {"kind": "skill", "name": "smoke_skill.missing"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is False
+    assert "scenario.webui.skill_tool_unknown" in {issue.code for issue in report.issues}
+
+
+def test_scenario_validation_reports_implicit_browser_read_policy(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "smoke_skill", "check")
+    skill_manifest = tmp_path / "skills" / "smoke_skill" / "skill.yaml"
+    skill = yaml.safe_load(skill_manifest.read_text(encoding="utf-8"))
+    skill["data_routes"] = [
+        {
+            "surface": "widget:status",
+            "route": "tool/details",
+            "tool": "check",
+        }
+    ]
+    skill_manifest.write_text(yaml.safe_dump(skill, sort_keys=False), encoding="utf-8")
+    scenario = _write_scenario(
+        tmp_path,
+        "webui_policy",
+        depends=["smoke_skill"],
+        route="smoke_skill.check",
+    )
+    (scenario / "webui.json").write_text(
+        json.dumps(
+            {
+                "widgets": [
+                    {
+                        "id": "status",
+                        "type": "item.details",
+                        "dataSource": {"kind": "skill", "name": "smoke_skill.check"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_scenario_path(scenario)
+
+    codes = {issue.code for issue in report.issues}
+    assert report.ok is True
+    assert {
+        "scenario.webui.cache_policy_implicit",
+        "scenario.webui.invalidation_tags_missing",
+    }.issubset(codes)
+
+
+def test_scenario_validation_does_not_let_incomplete_dev_skill_shadow_workspace_skill(tmp_path: Path) -> None:
+    dev_root = tmp_path / "dev" / "subnet"
+    (dev_root / "skills" / "builder_skill").mkdir(parents=True)
+    (dev_root / "skills" / "builder_skill" / "prompt_state.json").write_text("{}", encoding="utf-8")
+    workspace_root = tmp_path / "workspace"
+    _write_skill(workspace_root, "builder_skill", "chat")
+    scenario = _write_scenario(
+        dev_root,
+        "prototype",
+        depends=["builder_skill"],
+        route="builder_skill.chat",
+    )
+
+    report = validate_scenario_path(scenario, dependency_roots=[workspace_root / "skills"])
+
+    assert report.ok is True
+    assert report.errors == []

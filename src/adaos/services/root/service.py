@@ -58,6 +58,7 @@ from adaos.services.semver import bump_version
 
 
 logger = logging.getLogger(__name__)
+_log = logger
 
 
 class RootAuthError(RuntimeError):

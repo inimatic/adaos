@@ -19,6 +19,37 @@ WEBUI = SCENARIO / "webui.json"
 SCENARIO_JSON = SCENARIO / "scenario.json"
 CURRENT = SCENARIO / "ui_revisions" / "current.txt"
 CONTROL = "builder_sdk_control_skill"
+DATA_SOURCE_INVALIDATION_TAGS = {
+    f"{CONTROL}.read_project_file": ["builder.project.files"],
+    f"{CONTROL}.get_project": ["builder.project.metadata", "builder.project.lifecycle", "builder.project.publication"],
+    f"{CONTROL}.get_lifecycle": ["builder.project.lifecycle"],
+    f"{CONTROL}.get_preview": ["builder.project.preview"],
+    f"{CONTROL}.get_llm_options": ["builder.project.llm"],
+    f"{CONTROL}.get_prompt_context": ["builder.project.prompt"],
+    f"{CONTROL}.list_project_objects": ["builder.project.files"],
+    f"{CONTROL}.list_project_file_tree": ["builder.project.files"],
+    f"{CONTROL}.list_projects": ["builder.project.catalog"],
+    f"{CONTROL}.list_templates": ["builder.project.templates"],
+    f"{CONTROL}.get_automation": ["builder.project.automation"],
+    f"{CONTROL}.list_changes": ["builder.project.publication"],
+}
+ACTION_INVALIDATION_TAGS = {
+    f"{CONTROL}.save_project_file": ["builder.project.files"],
+    f"{CONTROL}.update_project_metadata": ["builder.project.metadata", "builder.project.lifecycle"],
+    f"{CONTROL}.set_workflow_state": ["builder.project.metadata", "builder.project.lifecycle"],
+    f"{CONTROL}.archive_project": ["builder.project.catalog", "builder.project.metadata", "builder.project.lifecycle"],
+    f"{CONTROL}.select_preview": ["builder.project.preview"],
+    f"{CONTROL}.set_llm_profile": ["builder.project.llm"],
+    f"{CONTROL}.save_prompt_context": ["builder.project.prompt"],
+    f"{CONTROL}.append_prompt_addendum": ["builder.project.prompt"],
+    f"{CONTROL}.create_project": ["builder.project.catalog", "builder.project.metadata", "builder.project.lifecycle"],
+    f"{CONTROL}.start_automation": ["builder.project.automation", "builder.project.lifecycle"],
+    f"{CONTROL}.submit_automation": ["builder.project.automation", "builder.project.lifecycle"],
+    f"{CONTROL}.push_project": ["builder.project.publication", "builder.project.lifecycle"],
+    f"{CONTROL}.update_project": ["builder.project.publication", "builder.project.metadata", "builder.project.lifecycle"],
+    f"{CONTROL}.publish_project": ["builder.project.publication", "builder.project.metadata", "builder.project.lifecycle"],
+    f"{CONTROL}.delete_project": ["builder.project.catalog", "builder.project.metadata", "builder.project.lifecycle"],
+}
 TEXT_FIELDS = {
     "title",
     "label",
@@ -203,6 +234,26 @@ def _add_i18n(application: dict[str, Any]) -> tuple[dict[str, str], dict[str, st
 
     visit(application)
     return ru, en
+
+
+def _apply_runtime_read_policies(value: Any) -> None:
+    if isinstance(value, dict):
+        data_source = value.get("dataSource")
+        if isinstance(data_source, dict) and data_source.get("kind") == "skill":
+            tags = DATA_SOURCE_INVALIDATION_TAGS.get(str(data_source.get("name") or ""))
+            if tags:
+                data_source["cacheTtlMs"] = 0
+                data_source["invalidationTags"] = list(tags)
+                data_source["preserveLastValue"] = True
+        if value.get("type") == "callSkill":
+            tags = ACTION_INVALIDATION_TAGS.get(str(value.get("target") or ""))
+            if tags:
+                value["invalidates"] = list(tags)
+        for nested in value.values():
+            _apply_runtime_read_policies(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _apply_runtime_read_policies(nested)
 
 
 def build() -> None:
@@ -417,6 +468,7 @@ def build() -> None:
     }
     webui["resources"] = copy.deepcopy(resources)
     app["resources"] = copy.deepcopy(resources)
+    _apply_runtime_read_policies(webui)
     _write(SCENARIO / "assets" / "i18n" / "ru.json", ru)
     _write(SCENARIO / "assets" / "i18n" / "en.json", en)
 

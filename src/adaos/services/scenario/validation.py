@@ -90,6 +90,110 @@ def _skill_tools(skill_root: Path) -> set[str]:
     return tools
 
 
+def _resolve_skill_root(dependency_id: str, roots: Iterable[Path]) -> tuple[Path | None, bool]:
+    candidates = [root / dependency_id for root in roots if (root / dependency_id).is_dir()]
+    for candidate in candidates:
+        if _skill_tools(candidate):
+            return candidate, True
+    return (candidates[0], False) if candidates else (None, False)
+
+
+def _skill_contract(skill_root: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    manifest = next((skill_root / name for name in _SKILL_MANIFESTS if (skill_root / name).is_file()), None)
+    if manifest is None:
+        return {}, set()
+    payload = _load_mapping(manifest)
+    tools = {
+        str(item.get("name") or "").strip(): dict(item)
+        for item in payload.get("tools") or []
+        if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+    }
+    routed_tools = {
+        str(item.get("tool") or "").strip()
+        for item in payload.get("data_routes") or []
+        if isinstance(item, Mapping) and str(item.get("tool") or "").strip()
+    }
+    return tools, routed_tools
+
+
+def _walk_objects(value: Any, path: str = "$") -> Iterable[tuple[str, Mapping[str, Any]]]:
+    if isinstance(value, Mapping):
+        yield path, value
+        for key, nested in value.items():
+            yield from _walk_objects(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            yield from _walk_objects(nested, f"{path}[{index}]")
+
+
+def _scenario_webui_contract_issues(
+    manifest: Path,
+    dependency_ids: Iterable[str],
+    roots: Iterable[Path],
+) -> list[ScenarioValidationIssue]:
+    webui = manifest.parent / "webui.json"
+    if not webui.is_file():
+        return []
+    try:
+        payload = _load_mapping(webui)
+    except Exception as exc:
+        return [ScenarioValidationIssue("error", "scenario.webui.invalid", str(exc), "webui.json")]
+
+    dependencies = set(dependency_ids)
+    contracts: dict[str, tuple[dict[str, dict[str, Any]], set[str]]] = {}
+    for dependency_id in dependencies:
+        skill_root, has_tools = _resolve_skill_root(dependency_id, roots)
+        if skill_root is not None and has_tools:
+            contracts[dependency_id] = _skill_contract(skill_root)
+
+    issues: list[ScenarioValidationIssue] = []
+    for path, item in _walk_objects(payload):
+        data_source = item.get("dataSource")
+        if isinstance(data_source, Mapping) and data_source.get("kind") == "skill":
+            target = str(data_source.get("name") or "").strip()
+            skill_id, separator, tool_name = target.partition(".")
+            where = f"webui.json:{path}.dataSource"
+            if not separator or not skill_id or not tool_name:
+                issues.append(ScenarioValidationIssue("error", "scenario.webui.skill_target_invalid", f"invalid skill dataSource target: {target}", where))
+                continue
+            if skill_id not in dependencies:
+                issues.append(ScenarioValidationIssue("error", "scenario.webui.skill_dependency_missing", f"skill dataSource '{target}' is not declared in scenario dependencies", where))
+                continue
+            tools, routed_tools = contracts.get(skill_id, ({}, set()))
+            if tool_name not in tools:
+                issues.append(ScenarioValidationIssue("error", "scenario.webui.skill_tool_unknown", f"skill dataSource references unknown tool '{target}'", where))
+                continue
+            side_effects = str(tools[tool_name].get("side_effects") or "none").strip().lower()
+            if side_effects not in {"", "none", "read_only"}:
+                issues.append(ScenarioValidationIssue("error", "scenario.webui.mutation_data_source", f"mutating tool '{target}' cannot be a dataSource", where))
+            if tool_name not in routed_tools:
+                issues.append(ScenarioValidationIssue("warning", "scenario.webui.data_route_missing", f"skill dataSource '{target}' has no exact tool data_route", where))
+            if data_source.get("cacheTtlMs") is None:
+                issues.append(ScenarioValidationIssue("warning", "scenario.webui.cache_policy_implicit", f"stable skill dataSource '{target}' relies on the client default cache policy", where))
+            tags = data_source.get("invalidationTags")
+            if not isinstance(tags, list) or not any(str(tag or "").strip() for tag in tags):
+                issues.append(ScenarioValidationIssue("warning", "scenario.webui.invalidation_tags_missing", f"skill dataSource '{target}' has no addressable invalidation tags", where))
+
+        if item.get("type") == "callSkill":
+            target = str(item.get("target") or "").strip()
+            skill_id, separator, tool_name = target.partition(".")
+            where = f"webui.json:{path}"
+            if not separator or skill_id not in dependencies:
+                continue
+            tools, _routed_tools = contracts.get(skill_id, ({}, set()))
+            tool = tools.get(tool_name)
+            if tool is None:
+                issues.append(ScenarioValidationIssue("error", "scenario.webui.action_tool_unknown", f"callSkill references unknown tool '{target}'", where))
+                continue
+            side_effects = str(tool.get("side_effects") or "none").strip().lower()
+            invalidates = item.get("invalidates")
+            if side_effects not in {"", "none", "read_only"} and (
+                not isinstance(invalidates, list) or not any(str(tag or "").strip() for tag in invalidates)
+            ):
+                issues.append(ScenarioValidationIssue("warning", "scenario.webui.mutation_invalidation_missing", f"mutating action '{target}' has no addressable invalidates tags", where))
+    return issues
+
+
 def _registry_with_dependencies(
     dependency_ids: Iterable[str],
     dependency_roots: Iterable[Path],
@@ -98,7 +202,7 @@ def _registry_with_dependencies(
     registry = default_registry()
     roots = list(dependency_roots)
     for dependency_id in dependency_ids:
-        skill_root = next((root / dependency_id for root in roots if (root / dependency_id).is_dir()), None)
+        skill_root, has_tools = _resolve_skill_root(dependency_id, roots)
         if skill_root is None:
             issues.append(
                 ScenarioValidationIssue(
@@ -110,7 +214,7 @@ def _registry_with_dependencies(
             )
             continue
         tools = _skill_tools(skill_root)
-        if not tools:
+        if not has_tools:
             issues.append(
                 ScenarioValidationIssue(
                     "error",
@@ -172,6 +276,7 @@ def validate_scenario_path(
     for message in ScenarioRuntime(registry=registry).validate(model):
         code = "scenario.route.unknown" if message.startswith("unknown route") else "scenario.steps.invalid"
         issues.append(ScenarioValidationIssue("error", code, message, "steps"))
+    issues.extend(_scenario_webui_contract_issues(manifest, _dependency_ids(payload), roots))
 
     return ScenarioValidationReport(
         not any(issue.level == "error" for issue in issues),

@@ -1090,6 +1090,21 @@
         },
         "params": { "type": "object", "additionalProperties": true },
         "body": {},
+        "cacheTtlMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Runtime read cache lifetime. Zero keeps the semantic read until explicit invalidation."
+        },
+        "invalidationTags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Addressable tags that can invalidate this runtime read."
+        },
+        "preserveLastValue": {
+          "type": "boolean",
+          "description": "Keep the last successful value visible while a matching invalidation is revalidated."
+        },
         "value": {},
         "resource": {
           "$ref": "#/$defs/id",
@@ -2103,6 +2118,12 @@
         },
         "target": { "type": "string" },
         "params": { "type": "object", "additionalProperties": true },
+        "invalidates": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Addressable runtime data-source tags invalidated after a successful callSkill mutation."
+        },
         "allowOffline": {
           "type": "boolean",
           "default": false,

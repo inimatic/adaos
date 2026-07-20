@@ -196,6 +196,35 @@ and tags match. Keep the last successful value visible while revalidating when
 `preserve_last_value` is true. Enforce `max_request_hz` independently of cache
 TTL so cache churn or repeated invalidations cannot turn into a server burst.
 
+The scenario must carry the executable side of this contract in `webui.json`.
+Map the skill route policy to camelCase browser fields and keep the tags exact:
+
+```json
+{
+  "dataSource": {
+    "kind": "skill",
+    "name": "recipes.list_recipes",
+    "cacheTtlMs": 0,
+    "invalidationTags": ["recipe.catalog"],
+    "preserveLastValue": true
+  },
+  "actions": [{
+    "type": "callSkill",
+    "target": "recipes.add_recipe",
+    "invalidates": ["recipe.catalog"]
+  }]
+}
+```
+
+`cacheTtlMs: 0` means that a stable semantic read does not expire by wall-clock
+time; it is replaced only when its state-dependent arguments change or a
+matching invalidation arrives. This is the default safe behavior for runtime
+skill/API reads. Use a positive TTL only when domain freshness requires it and
+the route budget explicitly permits expiry-driven revalidation. Scenario
+validation must cross-check every skill datasource and `callSkill` target
+against declared dependencies, exported tools, tool side effects, and exact
+`data_routes`; incomplete DEV folders must not shadow a valid workspace skill.
+
 Add an idle-soak test for every stable tool-backed widget: after first paint,
 leave the selected entity and its dependencies unchanged for at least three
 times the cache TTL (or 60 seconds when TTL is zero) and assert that the server
