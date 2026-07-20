@@ -831,6 +831,84 @@ async def test_project_named_entity_registry_stays_pending_without_live_room(mon
 
 
 @pytest.mark.anyio
+async def test_named_entity_projection_skips_applied_fingerprint_until_room_changes(monkeypatch) -> None:
+    from adaos.services import named_entity_projection
+
+    webspace_id = f"named-entities-{uuid4().hex}"
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    room_generation = [1]
+    applied: list[tuple[int, int]] = []
+
+    async def _applied(snapshot):
+        applied.append((snapshot.revision, room_generation[0]))
+        return {
+            "accepted": True,
+            "written": True,
+            "payload": dict(snapshot.payload),
+            "command": {
+                "accepted": True,
+                "applied": True,
+                "changed": True,
+                "reason": "applied",
+                "room_generation": room_generation[0],
+            },
+        }
+
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
+    monkeypatch.setattr(
+        named_entity_projection,
+        "_current_live_room_generation",
+        lambda _webspace_id: room_generation[0],
+    )
+    monkeypatch.setattr(named_entity_projection, "_apply_snapshot_to_live_room", _applied)
+    named_entity_projection.reset_named_entity_projection_diagnostics()
+    named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
+    named_entities.clear_named_entity_registry(webspace_id=webspace_id)
+
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="initial",
+        refresh=True,
+        wait=True,
+    )
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="duplicate",
+        refresh=True,
+        wait=True,
+    )
+
+    assert applied == [(1, 1)]
+    diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+    assert diagnostics["already_applied_total"] == 1
+    assert diagnostics["unchanged_total"] == 1
+
+    room_generation[0] = 2
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="room_ready",
+        refresh=False,
+        wait=True,
+    )
+
+    assert applied == [(1, 1), (1, 2)]
+    reconcile = named_entity_projection.named_entity_projection_reconciler_snapshot(
+        webspace_id=webspace_id
+    )
+    assert reconcile["states"][0]["applied_room_generation"] == 2
+
+
+@pytest.mark.anyio
 async def test_subnet_alias_change_projects_named_entities_to_current_and_default_webspaces(monkeypatch) -> None:
     from adaos.services import named_entity_projection
 

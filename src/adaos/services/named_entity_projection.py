@@ -21,6 +21,7 @@ _DIAGNOSTICS: dict[str, Any] = {
     "attempt_total": 0,
     "written_total": 0,
     "unchanged_total": 0,
+    "already_applied_total": 0,
     "live_room_total": 0,
     "detached_total": 0,
     "pending_total": 0,
@@ -58,6 +59,7 @@ def _record_projection_attempt(
         counter = {
             "written": "written_total",
             "unchanged": "unchanged_total",
+            "already_applied": "already_applied_total",
             "live_room": "live_room_total",
             "detached": "detached_total",
             "pending": "pending_total",
@@ -67,6 +69,8 @@ def _record_projection_attempt(
             _DIAGNOSTICS[counter] = int(_DIAGNOSTICS.get(counter) or 0) + 1
         if outcome in {"live_room", "detached"}:
             _DIAGNOSTICS["written_total"] = int(_DIAGNOSTICS.get("written_total") or 0) + 1
+        elif outcome == "already_applied":
+            _DIAGNOSTICS["unchanged_total"] = int(_DIAGNOSTICS.get("unchanged_total") or 0) + 1
         _DIAGNOSTICS["last_webspace_id"] = webspace_id
         _DIAGNOSTICS["last_outcome"] = outcome
         _DIAGNOSTICS["last_payload_bytes"] = int(payload_bytes)
@@ -93,6 +97,7 @@ def reset_named_entity_projection_diagnostics() -> None:
                 "attempt_total": 0,
                 "written_total": 0,
                 "unchanged_total": 0,
+                "already_applied_total": 0,
                 "live_room_total": 0,
                 "detached_total": 0,
                 "pending_total": 0,
@@ -223,6 +228,7 @@ def _new_reconcile_state(webspace_id: str) -> dict[str, Any]:
         "applied_revision": 0,
         "desired_fingerprint": None,
         "applied_fingerprint": None,
+        "applied_room_generation": None,
         "pending": False,
         "in_flight": False,
         "refresh_required": False,
@@ -305,6 +311,37 @@ async def _apply_snapshot_to_live_room(
     }
 
 
+def _current_live_room_generation(webspace_id: str) -> int | str | None:
+    from adaos.services.yjs.doc import live_room_generation
+
+    return live_room_generation(webspace_id)
+
+
+def _already_applied_result(
+    snapshot: named_entities.NamedEntityRegistrySnapshot,
+    room_generation: int | str,
+) -> dict[str, Any]:
+    return {
+        "accepted": True,
+        "written": False,
+        "payload": dict(snapshot.payload),
+        "command": {
+            "accepted": True,
+            "applied": False,
+            "changed": False,
+            "reason": "already_applied",
+            "handoff": "skipped",
+            "room_generation": room_generation,
+            "queue_ms": 0.0,
+            "apply_ms": 0.0,
+            "total_ms": 0.0,
+            "update_bytes": 0,
+            "encode_mode": "none",
+            "error": None,
+        },
+    }
+
+
 async def _run_reconciler(webspace_id: str) -> None:
     current_task = asyncio.current_task()
     try:
@@ -331,7 +368,18 @@ async def _run_reconciler(webspace_id: str) -> None:
             timings_ms = {"snapshot_build": _elapsed_ms(build_started)}
             payload_bytes = _payload_size_bytes(snapshot.payload)
             apply_started = time.perf_counter()
-            result = await _apply_snapshot_to_live_room(snapshot)
+            room_generation = _current_live_room_generation(webspace_id)
+            with _RECONCILE_LOCK:
+                state = _reconcile_state(webspace_id)
+                already_applied = (
+                    room_generation is not None
+                    and state.get("applied_fingerprint") == snapshot.fingerprint
+                    and state.get("applied_room_generation") == room_generation
+                )
+            if already_applied:
+                result = _already_applied_result(snapshot, room_generation)
+            else:
+                result = await _apply_snapshot_to_live_room(snapshot)
             timings_ms["live_room_apply"] = _elapsed_ms(apply_started)
             command = result.get("command") if isinstance(result.get("command"), Mapping) else {}
             timings_ms["command_queue"] = float(command.get("queue_ms") or 0.0)
@@ -351,6 +399,7 @@ async def _run_reconciler(webspace_id: str) -> None:
                         "changed",
                         "reason",
                         "handoff",
+                        "room_generation",
                         "queue_ms",
                         "apply_ms",
                         "total_ms",
@@ -363,8 +412,15 @@ async def _run_reconciler(webspace_id: str) -> None:
                 if result["accepted"]:
                     state["applied_revision"] = snapshot.revision
                     state["applied_fingerprint"] = snapshot.fingerprint
+                    state["applied_room_generation"] = command.get("room_generation")
                     state["pending"] = False
-                    state["last_outcome"] = "written" if result["written"] else "unchanged"
+                    state["last_outcome"] = (
+                        "written"
+                        if result["written"]
+                        else "already_applied"
+                        if command.get("reason") == "already_applied"
+                        else "unchanged"
+                    )
                     state["last_error"] = None
                 else:
                     state["pending"] = True
@@ -390,6 +446,8 @@ async def _run_reconciler(webspace_id: str) -> None:
                     "pending" if not result["accepted"] and command_reason == "room_not_ready"
                     else "error"
                     if not result["accepted"]
+                    else "already_applied"
+                    if command_reason == "already_applied"
                     else "live_room"
                     if result["written"]
                     else "unchanged"

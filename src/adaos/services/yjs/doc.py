@@ -32,6 +32,8 @@ _LIVE_MAP_VALUE_SAFE_KEYS = {
     ("runtime", "environment"),
 }
 _EMPTY_Y_UPDATE = b"\x00\x00"
+_LIVE_ROOM_GENERATION_LOCK = threading.RLock()
+_LIVE_ROOM_GENERATION_SEQ = 0
 _LIVE_ROOM_COMMAND_DIAGNOSTICS_LOCK = threading.RLock()
 _LIVE_ROOM_COMMAND_DIAGNOSTICS: dict[str, Any] = {
     "submitted_total": 0,
@@ -313,6 +315,34 @@ def _live_room_pipeline_ready(room: Any) -> bool:
         return bool(is_set())
     except Exception:
         return False
+
+
+def _live_room_generation(room: Any) -> int | str:
+    """Return a process-local identity that changes with the live room instance."""
+    global _LIVE_ROOM_GENERATION_SEQ
+    current = getattr(room, "_adaos_room_generation", None)
+    if isinstance(current, int) and current > 0:
+        return current
+    with _LIVE_ROOM_GENERATION_LOCK:
+        current = getattr(room, "_adaos_room_generation", None)
+        if isinstance(current, int) and current > 0:
+            return current
+        _LIVE_ROOM_GENERATION_SEQ += 1
+        current = _LIVE_ROOM_GENERATION_SEQ
+        try:
+            setattr(room, "_adaos_room_generation", current)
+        except Exception:
+            ydoc = getattr(room, "ydoc", None)
+            return f"object:{id(room):x}:ydoc:{id(ydoc):x}"
+        return current
+
+
+def live_room_generation(webspace_id: str) -> int | str | None:
+    """Return the current ready room generation without touching its YDoc."""
+    room = _resolve_live_room(webspace_id)
+    if not _live_room_pipeline_ready(room):
+        return None
+    return _live_room_generation(room)
 
 
 def _can_access_live_room_directly(room: Any) -> bool:
@@ -947,6 +977,7 @@ def _execute_live_room_mutation(
         "channel": channel,
         "root_names": list(root_names or []),
         "handoff": handoff,
+        "room_generation": _live_room_generation(room),
         "queue_ms": round(max(0.0, execution_started - submitted_at) * 1000.0, 3),
         "apply_ms": 0.0,
         "total_ms": 0.0,
@@ -1081,6 +1112,7 @@ async def submit_live_room_mutation(
             "channel": channel,
             "root_names": list(root_names or []),
             "handoff": "none",
+            "room_generation": None,
             "queue_ms": 0.0,
             "apply_ms": 0.0,
             "total_ms": _elapsed_ms(submitted_at),
@@ -1133,6 +1165,7 @@ async def submit_live_room_mutation(
             "channel": channel,
             "root_names": list(root_names or []),
             "handoff": "none",
+            "room_generation": None,
             "queue_ms": 0.0,
             "apply_ms": 0.0,
             "total_ms": _elapsed_ms(submitted_at),
@@ -1234,6 +1267,7 @@ __all__ = [
     "async_read_ydoc",
     "try_read_live_map_value",
     "invalidate_live_map_value_cache",
+    "live_room_generation",
     "live_room_command_diagnostics_snapshot",
     "mutate_live_room",
     "reset_live_room_command_diagnostics",

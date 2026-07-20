@@ -921,6 +921,7 @@ async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypa
     assert result["changed"] is True
     assert result["mutator_result"] is True
     assert result["handoff"] == "direct"
+    assert result["room_generation"] is not None
     assert result["encode_mode"] == "transaction_diff"
     assert result["update_bytes"] == len(marked[0])
     assert room_doc.get_map("registry").get("revision") == 1
@@ -936,6 +937,7 @@ async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypa
     assert unchanged["applied"] is True
     assert unchanged["changed"] is False
     assert unchanged["mutator_result"] is False
+    assert unchanged["room_generation"] == result["room_generation"]
     assert unchanged["reason"] == "unchanged"
     assert unchanged["update_bytes"] == 0
     assert len(marked) == 1
