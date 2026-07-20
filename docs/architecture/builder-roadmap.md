@@ -9,6 +9,10 @@ surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
 Detailed implementation remains in the specialized roadmaps. This page is the
 cross-cutting source of truth for Builder readiness.
 
+The [Governed Evolution Roadmap](governed-evolution-roadmap.md) places Builder
+inside the larger managed-deployment, Issue-first repair, and trusted-reuse
+sequence. It references Builder gates but does not duplicate this checklist.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
@@ -760,6 +764,10 @@ Open work:
 
 Builder is intentionally cross-cutting. Detailed work remains in:
 
+- [Governed Evolution](governed-evolution.md): Issue-first product loop,
+  Personal Builder isolation, Support boundary, and verified capability model
+- [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE2 Personal
+  Builder proof gate and its dependencies on managed deployment and repair
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
 - [Builder SDK Boundary](builder-sdk-boundary.md): SDK ownership, functional
   Builder control architecture, migration checklist, and local proof record

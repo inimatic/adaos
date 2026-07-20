@@ -1,5 +1,14 @@
 # Registry, Marketplace, and Operations Roadmap
 
+Status: domain roadmap for registry, publication, installation, and durable
+operation mechanics.
+
+This roadmap owns those mechanics. Their position in the broader managed
+deployment and verified-capability sequence is defined by
+[Governed Evolution](governed-evolution.md) and the
+[Governed Evolution Roadmap](governed-evolution-roadmap.md). ReDevice and other
+activation paths are proof cases; they do not redefine registry semantics.
+
 This note fixes the target architecture for three related tracks:
 
 - registry synchronization for published skills and scenarios

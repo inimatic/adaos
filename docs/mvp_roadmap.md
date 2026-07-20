@@ -11,13 +11,20 @@ conversations, endpoints, Root governance, and release evidence.
 
 Use this document with:
 
-- [Roadmap Inventory](architecture/roadmap-inventory.md) for current
-  implementation status across architecture tracks.
+- [Governed Evolution Roadmap](architecture/governed-evolution-roadmap.md) for
+  the longer cross-domain sequence that begins with the governed runtime and
+  continues beyond MVP.
+- [Roadmap Inventory](architecture/roadmap-inventory.md) to find the
+  authoritative architecture and sequencing owner for each domain.
 - [Operational Event Model Roadmap](architecture/operational-event-model-roadmap.md)
   as the master delivery track for event, projection, browser/runtime, status,
   and heavy-skill migration work.
 - [Issue Tracker](issue-tracker.md) for recent incidents, stand evidence, and
   acceptance notes.
+
+The MVP roadmap owns the current repository-wide completion target. It does
+not own long-term product direction, Support Agent/Issue architecture, trusted
+multi-Builder collaboration, or marketplace/network claims.
 
 ## MVP Definition
 
@@ -62,11 +69,11 @@ Goal: make the MVP target measurable before deeper migration work continues.
 
 Checklist:
 
-- [ ] Keep this roadmap linked from the documentation home and MkDocs
+- [x] Keep this roadmap linked from the documentation home and MkDocs
   navigation.
-- [ ] Keep [Roadmap Inventory](architecture/roadmap-inventory.md) as the
-  implementation status map and avoid duplicating every detailed checklist here.
-- [ ] Label old broad planning material such as [Roadmap](roadmap.md) as
+- [x] Keep [Roadmap Inventory](architecture/roadmap-inventory.md) as the
+  authority and routing map and avoid duplicating detailed checklists here.
+- [x] Label old broad planning material such as [Roadmap](roadmap.md) as
   historical or secondary when it conflicts with current architecture roadmaps.
 - [ ] Add a short developer map from common code surfaces to required
   architecture docs before editing them.

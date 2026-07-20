@@ -7,11 +7,19 @@ symptoms into evidence that humans and LLM planning tools can reason about.
 
 Read this with:
 
+- [Governed Evolution](governed-evolution.md)
+- [Governed Evolution Roadmap](governed-evolution-roadmap.md)
 - [Hub-Browser Connectivity](hub-browser-connectivity.md)
 - [Hub-Root Protocol](hub-root-protocol.md)
 - [Runtime Guarding](runtime-guarding.md)
 - [Semantic State Plane](semantic-state-plane.md)
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md)
+
+The registry owns normalized operational evidence. It does not decide that an
+incident is a product defect, create unreviewable development authority, or
+replace the future AdaOS Issue aggregate. Governed Support intake may link or
+promote incident evidence into an Issue after deduplication, policy, and
+consent checks.
 
 ## Problem
 

@@ -2,6 +2,11 @@
 
 Status: target architecture and terminology anchor.
 
+This page owns Builder's role and artifact-creation boundary. The broader
+human-signal -> Issue -> Builder -> release -> runtime-evidence loop is defined
+by [Governed Evolution](governed-evolution.md); its cross-domain proof order is
+tracked in the [Governed Evolution Roadmap](governed-evolution-roadmap.md).
+
 AdaOS Builder is the role and workflow that turns an idea into governed AdaOS
 artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests, and
 runtime-ready changes.
@@ -664,6 +669,13 @@ Relevant documents:
 
 This page owns the Builder role, terminology, and end-to-end capability
 creation boundary.
+
+It does not own Support intake, the durable AdaOS Issue aggregate, managed
+deployment economics, or trusted collaboration between independently owned
+Builders. Those cross-domain boundaries belong to
+[Governed Evolution](governed-evolution.md). This page remains authoritative
+for the work that begins after an approved development request reaches
+Builder.
 
 Other documents should describe their local projection of Builder:
 

@@ -9,6 +9,9 @@ and a roadmap-compatible authorization vocabulary.
 
 The implementation roadmap lives in
 [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md).
+The future trusted-development-group boundary is described by
+[Governed Evolution](governed-evolution.md); this document remains
+authoritative for identity, consent, membership, grants, and revocation.
 
 ## Goals
 

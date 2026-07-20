@@ -6,6 +6,11 @@ This document defines the target architecture for turning Builder ideas into
 implemented AdaOS skills, scenarios, UI descriptors, connectors, and related
 artifacts through isolated development workers.
 
+Within [Governed Evolution](governed-evolution.md), Skill Factory is the
+isolated realization layer for a Personal Builder. It is not the Support Agent,
+the durable Issue registry, the publication authority, or a shared writable
+workspace for collaborating Builders.
+
 The key principle is:
 
 ```text
@@ -38,6 +43,8 @@ worker.
 
 This layer must remain compatible with:
 
+- [Governed Evolution](governed-evolution.md)
+- [Governed Evolution Roadmap](governed-evolution-roadmap.md)
 - [AdaOS Builder](builder.md)
 - [Builder Roadmap](builder-roadmap.md)
 - [Root MCP Foundation](root-mcp-foundation.md)

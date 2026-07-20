@@ -13,6 +13,10 @@ migration, but they are not part of the clean architecture.
 
 Related documents:
 
+- [Governed Evolution](governed-evolution.md): conversation is an interface to
+  durable Issues and evidence, not the development source of truth
+- [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE3 Support and
+  repair gate and GE4 collaboration horizon
 - [Channel Semantics](channel-semantics.md)
 - [Endpoint Audio Service](endpoint-audio-service.md)
 - [AdaOS Builder](builder.md)

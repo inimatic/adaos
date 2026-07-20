@@ -20,6 +20,9 @@ replayable and auditable.
 
 ## Reading Order
 
+- [Governed Evolution](../architecture/governed-evolution.md): cross-domain
+  boundary between NLU, Support intake, AdaOS Issues, Builder, and runtime
+  evidence.
 - This document: vertical use-case gates and acceptance criteria.
 - [nlu-roadmap.md](./nlu-roadmap.md): detailed backlog by architecture lane.
 - [nlu-teacher-llm.md](./nlu-teacher-llm.md): current Teacher implementation

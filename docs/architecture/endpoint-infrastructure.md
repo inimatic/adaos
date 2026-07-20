@@ -11,6 +11,11 @@ which describes current IO and skill routing. Endpoint audio sessions,
 activation, STT routing, Bluetooth audio, dialog mode, and dictation are
 defined separately in [Endpoint Audio Service](endpoint-audio-service.md).
 
+Endpoint infrastructure supports the managed-deployment and activation proofs
+in [Governed Evolution](governed-evolution.md). ReDevice is one specialized
+endpoint and possible activation experiment; it is not the definition of the
+AdaOS product or endpoint model.
+
 ## Core Decision
 
 ReDevice and browser surfaces are not normal AdaOS members with installed

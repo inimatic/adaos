@@ -21,6 +21,11 @@ The core owns durability, idempotency, expiration, channel normalization, and
 response routing. Skills and scenarios use the SDK to publish requests and to
 handle responses.
 
+Within [Governed Evolution](governed-evolution.md), Pending Actions carry
+bounded human decisions. They do not replace the AdaOS Issue, approve a
+Support Agent's own proposal implicitly, or become the source of truth for
+release and runtime state.
+
 ## Implementation Status
 
 Current implemented slice:
