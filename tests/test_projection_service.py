@@ -16,6 +16,41 @@ if "ypy_websocket" not in sys.modules:
 from adaos.services.scenario import projection_service as projection_service_module
 
 
+def test_projection_service_apply_sync_waits_for_async_apply(monkeypatch) -> None:
+    calls: list[tuple[str, str, object, str | None, str | None]] = []
+
+    async def _apply(self, scope, slot, value, *, user_id=None, webspace_id=None):  # noqa: ARG001
+        await asyncio.sleep(0)
+        calls.append((scope, slot, value, user_id, webspace_id))
+
+    monkeypatch.setattr(projection_service_module.ProjectionService, "apply", _apply)
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=SimpleNamespace())
+
+    service.apply_sync(
+        "subnet",
+        "infra.status",
+        {"value": "OK"},
+        user_id="operator",
+        webspace_id="desktop",
+    )
+
+    assert calls == [("subnet", "infra.status", {"value": "OK"}, "operator", "desktop")]
+
+
+def test_projection_service_apply_sync_rejects_active_event_loop() -> None:
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=SimpleNamespace())
+
+    async def _call() -> None:
+        try:
+            service.apply_sync("subnet", "infra.status", {"value": "OK"})
+        except RuntimeError as exc:
+            assert "await ProjectionService.apply()" in str(exc)
+            return
+        raise AssertionError("apply_sync must reject an active event-loop thread")
+
+    asyncio.run(_call())
+
+
 class _FakeTxn:
     def __enter__(self):
         return self

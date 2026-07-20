@@ -16,6 +16,7 @@ from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.domain import Event
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.io_web.toast import WebToastService
+from adaos.services.platform_notifications import replace_platform_notifications
 from adaos.services.scenario.manager import (
     ScenarioManager,
     dependency_failure_blocks_scenario_activation,
@@ -485,6 +486,12 @@ class OperationManager:
 
     def _project(self, webspace_id: str) -> None:
         snapshot = self.snapshot(webspace_id=webspace_id)
+        replace_platform_notifications(
+            webspace_id=webspace_id,
+            items=snapshot["notifications"],
+            max_items=self.max_notifications,
+            bus=self.ctx.bus,
+        )
 
         async def _write_async() -> None:
             async with _operations_async_write_meta():

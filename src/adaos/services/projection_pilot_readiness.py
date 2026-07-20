@@ -10,6 +10,29 @@ PROJECTION_PILOT_READINESS_CONTRACT = "adaos.projection-pilot.readiness.v1"
 def projection_pilot_readiness_contract_snapshot(*, now: float | None = None) -> dict[str, Any]:
     """Return the pilot ordering contract for projection migration follow-ups."""
 
+    from adaos.services.projection_event_bridge import projection_event_bridge_snapshot
+    from adaos.services.projection_records import browser_projection_adapter_contract_snapshot
+    from adaos.services.status_projection import platform_emitter_contract_snapshot
+
+    browser_adapter = browser_projection_adapter_contract_snapshot(now=now)
+    event_bridge = projection_event_bridge_snapshot(now=now)
+    platform_emitters = platform_emitter_contract_snapshot(now=now)
+    lifecycle_states = set(browser_adapter.get("lifecycle_states") or [])
+    projection_families = set(event_bridge.get("projection_families") or [])
+    topics = set(event_bridge.get("topics") or [])
+    local_gate_checks = {
+        "browser_adapter_ready": bool(browser_adapter.get("ready_for_mvp")),
+        "browser_lifecycle_complete": lifecycle_states == {"pending", "refreshing", "ready", "stale", "error"},
+        "status_card_emitter_present": "status-card:*" in projection_families,
+        "notification_emitter_present": "platform:notifications" in projection_families,
+        "status_card_event_bridge_present": "adaos.status.card.changed" in topics,
+        "notification_event_bridge_present": "adaos.platform.notifications.changed" in topics,
+        "projection_records_core_owned": bool(
+            (platform_emitters.get("boundaries") or {}).get("projection_records_are_core_owned")
+        ),
+    }
+    local_gate_accepted = all(local_gate_checks.values())
+
     prerequisites = [
         "event_envelope_contract",
         "browser_demand_contract",
@@ -17,10 +40,12 @@ def projection_pilot_readiness_contract_snapshot(*, now: float | None = None) ->
         "dispatcher_memory_contract",
         "browser_adapter_contract",
         "platform_status_card_projection_contract",
+        "platform_notifications_projection_contract",
+        "browser_lifecycle_consumption",
     ]
     return {
         "contract": PROJECTION_PILOT_READINESS_CONTRACT,
-        "ready_for_mvp": True,
+        "ready_for_mvp": local_gate_accepted,
         "updated_at": float(now if now is not None else time.time()),
         "pilot_order": [
             "status_cards_first",
@@ -32,11 +57,20 @@ def projection_pilot_readiness_contract_snapshot(*, now: float | None = None) ->
             "simple_skills_deferred",
         ],
         "infrascope_after_prereqs": {
-            "selected": False,
+            "selected": local_gate_accepted,
             "skill_id": "infrascope_skill",
-            "status": "blocked_until_platform_emitter_validation",
+            "status": "eligible_for_local_pilot" if local_gate_accepted else "blocked_until_platform_emitter_validation",
             "required_gate_ids": prerequisites,
             "reason": "Infrascope is the heavy-skill pilot and must wait until the shared ABI, browser cache, dispatcher, and platform status-card emitter are accepted.",
+        },
+        "platform_emitter_validation": {
+            "local_acceptance": local_gate_accepted,
+            "stand_acceptance": False,
+            "checks": local_gate_checks,
+            "browser_adapter": browser_adapter,
+            "event_bridge": event_bridge,
+            "platform_emitters": platform_emitters,
+            "acceptance_test": "tests/test_projection_platform_acceptance.py",
         },
         "dev_scenario_followup": {
             "selected": True,

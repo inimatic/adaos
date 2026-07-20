@@ -9,6 +9,11 @@ from adaos.domain.projection_keys import STATUS_CARD_PROJECTION_PREFIX
 from adaos.services.projection_demand import projection_demand_consumers, resolve_projection_demand_stale_after_s
 from adaos.services.projection_dispatcher import dispatch_demanded_projection_refresh
 from adaos.services.projection_record_yjs import materialize_projection_records_to_yjs
+from adaos.services.platform_notifications import (
+    PLATFORM_NOTIFICATIONS_CHANGED_EVENT,
+    PLATFORM_NOTIFICATIONS_PROJECTION_KEY,
+    ensure_platform_notifications_projection_handler,
+)
 from adaos.services.status_projection import ensure_status_card_projection_handler
 
 
@@ -146,6 +151,66 @@ async def handle_status_card_changed_event(event: Any, *, bus: Any | None = None
     }
 
 
+async def handle_platform_notifications_changed_event(event: Any, *, bus: Any | None = None) -> dict[str, Any]:
+    envelope = normalize_event_envelope(event)
+    _inc("incoming_total")
+    webspace_ids = _webspace_ids_from_event(
+        envelope,
+        projection_key=PLATFORM_NOTIFICATIONS_PROJECTION_KEY,
+    )
+    if not webspace_ids:
+        _inc("skipped_total")
+        return {
+            "ok": True,
+            "accepted": False,
+            "reason": "no_projection_demand",
+            "event_type": envelope.type,
+            "projection_key": PLATFORM_NOTIFICATIONS_PROJECTION_KEY,
+        }
+    ensure_platform_notifications_projection_handler()
+    report = await dispatch_demanded_projection_refresh(
+        envelope,
+        webspace_ids=webspace_ids,
+        projection_keys=[PLATFORM_NOTIFICATIONS_PROJECTION_KEY],
+        bus=bus,
+    )
+    _inc("selected_total", len(report.selected))
+    _inc("refreshed_total", len(report.refreshed))
+    _inc("skipped_total", len(report.skipped))
+    _inc("error_total", len(report.errors))
+    materialized: list[dict[str, Any]] = []
+    for webspace_id in sorted({item.webspace_id for item in report.refreshed}):
+        try:
+            result = await materialize_projection_records_to_yjs(
+                webspace_id=webspace_id,
+                projection_keys=[PLATFORM_NOTIFICATIONS_PROJECTION_KEY],
+                demanded_only=True,
+            )
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "accepted": False,
+                "webspace_id": webspace_id,
+                "projection_keys": [PLATFORM_NOTIFICATIONS_PROJECTION_KEY],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        if result.get("ok"):
+            _inc("materialized_total")
+        else:
+            _inc("error_total")
+        materialized.append(result)
+    return {
+        "ok": True,
+        "accepted": bool(report.selected),
+        "event_type": envelope.type,
+        "projection_key": PLATFORM_NOTIFICATIONS_PROJECTION_KEY,
+        "webspace_ids": webspace_ids,
+        "report": report.to_dict(),
+        "materialized": materialized,
+        "updated_at": time.time(),
+    }
+
+
 def register_projection_event_bridge(bus: Any) -> dict[str, Any]:
     if bus is None:
         return {"ok": False, "accepted": False, "reason": "bus_missing"}
@@ -156,7 +221,7 @@ def register_projection_event_bridge(bus: Any) -> dict[str, Any]:
                 "ok": True,
                 "accepted": False,
                 "reason": "already_registered",
-                "topics": [STATUS_CARD_CHANGED_EVENT],
+                "topics": [STATUS_CARD_CHANGED_EVENT, PLATFORM_NOTIFICATIONS_CHANGED_EVENT],
             }
         _REGISTERED_BUSES.add(key)
         _STATS["registered_bus_total"] = len(_REGISTERED_BUSES)
@@ -164,12 +229,17 @@ def register_projection_event_bridge(bus: Any) -> dict[str, Any]:
     async def _status_card_changed(event: Any) -> None:
         await handle_status_card_changed_event(event, bus=bus)
 
+    async def _platform_notifications_changed(event: Any) -> None:
+        await handle_platform_notifications_changed_event(event, bus=bus)
+
     setattr(_status_card_changed, "_adaos_projection_event_bridge", True)
+    setattr(_platform_notifications_changed, "_adaos_projection_event_bridge", True)
     bus.subscribe(STATUS_CARD_CHANGED_EVENT, _status_card_changed)
+    bus.subscribe(PLATFORM_NOTIFICATIONS_CHANGED_EVENT, _platform_notifications_changed)
     return {
         "ok": True,
         "accepted": True,
-        "topics": [STATUS_CARD_CHANGED_EVENT],
+        "topics": [STATUS_CARD_CHANGED_EVENT, PLATFORM_NOTIFICATIONS_CHANGED_EVENT],
     }
 
 
@@ -182,8 +252,8 @@ def projection_event_bridge_snapshot(*, now: float | None = None) -> dict[str, A
         "contract": PROJECTION_EVENT_BRIDGE_CONTRACT,
         "ready_for_mvp": True,
         "registered_bus_total": registered_bus_total,
-        "topics": [STATUS_CARD_CHANGED_EVENT],
-        "projection_families": [f"{STATUS_CARD_PROJECTION_PREFIX}*"],
+        "topics": [STATUS_CARD_CHANGED_EVENT, PLATFORM_NOTIFICATIONS_CHANGED_EVENT],
+        "projection_families": [f"{STATUS_CARD_PROJECTION_PREFIX}*", PLATFORM_NOTIFICATIONS_PROJECTION_KEY],
         "pipeline": [
             "eventbus topic",
             "projection demand selection",
@@ -201,6 +271,7 @@ __all__ = [
     "PROJECTION_EVENT_BRIDGE_CONTRACT",
     "PROJECTION_LIFECYCLE_EVENT",
     "STATUS_CARD_CHANGED_EVENT",
+    "handle_platform_notifications_changed_event",
     "handle_status_card_changed_event",
     "projection_event_bridge_snapshot",
     "register_projection_event_bridge",

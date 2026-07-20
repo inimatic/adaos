@@ -39,9 +39,13 @@ def test_projection_pilot_readiness_contract_snapshot_selects_followup() -> None
     assert snapshot["contract"] == "adaos.projection-pilot.readiness.v1"
     assert snapshot["ready_for_mvp"] is True
     assert snapshot["updated_at"] == 130.0
-    assert snapshot["infrascope_after_prereqs"]["selected"] is False
-    assert snapshot["infrascope_after_prereqs"]["status"] == "blocked_until_platform_emitter_validation"
+    assert snapshot["infrascope_after_prereqs"]["selected"] is True
+    assert snapshot["infrascope_after_prereqs"]["status"] == "eligible_for_local_pilot"
     assert "platform_status_card_projection_contract" in snapshot["infrascope_after_prereqs"]["required_gate_ids"]
+    assert "platform_notifications_projection_contract" in snapshot["infrascope_after_prereqs"]["required_gate_ids"]
+    assert snapshot["platform_emitter_validation"]["local_acceptance"] is True
+    assert snapshot["platform_emitter_validation"]["stand_acceptance"] is False
+    assert snapshot["platform_emitter_validation"]["checks"]["browser_lifecycle_complete"] is True
     assert snapshot["dev_scenario_followup"]["scenario_id"] == "prompt_engineer_scenario"
     assert snapshot["dev_scenario_followup"]["skill_id"] == "prompt_engineer_skill"
     assert snapshot["simple_skills_deferred"]["status"] == "deferred_until_adapter_stable"
@@ -57,5 +61,6 @@ def test_projection_pilot_readiness_contract_endpoint_exposes_followup() -> None
     payload = resp.json()
     assert payload["contract"] == "adaos.projection-pilot.readiness.v1"
     assert payload["dev_scenario_followup"]["scenario_id"] == "prompt_engineer_scenario"
+    assert payload["platform_emitter_validation"]["local_acceptance"] is True
     assert payload["simple_skills_deferred"]["selected"] is True
     assert payload["boundaries"]["uses_acceptance_summary_as_gate_source"] is True

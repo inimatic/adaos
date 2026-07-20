@@ -60,7 +60,15 @@ class _ScopeCtx:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(self.set_async(slot, value, user_id=user_id, webspace_id=webspace_id))
+            ctx = require_ctx(f"sdk.data.ctx.{self._scope}.set")
+            svc = ProjectionService.from_ctx(ctx)
+            svc.apply_sync(
+                self._scope,
+                slot,
+                value,
+                user_id=user_id,
+                webspace_id=webspace_id,
+            )
             return
 
         task = loop.create_task(self.set_async(slot, value, user_id=user_id, webspace_id=webspace_id))

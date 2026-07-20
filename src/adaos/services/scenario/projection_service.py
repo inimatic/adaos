@@ -1237,6 +1237,40 @@ class ProjectionService:
         c = ctx or get_ctx()
         return cls(ctx=c, registry=c.projections)
 
+    def apply_sync(
+        self,
+        scope: str,
+        slot: str,
+        value: Any,
+        *,
+        user_id: Optional[str] = None,
+        webspace_id: Optional[str] = None,
+    ) -> None:
+        """Durably apply a projection from a synchronous handler.
+
+        Async handlers must await :meth:`apply` instead. Blocking the thread
+        that owns a running event loop can deadlock live-room handoff, so the
+        bridge rejects that usage instead of silently degrading to a
+        fire-and-forget task.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(
+                self.apply(
+                    scope,
+                    slot,
+                    value,
+                    user_id=user_id,
+                    webspace_id=webspace_id,
+                )
+            )
+            return
+        raise RuntimeError(
+            "ProjectionService.apply_sync() cannot run on an active event-loop thread; "
+            "await ProjectionService.apply() instead"
+        )
+
     async def apply(
         self,
         scope: str,

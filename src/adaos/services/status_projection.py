@@ -234,7 +234,7 @@ def platform_emitter_contract_snapshot(*, now: float | None = None) -> dict[str,
         "projection_family": f"{STATUS_CARD_PROJECTION_PREFIX}*",
         "projection_families": [
             f"{STATUS_CARD_PROJECTION_PREFIX}*",
-            "platform/notifications",
+            "platform:notifications",
             "platform/runtime-diagnostics",
         ],
         "existing_status_registry": True,
@@ -252,7 +252,7 @@ def platform_emitter_contract_snapshot(*, now: float | None = None) -> dict[str,
         },
         "platform_sources": {
             "status_cards": "services.status.StatusRegistry",
-            "notifications": "runtime/notifications via existing OperationManager projection",
+            "notifications": "platform:notifications ProjectionRecord with runtime/notifications compatibility mirror",
             "runtime_diagnostics": "platform/nodes/<node_id>/diagnostics reserved branch",
         },
         "boundaries": {
