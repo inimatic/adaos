@@ -996,12 +996,15 @@ def _execute_live_room_mutation(
         ):
             with room.ydoc.begin_transaction() as txn:
                 diff_v1 = getattr(txn, "diff_v1", None)
-                if not callable(diff_v1):
+                state_vector_v1 = getattr(txn, "state_vector_v1", None)
+                if callable(diff_v1) and callable(state_vector_v1):
+                    before = bytes(state_vector_v1() or b"")
+                else:
                     result["encode_mode"] = "state_vector_fallback"
                     before = Y.encode_state_vector(room.ydoc)
                 result["mutator_result"] = mutator(room.ydoc, txn)
-                if callable(diff_v1):
-                    update = bytes(diff_v1() or b"")
+                if result["encode_mode"] == "transaction_diff":
+                    update = bytes(diff_v1(before) or b"")
         if result["encode_mode"] == "state_vector_fallback":
             update = _encode_diff(room.ydoc, before)
         if bytes(update or b"") == _EMPTY_Y_UPDATE:

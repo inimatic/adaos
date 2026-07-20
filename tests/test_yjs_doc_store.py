@@ -924,10 +924,26 @@ async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypa
     assert result["encode_mode"] == "transaction_diff"
     assert result["update_bytes"] == len(marked[0])
     assert room_doc.get_map("registry").get("revision") == 1
+
+    unchanged = await ydoc_module.submit_live_room_mutation(
+        webspace_id,
+        lambda _ydoc, _txn: False,
+        root_names=["registry"],
+        governed=True,
+    )
+
+    assert unchanged["accepted"] is True
+    assert unchanged["applied"] is True
+    assert unchanged["changed"] is False
+    assert unchanged["mutator_result"] is False
+    assert unchanged["reason"] == "unchanged"
+    assert unchanged["update_bytes"] == 0
+    assert len(marked) == 1
     diagnostics = ydoc_module.live_room_command_diagnostics_snapshot()
-    assert diagnostics["submitted_total"] == 1
+    assert diagnostics["submitted_total"] == 2
     assert diagnostics["applied_total"] == 1
-    assert diagnostics["direct_total"] == 1
+    assert diagnostics["unchanged_total"] == 1
+    assert diagnostics["direct_total"] == 2
 
 
 async def test_submit_live_room_mutation_hands_off_to_room_owner_loop(monkeypatch) -> None:
