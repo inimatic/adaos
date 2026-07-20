@@ -48,6 +48,8 @@ EntityMatchType = Literal[
     "fallback_label",
 ]
 EntityLabelRole = Literal["display", "registered", "observed", "draft", "alias", "fallback"]
+RegistrySource = Literal["static", "subnet", "devices", "lookups"]
+REGISTRY_SOURCES: tuple[RegistrySource, ...] = ("static", "subnet", "devices", "lookups")
 
 
 _SPACE_RE = re.compile(r"\s+")
@@ -937,13 +939,37 @@ class NamedEntityService:
         kind: str | None = None,
         webspace_id: str | None = None,
     ) -> list[NamedEntityRecord]:
-        records: list[NamedEntityRecord] = list(self._static_entities)
-        if self._include_runtime_subnet_entity:
-            subnet_entity = _entity_from_current_subnet()
-            if subnet_entity is not None:
-                records.append(subnet_entity)
-        records.extend(self._list_device_entities())
-        records.extend(self._list_lookup_entities(webspace_id=webspace_id))
+        records: list[NamedEntityRecord] = []
+        for source in REGISTRY_SOURCES:
+            records.extend(
+                self.list_source_entities(
+                    source,
+                    kind=kind,
+                    webspace_id=webspace_id,
+                )
+            )
+        records.sort(key=lambda item: (item.kind, item.display_label.casefold(), item.canonical_ref))
+        return records
+
+    def list_source_entities(
+        self,
+        source: RegistrySource,
+        *,
+        kind: str | None = None,
+        webspace_id: str | None = None,
+    ) -> list[NamedEntityRecord]:
+        """Collect one independently invalidatable registry source."""
+        if source == "static":
+            records = list(self._static_entities)
+        elif source == "subnet":
+            subnet_entity = _entity_from_current_subnet() if self._include_runtime_subnet_entity else None
+            records = [subnet_entity] if subnet_entity is not None else []
+        elif source == "devices":
+            records = self._list_device_entities()
+        elif source == "lookups":
+            records = self._list_lookup_entities(webspace_id=webspace_id)
+        else:
+            raise ValueError(f"unknown named-entity registry source: {source}")
         if kind:
             wanted = _text(kind)
             records = [item for item in records if item.kind == wanted]
@@ -1883,14 +1909,12 @@ def _registry_conflicts(records: Iterable[NamedEntityRecord]) -> list[dict[str, 
     return conflicts
 
 
-def compact_registry_payload(
+def _compact_registry_payload_from_records(
+    records: Iterable[NamedEntityRecord],
     *,
-    kind: str | None = None,
-    webspace_id: str | None = None,
-    service: NamedEntityService | None = None,
+    webspace_id: str,
 ) -> dict[str, Any]:
-    webspace = _text(webspace_id) or "desktop"
-    records = (service or get_named_entity_service()).list_entities(kind=kind, webspace_id=webspace)
+    records = list(records)
     items = [
         {
             "canonical_ref": item.canonical_ref,
@@ -1910,7 +1934,7 @@ def compact_registry_payload(
     ).hexdigest()
     return {
         "version": 1,
-        "webspace_id": webspace,
+        "webspace_id": webspace_id,
         "items": items,
         "summary": {
             "count": len(items),
@@ -1922,6 +1946,17 @@ def compact_registry_payload(
     }
 
 
+def compact_registry_payload(
+    *,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    service: NamedEntityService | None = None,
+) -> dict[str, Any]:
+    webspace = _text(webspace_id) or "desktop"
+    records = (service or get_named_entity_service()).list_entities(kind=kind, webspace_id=webspace)
+    return _compact_registry_payload_from_records(records, webspace_id=webspace)
+
+
 @dataclass(frozen=True)
 class NamedEntityRegistrySnapshot:
     webspace_id: str
@@ -1929,7 +1964,11 @@ class NamedEntityRegistrySnapshot:
     fingerprint: str
     payload: Mapping[str, Any]
     records_by_ref: Mapping[str, Mapping[str, Any]]
+    records_by_source: Mapping[str, tuple[NamedEntityRecord, ...]] = field(default_factory=dict, repr=False)
     changed_refs: tuple[str, ...] = field(default_factory=tuple)
+    rebuilt_sources: tuple[str, ...] = field(default_factory=tuple)
+    reused_sources: tuple[str, ...] = field(default_factory=tuple)
+    service_identity: int = field(default=0, repr=False)
     built_at: float = 0.0
 
     def to_dict(self, *, include_payload: bool = True) -> dict[str, Any]:
@@ -1940,6 +1979,8 @@ class NamedEntityRegistrySnapshot:
             "fingerprint": self.fingerprint,
             "record_total": len(self.records_by_ref),
             "changed_refs": list(self.changed_refs),
+            "rebuilt_sources": list(self.rebuilt_sources),
+            "reused_sources": list(self.reused_sources),
             "built_at": self.built_at,
         }
         if include_payload:
@@ -1956,6 +1997,10 @@ class NamedEntityRegistry:
         self._refresh_total = 0
         self._changed_total = 0
         self._unchanged_total = 0
+        self._source_build_total = 0
+        self._source_reuse_total = 0
+        self._fingerprint_hit_total = 0
+        self._fingerprint_miss_total = 0
 
     @staticmethod
     def _records_by_ref(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -1982,15 +2027,52 @@ class NamedEntityRegistry:
         *,
         webspace_id: str | None = None,
         service: NamedEntityService | None = None,
+        dirty_sources: Iterable[str] | None = None,
     ) -> NamedEntityRegistrySnapshot:
         webspace = _text(webspace_id) or "desktop"
-        payload = compact_registry_payload(webspace_id=webspace, service=service)
+        entity_service = service or get_named_entity_service()
+        with self._lock:
+            previous = self._snapshots.get(webspace)
+        requested_sources = {
+            _text(source)
+            for source in dirty_sources
+            if _text(source) in REGISTRY_SOURCES
+        } if dirty_sources is not None else set(REGISTRY_SOURCES)
+        if (
+            previous is None
+            or previous.service_identity != id(entity_service)
+            or not previous.records_by_source
+        ):
+            requested_sources = set(REGISTRY_SOURCES)
+        records_by_source: dict[str, tuple[NamedEntityRecord, ...]] = {}
+        rebuilt_sources: list[str] = []
+        reused_sources: list[str] = []
+        for source in REGISTRY_SOURCES:
+            if previous is not None and source not in requested_sources:
+                cached = previous.records_by_source.get(source)
+                if cached is not None:
+                    records_by_source[source] = tuple(cached)
+                    reused_sources.append(source)
+                    continue
+            records_by_source[source] = tuple(
+                entity_service.list_source_entities(source, webspace_id=webspace)
+            )
+            rebuilt_sources.append(source)
+        records = [
+            record
+            for source in REGISTRY_SOURCES
+            for record in records_by_source.get(source, ())
+        ]
+        records.sort(key=lambda item: (item.kind, item.display_label.casefold(), item.canonical_ref))
+        payload = _compact_registry_payload_from_records(records, webspace_id=webspace)
         summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
         fingerprint = str(summary.get("fingerprint") or "")
         records_by_ref = self._records_by_ref(payload)
         built_at = time.time()
         with self._lock:
             self._refresh_total += 1
+            self._source_build_total += len(rebuilt_sources)
+            self._source_reuse_total += len(reused_sources)
             previous = self._snapshots.get(webspace)
             if previous is not None and previous.fingerprint == fingerprint:
                 self._unchanged_total += 1
@@ -2007,12 +2089,38 @@ class NamedEntityRegistry:
                 fingerprint=fingerprint,
                 payload=projected_payload,
                 records_by_ref=records_by_ref,
+                records_by_source=records_by_source,
                 changed_refs=changed_refs,
+                rebuilt_sources=tuple(rebuilt_sources),
+                reused_sources=tuple(reused_sources),
+                service_identity=id(entity_service),
                 built_at=built_at,
             )
             self._snapshots[webspace] = snapshot
             self._changed_total += 1
             return snapshot
+
+    def fingerprints_match(
+        self,
+        fingerprints: Mapping[str, str],
+        *,
+        webspace_id: str | None = None,
+    ) -> bool:
+        expected = {
+            _text(canonical_ref): _text(fingerprint)
+            for canonical_ref, fingerprint in fingerprints.items()
+            if _text(canonical_ref) and _text(fingerprint)
+        }
+        webspace = _text(webspace_id) or "desktop"
+        with self._lock:
+            snapshot = self._snapshots.get(webspace)
+            matches = bool(expected) and snapshot is not None and all(
+                _text(snapshot.records_by_ref.get(canonical_ref, {}).get("fingerprint")) == fingerprint
+                for canonical_ref, fingerprint in expected.items()
+            )
+            counter = "_fingerprint_hit_total" if matches else "_fingerprint_miss_total"
+            setattr(self, counter, int(getattr(self, counter)) + 1)
+            return matches
 
     def get(
         self,
@@ -2035,6 +2143,10 @@ class NamedEntityRegistry:
                 self._refresh_total = 0
                 self._changed_total = 0
                 self._unchanged_total = 0
+                self._source_build_total = 0
+                self._source_reuse_total = 0
+                self._fingerprint_hit_total = 0
+                self._fingerprint_miss_total = 0
 
     def diagnostics_snapshot(self, *, webspace_id: str | None = None) -> dict[str, Any]:
         webspace = _text(webspace_id)
@@ -2048,6 +2160,10 @@ class NamedEntityRegistry:
                 "refresh_total": self._refresh_total,
                 "changed_total": self._changed_total,
                 "unchanged_total": self._unchanged_total,
+                "source_build_total": self._source_build_total,
+                "source_reuse_total": self._source_reuse_total,
+                "fingerprint_hit_total": self._fingerprint_hit_total,
+                "fingerprint_miss_total": self._fingerprint_miss_total,
                 "snapshot_total": len(snapshots),
                 "snapshots": [item.to_dict(include_payload=False) for item in snapshots],
                 "updated_at": time.time(),
@@ -2065,8 +2181,13 @@ def refresh_named_entity_registry_snapshot(
     *,
     webspace_id: str | None = None,
     service: NamedEntityService | None = None,
+    dirty_sources: Iterable[str] | None = None,
 ) -> NamedEntityRegistrySnapshot:
-    return _REGISTRY.refresh(webspace_id=webspace_id, service=service)
+    return _REGISTRY.refresh(
+        webspace_id=webspace_id,
+        service=service,
+        dirty_sources=dirty_sources,
+    )
 
 
 def named_entity_registry_snapshot(

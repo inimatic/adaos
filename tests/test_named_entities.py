@@ -470,6 +470,50 @@ def test_named_entity_registry_snapshot_revisions_only_change_with_content() -> 
     assert diagnostics["unchanged_total"] == 1
 
 
+def test_named_entity_registry_refresh_rebuilds_only_dirty_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    calls = {source: 0 for source in named_entities.REGISTRY_SOURCES}
+    original = service.list_source_entities
+
+    def _counted(source, **kwargs):
+        calls[source] += 1
+        return original(source, **kwargs)
+
+    monkeypatch.setattr(service, "list_source_entities", _counted)
+    registry = named_entities.NamedEntityRegistry()
+
+    first = registry.refresh(webspace_id="desktop", service=service)
+    second = registry.refresh(
+        webspace_id="desktop",
+        service=service,
+        dirty_sources=("devices",),
+    )
+
+    assert second is first
+    assert calls == {"static": 1, "subnet": 1, "devices": 2, "lookups": 1}
+    entity_fingerprint = first.records_by_ref["skill:browsers_skill"]["fingerprint"]
+    assert registry.fingerprints_match(
+        {"skill:browsers_skill": entity_fingerprint},
+        webspace_id="desktop",
+    )
+    diagnostics = registry.diagnostics_snapshot(webspace_id="desktop")
+    assert diagnostics["source_build_total"] == 5
+    assert diagnostics["source_reuse_total"] == 3
+    assert diagnostics["fingerprint_hit_total"] == 1
+
+
 def test_entity_event_payload_carries_locale_metadata() -> None:
     payload = named_entities.entity_event_payload(
         entity_ref="device:member:node-1",
@@ -805,7 +849,7 @@ async def test_project_named_entity_registry_stays_pending_without_live_room(mon
     named_entity_projection.reset_named_entity_projection_diagnostics()
     named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
     named_entities.clear_named_entity_registry(webspace_id=webspace_id)
-    async def _pending_room(_snapshot):
+    async def _pending_room(_snapshot, **_kwargs):
         return {
             "accepted": False,
             "written": False,
@@ -847,10 +891,17 @@ async def test_named_entity_projection_skips_applied_fingerprint_until_room_chan
         lookup_payload_provider=_empty_lookup_provider,
     )
     room_generation = [1]
-    applied: list[tuple[int, int]] = []
+    applied: list[tuple[int, int, tuple[str, ...] | None]] = []
 
-    async def _applied(snapshot):
-        applied.append((snapshot.revision, room_generation[0]))
+    async def _applied(snapshot, **kwargs):
+        changed_refs = kwargs.get("changed_refs")
+        applied.append(
+            (
+                snapshot.revision,
+                room_generation[0],
+                tuple(changed_refs) if changed_refs is not None else None,
+            )
+        )
         return {
             "accepted": True,
             "written": True,
@@ -881,17 +932,23 @@ async def test_named_entity_projection_skips_applied_fingerprint_until_room_chan
         refresh=True,
         wait=True,
     )
+    cached = named_entities.named_entity_registry_snapshot(webspace_id=webspace_id)
+    fingerprint = cached.records_by_ref["skill:browsers_skill"]["fingerprint"]
     await named_entity_projection.request_named_entity_projection(
         webspace_id=webspace_id,
         reason="duplicate",
         refresh=True,
         wait=True,
+        dirty_sources=("static",),
+        fingerprint_hints={"skill:browsers_skill": fingerprint},
     )
 
-    assert applied == [(1, 1)]
+    assert applied == [(1, 1, None)]
     diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
     assert diagnostics["already_applied_total"] == 1
     assert diagnostics["unchanged_total"] == 1
+    assert diagnostics["fingerprint_skip_total"] == 1
+    assert diagnostics["last_snapshot_mode"] == "fingerprint_hit"
 
     room_generation[0] = 2
     await named_entity_projection.request_named_entity_projection(
@@ -901,11 +958,32 @@ async def test_named_entity_projection_skips_applied_fingerprint_until_room_chan
         wait=True,
     )
 
-    assert applied == [(1, 1), (1, 2)]
+    assert applied == [(1, 1, None), (1, 2, None)]
     reconcile = named_entity_projection.named_entity_projection_reconciler_snapshot(
         webspace_id=webspace_id
     )
     assert reconcile["states"][0]["applied_room_generation"] == 2
+
+    service._static_entities = (
+        named_entities.NamedEntityRecord(
+            canonical_ref="skill:browsers_skill",
+            kind="skill",
+            display_name="Browser Automation",
+        ),
+    )
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="entity_changed",
+        refresh=True,
+        wait=True,
+        dirty_sources=("static",),
+    )
+
+    assert applied == [
+        (1, 1, None),
+        (1, 2, None),
+        (2, 2, ("skill:browsers_skill",)),
+    ]
 
 
 @pytest.mark.anyio
@@ -927,7 +1005,7 @@ async def test_subnet_alias_change_projects_named_entities_to_current_and_defaul
     )
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
     monkeypatch.setattr(named_entity_projection, "default_webspace_id", lambda: default_id)
-    async def _applied(snapshot):
+    async def _applied(snapshot, **_kwargs):
         return {
             "accepted": True,
             "written": True,
@@ -1031,12 +1109,36 @@ def test_named_entity_projection_v2_is_keyed_and_idempotent(monkeypatch) -> None
         "fingerprint": "registry-v8",
     }
     with ydoc.begin_transaction() as txn:
-        assert named_entity_projection._write_payload_to_doc(ydoc, txn, changed) is True
+        assert named_entity_projection._write_payload_to_doc(
+            ydoc,
+            txn,
+            changed,
+            changed_refs=("device:member:node-1",),
+        ) is True
 
     rendered = json.loads(v2.to_json())
     assert rendered["meta"]["revision"] == 8
     assert rendered["entities"]["device:member:node-1"]["display_name"] == "Kitchen Screen"
     assert rendered["entities"]["skill:browsers_skill"]["display_name"] == "Browsers Skill"
+
+    deleted = dict(changed)
+    deleted["items"] = [dict(changed["items"][0])]
+    deleted["summary"] = {
+        **changed["summary"],
+        "registry_revision": 9,
+        "fingerprint": "registry-v9",
+    }
+    with ydoc.begin_transaction() as txn:
+        assert named_entity_projection._write_payload_to_doc(
+            ydoc,
+            txn,
+            deleted,
+            changed_refs=("skill:browsers_skill",),
+        ) is True
+
+    rendered = json.loads(v2.to_json())
+    assert rendered["meta"]["revision"] == 9
+    assert "skill:browsers_skill" not in rendered["entities"]
 
 
 def test_named_entity_projection_can_dual_write_legacy_payload(monkeypatch) -> None:

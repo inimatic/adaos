@@ -6,11 +6,12 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Iterable
 from typing import Any, Mapping
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services import named_entities
-from adaos.services.yjs.json_merge import set_map_value_if_changed
+from adaos.services.yjs.json_merge import is_y_map_value, set_map_value_if_changed
 from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.named_entities.projection")
@@ -28,8 +29,10 @@ _DIAGNOSTICS: dict[str, Any] = {
     "reconcile_total": 0,
     "coalesced_total": 0,
     "error_total": 0,
+    "fingerprint_skip_total": 0,
     "last_webspace_id": None,
     "last_outcome": None,
+    "last_snapshot_mode": None,
     "last_payload_bytes": 0,
     "last_timings_ms": {},
     "last_updated_at": None,
@@ -53,6 +56,7 @@ def _record_projection_attempt(
     outcome: str,
     payload_bytes: int,
     timings_ms: Mapping[str, float],
+    snapshot_mode: str,
 ) -> None:
     with _DIAGNOSTICS_LOCK:
         _DIAGNOSTICS["attempt_total"] = int(_DIAGNOSTICS.get("attempt_total") or 0) + 1
@@ -71,8 +75,13 @@ def _record_projection_attempt(
             _DIAGNOSTICS["written_total"] = int(_DIAGNOSTICS.get("written_total") or 0) + 1
         elif outcome == "already_applied":
             _DIAGNOSTICS["unchanged_total"] = int(_DIAGNOSTICS.get("unchanged_total") or 0) + 1
+        if snapshot_mode == "fingerprint_hit":
+            _DIAGNOSTICS["fingerprint_skip_total"] = int(
+                _DIAGNOSTICS.get("fingerprint_skip_total") or 0
+            ) + 1
         _DIAGNOSTICS["last_webspace_id"] = webspace_id
         _DIAGNOSTICS["last_outcome"] = outcome
+        _DIAGNOSTICS["last_snapshot_mode"] = snapshot_mode
         _DIAGNOSTICS["last_payload_bytes"] = int(payload_bytes)
         _DIAGNOSTICS["last_timings_ms"] = {
             str(key): round(float(value), 3) for key, value in timings_ms.items()
@@ -104,8 +113,10 @@ def reset_named_entity_projection_diagnostics() -> None:
                 "reconcile_total": 0,
                 "coalesced_total": 0,
                 "error_total": 0,
+                "fingerprint_skip_total": 0,
                 "last_webspace_id": None,
                 "last_outcome": None,
+                "last_snapshot_mode": None,
                 "last_payload_bytes": 0,
                 "last_timings_ms": {},
                 "last_updated_at": None,
@@ -126,6 +137,35 @@ def _topic(evt: Any) -> str:
     if isinstance(evt, dict):
         return str(evt.get("type") or evt.get("topic") or "").strip()
     return str(getattr(evt, "type", "") or getattr(evt, "topic", "") or "").strip()
+
+
+def _registry_invalidation_sources(topic: str, payload: Mapping[str, Any]) -> tuple[str, ...]:
+    if topic == "sys.ready":
+        return tuple(named_entities.REGISTRY_SOURCES)
+    if topic == "subnet.alias.changed":
+        return ("subnet",)
+    source = str(payload.get("source") or "").strip()
+    entity_ref = str(payload.get("entity_ref") or "").strip()
+    entity_kind = str(payload.get("entity_kind") or "").strip()
+    if source in {"access_links", "device_inventory"} or entity_ref.startswith("device:"):
+        return ("devices",)
+    if source.startswith(("node_config", "subnet")) or entity_ref.startswith("assistant:"):
+        return ("subnet",)
+    if entity_kind in {"modal", "app", "scenario", "webspace", "skill"}:
+        return ("static", "lookups")
+    return tuple(named_entities.REGISTRY_SOURCES)
+
+
+def _registry_fingerprint_hints(payload: Mapping[str, Any]) -> dict[str, str]:
+    entity_ref = str(payload.get("entity_ref") or "").strip()
+    current = payload.get("current") if isinstance(payload.get("current"), Mapping) else {}
+    fingerprint = str(
+        current.get("current_fingerprint")
+        or current.get("fingerprint")
+        or payload.get("fingerprint")
+        or ""
+    ).strip()
+    return {entity_ref: fingerprint} if entity_ref and fingerprint else {}
 
 
 def _resolve_webspace_id(payload: Mapping[str, Any] | None = None) -> str:
@@ -199,9 +239,79 @@ def _remove_map_key(y_map: Any, txn: Any, key: str) -> bool:
         return False
 
 
-def _write_payload_to_doc(ydoc: Any, txn: Any, payload: Mapping[str, Any]) -> bool:
+def _write_incremental_v2_payload(
+    registry_map: Any,
+    txn: Any,
+    payload: Mapping[str, Any],
+    changed_refs: Iterable[str],
+) -> bool:
+    projected = _v2_payload(payload)
+    current = registry_map.get(NAMED_ENTITIES_V2_KEY)
+    if not is_y_map_value(current):
+        changed, _mode = set_map_value_if_changed(
+            registry_map,
+            txn,
+            NAMED_ENTITIES_V2_KEY,
+            projected,
+        )
+        return changed
+    changed = False
+    meta_changed, _mode = set_map_value_if_changed(current, txn, "meta", projected["meta"])
+    changed = meta_changed or changed
+    entities = current.get("entities")
+    if not is_y_map_value(entities):
+        entities_changed, _mode = set_map_value_if_changed(
+            current,
+            txn,
+            "entities",
+            projected["entities"],
+        )
+        changed = entities_changed or changed
+    else:
+        next_entities = projected["entities"]
+        for canonical_ref in sorted({str(item).strip() for item in changed_refs if str(item).strip()}):
+            next_entity = next_entities.get(canonical_ref)
+            if next_entity is None:
+                changed = _remove_map_key(entities, txn, canonical_ref) or changed
+                continue
+            entity_changed, _mode = set_map_value_if_changed(
+                entities,
+                txn,
+                canonical_ref,
+                next_entity,
+            )
+            changed = entity_changed or changed
+    conflicts_changed, _mode = set_map_value_if_changed(
+        current,
+        txn,
+        "conflicts",
+        projected["conflicts"],
+    )
+    return conflicts_changed or changed
+
+
+def _write_payload_to_doc(
+    ydoc: Any,
+    txn: Any,
+    payload: Mapping[str, Any],
+    *,
+    changed_refs: Iterable[str] | None = None,
+) -> bool:
     registry_map = ydoc.get_map("registry")
-    changed, _mode = set_map_value_if_changed(registry_map, txn, NAMED_ENTITIES_V2_KEY, _v2_payload(payload))
+    if changed_refs is None:
+        changed, _mode = set_map_value_if_changed(
+            registry_map,
+            txn,
+            NAMED_ENTITIES_V2_KEY,
+            _v2_payload(payload),
+        )
+    else:
+        changed = _write_incremental_v2_payload(
+            registry_map,
+            txn,
+            payload,
+            changed_refs,
+        )
     if _legacy_projection_enabled():
         legacy_changed, _legacy_mode = set_map_value_if_changed(
             registry_map,
@@ -232,10 +342,15 @@ def _new_reconcile_state(webspace_id: str) -> dict[str, Any]:
         "pending": False,
         "in_flight": False,
         "refresh_required": False,
+        "refresh_all_required": False,
+        "dirty_sources": set(),
+        "fingerprint_hints": {},
+        "fingerprint_hints_complete": True,
         "last_reason": None,
         "last_outcome": None,
         "last_error": None,
         "last_command": None,
+        "last_snapshot_mode": None,
         "last_updated_at": None,
         "task": None,
     }
@@ -250,11 +365,14 @@ def _reconcile_state(webspace_id: str) -> dict[str, Any]:
 
 
 def _public_reconcile_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    result = {
         key: value
         for key, value in state.items()
         if key != "task"
     }
+    result["dirty_sources"] = sorted(str(item) for item in state.get("dirty_sources") or ())
+    result["fingerprint_hints"] = dict(state.get("fingerprint_hints") or {})
+    return result
 
 
 def named_entity_projection_reconciler_snapshot(*, webspace_id: str | None = None) -> dict[str, Any]:
@@ -287,13 +405,21 @@ def clear_named_entity_projection_reconciler(*, webspace_id: str | None = None) 
 
 async def _apply_snapshot_to_live_room(
     snapshot: named_entities.NamedEntityRegistrySnapshot,
+    *,
+    changed_refs: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     from adaos.services.yjs.doc import submit_live_room_mutation
 
     payload = dict(snapshot.payload)
+    selected_refs = tuple(changed_refs) if changed_refs is not None else None
 
     def _apply(ydoc: Any, txn: Any) -> bool:
-        return _write_payload_to_doc(ydoc, txn, payload)
+        return _write_payload_to_doc(
+            ydoc,
+            txn,
+            payload,
+            changed_refs=selected_refs,
+        )
 
     command = await submit_live_room_mutation(
         snapshot.webspace_id,
@@ -303,6 +429,8 @@ async def _apply_snapshot_to_live_room(
         owner="core:named_entities",
         channel="core.named_entities.live_room",
     )
+    command["projection_patch_mode"] = "incremental" if selected_refs is not None else "full"
+    command["changed_ref_total"] = len(selected_refs or ())
     return {
         "accepted": bool(command.get("applied")),
         "written": bool(command.get("mutator_result")) if command.get("applied") else False,
@@ -337,6 +465,8 @@ def _already_applied_result(
             "total_ms": 0.0,
             "update_bytes": 0,
             "encode_mode": "none",
+            "projection_patch_mode": "skipped",
+            "changed_ref_total": 0,
             "error": None,
         },
     }
@@ -350,36 +480,72 @@ async def _run_reconciler(webspace_id: str) -> None:
                 state = _reconcile_state(webspace_id)
                 target_generation = int(state["requested_generation"])
                 refresh = bool(state["refresh_required"])
+                refresh_all = bool(state["refresh_all_required"])
+                dirty_sources = tuple(sorted(state["dirty_sources"]))
+                fingerprint_hints = dict(state["fingerprint_hints"])
+                fingerprint_hints_complete = bool(state["fingerprint_hints_complete"])
                 state["refresh_required"] = False
+                state["refresh_all_required"] = False
+                state["dirty_sources"].clear()
+                state["fingerprint_hints"].clear()
+                state["fingerprint_hints_complete"] = True
                 state["in_flight"] = True
                 state["last_error"] = None
             total_started = time.perf_counter()
             build_started = time.perf_counter()
             if refresh:
-                snapshot = await asyncio.to_thread(
-                    named_entities.refresh_named_entity_registry_snapshot,
-                    webspace_id=webspace_id,
-                )
+                registry = named_entities.get_named_entity_registry()
+                if (
+                    not refresh_all
+                    and fingerprint_hints_complete
+                    and fingerprint_hints
+                    and registry.fingerprints_match(
+                        fingerprint_hints,
+                        webspace_id=webspace_id,
+                    )
+                ):
+                    snapshot = registry.get(webspace_id=webspace_id)
+                    snapshot_mode = "fingerprint_hit"
+                else:
+                    snapshot = await asyncio.to_thread(
+                        named_entities.refresh_named_entity_registry_snapshot,
+                        webspace_id=webspace_id,
+                        dirty_sources=None if refresh_all else dirty_sources,
+                    )
+                    snapshot_mode = "full_refresh" if refresh_all else "source_refresh"
             else:
                 snapshot = await asyncio.to_thread(
                     named_entities.named_entity_registry_snapshot,
                     webspace_id=webspace_id,
                 )
+                snapshot_mode = "cache"
             timings_ms = {"snapshot_build": _elapsed_ms(build_started)}
             payload_bytes = _payload_size_bytes(snapshot.payload)
             apply_started = time.perf_counter()
             room_generation = _current_live_room_generation(webspace_id)
             with _RECONCILE_LOCK:
                 state = _reconcile_state(webspace_id)
+                applied_revision = int(state.get("applied_revision") or 0)
+                applied_room_generation = state.get("applied_room_generation")
                 already_applied = (
                     room_generation is not None
                     and state.get("applied_fingerprint") == snapshot.fingerprint
-                    and state.get("applied_room_generation") == room_generation
+                    and applied_room_generation == room_generation
+                )
+                incremental_refs = (
+                    snapshot.changed_refs
+                    if room_generation is not None
+                    and applied_room_generation == room_generation
+                    and applied_revision + 1 == snapshot.revision
+                    else None
                 )
             if already_applied:
                 result = _already_applied_result(snapshot, room_generation)
             else:
-                result = await _apply_snapshot_to_live_room(snapshot)
+                result = await _apply_snapshot_to_live_room(
+                    snapshot,
+                    changed_refs=incremental_refs,
+                )
             timings_ms["live_room_apply"] = _elapsed_ms(apply_started)
             command = result.get("command") if isinstance(result.get("command"), Mapping) else {}
             timings_ms["command_queue"] = float(command.get("queue_ms") or 0.0)
@@ -391,6 +557,7 @@ async def _run_reconciler(webspace_id: str) -> None:
                 state["desired_revision"] = snapshot.revision
                 state["desired_fingerprint"] = snapshot.fingerprint
                 state["last_updated_at"] = time.time()
+                state["last_snapshot_mode"] = snapshot_mode
                 state["last_command"] = {
                     key: command.get(key)
                     for key in (
@@ -405,6 +572,8 @@ async def _run_reconciler(webspace_id: str) -> None:
                         "total_ms",
                         "update_bytes",
                         "encode_mode",
+                        "projection_patch_mode",
+                        "changed_ref_total",
                         "error",
                     )
                     if key in command
@@ -454,6 +623,7 @@ async def _run_reconciler(webspace_id: str) -> None:
                 ),
                 payload_bytes=payload_bytes,
                 timings_ms=timings_ms,
+                snapshot_mode=snapshot_mode,
             )
             if not more_work:
                 return
@@ -471,6 +641,7 @@ async def _run_reconciler(webspace_id: str) -> None:
             outcome="error",
             payload_bytes=0,
             timings_ms={},
+            snapshot_mode="error",
         )
         _log.warning("named entity projection reconcile failed webspace=%s: %s", webspace_id, exc, exc_info=True)
     finally:
@@ -488,6 +659,8 @@ async def request_named_entity_projection(
     reason: str = "registry_changed",
     refresh: bool = True,
     wait: bool = False,
+    dirty_sources: Iterable[str] | None = None,
+    fingerprint_hints: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     webspace = str(webspace_id or default_webspace_id()).strip() or default_webspace_id()
     loop = asyncio.get_running_loop()
@@ -495,6 +668,27 @@ async def request_named_entity_projection(
         state = _reconcile_state(webspace)
         state["requested_generation"] = int(state["requested_generation"]) + 1
         state["refresh_required"] = bool(state["refresh_required"] or refresh)
+        if refresh:
+            if dirty_sources is None:
+                state["refresh_all_required"] = True
+                state["dirty_sources"].clear()
+                state["fingerprint_hints"].clear()
+                state["fingerprint_hints_complete"] = False
+            elif not state["refresh_all_required"]:
+                state["dirty_sources"].update(
+                    source
+                    for source in dirty_sources
+                    if source in named_entities.REGISTRY_SOURCES
+                )
+                state["fingerprint_hints"].update(
+                    {
+                        str(canonical_ref): str(fingerprint)
+                        for canonical_ref, fingerprint in dict(fingerprint_hints or {}).items()
+                        if str(canonical_ref).strip() and str(fingerprint).strip()
+                    }
+                )
+                if not fingerprint_hints:
+                    state["fingerprint_hints_complete"] = False
         state["last_reason"] = str(reason or "registry_changed")
         task = state.get("task")
         if not isinstance(task, asyncio.Task) or task.done():
@@ -550,6 +744,8 @@ async def on_entity_registry_changed(evt: Any) -> None:
                 reason=_topic(evt) or "entity.registry.changed",
                 refresh=True,
                 wait=False,
+                dirty_sources=_registry_invalidation_sources(_topic(evt), payload),
+                fingerprint_hints=_registry_fingerprint_hints(payload),
             )
     except Exception:
         _log.debug("failed to project named entity registry", exc_info=True)
