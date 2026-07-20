@@ -141,6 +141,40 @@ def test_descriptor_fix_draft_materializes_manifest_webui_and_nlu_files(tmp_path
     assert "route_plan.missing" in route_codes
 
 
+def test_route_plan_rejects_uncausal_tool_backed_browser_read(tmp_path: Path) -> None:
+    skill_dir = _write_demo_skill(tmp_path)
+    manifest_path = skill_dir / "skill.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["tools"] = [
+        {
+            "name": "get_status",
+            "entry": "handlers.main:get_status",
+            "input_schema": {"type": "object"},
+        }
+    ]
+    manifest["data_routes"] = [
+        {
+            "surface": "widget:demo.status",
+            "route": "tool/details",
+            "first_paint": "stable skeleton",
+            "recovery": "explicit retry",
+            "budget": {"max_payload_bytes": 4096, "snapshot_policy": "on_subscribe"},
+            "guard_visibility": "unavailable status",
+        }
+    ]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    report = _service(tmp_path)._route_plan_report("skill", skill_dir)
+
+    codes = {item["code"] for item in report["issues"]}
+    assert report["ok"] is False
+    assert {
+        "route_plan.tool_missing",
+        "route_plan.read_policy_missing",
+        "route_plan.tool_snapshot_policy",
+    }.issubset(codes)
+
+
 def test_preview_reports_scenario_dependency_bootstrap(tmp_path: Path) -> None:
     good_skill = tmp_path / "workspace" / "skills" / "good_skill"
     good_skill.mkdir(parents=True)

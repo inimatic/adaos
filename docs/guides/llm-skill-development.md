@@ -140,6 +140,69 @@ Generated code should fail review when a browser-facing skill has
 tool response is the real data transport but the route plan claims Yjs or
 stream ownership.
 
+### Causal read policy for tool-backed surfaces
+
+`tool/details` is an explicit read boundary, not a subscription emulation.
+Every browser-visible tool route must name the exact `tool` and declare a
+`read_policy`:
+
+```yaml
+data_routes:
+  - surface: widget:project.overview.state
+    route: tool/details
+    tool: get_project
+    first_paint: last successful value or a stable skeleton
+    recovery: preserve the last value and expose an explicit retry
+    budget:
+      max_payload_bytes: 32768
+      max_items: 100
+    read_policy:
+      mode: stale_while_revalidate
+      triggers: [mount, explicit_refresh, targeted_invalidation, state_dependency_changed]
+      cache_ttl_ms: 60000
+      max_request_hz: 0.1
+      preserve_last_value: true
+      invalidation_tags: [builder.project.metadata, builder.project.lifecycle]
+    guard_visibility:
+      degraded_state: project state is stale
+      metric: data_route.tool_read
+```
+
+The browser must key a read by semantic identity: skill/tool name, normalized
+arguments, webspace, and relevant state dependencies. Recreating a schema
+object, rerendering a widget, receiving an unrelated Yjs update, expiring a
+presentation observable, or completing an unrelated `callSkill` action is not
+a valid request cause.
+
+Allowed triggers are explicit and finite:
+
+- `mount`: the first subscription for a semantic read key;
+- `explicit_refresh`: a user or operator asks for current data;
+- `targeted_invalidation`: a successful mutation invalidates one of the
+  route's declared tags;
+- `state_dependency_changed`: an argument such as selected project actually
+  changes by value;
+- `reconnect`: only when the declared consistency mode requires a fresh read.
+
+Do not use an interval, focus event, generic application-state update, global
+action completion, or object identity change as an implicit trigger. A tool
+route cannot use `read_policy.mode: live` or a subscription
+`snapshot_policy`. If the surface genuinely needs live updates, move it to a
+bounded stream or Yjs projection.
+
+Invalidation must be addressable. Mutation actions publish concrete tags such
+as `builder.project.metadata`; consumers refetch only when their semantic key
+and tags match. Keep the last successful value visible while revalidating when
+`preserve_last_value` is true. Enforce `max_request_hz` independently of cache
+TTL so cache churn or repeated invalidations cannot turn into a server burst.
+
+Add an idle-soak test for every stable tool-backed widget: after first paint,
+leave the selected entity and its dependencies unchanged for at least three
+times the cache TTL (or 60 seconds when TTL is zero) and assert that the server
+observes zero additional tool calls. Then execute an unrelated mutation and
+assert zero calls, followed by one matching targeted invalidation and assert
+at most one coalesced call.
+
 ## Memory and reload safety
 
 Process memory is a data plane too. Browser-facing skills run inside long-lived
@@ -1102,6 +1165,20 @@ Use:
 - visible `degraded` / `unavailable` states when data cannot be fetched
 - disk/360log snapshot references for large evidence
 
+For browser reads, emit one compact causal record per attempted request with:
+
+- `route_id`, `surface`, semantic `read_key_hash`, tool, and owner;
+- `cause`: one of the declared `read_policy.triggers`;
+- `invalidation_tag` and source action when the cause is targeted invalidation;
+- cache age, TTL, request count, suppression count, and coalescing decision;
+- duration, payload bytes, result (`success`, `error`, `cache_hit`,
+  `rate_limited`, or `coalesced`), and `trace_id`.
+
+Aggregate counters by route and cause. Alert on an undeclared cause, a stable
+read key exceeding `max_request_hz`, repeated mount causes without unmount, or
+tool calls during an idle-soak window. Do not put raw arguments or response
+payloads in metrics; use bounded identifiers and hashes.
+
 Do not:
 
 - swallow exceptions and return stale success
@@ -1156,6 +1233,11 @@ Before publishing:
 
 - verify `data_routes` exists for browser-facing Yjs, stream, details, or
   diagnostic surfaces
+- verify every tool-backed surface names its exact tool and has a causal
+  `read_policy`, addressable invalidation tags, and a frequency budget
+- run the idle-soak and targeted-invalidation checks for stable tool-backed
+  widgets; schema rerenders and unrelated Yjs/action updates must produce zero
+  additional calls
 - verify `data_projections` exist for Yjs state
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
 - verify stream payloads stay within budget after multiplying by expected

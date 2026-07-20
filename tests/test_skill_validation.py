@@ -424,3 +424,102 @@ def ping():
     issues = validate_webui_file_contract(skill_dir, skill_name="demo_skill")
 
     assert issues == []
+
+
+def test_skill_validation_rejects_tool_route_without_exact_tool(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "data_routes:",
+            "  - surface: widget:demo.status",
+            "    route: tool/details",
+            "    first_paint: cached status",
+            "    recovery: explicit retry",
+            "    budget:",
+            "      max_payload_bytes: 4096",
+            "    guard_visibility: unavailable status",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is False
+    assert "data_routes.tool_missing" in {issue.code for issue in report.issues}
+
+
+def test_skill_validation_accepts_bounded_causal_tool_read(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "data_routes:",
+            "  - surface: widget:demo.status",
+            "    route: tool/details",
+            "    tool: ping",
+            "    first_paint: last successful status",
+            "    recovery: explicit retry preserves the last value",
+            "    budget:",
+            "      max_payload_bytes: 4096",
+            "    read_policy:",
+            "      mode: stale_while_revalidate",
+            "      triggers: [mount, explicit_refresh, targeted_invalidation]",
+            "      cache_ttl_ms: 60000",
+            "      max_request_hz: 0.1",
+            "      preserve_last_value: true",
+            "      invalidation_tags: [demo.status]",
+            "    guard_visibility: unavailable status",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert report.ok is True
+    assert not report.issues
+
+
+def test_skill_validation_rejects_subscription_policy_for_tool_read(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "data_routes:",
+            "  - surface: widget:demo.status",
+            "    route: tool/details",
+            "    tool: ping",
+            "    first_paint: empty status",
+            "    recovery: explicit retry",
+            "    budget:",
+            "      max_payload_bytes: 4096",
+            "      snapshot_policy: on_subscribe",
+            "    read_policy:",
+            "      mode: explicit",
+            "      triggers: [explicit_refresh]",
+            "      max_request_hz: 1",
+            "      preserve_last_value: true",
+            "    guard_visibility: unavailable status",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is False
+    assert "data_routes.tool_snapshot_policy" in {issue.code for issue in report.issues}

@@ -383,6 +383,7 @@
 				"path": { "type": "string", "minLength": 1 },
 				"receiver": { "type": "string", "minLength": 1 },
 				"projection_slot": { "type": "string", "minLength": 1 },
+				"tool": { "type": "string", "minLength": 1 },
 				"first_paint": { "type": "string", "minLength": 1 },
 				"recovery": { "type": "string", "minLength": 1 },
 				"update_source": {
@@ -396,6 +397,7 @@
 					]
 				},
 				"budget": { "$ref": "#/$defs/dataRouteBudget" },
+				"read_policy": { "$ref": "#/$defs/dataRouteReadPolicy" },
 				"guard_visibility": { "$ref": "#/$defs/guardVisibility" },
 				"notes": { "type": "string" }
 			},
@@ -416,6 +418,34 @@
 					"enum": ["none", "on_subscribe", "on_subscribe_if_stale", "manual"]
 				}
 			}
+		},
+		"dataRouteReadPolicy": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"mode": {
+					"type": "string",
+					"enum": ["explicit", "cache_first", "stale_while_revalidate", "live"]
+				},
+				"triggers": {
+					"type": "array",
+					"minItems": 1,
+					"uniqueItems": true,
+					"items": {
+						"type": "string",
+						"enum": ["mount", "explicit_refresh", "targeted_invalidation", "state_dependency_changed", "reconnect"]
+					}
+				},
+				"cache_ttl_ms": { "type": "integer", "minimum": 0 },
+				"max_request_hz": { "type": "number", "exclusiveMinimum": 0 },
+				"preserve_last_value": { "type": "boolean" },
+				"invalidation_tags": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 },
+					"uniqueItems": true
+				}
+			},
+			"required": ["mode", "triggers", "max_request_hz", "preserve_last_value"]
 		},
 		"guardVisibility": {
 			"oneOf": [

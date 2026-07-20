@@ -198,9 +198,71 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     # webui.json (optional): validate declarative WebUI contributions and
     # cross-link the public skill interface with modal routes/actions.
     issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
+    issues.extend(validate_data_route_contract(data))
     issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
+    return issues
+
+
+def validate_data_route_contract(manifest: Dict[str, Any]) -> List[Issue]:
+    """Validate causal, bounded browser data routes beyond JSON Schema shape."""
+
+    issues: List[Issue] = []
+    tools = {
+        str(item.get("name") or "").strip()
+        for item in manifest.get("tools") or []
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+    projections = {
+        str(item.get("slot") or "").strip()
+        for item in manifest.get("data_projections") or []
+        if isinstance(item, dict) and str(item.get("slot") or "").strip()
+    }
+    tool_routes = {"tool", "details", "tool/details"}
+
+    for index, route in enumerate(manifest.get("data_routes") or []):
+        if not isinstance(route, dict):
+            continue
+        where = f"skill.yaml:data_routes[{index}]"
+        kind = str(route.get("route") or "").strip()
+        budget = route.get("budget") if isinstance(route.get("budget"), dict) else {}
+        read_policy = route.get("read_policy") if isinstance(route.get("read_policy"), dict) else {}
+
+        for field in ("first_paint", "recovery", "guard_visibility"):
+            if not route.get(field):
+                issues.append(Issue("warning", f"data_routes.{field}_missing", f"data route must declare {field}", f"{where}.{field}"))
+        if not budget:
+            issues.append(Issue("warning", "data_routes.budget_missing", "browser data route must declare a bounded budget", f"{where}.budget"))
+
+        if kind in {"yjs", "stream", *tool_routes} and not budget.get("max_payload_bytes"):
+            issues.append(Issue("warning", "data_routes.payload_budget_missing", f"{kind} route must declare budget.max_payload_bytes", f"{where}.budget.max_payload_bytes"))
+        if kind == "stream" and not route.get("receiver"):
+            issues.append(Issue("error", "data_routes.receiver_missing", "stream route must reference an exact receiver", f"{where}.receiver"))
+        if kind == "yjs":
+            slot = str(route.get("projection_slot") or "").strip()
+            if not slot:
+                issues.append(Issue("error", "data_routes.projection_missing", "Yjs route must reference an exact projection_slot", f"{where}.projection_slot"))
+            elif slot not in projections:
+                issues.append(Issue("error", "data_routes.projection_unknown", f"projection_slot '{slot}' is not declared in data_projections", f"{where}.projection_slot"))
+
+        if kind in tool_routes:
+            tool_name = str(route.get("tool") or "").strip()
+            if not tool_name:
+                issues.append(Issue("error", "data_routes.tool_missing", f"{kind} route must reference an exact tool", f"{where}.tool"))
+            elif tool_name not in tools:
+                issues.append(Issue("error", "data_routes.tool_unknown", f"tool '{tool_name}' is not declared in tools", f"{where}.tool"))
+            if not read_policy:
+                issues.append(Issue("warning", "data_routes.read_policy_missing", "tool-backed browser reads must declare their causal read_policy", f"{where}.read_policy"))
+            else:
+                triggers = set(read_policy.get("triggers") or [])
+                if read_policy.get("mode") == "live":
+                    issues.append(Issue("error", "data_routes.tool_live_read", "tool/details cannot be a live steady-state data route", f"{where}.read_policy.mode"))
+                if "targeted_invalidation" in triggers and not read_policy.get("invalidation_tags"):
+                    issues.append(Issue("error", "data_routes.invalidation_tags_missing", "targeted_invalidation requires one or more invalidation_tags", f"{where}.read_policy.invalidation_tags"))
+            if budget.get("snapshot_policy") in {"on_subscribe", "on_subscribe_if_stale"}:
+                issues.append(Issue("error", "data_routes.tool_snapshot_policy", "subscription snapshot_policy is invalid for a tool/details route", f"{where}.budget.snapshot_policy"))
+
     return issues
 
 

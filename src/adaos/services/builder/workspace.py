@@ -16,6 +16,7 @@ from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
 from adaos.services import conversation_links, conversation_safety
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
+from adaos.services.skill.validation import validate_data_route_contract
 
 
 _ARTIFACT_ID_RE = re.compile(r"^[a-z0-9_.-]+$")
@@ -1213,6 +1214,15 @@ class BuilderWorkspaceService:
                     issues.append(_issue("warning", "route_plan.yjs_projection_missing", "Yjs route should name projection_slot", f"data_routes[{idx}].projection_slot"))
                 if not isinstance(route.get("budget"), dict):
                     issues.append(_issue("warning", "route_plan.budget_missing", "data route should declare budget", f"data_routes[{idx}].budget"))
+            for contract_issue in validate_data_route_contract(data):
+                issues.append(
+                    _issue(
+                        contract_issue.level,
+                        contract_issue.code.replace("data_routes.", "route_plan."),
+                        contract_issue.message,
+                        contract_issue.where,
+                    )
+                )
             webui = artifact_root / "webui.json"
             if webui.exists():
                 webui_data = _read_json(webui)
