@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from adaos.domain.project_events import BUILDER_PREVIEW_DESIRED, BUILDER_PREVIEW_OBSERVED
+from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, BUILDER_PREVIEW_DESIRED, BUILDER_PREVIEW_OBSERVED
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.builder.preview_reconciler import BuilderPreviewReconciler
 from adaos.services.runtime_paths import current_state_dir
@@ -93,9 +93,79 @@ def _binding_semantic_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -
         "runtime_scenario_id",
         "purpose",
         "active_draft_id",
+        "selection",
         "dialog",
     )
     return all(left.get(key) == right.get(key) for key in keys)
+
+
+def _project_selection(
+    object_type: Any,
+    object_id: Any,
+    *,
+    title: Any = None,
+    description: Any = None,
+    previous: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    kind = str(object_type or "scenario").strip().lower().rstrip("s")
+    project_id = str(object_id or "builder").strip() or "builder"
+    old = dict(previous) if isinstance(previous, Mapping) else {}
+    same_project = old.get("object_type") == kind and old.get("object_id") == project_id
+    resolved_title = str(title or (old.get("title") if same_project else "") or project_id).strip() or project_id
+    resolved_description = str(
+        description if description is not None else (old.get("description") if same_project else "")
+    ).strip()
+    topic_id = f"prompt-project:{kind}:{project_id}"
+    return {
+        "object_type": kind,
+        "object_id": project_id,
+        "ref": f"{kind}:{project_id}",
+        "title": resolved_title,
+        "description": resolved_description,
+        "topic_id": topic_id,
+        "thread_id": topic_id,
+    }
+
+
+def _preview_runtime_projection(value: Any) -> dict[str, Any]:
+    runtime = dict(value) if isinstance(value, Mapping) else {}
+    return {
+        key: runtime.get(key)
+        for key in (
+            "schema",
+            "source_webspace_id",
+            "preview_webspace_id",
+            "selected_project",
+            "desired_scenario",
+            "observed_scenario",
+            "generation",
+            "operation_id",
+            "status",
+            "requested_at",
+            "started_at",
+            "completed_at",
+            "updated_at",
+            "error",
+        )
+    }
+
+
+def _preview_state_projection(value: Any) -> dict[str, Any]:
+    state = dict(value) if isinstance(value, Mapping) else {}
+    return {
+        key: state.get(key)
+        for key in (
+            "scenario_id",
+            "draft_id",
+            "version",
+            "revision",
+            "title",
+            "status",
+            "phase",
+            "updated_at",
+        )
+        if key in state
+    }
 
 
 def _info_to_dict(info: Any) -> dict[str, Any]:
@@ -393,6 +463,15 @@ class BuilderWorkbenchService:
             normalized = dict(existing)
             active_draft_id = str(normalized.get("active_draft_id") or "").strip() or None
             runtime_scenario_id = str(normalized.get("runtime_scenario_id") or "").strip() or None
+            selection = (
+                dict(normalized.get("selection"))
+                if isinstance(normalized.get("selection"), Mapping)
+                else _project_selection(
+                    "scenario",
+                    runtime_scenario_id or "builder",
+                    title="Builder" if not runtime_scenario_id else None,
+                )
+            )
             relation, _created = self._ensure_preview_relation(
                 source_id,
                 scenario_id=runtime_scenario_id,
@@ -412,11 +491,13 @@ class BuilderWorkbenchService:
                 normalized.get("dialog") != refreshed_dialog
                 or normalized.get("preview_webspace_id") != dev_id
                 or normalized.get("relationship") != relation_payload
+                or normalized.get("selection") != selection
             ):
                 normalized["source_webspace_id"] = source_id
                 normalized["dev_webspace_id"] = dev_id
                 normalized["preview_webspace_id"] = dev_id
                 normalized["relationship"] = relation_payload
+                normalized["selection"] = selection
                 normalized["dialog"] = refreshed_dialog
                 normalized["updated_at"] = _now()
                 _write_json(self.binding_path(source_id), normalized)
@@ -431,6 +512,7 @@ class BuilderWorkbenchService:
             "runtime_scenario_id": None,
             "purpose": "builder_prompt_ide",
             "active_draft_id": None,
+            "selection": _project_selection("scenario", "builder", title="Builder"),
             "dialog": self.dialog_widget_config(
                 source_id,
                 dev_webspace_id=relation.target_webspace_id,
@@ -471,6 +553,16 @@ class BuilderWorkbenchService:
         dev_id = relation.target_webspace_id
         scenario_token = str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip()
         active_draft_token = str(active_draft_id or "").strip() or None
+        previous_selection = existing.get("selection") if isinstance(existing.get("selection"), Mapping) else None
+        explicit_runtime_id = str(runtime_scenario_id or "").strip()
+        if explicit_runtime_id and (
+            not previous_selection
+            or str(previous_selection.get("object_type") or "") == "scenario"
+            and str(previous_selection.get("object_id") or "") != explicit_runtime_id
+        ):
+            selection = _project_selection("scenario", explicit_runtime_id, previous=previous_selection)
+        else:
+            selection = dict(previous_selection) if previous_selection else _project_selection("scenario", "builder", title="Builder")
         binding = {
             "source_webspace_id": source_id,
             "dev_webspace_id": dev_id,
@@ -480,6 +572,7 @@ class BuilderWorkbenchService:
             "runtime_scenario_id": runtime_id,
             "purpose": "builder_prompt_ide",
             "active_draft_id": active_draft_token,
+            "selection": selection,
             "dialog": self.dialog_widget_config(
                 source_id,
                 active_draft_id=active_draft_token,
@@ -495,6 +588,34 @@ class BuilderWorkbenchService:
         if persist_projection:
             self.publish_projection_sync(source_id)
         return binding
+
+    def set_selected_project(
+        self,
+        *,
+        source_webspace_id: str | None = None,
+        object_type: str,
+        object_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        persist_projection: bool = False,
+    ) -> dict[str, Any]:
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        binding = self.get_workspace_binding(source_id)
+        previous = binding.get("selection") if isinstance(binding.get("selection"), Mapping) else None
+        selection = _project_selection(
+            object_type,
+            object_id,
+            title=title,
+            description=description,
+            previous=previous,
+        )
+        if selection == previous:
+            return binding
+        updated = {**binding, "selection": selection, "updated_at": _now()}
+        _write_json(self.binding_path(source_id), updated)
+        if persist_projection:
+            self.publish_projection_sync(source_id)
+        return updated
 
     def open_dev_webspace(self, source_webspace_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
         binding = self.get_workspace_binding(source_webspace_id)
@@ -753,6 +874,7 @@ class BuilderWorkbenchService:
             "schema": "adaos.builder.workbench.v1",
             "source_webspace_id": source_id,
             "binding": binding,
+            "selection": dict(binding.get("selection") or {}),
             "dialog": binding.get("dialog") if isinstance(binding.get("dialog"), dict) else self.dialog_widget_config(source_id),
             "development_skills": self.list_development_skills(source_id).get("items", []),
             "preview_runtime": self.reconciler.describe(source_id),
@@ -762,22 +884,47 @@ class BuilderWorkbenchService:
         _write_json(self.snapshot_path(source_id), snapshot)
         return snapshot
 
+    def runtime_projection(
+        self,
+        source_webspace_id: str | None = None,
+        *,
+        preview_state: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        binding = self.get_workspace_binding(source_id)
+        return {
+            "schema": "adaos.builder.runtime_projection.v1",
+            "source_webspace_id": source_id,
+            "selection": dict(binding.get("selection") or {}),
+            "binding": {
+                key: binding.get(key)
+                for key in (
+                    "source_webspace_id",
+                    "preview_webspace_id",
+                    "runtime_scenario_id",
+                    "active_draft_id",
+                    "purpose",
+                )
+            },
+            "preview_runtime": _preview_runtime_projection(self.reconciler.describe(source_id)),
+            "preview_state": _preview_state_projection(preview_state),
+            "updated_at": _now(),
+        }
+
     async def publish_projection(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
-        snapshot = self.snapshot(source_id, preview_state=preview_state)
-        targets = [source_id, str(snapshot["binding"].get("dev_webspace_id") or "")]
+        snapshot = self.runtime_projection(source_id, preview_state=preview_state)
         published: list[str] = []
-        for target in [item for item in targets if item]:
-            try:
-                from adaos.services.yjs.doc import async_get_ydoc
+        try:
+            from adaos.services.yjs.doc import async_get_ydoc
 
-                async with async_get_ydoc(target, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
-                    data = ydoc.get_map("data")
-                    with ydoc.begin_transaction() as txn:
-                        data.set(txn, "builder", snapshot)
-                published.append(target)
-            except Exception:
-                continue
+            async with async_get_ydoc(source_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+                data = ydoc.get_map("data")
+                with ydoc.begin_transaction() as txn:
+                    data.set(txn, "builder", snapshot)
+            published.append(source_id)
+        except Exception:
+            pass
         return {"ok": True, "snapshot": snapshot, "published_webspaces": published}
 
     def publish_projection_sync(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -785,7 +932,7 @@ class BuilderWorkbenchService:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.publish_projection(source_webspace_id, preview_state=preview_state))
-        snapshot = self.snapshot(source_webspace_id, preview_state=preview_state)
+        snapshot = self.runtime_projection(source_webspace_id, preview_state=preview_state)
         return {"ok": True, "snapshot": snapshot, "published_webspaces": [], "deferred": True}
 
 
@@ -797,6 +944,26 @@ def _payload_from_event(evt: Any) -> dict[str, Any]:
     if isinstance(payload, Mapping):
         return dict(payload)
     return {}
+
+
+@subscribe(BUILDER_CONTEXT_SELECTED)
+async def _on_builder_context_selected(evt: Any) -> None:
+    payload = _payload_from_event(evt)
+    source_webspace_id = str(payload.get("source_webspace_id") or payload.get("webspace_id") or "").strip()
+    object_type = str(payload.get("object_type") or payload.get("project_kind") or "").strip()
+    object_id = str(payload.get("object_id") or payload.get("project_id") or "").strip()
+    if not source_webspace_id or not object_type or not object_id:
+        return
+    service = BuilderWorkbenchService()
+    service.set_selected_project(
+        source_webspace_id=source_webspace_id,
+        object_type=object_type,
+        object_id=object_id,
+        title=str(payload.get("title") or "").strip() or None,
+        description=str(payload.get("description") or "").strip() or None,
+        persist_projection=False,
+    )
+    await service.publish_projection(source_webspace_id)
 
 
 @subscribe("builder.workbench.ensure_requested")

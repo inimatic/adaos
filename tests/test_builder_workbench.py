@@ -440,6 +440,116 @@ def test_set_active_draft_skips_unchanged_deferred_binding_write(monkeypatch, tm
     assert len(writes) == 2
 
 
+def test_selected_project_is_persisted_without_changing_runtime_scenario(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="shopping",
+        persist_projection=False,
+    )
+
+    binding = service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="skill",
+        object_id="builder_skill",
+        title="Builder Skill",
+        description="Builder tools",
+    )
+
+    assert binding["runtime_scenario_id"] == "shopping"
+    assert binding["selection"] == {
+        "object_type": "skill",
+        "object_id": "builder_skill",
+        "ref": "skill:builder_skill",
+        "title": "Builder Skill",
+        "description": "Builder tools",
+        "topic_id": "prompt-project:skill:builder_skill",
+        "thread_id": "prompt-project:skill:builder_skill",
+    }
+    assert service.get_workspace_binding("desktop")["selection"] == binding["selection"]
+
+
+@pytest.mark.asyncio
+async def test_builder_runtime_projection_is_compact_and_host_only(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.yjs.doc as ydoc_module
+
+    published: list[tuple[str, str, dict]] = []
+
+    class _Data:
+        def set(self, _txn, key, value):
+            published.append((current_webspace[0], key, value))
+
+    class _Transaction:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Doc:
+        def get_map(self, name):
+            assert name == "data"
+            return _Data()
+
+        def begin_transaction(self):
+            return _Transaction()
+
+    class _Context:
+        async def __aenter__(self):
+            return _Doc()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    current_webspace = [""]
+
+    def _get_ydoc(webspace_id, **_kwargs):
+        current_webspace[0] = webspace_id
+        return _Context()
+
+    monkeypatch.setattr(ydoc_module, "async_get_ydoc", _get_ydoc)
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    binding = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="shopping",
+        persist_projection=False,
+    )
+    monkeypatch.setattr(
+        type(service.reconciler),
+        "describe",
+        lambda _self, _source: {
+            "schema": "adaos.builder.preview_runtime.v1",
+            "source_webspace_id": "desktop",
+            "preview_webspace_id": binding["preview_webspace_id"],
+            "desired_scenario": "shopping",
+            "observed_scenario": "shopping",
+            "generation": 4,
+            "operation_id": "preview-4",
+            "status": "ready",
+            "result": {"materialized_payload": "x" * 100_000},
+        },
+    )
+
+    result = await service.publish_projection(
+        "desktop",
+        preview_state={"version": "033", "page_schema": {"widgets": ["x" * 100_000]}},
+    )
+
+    assert result["published_webspaces"] == ["desktop"]
+    assert [item[0] for item in published] == ["desktop"]
+    projection = published[0][2]
+    assert projection["selection"]["object_id"] == "shopping"
+    assert projection["binding"]["preview_webspace_id"] == binding["preview_webspace_id"]
+    assert projection["preview_runtime"]["status"] == "ready"
+    assert "result" not in projection["preview_runtime"]
+    assert projection["preview_state"] == {"version": "033"}
+    assert len(json.dumps(projection)) < 4_096
+    assert "development_skills" not in projection
+    assert "dialog" not in projection
+
+
 def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     class _Webspaces:
         def __init__(self) -> None:

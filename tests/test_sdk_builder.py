@@ -72,13 +72,32 @@ def test_automation_facade_treats_missing_session_as_idle_state(monkeypatch) -> 
 
 class _PreviewService:
     def __init__(self) -> None:
-        self.selected: list[dict] = []
+        self.active_drafts: list[dict] = []
+        self.selections: list[dict] = []
+        self.ensure_calls: list[dict] = []
 
     def set_active_draft(self, **kwargs):
-        self.selected.append(kwargs)
-        return {"ok": True, "runtime_scenario_id": kwargs["runtime_scenario_id"]}
+        self.active_drafts.append(kwargs)
+        return {
+            "ok": True,
+            "runtime_scenario_id": kwargs["runtime_scenario_id"],
+            "preview_webspace_id": "preview-alpha",
+        }
+
+    def set_selected_project(self, **kwargs):
+        self.selections.append(kwargs)
+        return {
+            "ok": True,
+            "selection": {
+                "object_type": kwargs["object_type"],
+                "object_id": kwargs["object_id"],
+                "title": kwargs["title"],
+            },
+            "preview_webspace_id": "preview-alpha",
+        }
 
     async def ensure_dev_webspace(self, source_webspace_id, **kwargs):
+        self.ensure_calls.append({"source_webspace_id": source_webspace_id, **kwargs})
         return {"ok": True, "source_webspace_id": source_webspace_id, **kwargs}
 
     def get_workspace_binding(self, source_webspace_id):
@@ -104,9 +123,9 @@ def test_preview_facade_selects_and_ensures_scenario(monkeypatch) -> None:
     )
 
     assert result["ok"] is True
-    assert result["dev_webspace_id"] == "desktop-dev"
+    assert result["dev_webspace_id"] == "preview-alpha"
     assert result["ensure"]["runtime_scenario_id"] == "builder"
-    assert service.selected == [
+    assert service.active_drafts == [
         {
             "source_webspace_id": "desktop",
             "active_draft_id": None,
@@ -114,6 +133,8 @@ def test_preview_facade_selects_and_ensures_scenario(monkeypatch) -> None:
             "persist_projection": False,
         }
     ]
+    assert service.selections[0]["object_type"] == "scenario"
+    assert service.selections[0]["object_id"] == "builder"
 
 
 def test_preview_facade_uses_explicit_service_topology(monkeypatch) -> None:
@@ -128,20 +149,43 @@ def test_preview_facade_uses_explicit_service_topology(monkeypatch) -> None:
     assert opened["source_webspace_id"] == "dev1-builder"
 
 
-def test_preview_facade_does_not_bind_skill_project(monkeypatch) -> None:
+def test_preview_facade_persists_skill_context_without_changing_preview(monkeypatch) -> None:
     service = _PreviewService()
     monkeypatch.setattr(preview, "_service", lambda: service)
 
     result = preview.select_project("skill", "builder_skill", publish_event=False)
 
-    assert result == {
-        "ok": True,
-        "selected": False,
-        "object_type": "skill",
-        "object_id": "builder_skill",
-        "source_webspace_id": "desktop",
-    }
-    assert service.selected == []
+    assert result["selected"] is True
+    assert result["object_type"] == "skill"
+    assert result["object_id"] == "builder_skill"
+    assert service.active_drafts == []
+    assert service.ensure_calls == []
+    assert service.selections[0]["object_type"] == "skill"
+    assert service.selections[0]["object_id"] == "builder_skill"
+
+
+def test_preview_facade_never_blocks_event_driven_selection_on_rebuild(monkeypatch) -> None:
+    service = _PreviewService()
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.sdk.data.events.publish",
+        lambda topic, payload, **_kwargs: events.append((topic, payload)),
+    )
+
+    result = preview.select_project(
+        "scenario",
+        "builder",
+        source_webspace_id="desktop",
+        wait_for_rebuild=True,
+        publish_event=True,
+    )
+
+    assert result["ensure"]["scheduled"] is True
+    assert service.ensure_calls == []
+    desired = next(payload for topic, payload in events if topic == "builder.preview.desired")
+    assert desired["reconciled"] is False
+    assert desired["wait_for_rebuild"] is False
 
 
 def test_artifact_checkpoint_forwards_public_metadata(monkeypatch) -> None:

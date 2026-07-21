@@ -118,7 +118,7 @@ def select_project(
     wait_for_rebuild: bool = False,
     publish_event: bool = True,
 ) -> dict[str, Any]:
-    """Select a scenario for preview and optionally ensure its dev webspace."""
+    """Persist Builder context and request scenario preview reconciliation."""
 
     kind = str(object_type or "").strip().lower().rstrip("s")
     project_id = str(object_id or "").strip()
@@ -127,13 +127,33 @@ def select_project(
         raise ValueError("object_type must be skill or scenario")
     if not project_id:
         raise ValueError("object_id is required")
+    try:
+        from adaos.sdk.developer import projects
+
+        metadata = _plain(projects.describe(kind, project_id))
+    except Exception:
+        metadata = {}
+    title = str(metadata.get("title") or metadata.get("name") or project_id).strip() or project_id
+    description = str(metadata.get("description") or "").strip()
+    service = _service()
     if kind != "scenario":
+        binding = _plain(
+            service.set_selected_project(
+                source_webspace_id=source,
+                object_type=kind,
+                object_id=project_id,
+                title=title,
+                description=description,
+                persist_projection=False,
+            )
+        )
         result = {
             "ok": True,
-            "selected": False,
+            "selected": True,
             "object_type": kind,
             "object_id": project_id,
             "source_webspace_id": source,
+            "binding": binding,
         }
         if publish_event:
             from adaos.sdk.data.events import publish
@@ -146,12 +166,13 @@ def select_project(
                     "project_id": project_id,
                     "object_type": kind,
                     "object_id": project_id,
+                    "title": title,
+                    "description": description,
                 },
                 source="sdk.builder.preview",
             )
         return result
 
-    service = _service()
     binding = _plain(
         service.set_active_draft(
             source_webspace_id=source,
@@ -160,8 +181,18 @@ def select_project(
             persist_projection=not ensure_ready,
         )
     )
+    binding = _plain(
+        service.set_selected_project(
+            source_webspace_id=source,
+            object_type="scenario",
+            object_id=project_id,
+            title=title,
+            description=description,
+            persist_projection=False,
+        )
+    )
     ensured: dict[str, Any] | None = None
-    deferred_to_event = bool(ensure_ready and not wait_for_rebuild and not _has_running_loop())
+    deferred_to_event = bool(ensure_ready and publish_event)
     if ensure_ready and not deferred_to_event:
         effective_wait = bool(wait_for_rebuild or not _has_running_loop())
         result, scheduled = _complete(
@@ -178,9 +209,6 @@ def select_project(
             else _plain(result)
         )
     elif deferred_to_event:
-        # Synchronous skill handlers cannot safely keep an asyncio task alive
-        # after returning. The canonical desired event hands ownership to the
-        # persistent runtime loop instead of blocking the skill response.
         ensured = {
             "ok": True,
             "scheduled": True,
@@ -209,6 +237,8 @@ def select_project(
                 "project_id": project_id,
                 "object_type": "scenario",
                 "object_id": project_id,
+                "title": title,
+                "description": description,
             },
             source="sdk.builder.preview",
         )
@@ -220,8 +250,8 @@ def select_project(
                 "object_type": "scenario",
                 "object_id": project_id,
                 "scenario_id": project_id,
-                "reconciled": bool(ensure_ready and not deferred_to_event),
-                "wait_for_rebuild": bool(wait_for_rebuild),
+                "reconciled": False,
+                "wait_for_rebuild": False,
             },
             source="sdk.builder.preview",
         )

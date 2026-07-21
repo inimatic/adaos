@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Iterable
 import anyio
 
 from adaos.sdk.core.decorators import subscribe
-from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, PROJECT_CONTENT_CHANGED, ProjectEventIdentity
+from adaos.domain.project_events import PROJECT_CONTENT_CHANGED, ProjectEventIdentity
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
@@ -1171,7 +1171,6 @@ async def _on_workflow_set_state(evt: Dict[str, Any]) -> None:
         )
 
 
-@subscribe(BUILDER_CONTEXT_SELECTED)
 @subscribe(PROJECT_CONTENT_CHANGED)
 @subscribe("prompt.project.changed")
 async def _on_prompt_project_changed_refresh_workflow(evt: Dict[str, Any]) -> None:

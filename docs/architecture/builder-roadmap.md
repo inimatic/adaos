@@ -518,14 +518,24 @@ Open work:
   second chat/transcript surface. `BuilderWorkbenchService.dialog_widget_config`
   and `builder_skill.attach_dialog_widget` publish the first embedded widget
   contract.
-- [x] `[must]` Add source-to-dev webspace binding for Prompt IDE:
-  `dev_webspace_id = f"{safe_source_webspace_id}-dev"`. Reuse one paired dev
-  webspace per source webspace instead of creating a new webspace per draft.
-  `BuilderWorkbenchService.ensure_dev_webspace` creates/reuses that binding.
-- [x] `[must]` Store Builder Workbench projections under `data/builder/*`,
-  including active draft, draft list, preview snapshot, validation evidence,
-  and workspace binding. Keep `data/prompt/*` only for migration or
-  compatibility. The first service snapshot writes `data.builder`.
+- [x] `[must]` Add explicit Builder host-to-preview relationships. Webspace ids
+  are opaque; legacy suffix-shaped ids are migration inputs, not topology.
+  Builder self-development is the only two-level case: production Builder to
+  development Builder through `builder_self_host`, then development Builder to
+  its project preview through `builder_project_preview`.
+- [x] `[must]` Store live Builder Workbench identity under `data/builder/*`.
+  The source-only runtime projection is compact and contains selection,
+  binding, and preview status; large draft/dialog/evidence snapshots remain
+  explicit reads. Keep `data/prompt/*` only for migration or compatibility.
+- [x] `[must]` Keep the Builder host mounted when Choose Project changes data
+  context. Revision 033 hydrates page state from
+  `data/builder/selection`; `403` data-source failures no longer invalidate the
+  browser session, and project selection does not refresh the Prompt workflow.
+- [x] `[must]` Make scenario preview selection asynchronous. The SDK persists
+  desired context and emits `builder.preview.desired`; the reconciler owns the
+  bounded materialization and observed status while skill selection leaves the
+  preview scenario unchanged. Declarative background skill commands keep local
+  selection and modal feedback independent from materialization latency.
 - [x] `[must]` Add workbench commands:
   `builder.ensure_dev_webspace`, `builder.get_workspace_binding`,
   `builder.open_dev_webspace`, `builder.set_active_draft`,

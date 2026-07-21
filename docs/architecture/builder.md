@@ -536,27 +536,44 @@ The rapid-prototyping Builder experience uses two cooperating surfaces:
   input, typed input, channel selection, transcript rendering, STT/TTS state,
   and browser recovery stay in one reusable dialog component.
 
-Prompt IDE may be loaded in any source webspace. For each source webspace,
-Builder creates or reuses exactly one paired development webspace. The paired
-webspace id is derived from the source id:
+Prompt IDE may be loaded in any Builder host webspace. Each host owns one
+explicit `builder_project_preview` relation to its preview webspace. Neither
+side of the relation is inferred from an id suffix; ids are opaque and legacy
+names such as `dev1-dev` are adopted only as relation targets during migration.
+Selecting another project changes the binding carried by that relation. It
+does not change or rematerialize the Builder host scenario.
 
-```python
-dev_webspace_id = f"{safe_source_webspace_id}-dev"
-```
-
-Examples: `desktop` maps to `desktop-dev`; `lab` maps to `lab-dev`.
-`safe_source_webspace_id` is the normalized, UI-safe source id already used by
-the runtime for webspace identity. Builder must not create a new dev webspace
-for every draft. Draft switching changes the active draft binding inside the
-same paired dev webspace. When a control is invoked from the paired DEV
-webspace, the SDK first canonicalizes it back to its source id; appending a
-second `-dev` suffix is invalid.
+There is one additional topology used while developing Builder itself. A
+production Builder host may own one `builder_self_host` relation to a
+development Builder host. That development host may in turn own one
+`builder_project_preview` relation for the scenario currently inspected by the
+development Builder. A project-preview webspace cannot own another preview, so
+the topology remains bounded to these two explicit levels.
 
 Preview controls share this binding but keep their native responsibilities:
 Compare/select materializes through `adaos.sdk.builder.preview`, Open uses the
 browser workspace-navigation action in a new window, and QR renders the same
 relative workspace URL locally. No external QR service is part of the Builder
 contract.
+
+Project selection is a command/status flow:
+
+1. `select_project` persists `binding.selection` and publishes
+   `builder.context.selected`.
+2. The declarative `callSkill` is marked as a background command, so local
+   `updateState` and `closeModal` do not wait for preview work. Failures still
+   use the normal action notification path.
+3. The source host receives a compact `data/builder` projection and hydrates
+   page state from `data/builder/selection` without navigation or page reload.
+4. Scenario projects additionally publish `builder.preview.desired`; the
+   reconciler materializes only the explicitly related preview in the
+   background and later publishes `builder.preview.observed`.
+5. Skill projects change Builder data context only and leave the preview
+   scenario untouched.
+
+`builder.context.selected` is not a content-change event. It must not refresh
+the complete Prompt workflow projection. Artifact writes use
+`project.content.changed` and may trigger the heavier refresh path.
 
 Builder copy is locale-neutral at the SDK boundary. Static widget and modal
 fields carry semantic `*_i18n` references backed by scenario-owned `ru` and
@@ -571,17 +588,42 @@ binding is explicit service state, for example:
 
 ```yaml
 builder_workspace_binding:
-  source_webspace_id: desktop
-  dev_webspace_id: desktop-dev
+  source_webspace_id: dev1
+  preview_webspace_id: dev1-dev
+  relationship:
+    purpose: builder_project_preview
   scenario_id: prompt_engineer_scenario
   purpose: builder_prompt_ide
-  active_draft_id: shopping_list_skill
+  selection:
+    object_type: scenario
+    object_id: shopping_list
+    title: Shopping List
 ```
 
-Builder state should use `data/builder/*` projections for workbench state,
-active draft, draft list, preview snapshots, and validation evidence. Legacy
-`data/prompt/*` paths may be read only for migration or compatibility, not as
-the canonical Builder state.
+Builder state uses `data/builder/*` projections. The live source projection is
+bounded to selection identity, binding identity, preview status, and compact
+preview identity. Full reconciler results, page schemas, draft lists, dialog
+diagnostics, and validation evidence remain explicit tool/snapshot reads rather
+than being copied into every YDoc update. The projection is written only to the
+Builder host; the preview owns its scenario data. Legacy `data/prompt/*` paths
+may be read only for migration or compatibility, not as canonical Builder
+state.
+
+An HTTP `403` from a Builder data source means that the authenticated caller is
+forbidden or that an approval is required. It is a local source failure and
+must not invalidate the browser session. Only an authentication failure such
+as `401` may enter session recovery.
+
+Acceptance checks for project selection are:
+
+- the Builder host document and Yjs connection stay mounted;
+- `ui.application` in the Builder host is unchanged;
+- selected project identity survives a later render or reload through
+  `data/builder/selection`;
+- only a scenario selection changes the explicitly related preview;
+- the selection command returns before preview materialization completes;
+- repeated selections remain coalesced and do not create unbounded runtime
+  records, YDoc snapshots, tasks, or memory growth.
 
 The workbench-facing control surface should include:
 
