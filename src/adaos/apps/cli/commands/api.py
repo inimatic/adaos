@@ -1370,7 +1370,8 @@ def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: b
     args = [
         sys.executable,
         "-m",
-        "adaos.apps.cli.commands.api",
+        "adaos",
+        "api",
         "serve",
         "--host",
         str(host),

@@ -261,6 +261,30 @@ def test_api_restart_preflight_failure_keeps_previous_server(monkeypatch):
     assert "preflight failed" in result.stdout
 
 
+def test_api_detached_restart_uses_root_cli_bootstrap(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(api_cmd, "merged_runtime_dotenv_env", lambda env: dict(env))
+    monkeypatch.setattr(api_cmd.subprocess, "Popen", lambda **kwargs: captured.update(kwargs))
+
+    api_cmd._spawn_detached_server("127.0.0.1", 8777, token="t1", reload=True)
+
+    assert captured["args"] == [
+        api_cmd.sys.executable,
+        "-m",
+        "adaos",
+        "api",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8777",
+        "--reload",
+        "--token",
+        "t1",
+    ]
+
+
 def test_resolve_stop_bind_rejects_remote_hub_url():
     conf = NodeConfig(
         node_id="n1",
