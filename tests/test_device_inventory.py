@@ -536,6 +536,45 @@ def test_access_link_normalizer_builds_redevice_endpoint_assignment_from_legacy_
     }
 
 
+def test_device_inventory_collapses_redevice_policy_identity_aliases(monkeypatch) -> None:
+    canonical = "redevice-5a3a7b0f-b204-41ad-9637-d00898498c54"
+    _patch_sources(
+        monkeypatch,
+        redevice_entries=[
+            {
+                "id": canonical,
+                "display_name": "Android ReDevice Legacy",
+                "pair_code": "FR57P7TC",
+                "code": "FR57P7TC",
+                "online": True,
+                "connection_state": "online",
+                "last_seen_at": 990.0,
+                "endpoint_policy": {"endpoint_id": canonical, "transport_profile": {"endpoint_id": canonical}},
+                "endpoint_manifest": {"endpoint_id": "redevice-53f793b0"},
+            },
+            {
+                "id": "redevice-be511fc0",
+                "display_name": "Android ReDevice Legacy",
+                "pair_code": "SNX68P2A",
+                "code": "SNX68P2A",
+                "online": True,
+                "connection_state": "online",
+                "last_seen_at": 999.0,
+                "endpoint_policy": {"endpoint_id": canonical, "transport_profile": {"endpoint_id": canonical}},
+                "endpoint_manifest": {"endpoint_id": "redevice-be511fc0"},
+            },
+        ],
+        now=1000.0,
+    )
+
+    items = device_inventory.list_devices(kind="redevice")
+
+    assert [item["ref"] for item in items] == [f"redevice:{canonical}"]
+    assert items[0]["identity"]["endpoint_id"] == canonical
+    assert items[0]["identity"]["pair_code"] == "FR57P7TC"
+    assert items[0]["identity"]["endpoint_alias_ids"] == ["redevice-be511fc0"]
+
+
 def test_device_inventory_surfaces_redevice_agent_versions(monkeypatch) -> None:
     _patch_sources(
         monkeypatch,

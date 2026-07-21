@@ -192,9 +192,45 @@ def display_name(endpoint: Mapping[str, Any]) -> str:
     )
 
 
+def _policy_endpoint_id(endpoint: Mapping[str, Any]) -> str:
+    policy = _mapping(endpoint.get("endpoint_policy"))
+    profile = _mapping(policy.get("transport_profile")) or _mapping(policy.get("transport_policy"))
+    return _text(policy.get("endpoint_id")) or _text(profile.get("endpoint_id"))
+
+
+def _primary_endpoint_id(endpoint: Mapping[str, Any]) -> str:
+    return _text(endpoint.get("endpoint_id")) or _text(endpoint.get("id"))
+
+
 def endpoint_id(endpoint: Mapping[str, Any]) -> str:
     manifest = _mapping(endpoint.get("endpoint_manifest"))
-    return _text(endpoint.get("endpoint_id")) or _text(manifest.get("endpoint_id")) or _text(endpoint.get("code"))
+    return (
+        _policy_endpoint_id(endpoint)
+        or _primary_endpoint_id(endpoint)
+        or _text(manifest.get("endpoint_id"))
+        or _text(endpoint.get("code"))
+    )
+
+
+def endpoint_alias_ids(endpoint: Mapping[str, Any]) -> list[str]:
+    manifest = _mapping(endpoint.get("endpoint_manifest"))
+    policy = _mapping(endpoint.get("endpoint_policy"))
+    profile = _mapping(policy.get("transport_profile")) or _mapping(policy.get("transport_policy"))
+    candidates = (
+        _primary_endpoint_id(endpoint),
+        _text(manifest.get("endpoint_id")),
+        _text(policy.get("endpoint_id")),
+        _text(profile.get("endpoint_id")),
+    )
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        token = _text(candidate)
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        result.append(token)
+    return result
 
 
 def pair_code(endpoint: Mapping[str, Any]) -> str:
@@ -582,20 +618,36 @@ def current_endpoint_records(endpoints: list[Mapping[str, Any]]) -> list[dict[st
         groups.setdefault(key, []).append(item)
 
     result: list[dict[str, Any]] = []
-    for _eid, items in groups.items():
+    for eid, items in groups.items():
         active = [item for item in items if _text(item.get("state")) in {"approved", "consumed"}]
         pool = active or items
-        pool.sort(key=_endpoint_rank)
+        pool.sort(
+            key=lambda item: (
+                _endpoint_rank(item)[0],
+                0 if _primary_endpoint_id(item) == eid else 1,
+                _endpoint_rank(item)[1],
+            )
+        )
         current_source = pool[0]
         current = dict(current_source)
+        current["endpoint_id"] = eid
         current_code = pair_code(current)
         history: list[dict[str, Any]] = []
+        alias_ids: list[str] = []
+        seen_alias_ids: set[str] = set()
+        for item in items:
+            for alias_id in endpoint_alias_ids(item):
+                if alias_id == eid or alias_id in seen_alias_ids:
+                    continue
+                seen_alias_ids.add(alias_id)
+                alias_ids.append(alias_id)
         for item in sorted(items, key=_endpoint_rank):
             if item is current_source:
                 continue
             history.append(
                 {
                     "code": pair_code(item),
+                    "endpoint_id": _primary_endpoint_id(item) or endpoint_id(item),
                     "state": _text(item.get("state")),
                     "last_seen_at": item.get("last_seen_at"),
                     "online_state": online_state(item.get("last_seen_at")),
@@ -605,6 +657,8 @@ def current_endpoint_records(endpoints: list[Mapping[str, Any]]) -> list[dict[st
             )
         if history:
             current["admission_history"] = history
+        if alias_ids:
+            current["endpoint_alias_ids"] = alias_ids
         if current_code:
             result.append(current)
     result.extend(anonymous)

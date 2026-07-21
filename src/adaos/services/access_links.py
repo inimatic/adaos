@@ -160,6 +160,137 @@ def _mapping_or_none(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, (list, tuple, set)):
+        return bool(value)
+    return True
+
+
+def _numeric_or_none(value: Any) -> float | None:
+    try:
+        token = float(value) if value is not None else None
+    except Exception:
+        return None
+    if token is None or token <= 0.0:
+        return None
+    return token
+
+
+def _redevice_canonical_entry_id(entry_id: str, raw: Mapping[str, Any] | None = None) -> str:
+    data = _mapping(raw)
+    policy = _mapping(data.get("endpoint_policy"))
+    profile = _mapping(policy.get("transport_profile")) or _mapping(policy.get("transport_policy"))
+    manifest = _mapping(data.get("endpoint_manifest"))
+    return (
+        _text(policy.get("endpoint_id"))
+        or _text(profile.get("endpoint_id"))
+        or _text(data.get("endpoint_id"))
+        or _text(data.get("id"))
+        or _text(entry_id)
+        or _text(manifest.get("endpoint_id"))
+        or _text(data.get("pair_code") or data.get("code"))
+    )
+
+
+def _merge_redevice_entries(
+    preferred: Mapping[str, Any],
+    fallback: Mapping[str, Any],
+    *,
+    entry_id: str,
+) -> dict[str, Any]:
+    merged = dict(fallback)
+    for key, value in dict(preferred).items():
+        if key in {"id", "kind"}:
+            continue
+        if key == "aliases":
+            merged[key] = _normalize_text_list(
+                [*_normalize_text_list(merged.get(key)), *_normalize_text_list(value)]
+            )
+            continue
+        if key == "labels":
+            merged[key] = _normalize_label_list(
+                [*_normalize_label_list(merged.get(key)), *_normalize_label_list(value)]
+            )
+            continue
+        if key == "created_at":
+            current = _numeric_or_none(merged.get(key))
+            incoming = _numeric_or_none(value)
+            if incoming is not None:
+                merged[key] = min(current, incoming) if current is not None else incoming
+            continue
+        if key in {
+            "updated_at",
+            "last_seen_at",
+            "revoked_at",
+            "detached_at",
+            "denied_at",
+            "assignment_updated_at",
+        }:
+            current = _numeric_or_none(merged.get(key))
+            incoming = _numeric_or_none(value)
+            if incoming is not None:
+                merged[key] = max(current, incoming) if current is not None else incoming
+            continue
+        if _has_value(value) or not _has_value(merged.get(key)):
+            merged[key] = value
+    merged["id"] = entry_id
+    merged["kind"] = "redevice"
+    return _normalize_entry("redevice", entry_id, merged)
+
+
+def _redevice_entry_for_write(
+    registry: dict[str, Any],
+    entry_id: str,
+    patch: Mapping[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    requested_id = _text(entry_id)
+    raw_existing = _get_entry(registry, "redevice", requested_id)
+    canonical_id = _redevice_canonical_entry_id(
+        requested_id,
+        {
+            **(raw_existing or {}),
+            **{key: value for key, value in dict(patch or {}).items() if value is not None},
+        },
+    )
+    if not canonical_id:
+        canonical_id = requested_id
+    canonical_existing = _get_entry(registry, "redevice", canonical_id)
+    entry = canonical_existing or raw_existing or _normalize_entry("redevice", canonical_id, {})
+    if raw_existing is not None and requested_id != canonical_id:
+        entry = _merge_redevice_entries(entry, raw_existing, entry_id=canonical_id)
+
+    bucket = registry.get("redevices")
+    if isinstance(bucket, dict):
+        for alias_id, raw in list(bucket.items()):
+            alias_token = _text(alias_id)
+            if not alias_token or alias_token == canonical_id:
+                continue
+            if not isinstance(raw, Mapping):
+                continue
+            alias_entry = _normalize_entry("redevice", alias_token, raw)
+            if _redevice_canonical_entry_id(alias_token, alias_entry) != canonical_id:
+                continue
+            entry = _merge_redevice_entries(entry, alias_entry, entry_id=canonical_id)
+            bucket.pop(alias_token, None)
+    entry["id"] = canonical_id
+    entry["kind"] = "redevice"
+    return canonical_id, entry
+
+
 def _normalize_endpoint_assignment(value: Any, *, fallback_role: Any = None, updated_at: Any = None) -> dict[str, Any] | None:
     data = dict(value) if isinstance(value, Mapping) else {}
     role = str(data.get("role") or data.get("assignment") or fallback_role or "").strip()
@@ -706,11 +837,20 @@ def touch_redevice_link(
     assignment: str | None = None,
     endpoint_assignment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    token = str(endpoint_id or "").strip()
-    if not token:
+    requested_token = str(endpoint_id or "").strip()
+    if not requested_token:
         return None
     registry = _load_registry()
-    entry = _get_entry(registry, "redevice", token) or _normalize_entry("redevice", token, {})
+    token, entry = _redevice_entry_for_write(
+        registry,
+        requested_token,
+        {
+            "pair_code": pair_code,
+            "endpoint_policy": endpoint_policy,
+            "endpoint_manifest": endpoint_manifest,
+        },
+    )
+    alias_touch = requested_token != token
     previous = dict(entry)
     entry.setdefault("access_class", "device")
     entry.setdefault("autorotate", True)
@@ -718,8 +858,11 @@ def touch_redevice_link(
     if display_name is not None:
         entry["display_name"] = str(display_name or "").strip()
     if pair_code is not None:
-        entry["pair_code"] = str(pair_code or "").strip() or None
-        entry["code"] = str(pair_code or "").strip() or None
+        incoming_pair_code = str(pair_code or "").strip() or None
+        existing_pair_code = str(entry.get("pair_code") or entry.get("code") or "").strip() or None
+        if not (alias_touch and existing_pair_code and incoming_pair_code and existing_pair_code != incoming_pair_code):
+            entry["pair_code"] = incoming_pair_code
+            entry["code"] = incoming_pair_code
     if hub_id is not None:
         entry["hub_id"] = str(hub_id or "").strip() or None
         entry["subnet_id"] = str(hub_id or "").strip() or None
@@ -742,7 +885,17 @@ def touch_redevice_link(
     if endpoint_policy is not None:
         entry["endpoint_policy"] = dict(endpoint_policy)
     if endpoint_manifest is not None:
-        entry["endpoint_manifest"] = dict(endpoint_manifest)
+        incoming_manifest = dict(endpoint_manifest)
+        existing_manifest = _mapping(entry.get("endpoint_manifest"))
+        existing_manifest_id = _text(existing_manifest.get("endpoint_id"))
+        incoming_manifest_id = _text(incoming_manifest.get("endpoint_id"))
+        if not (
+            alias_touch
+            and existing_manifest_id
+            and incoming_manifest_id
+            and existing_manifest_id != incoming_manifest_id
+        ):
+            entry["endpoint_manifest"] = incoming_manifest
     if diagnostic_report is not None:
         entry["diagnostic_report"] = dict(diagnostic_report)
     if endpoint_health is not None:
@@ -1151,9 +1304,12 @@ def upsert_link(kind: LinkKind, entry_id: str, patch: Mapping[str, Any] | None =
     if not token:
         raise ValueError("entry id is required")
     registry = _load_registry()
-    entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
-    previous = dict(entry)
     payload = dict(patch or {})
+    if kind == "redevice":
+        token, entry = _redevice_entry_for_write(registry, token, payload)
+    else:
+        entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    previous = dict(entry)
     for key, value in payload.items():
         if key in {"id", "kind"}:
             continue

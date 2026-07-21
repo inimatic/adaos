@@ -178,3 +178,54 @@ def test_lan_heartbeat_touches_endpoint_without_leasing_command(monkeypatch) -> 
     assert touches[0]["connection_state"] == "online"
     assert touches[0]["endpoint_health"] == {"battery_level": 0.9}
     assert first["command"]["command_id"] == "cmd:test"
+
+
+def test_lan_device_list_collapses_policy_identity_aliases(monkeypatch) -> None:
+    _install_memory_state(monkeypatch)
+    canonical = "redevice-5a3a7b0f-b204-41ad-9637-d00898498c54"
+    monkeypatch.setattr(lan, "_now_ts", lambda: 1000.0)
+    monkeypatch.setattr(lan, "_local_config", lambda: {})
+    monkeypatch.setattr(
+        lan.access_links,
+        "list_links",
+        lambda kind: [
+            {
+                "id": canonical,
+                "pair_code": "FR57P7TC",
+                "code": "FR57P7TC",
+                "display_name": "Android ReDevice Legacy",
+                "connection_state": "online",
+                "last_seen_at": 990.0,
+                "endpoint_policy": {"endpoint_id": canonical, "transport_profile": {"endpoint_id": canonical}},
+                "endpoint_manifest": {"endpoint_id": "redevice-53f793b0"},
+            },
+            {
+                "id": "redevice-be511fc0",
+                "pair_code": "SNX68P2A",
+                "code": "SNX68P2A",
+                "display_name": "Android ReDevice Legacy",
+                "connection_state": "online",
+                "last_seen_at": 999.0,
+                "endpoint_policy": {"endpoint_id": canonical, "transport_profile": {"endpoint_id": canonical}},
+                "endpoint_manifest": {"endpoint_id": "redevice-be511fc0"},
+            },
+            {
+                "id": "redevice-53f793b0",
+                "pair_code": "FR57P7TC",
+                "code": "FR57P7TC",
+                "display_name": "Android ReDevice Legacy",
+                "connection_state": "online",
+                "last_seen_at": 998.0,
+                "endpoint_policy": {"endpoint_id": canonical, "transport_profile": {"endpoint_id": canonical}},
+                "endpoint_manifest": {"endpoint_id": "redevice-53f793b0"},
+            },
+        ],
+    )
+
+    result = lan.list_devices()
+
+    assert result["count"] == 1
+    assert result["devices"][0]["endpoint_id"] == canonical
+    assert result["devices"][0]["code"] == "FR57P7TC"
+    assert result["devices"][0]["endpoint_alias_ids"] == ["redevice-be511fc0", "redevice-53f793b0"]
+    assert result["devices"][0]["admission_history"][0]["code"] == "SNX68P2A"

@@ -602,6 +602,82 @@ def _entry_matches_local_scope(entry: Mapping[str, Any]) -> bool:
     return True
 
 
+def _entry_endpoint_id(entry: Mapping[str, Any]) -> str:
+    policy = _mapping(entry.get("endpoint_policy"))
+    profile = _mapping(policy.get("transport_profile")) or _mapping(policy.get("transport_policy"))
+    manifest = _mapping(entry.get("endpoint_manifest"))
+    return (
+        _text(policy.get("endpoint_id"))
+        or _text(profile.get("endpoint_id"))
+        or _text(entry.get("endpoint_id"))
+        or _text(entry.get("id"))
+        or _text(manifest.get("endpoint_id"))
+        or _text(entry.get("pair_code") or entry.get("code"))
+    )
+
+
+def _entry_primary_endpoint_id(entry: Mapping[str, Any]) -> str:
+    return _text(entry.get("id") or entry.get("endpoint_id"))
+
+
+def _entry_rank(entry: Mapping[str, Any], endpoint_id: str) -> tuple[int, int, float]:
+    state = _text(entry.get("connection_state"))
+    state_rank = 0 if state in {"online", "stale"} or bool(entry.get("online")) else 1
+    try:
+        last_seen = float(entry.get("last_seen_at") or 0.0)
+    except Exception:
+        last_seen = 0.0
+    return (state_rank, 0 if _entry_primary_endpoint_id(entry) == endpoint_id else 1, -last_seen)
+
+
+def _current_entries(entries: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    anonymous: list[dict[str, Any]] = []
+    for entry in entries:
+        item = dict(entry)
+        endpoint_id = _entry_endpoint_id(item)
+        if not endpoint_id:
+            anonymous.append(item)
+            continue
+        groups.setdefault(endpoint_id, []).append(item)
+
+    current: list[dict[str, Any]] = []
+    for endpoint_id, items in groups.items():
+        items.sort(key=lambda item: _entry_rank(item, endpoint_id))
+        item = dict(items[0])
+        alias_ids: list[str] = []
+        seen_alias_ids: set[str] = set()
+        history: list[dict[str, Any]] = []
+        for candidate in items:
+            alias_id = _entry_primary_endpoint_id(candidate)
+            if alias_id and alias_id != endpoint_id and alias_id not in seen_alias_ids:
+                seen_alias_ids.add(alias_id)
+                alias_ids.append(alias_id)
+        for candidate in items[1:]:
+            history.append(
+                {
+                    "code": _text(candidate.get("pair_code") or candidate.get("code")),
+                    "endpoint_id": _entry_primary_endpoint_id(candidate),
+                    "connection_state": _text(candidate.get("connection_state")),
+                    "last_seen_at": candidate.get("last_seen_at"),
+                }
+            )
+        item["_canonical_endpoint_id"] = endpoint_id
+        if alias_ids:
+            item["_endpoint_alias_ids"] = alias_ids
+        if history:
+            item["_admission_history"] = history
+        current.append(item)
+    current.extend(anonymous)
+    current.sort(
+        key=lambda item: _entry_rank(
+            item,
+            _text(item.get("_canonical_endpoint_id")) or _entry_endpoint_id(item),
+        )
+    )
+    return current
+
+
 def _authorize_endpoint(code: str, endpoint_token: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     entry = _endpoint_by_code(code)
     if not entry:
@@ -622,44 +698,49 @@ def list_devices() -> dict[str, Any]:
     events = _mapping(state.get("events"))
     acks = _mapping(state.get("acks"))
     now = _now_ts()
+    entries: list[dict[str, Any]] = []
     for entry in access_links.list_links("redevice"):
         item = dict(entry)
         if not _entry_matches_local_scope(item):
             continue
         if _text(item.get("admission_policy")) == "deny":
             continue
+        entries.append(item)
+    for item in _current_entries(entries):
+        endpoint_id = _text(item.get("_canonical_endpoint_id")) or _entry_endpoint_id(item)
         pair_code = _text(item.get("pair_code") or item.get("code"))
         command_queue = [dict(command) for command in _list(commands.get(pair_code)) if isinstance(command, Mapping)]
         event_history = [dict(event) for event in _list(events.get(pair_code)) if isinstance(event, Mapping)]
         ack_history = [dict(ack) for ack in _list(acks.get(pair_code)) if isinstance(ack, Mapping)]
-        devices.append(
-            {
-                "code": pair_code,
-                "pair_code": pair_code,
-                "endpoint_id": _text(item.get("id")),
-                "display_name": _text(item.get("display_name")) or "ReDevice",
-                "device_label": _text(item.get("display_name")) or "ReDevice",
-                "state": "consumed" if _text(item.get("connection_state")) in {"online", "stale"} else "approved",
-                "hub_id": _text(item.get("hub_id")),
-                "subnet_id": _text(item.get("subnet_id") or item.get("hub_id")),
-                "owner_id": _text(item.get("owner_id")),
-                "endpoint_policy": _mapping(item.get("endpoint_policy")),
-                "endpoint_manifest": _mapping(item.get("endpoint_manifest")),
-                "diagnostic_report": _mapping(item.get("diagnostic_report")),
-                "endpoint_health": _mapping(item.get("endpoint_health")),
-                "service_state": _mapping(item.get("service_state")),
-                "active_app": _mapping(item.get("active_app")) or None,
-                "active_surface": _mapping(item.get("active_surface")) or None,
-                "last_seen_at": item.get("last_seen_at"),
-                "endpoint_token": _text(item.get("endpoint_token")),
-                "root_url": _text(item.get("root_url")),
-                "pending_command_count": len(command_queue),
-                "inflight_command_count": len([command for command in command_queue if float(command.get("leased_until") or 0.0) > now]),
-                "last_command": command_queue[-1] if command_queue else None,
-                "last_event": event_history[-1] if event_history else None,
-                "last_ack": ack_history[-1] if ack_history else None,
-            }
-        )
+        device = {
+            "code": pair_code,
+            "pair_code": pair_code,
+            "endpoint_id": endpoint_id,
+            "endpoint_alias_ids": list(item.get("_endpoint_alias_ids") or []),
+            "admission_history": list(item.get("_admission_history") or []),
+            "display_name": _text(item.get("display_name")) or "ReDevice",
+            "device_label": _text(item.get("display_name")) or "ReDevice",
+            "state": "consumed" if _text(item.get("connection_state")) in {"online", "stale"} else "approved",
+            "hub_id": _text(item.get("hub_id")),
+            "subnet_id": _text(item.get("subnet_id") or item.get("hub_id")),
+            "owner_id": _text(item.get("owner_id")),
+            "endpoint_policy": _mapping(item.get("endpoint_policy")),
+            "endpoint_manifest": _mapping(item.get("endpoint_manifest")),
+            "diagnostic_report": _mapping(item.get("diagnostic_report")),
+            "endpoint_health": _mapping(item.get("endpoint_health")),
+            "service_state": _mapping(item.get("service_state")),
+            "active_app": _mapping(item.get("active_app")) or None,
+            "active_surface": _mapping(item.get("active_surface")) or None,
+            "last_seen_at": item.get("last_seen_at"),
+            "endpoint_token": _text(item.get("endpoint_token")),
+            "root_url": _text(item.get("root_url")),
+            "pending_command_count": len(command_queue),
+            "inflight_command_count": len([command for command in command_queue if float(command.get("leased_until") or 0.0) > now]),
+            "last_command": command_queue[-1] if command_queue else None,
+            "last_event": event_history[-1] if event_history else None,
+            "last_ack": ack_history[-1] if ack_history else None,
+        }
+        devices.append(device)
     return {"ok": True, "devices": devices, "count": len(devices), "updated_at": _iso()}
 
 

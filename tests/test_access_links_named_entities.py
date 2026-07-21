@@ -269,6 +269,57 @@ def test_detach_and_deny_have_distinct_admission_policy(monkeypatch) -> None:
     assert access_links.authorize_link("member", "member-1") == (False, "denied")
 
 
+def test_redevice_touch_merges_policy_identity_aliases(monkeypatch) -> None:
+    store = _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    canonical = "redevice-5a3a7b0f-b204-41ad-9637-d00898498c54"
+    store[("access_links", "registry")] = {
+        "redevices": {
+            canonical: {
+                "id": canonical,
+                "kind": "redevice",
+                "display_name": "Android ReDevice Legacy",
+                "pair_code": "FR57P7TC",
+                "code": "FR57P7TC",
+                "connection_state": "online",
+                "endpoint_policy": {
+                    "endpoint_id": canonical,
+                    "transport_profile": {"endpoint_id": canonical},
+                },
+                "endpoint_manifest": {"endpoint_id": "redevice-53f793b0"},
+            },
+            "redevice-be511fc0": {
+                "id": "redevice-be511fc0",
+                "kind": "redevice",
+                "pair_code": "SNX68P2A",
+                "code": "SNX68P2A",
+                "connection_state": "online",
+                "endpoint_policy": {
+                    "endpoint_id": canonical,
+                    "transport_profile": {"endpoint_id": canonical},
+                },
+                "endpoint_manifest": {"endpoint_id": "redevice-be511fc0"},
+            },
+        }
+    }
+
+    saved = access_links.touch_redevice_link(
+        "redevice-be511fc0",
+        pair_code="SNX68P2A",
+        online=True,
+        connection_state="online",
+        endpoint_policy={"endpoint_id": canonical, "transport_profile": {"endpoint_id": canonical}},
+        endpoint_manifest={"endpoint_id": "redevice-be511fc0"},
+    )
+
+    links = access_links.list_links("redevice")
+    assert saved is not None
+    assert saved["id"] == canonical
+    assert saved["pair_code"] == "FR57P7TC"
+    assert saved["endpoint_manifest"] == {"endpoint_id": "redevice-53f793b0"}
+    assert [item["id"] for item in links] == [canonical]
+
+
 def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
     metadata = gateway_ws._browser_session_metadata(
         {

@@ -100,6 +100,67 @@ def _redevice_scope(entry: Mapping[str, Any]) -> tuple[str, str]:
     return hub_id, owner_id
 
 
+def _redevice_endpoint_id(entry: Mapping[str, Any]) -> str:
+    policy = _mapping(entry.get("endpoint_policy"))
+    profile = _mapping(policy.get("transport_profile")) or _mapping(policy.get("transport_policy"))
+    manifest = _mapping(entry.get("endpoint_manifest"))
+    return (
+        _text(policy.get("endpoint_id"))
+        or _text(profile.get("endpoint_id"))
+        or _text(entry.get("endpoint_id"))
+        or _text(entry.get("id"))
+        or _text(manifest.get("endpoint_id"))
+        or _text(entry.get("pair_code") or entry.get("code"))
+    )
+
+
+def _redevice_primary_endpoint_id(entry: Mapping[str, Any]) -> str:
+    return _text(entry.get("id") or entry.get("endpoint_id"))
+
+
+def _redevice_entry_rank(entry: Mapping[str, Any], endpoint_id: str) -> tuple[int, int, float]:
+    state = _text(entry.get("connection_state"))
+    state_rank = 0 if state in {"online", "stale"} or bool(entry.get("online")) else 1
+    last_seen = _float_or_none(entry.get("last_seen_at")) or 0.0
+    return (state_rank, 0 if _redevice_primary_endpoint_id(entry) == endpoint_id else 1, -last_seen)
+
+
+def _current_redevice_entries(entries: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    anonymous: list[dict[str, Any]] = []
+    for entry in entries:
+        item = dict(entry)
+        endpoint_id = _redevice_endpoint_id(item)
+        if not endpoint_id:
+            anonymous.append(item)
+            continue
+        groups.setdefault(endpoint_id, []).append(item)
+
+    current: list[dict[str, Any]] = []
+    for endpoint_id, items in groups.items():
+        items.sort(key=lambda item: _redevice_entry_rank(item, endpoint_id))
+        item = dict(items[0])
+        alias_ids: list[str] = []
+        seen_alias_ids: set[str] = set()
+        for candidate in items:
+            alias_id = _redevice_primary_endpoint_id(candidate)
+            if alias_id and alias_id != endpoint_id and alias_id not in seen_alias_ids:
+                seen_alias_ids.add(alias_id)
+                alias_ids.append(alias_id)
+        item["_canonical_endpoint_id"] = endpoint_id
+        if alias_ids:
+            item["_endpoint_alias_ids"] = alias_ids
+        current.append(item)
+    current.extend(anonymous)
+    current.sort(
+        key=lambda item: _redevice_entry_rank(
+            item,
+            _text(item.get("_canonical_endpoint_id")) or _redevice_endpoint_id(item),
+        )
+    )
+    return current
+
+
 def _redevice_entry_matches_local_scope(entry: Mapping[str, Any]) -> bool:
     expected_hub, expected_owner = _local_redevice_scope()
     if not expected_hub and not expected_owner:
@@ -455,11 +516,14 @@ class DeviceInventoryService:
             policy_entries = list(_access_links.list_links("redevice") or [])
         except Exception:
             policy_entries = []
+        scoped_entries: list[dict[str, Any]] = []
         for raw in policy_entries:
             entry = _mapping(raw)
             if not _redevice_entry_matches_local_scope(entry):
                 continue
-            endpoint_id = _text(entry.get("id") or entry.get("endpoint_id"))
+            scoped_entries.append(entry)
+        for entry in _current_redevice_entries(scoped_entries):
+            endpoint_id = _text(entry.get("_canonical_endpoint_id")) or _redevice_endpoint_id(entry)
             if not endpoint_id:
                 continue
             policy = _mapping(entry.get("endpoint_policy"))
@@ -483,6 +547,7 @@ class DeviceInventoryService:
                         "node_names": [],
                         "base_url": None,
                         "endpoint_id": endpoint_id,
+                        "endpoint_alias_ids": list(entry.get("_endpoint_alias_ids") or []),
                         "pair_code": _text_or_none(entry.get("pair_code") or entry.get("code")),
                         "root_url": _text_or_none(entry.get("root_url")),
                         "endpoint_root_url": _text_or_none(entry.get("endpoint_root_url")),

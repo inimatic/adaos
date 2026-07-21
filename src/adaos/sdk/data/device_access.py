@@ -145,10 +145,17 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
             if not isinstance(raw, Mapping):
                 continue
             entry = dict(raw)
+            policy = _mapping(entry.get("endpoint_policy"))
+            profile = _mapping(policy.get("transport_profile")) or _mapping(policy.get("transport_policy"))
+            manifest = _mapping(entry.get("endpoint_manifest"))
             endpoint_id = _text(entry.get("id") or entry.get("endpoint_id"))
+            canonical_endpoint_id = _text(policy.get("endpoint_id")) or _text(profile.get("endpoint_id")) or endpoint_id
             candidates = {
                 endpoint_id,
                 f"redevice:{endpoint_id}" if endpoint_id else "",
+                canonical_endpoint_id,
+                f"redevice:{canonical_endpoint_id}" if canonical_endpoint_id else "",
+                _text(manifest.get("endpoint_id")),
                 _text(entry.get("pair_code")),
                 _text(entry.get("code")),
             }
