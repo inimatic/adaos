@@ -24,7 +24,9 @@ def service_for_command(command_type: str | None) -> str:
         return "display_endpoint"
     if token.startswith(("audio.capture", "audio.input", "audio.stream.in")):
         return "audio_input_endpoint"
-    if token.startswith(("audio.output", "audio.play", "voice.prompt")):
+    if token.startswith(
+        ("audio.output", "audio.play", "audio.volume", "audio.mute", "audio.route", "media.audio.output", "voice.prompt")
+    ):
         return "audio_output_endpoint"
     if token.startswith(("settings.", "system.", "device.")):
         return "settings_endpoint"

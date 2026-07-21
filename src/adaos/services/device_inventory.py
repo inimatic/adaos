@@ -406,6 +406,90 @@ def _browser_effective_name(entry: Mapping[str, Any], *, hostname: str | None, f
     return device_name or endpoint_name or _text(hostname) or fallback_id
 
 
+def _browser_media_control(entry: Mapping[str, Any]) -> dict[str, Any]:
+    media = _mapping(entry.get("media_control"))
+    capabilities = _mapping(media.get("capabilities"))
+    selected_input = _mapping(media.get("selected_audio_input"))
+    selected_output = _mapping(media.get("selected_audio_output"))
+    volume: float | None = None
+    try:
+        volume = float(media.get("volume"))
+    except (TypeError, ValueError):
+        volume = None
+    if volume is not None:
+        volume = min(1.0, max(0.0, volume))
+    out: dict[str, Any] = {
+        "schema_version": _text_or_none(media.get("schema_version")) or "browser-media-control.v1",
+        "capabilities": {
+            "audio_input_selection": bool(capabilities.get("audio_input_selection")),
+            "audio_output_sink": bool(capabilities.get("audio_output_sink")),
+            "audio_output_prompt": bool(capabilities.get("audio_output_prompt")),
+            "volume": True,
+            "mute": True,
+        },
+        "selected_audio_input": {
+            "device_id": _text_or_none(selected_input.get("device_id")),
+            "label": _text_or_none(selected_input.get("label")),
+            "kind": "audioinput",
+        },
+        "selected_audio_output": {
+            "device_id": _text_or_none(selected_output.get("device_id")),
+            "label": _text_or_none(selected_output.get("label")),
+            "kind": "audiooutput",
+        },
+        "volume": volume,
+        "muted": _bool_or_none(media.get("muted")),
+        "updated_at": _float_or_none(media.get("updated_at")),
+    }
+    if out["volume"] is None:
+        out["volume"] = 1.0
+    if out["muted"] is None:
+        out["muted"] = False
+    return out
+
+
+def _browser_media_services(entry: Mapping[str, Any]) -> dict[str, Any]:
+    media = _browser_media_control(entry)
+    capabilities = _mapping(media.get("capabilities"))
+    online = bool(entry.get("online"))
+    output_supported = bool(capabilities.get("audio_output_sink"))
+    input_supported = bool(capabilities.get("audio_input_selection"))
+    return {
+        "audio_input_endpoint": {
+            "enabled": input_supported,
+            "state": "ready" if online and input_supported else "unavailable",
+            "controls": {
+                "select_device": input_supported,
+            },
+            "selected_source": _mapping(media.get("selected_audio_input")),
+            "contract": "browser.media.audio_input.v1",
+        },
+        "audio_output_endpoint": {
+            "enabled": True,
+            "state": "ready" if online else "offline",
+            "controls": {
+                "select_device": output_supported,
+                "set_volume": True,
+                "mute": True,
+            },
+            "selected_sink": _mapping(media.get("selected_audio_output")),
+            "volume": media.get("volume"),
+            "muted": media.get("muted"),
+            "contract": "browser.media.audio_output.v1",
+        },
+        "settings_endpoint": {
+            "enabled": True,
+            "state": "ready" if online else "offline",
+            "controls": {
+                "set_media_preferences": True,
+                "set_volume": True,
+                "mute": True,
+            },
+            "contract": "browser.media.settings.v1",
+        },
+    }
+
+
 def _runtime_projection_like(
     runtime_projection: Mapping[str, Any] | None,
     live_snapshot: Mapping[str, Any] | None,
@@ -824,6 +908,8 @@ class DeviceInventoryService:
                 continue
             hostname = _text_or_none(entry.get("hostname"))
             effective_name = _browser_effective_name(entry, hostname=hostname, fallback_id=device_id)
+            media_control = _browser_media_control(entry)
+            media_services = _browser_media_services(entry)
             items.append(
                 {
                     "ref": make_device_ref("browser", device_id),
@@ -867,6 +953,8 @@ class DeviceInventoryService:
                         "active_runtime_sources": list(entry.get("active_runtime_sources") or []),
                         "events_channel_state": _text_or_none(entry.get("events_channel_state")),
                         "yjs_channel_state": _text_or_none(entry.get("yjs_channel_state")),
+                        "media_control": media_control,
+                        "services": media_services,
                     },
                     "diagnostics": {
                         "policy_source": "access_links",

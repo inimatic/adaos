@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from adaos.services import access_links
 from adaos.services import device_access
 
 
@@ -419,7 +420,27 @@ def test_browser_device_settings_schema_separates_device_and_endpoint_names(monk
             "last_seen_at": 100.0,
             "last_webspace_id": "desktop",
         },
-        "runtime": {"connected_to_subnet": True},
+        "runtime": {
+            "connected_to_subnet": True,
+            "media_control": {
+                "schema_version": "browser-media-control.v1",
+                "selected_audio_input": {"device_id": "mic-1", "label": "Desk mic", "kind": "audioinput"},
+                "selected_audio_output": {"device_id": "speaker-1", "label": "Speakers", "kind": "audiooutput"},
+                "volume": 0.25,
+                "muted": False,
+                "capabilities": {
+                    "audio_input_selection": True,
+                    "audio_output_sink": True,
+                    "audio_output_prompt": False,
+                    "volume": True,
+                    "mute": True,
+                },
+            },
+            "services": {
+                "audio_input_endpoint": {"controls": {"select_device": True}},
+                "audio_output_endpoint": {"controls": {"select_device": True, "set_volume": True, "mute": True}},
+            },
+        },
     }
 
     monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
@@ -460,6 +481,13 @@ def test_browser_device_settings_schema_separates_device_and_endpoint_names(monk
     assert settings["identify"] == {
         "enabled": True,
         "target": "browsers_skill.identify_device",
+        "params": {"device_ref": "browser:dev-phone"},
+    }
+    assert settings["media_control"]["volume"] == 0.25
+    assert settings["media_control"]["muted"] is False
+    assert settings["media_control"]["set"] == {
+        "enabled": True,
+        "target": "browsers_skill.set_browser_media_control",
         "params": {"device_ref": "browser:dev-phone"},
     }
 
@@ -507,6 +535,152 @@ def test_identify_browser_device_publishes_parent_target(monkeypatch) -> None:
     assert published[0][1]["request_id"] == "identify-test"
     assert published[0][1]["target_browser_device_id"] == "dev-phone"
     assert published[0][1]["requested_ref"] == "browser:dev-phone::webrtc"
+
+
+def test_set_browser_media_control_publishes_parent_target(monkeypatch) -> None:
+    device = {
+        "ref": "browser:dev-phone::webrtc",
+        "kind": "browser",
+        "identity": {
+            "browser_device_id": "dev-phone::webrtc",
+            "parent_browser_device_id": "dev-phone",
+        },
+        "policy": {"effective_name": "Chrome"},
+        "observation": {"online": True, "last_webspace_id": "desktop"},
+    }
+    published: list[tuple[str, dict, str]] = []
+    touched: list[dict[str, object]] = []
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("browser", str(device_ref).split(":", 1)[1]),
+    )
+    monkeypatch.setattr(
+        device_access._access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {"id": device_id},
+    )
+
+    class _Ctx:
+        bus = object()
+
+    def _fake_emit(bus, topic, payload, source=""):
+        published.append((topic, dict(payload), source))
+
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: _Ctx())
+    monkeypatch.setattr("adaos.services.eventbus.emit", _fake_emit)
+
+    result = device_access.set_browser_media_control(
+        "browser:dev-phone::webrtc",
+        volume=0,
+        muted=False,
+        audio_output_device_id="speaker-1",
+        request_id="media-test",
+        webspace_id="desktop",
+    )
+
+    assert result["ok"] is True
+    assert result["device_ref"] == "browser:dev-phone"
+    assert touched[0]["device_id"] == "dev-phone"
+    assert touched[0]["media_volume"] == 0.0
+    assert touched[0]["media_muted"] is False
+    assert touched[0]["media_audio_output_device_id"] == "speaker-1"
+    assert published[0][0] == "browser.media_control.requested"
+    assert published[0][1]["request_id"] == "media-test"
+    assert published[0][1]["target_browser_device_id"] == "dev-phone"
+    assert published[0][1]["media_preferences"]["audioOutputDeviceId"] == "speaker-1"
+    assert published[0][1]["media_preferences"]["audioOutputVolume"] == 0.0
+    assert published[0][1]["media_preferences"]["audioOutputMuted"] is False
+
+
+def test_set_browser_media_control_can_clear_audio_output_device(monkeypatch) -> None:
+    device = {
+        "ref": "browser:dev-phone",
+        "kind": "browser",
+        "identity": {"browser_device_id": "dev-phone"},
+        "policy": {"effective_name": "Chrome"},
+        "observation": {"online": True, "last_webspace_id": "desktop"},
+    }
+    published: list[tuple[str, dict, str]] = []
+    touched: list[dict[str, object]] = []
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("browser", str(device_ref).split(":", 1)[1]),
+    )
+    monkeypatch.setattr(
+        device_access._access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {"id": device_id},
+    )
+
+    class _Ctx:
+        bus = object()
+
+    def _fake_emit(bus, topic, payload, source=""):
+        published.append((topic, dict(payload), source))
+
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: _Ctx())
+    monkeypatch.setattr("adaos.services.eventbus.emit", _fake_emit)
+
+    result = device_access.set_browser_media_control(
+        "browser:dev-phone",
+        audio_output_device_id="",
+        audio_output_label="",
+        request_id="media-clear",
+    )
+
+    assert result["ok"] is True
+    assert touched[0]["media_audio_output_device_id"] == ""
+    assert touched[0]["media_audio_output_label"] == ""
+    assert published[0][1]["media_preferences"] == {
+        "audioOutputDeviceId": "",
+        "audioOutputLabel": "",
+    }
+
+
+def test_touch_browser_session_can_clear_selected_audio_output(monkeypatch) -> None:
+    store: dict[tuple[str, str], dict[str, object]] = {}
+
+    def _get(ns: str, key: str):
+        return dict(store.get((ns, key)) or {})
+
+    def _put(ns: str, key: str, value: dict[str, object]) -> None:
+        store[(ns, key)] = dict(value)
+
+    monkeypatch.setattr(access_links.sqlite_db, "durable_state_get", _get)
+    monkeypatch.setattr(access_links.sqlite_db, "durable_state_put", _put)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+
+    saved = access_links.touch_browser_session(
+        "dev-browser",
+        media_audio_output_device_id="speaker-1",
+        media_audio_output_label="Desk speakers",
+        media_volume=0.4,
+        media_muted=False,
+    )
+
+    assert saved is not None
+    assert saved["media_control"]["selected_audio_output"]["device_id"] == "speaker-1"
+    assert saved["media_control"]["selected_audio_output"]["label"] == "Desk speakers"
+    assert saved["media_control"]["volume"] == 0.4
+    assert saved["media_control"]["muted"] is False
+
+    cleared = access_links.touch_browser_session(
+        "dev-browser",
+        media_audio_output_device_id="",
+        media_audio_output_label="",
+    )
+
+    assert cleared is not None
+    assert cleared["media_control"]["selected_audio_output"]["device_id"] is None
+    assert cleared["media_control"]["selected_audio_output"]["label"] is None
+    assert cleared["media_control"]["volume"] == 0.4
+    assert cleared["media_control"]["muted"] is False
 
 
 def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -> None:

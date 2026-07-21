@@ -574,6 +574,7 @@ def test_runtime_action_risk_allows_slideshow_redevice_refresh_tick() -> None:
         ("browsers_skill:rename_selected_browser", {"name": "Chrome"}),
         ("browsers_skill:rename_device", {"device_id": "dev_phone", "name": "Chrome"}),
         ("browsers_skill:rename_browser_device_name", {"browser_device_id": "dev_phone", "name": "My phone"}),
+        ("browsers_skill:set_browser_media_control", {"browser_device_id": "dev_phone", "volume": 0.5}),
     ],
 )
 def test_runtime_action_risk_allows_local_ui_state_tools(tool: str, arguments: dict[str, object]) -> None:

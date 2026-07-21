@@ -193,29 +193,53 @@ def _clean_browser_metadata_value(value: Any, *, max_len: int = 256) -> str | No
     return token[:max_len]
 
 
+def _browser_metadata_param(params: Mapping[str, Any], *keys: str) -> tuple[Any, bool]:
+    for key in keys:
+        if key in params:
+            return params.get(key), True
+    return None, False
+
+
 def _clean_signaling_device_id(value: Any) -> str | None:
     return _clean_browser_metadata_value(value, max_len=128)
 
 
 def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
-    raw: dict[str, Any] = {
-        "browser_family": params.get("browser_family") or params.get("browserFamily") or params.get("browser"),
-        "device_display_name": params.get("device_display_name") or params.get("deviceDisplayName") or params.get("device_name") or params.get("deviceName"),
-        "endpoint_display_name": params.get("endpoint_display_name") or params.get("endpointDisplayName") or params.get("endpoint_name") or params.get("endpointName"),
-        "client_build_id": params.get("client_build_id") or params.get("clientBuildId") or params.get("build_id") or params.get("buildId"),
-        "client_build_version": params.get("client_build_version") or params.get("clientBuildVersion") or params.get("build_version") or params.get("buildVersion"),
-        "os_name": params.get("os_name") or params.get("osName") or params.get("os") or params.get("platform"),
-        "form_factor": params.get("form_factor") or params.get("formFactor") or params.get("form"),
-        "user_agent": params.get("user_agent") or params.get("userAgent") or params.get("ua"),
+    raw: dict[str, tuple[Any, bool]] = {
+        "browser_family": _browser_metadata_param(params, "browser_family", "browserFamily", "browser"),
+        "device_display_name": _browser_metadata_param(params, "device_display_name", "deviceDisplayName", "device_name", "deviceName"),
+        "endpoint_display_name": _browser_metadata_param(params, "endpoint_display_name", "endpointDisplayName", "endpoint_name", "endpointName"),
+        "client_build_id": _browser_metadata_param(params, "client_build_id", "clientBuildId", "build_id", "buildId"),
+        "client_build_version": _browser_metadata_param(params, "client_build_version", "clientBuildVersion", "build_version", "buildVersion"),
+        "os_name": _browser_metadata_param(params, "os_name", "osName", "os", "platform"),
+        "form_factor": _browser_metadata_param(params, "form_factor", "formFactor", "form"),
+        "user_agent": _browser_metadata_param(params, "user_agent", "userAgent", "ua"),
+        "media_audio_input_device_id": _browser_metadata_param(params, "media_audio_input_device_id", "mediaAudioInputDeviceId"),
+        "media_audio_input_label": _browser_metadata_param(params, "media_audio_input_label", "mediaAudioInputLabel"),
+        "media_audio_output_device_id": _browser_metadata_param(params, "media_audio_output_device_id", "mediaAudioOutputDeviceId"),
+        "media_audio_output_label": _browser_metadata_param(params, "media_audio_output_label", "mediaAudioOutputLabel"),
+        "media_volume": _browser_metadata_param(params, "media_volume", "mediaVolume"),
+        "media_muted": _browser_metadata_param(params, "media_muted", "mediaMuted"),
+        "media_audio_input_supported": _browser_metadata_param(params, "media_audio_input_supported", "mediaAudioInputSupported"),
+        "media_audio_output_supported": _browser_metadata_param(params, "media_audio_output_supported", "mediaAudioOutputSupported"),
+        "media_audio_output_selection_supported": _browser_metadata_param(params, "media_audio_output_selection_supported", "mediaAudioOutputSelectionSupported"),
+    }
+    clearable_media_keys = {
+        "media_audio_input_device_id",
+        "media_audio_input_label",
+        "media_audio_output_device_id",
+        "media_audio_output_label",
     }
     out: dict[str, str] = {}
-    for key, value in raw.items():
+    for key, (value, present) in raw.items():
         cleaned = _clean_browser_metadata_value(
             value,
-            max_len=512 if key == "user_agent" else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name"} else 96),
+            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id"} else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96)),
         )
         if cleaned:
             out[key] = cleaned
+        elif present and key in clearable_media_keys:
+            out[key] = ""
     return out
 
 
@@ -7921,6 +7945,15 @@ async def browser_session_authorize(
     os_name: str | None = None,
     form_factor: str | None = None,
     user_agent: str | None = None,
+    media_audio_input_device_id: str | None = None,
+    media_audio_input_label: str | None = None,
+    media_audio_output_device_id: str | None = None,
+    media_audio_output_label: str | None = None,
+    media_volume: str | None = None,
+    media_muted: str | None = None,
+    media_audio_input_supported: str | None = None,
+    media_audio_output_supported: str | None = None,
+    media_audio_output_selection_supported: str | None = None,
 ):
     """
     Lightweight browser-device preflight for clients before opening /yws.
@@ -7932,16 +7965,28 @@ async def browser_session_authorize(
     """
     dev_id = str(dev or "").strip() or "unknown"
     webspace_id = _coerce_gateway_webspace_id(ws)
-    metadata = _browser_session_metadata(
-        {
-            "browser_family": browser_family or "",
-            "client_build_id": client_build_id or "",
-            "client_build_version": client_build_version or "",
-            "os_name": os_name or "",
-            "form_factor": form_factor or "",
-            "user_agent": user_agent or "",
-        }
-    )
+    metadata_params = {
+        "browser_family": browser_family or "",
+        "client_build_id": client_build_id or "",
+        "client_build_version": client_build_version or "",
+        "os_name": os_name or "",
+        "form_factor": form_factor or "",
+        "user_agent": user_agent or "",
+    }
+    for key, value in {
+        "media_audio_input_device_id": media_audio_input_device_id,
+        "media_audio_input_label": media_audio_input_label,
+        "media_audio_output_device_id": media_audio_output_device_id,
+        "media_audio_output_label": media_audio_output_label,
+        "media_volume": media_volume,
+        "media_muted": media_muted,
+        "media_audio_input_supported": media_audio_input_supported,
+        "media_audio_output_supported": media_audio_output_supported,
+        "media_audio_output_selection_supported": media_audio_output_selection_supported,
+    }.items():
+        if value is not None:
+            metadata_params[key] = value
+    metadata = _browser_session_metadata(metadata_params)
     try:
         from adaos.services.access_links import authorize_link, touch_browser_session
 

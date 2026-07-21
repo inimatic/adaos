@@ -57,7 +57,16 @@ def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
         "/api/personalization/current-user/settings",
         json={
             "profile": {"display_name": "Maria", "language": "en"},
-            "preferences": {"theme": "light", "ui_density": "comfortable"},
+            "preferences": {
+                "theme": "light",
+                "ui_density": "comfortable",
+                "media_audio_input_device_id": "mic-1",
+                "media_audio_input_label": "Desk mic",
+                "media_audio_output_device_id": "speaker-1",
+                "media_audio_output_label": "Speakers",
+                "media_audio_output_volume": 0,
+                "media_audio_output_muted": False,
+            },
         },
         headers=TOKEN_HEADERS,
     )
@@ -71,6 +80,10 @@ def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
     payload = header.json()["settings"]
     assert payload["display_name"] == "Maria"
     assert payload["theme"] == "light"
+    assert payload["media_audio_input_device_id"] == "mic-1"
+    assert payload["media_audio_output_device_id"] == "speaker-1"
+    assert payload["media_audio_output_volume"] == 0
+    assert payload["media_audio_output_muted"] is False
     assert payload["role_status"] == {"value": "owner", "editable": False}
     assert payload["identity_source"] == "owner_settings_fallback"
 

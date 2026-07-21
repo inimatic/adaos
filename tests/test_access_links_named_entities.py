@@ -338,6 +338,21 @@ def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
     }
 
 
+def test_yws_browser_session_metadata_preserves_empty_media_selection_fields() -> None:
+    metadata = gateway_ws._browser_session_metadata(
+        {
+            "media_audio_output_device_id": "",
+            "media_audio_output_label": "",
+            "media_muted": "false",
+        }
+    )
+
+    assert metadata["media_audio_output_device_id"] == ""
+    assert metadata["media_audio_output_label"] == ""
+    assert metadata["media_muted"] == "false"
+    assert "media_audio_input_device_id" not in metadata
+
+
 def test_access_links_emits_specific_lifecycle_events_before_registry_invalidation(monkeypatch) -> None:
     emitted: list[tuple[str, dict[str, object]]] = []
 

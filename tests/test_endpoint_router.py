@@ -42,6 +42,15 @@ def test_legacy_payload_preserves_command_id_and_embeds_envelope_summary() -> No
     assert payload["endpoint_command"]["target"]["service"] == "audio_input_endpoint"
 
 
+def test_endpoint_router_routes_audio_volume_to_output_service() -> None:
+    envelope = endpoint_router.build_endpoint_command(
+        {"type": "audio.volume.set", "volume": 0.4},
+        endpoint={"endpoint_id": "endpoint-1", "code": "ABCD1234"},
+    )
+
+    assert envelope["target"]["service"] == "audio_output_endpoint"
+
+
 def test_endpoint_router_sends_redevice_command_with_router_evidence(monkeypatch) -> None:
     from adaos.sdk import redevice as sdk_redevice
 

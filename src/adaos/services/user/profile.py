@@ -294,6 +294,13 @@ class UserProfileService:
         )
         settings = dict(profile.settings)
         role_value = "owner" if uid == self.current_user_id() else None
+        def preference_or_setting(key: str, default: object | None = None) -> object | None:
+            if key in preferences:
+                return preferences.get(key)
+            if key in settings:
+                return settings.get(key)
+            return default
+
         return {
             "user_id": uid,
             "display_name": profile.display_name or settings.get("display_name") or uid,
@@ -303,6 +310,12 @@ class UserProfileService:
             "timezone": profile.timezone or preferences.get("timezone") or settings.get("timezone"),
             "theme": preferences.get("theme") or settings.get("theme") or "system",
             "memory_privacy": preferences.get("memory_privacy") or settings.get("memory_privacy") or "default",
+            "media_audio_input_device_id": preference_or_setting("media_audio_input_device_id"),
+            "media_audio_input_label": preference_or_setting("media_audio_input_label"),
+            "media_audio_output_device_id": preference_or_setting("media_audio_output_device_id"),
+            "media_audio_output_label": preference_or_setting("media_audio_output_label"),
+            "media_audio_output_volume": preference_or_setting("media_audio_output_volume", 1.0),
+            "media_audio_output_muted": preference_or_setting("media_audio_output_muted", False),
             "preferences_revision": preferences_revision,
             "current_subnet": getattr(self.ctx.settings, "subnet_id", None),
             "current_workspace": preferences.get("current_workspace") or settings.get("current_workspace"),

@@ -65,6 +65,36 @@ def _max_float(*values: Any) -> float | None:
     return out
 
 
+def _clamped_unit_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return min(1.0, max(0.0, number))
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    token = _text(value).casefold()
+    if not token:
+        return None
+    if token in {"1", "true", "yes", "on", "muted"}:
+        return True
+    if token in {"0", "false", "no", "off", "unmuted"}:
+        return False
+    return None
+
+
+def _first_provided(*values: Any) -> tuple[bool, Any]:
+    for value in values:
+        if value is not None:
+            return True, value
+    return False, None
+
+
 def _browser_parent_device_id(device_ref: str, identity: Mapping[str, Any] | None = None) -> str:
     parsed = _device_inventory.parse_device_ref(_text(device_ref))
     if parsed is None:
@@ -535,6 +565,7 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
     assert device is not None
     policy = _mapping(device.get("policy"))
     identity = _mapping(device.get("identity"))
+    runtime = _mapping(device.get("runtime"))
     kind = _text(device.get("kind"))
     managed_state = _text(policy.get("managed_state")) or "observed_only"
     policy_present = bool(policy.get("present"))
@@ -552,6 +583,10 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
     deny_reason = None if deny_enabled else "already_denied"
     apps_enabled = kind == "member" and bool(node_id) and managed_state not in {"detached", "denied", "revoked"}
     apps_reason = None if apps_enabled else "browser_has_no_node_context" if kind == "browser" else "device_unavailable"
+    observation = _mapping(device.get("observation"))
+    media_enabled = kind == "browser" and bool(observation.get("online"))
+    media_reason = None if media_enabled else "browser_offline" if kind == "browser" else "media_control_browser_only"
+    media_device_ref = _browser_parent_device_ref(_text(device_ref), identity) if kind == "browser" else _text(device_ref)
 
     return {
         "device_ref": _text(device_ref),
@@ -566,6 +601,12 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
         "deny": _toggle(deny_enabled, reason=deny_reason),
         "open_apps": _toggle(apps_enabled, reason=apps_reason, node_id=node_id),
         "open_marketplace": _toggle(apps_enabled, reason=apps_reason, node_id=node_id),
+        "media_control": _toggle(
+            media_enabled,
+            reason=media_reason,
+            target="browsers_skill.set_browser_media_control",
+            params={"device_ref": media_device_ref},
+        ),
     }
 
 
@@ -634,6 +675,11 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     policy_status = _text(policy.get("managed_state")) or "observed_only"
     policy_storage = "access_links.display_name + access_links.node_names"
     policy_mode = "rename" if rename_enabled else "adopt" if adopt_enabled else "disabled"
+    media_control = _mapping(runtime.get("media_control"))
+    media_services = _mapping(runtime.get("services"))
+    audio_input_endpoint = _mapping(media_services.get("audio_input_endpoint"))
+    audio_output_endpoint = _mapping(media_services.get("audio_output_endpoint"))
+    media_action = _mapping(profile.get("media_control"))
     return {
         "device_ref": device_ref_token,
         "kind": kind_token,
@@ -765,6 +811,25 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "open_apps": _mapping(profile.get("open_apps")),
             "open_marketplace": _mapping(profile.get("open_marketplace")),
         },
+        "media_control": {
+            "schema_version": _text(media_control.get("schema_version")) or "browser-media-control.v1",
+            "selected_audio_input": _mapping(media_control.get("selected_audio_input")),
+            "selected_audio_output": _mapping(media_control.get("selected_audio_output")),
+            "volume": _clamped_unit_float(media_control.get("volume")),
+            "muted": _optional_bool(media_control.get("muted")),
+            "capabilities": _mapping(media_control.get("capabilities")),
+            "services": {
+                "audio_input_endpoint": audio_input_endpoint,
+                "audio_output_endpoint": audio_output_endpoint,
+            },
+            "set": _toggle(
+                bool(media_action.get("enabled")),
+                reason=_text(media_action.get("reason")) or None,
+                target="browsers_skill.set_browser_media_control",
+                params={"device_ref": action_device_ref},
+            ),
+            "helper": "Browser media channel preferences are stored per user and applied by the active browser session.",
+        } if kind_token == "browser" else None,
         "identify": _toggle(
             kind_token == "browser" and bool(observation.get("online")),
             reason=None if kind_token == "browser" and bool(observation.get("online")) else "browser_offline" if kind_token == "browser" else "identify_browser_only",
@@ -1024,6 +1089,113 @@ def identify_device(
     }
 
 
+def set_browser_media_control(
+    device_ref: str,
+    *,
+    audio_input_device_id: str | None = None,
+    audio_input_label: str | None = None,
+    audio_output_device_id: str | None = None,
+    audio_output_label: str | None = None,
+    volume: float | int | str | None = None,
+    muted: bool | str | None = None,
+    media_audio_input_device_id: str | None = None,
+    media_audio_input_label: str | None = None,
+    media_audio_output_device_id: str | None = None,
+    media_audio_output_label: str | None = None,
+    media_audio_output_volume: float | int | str | None = None,
+    media_audio_output_muted: bool | str | None = None,
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    ttl_s: float = 12.0,
+) -> dict[str, Any]:
+    token = _text(device_ref)
+    parsed = _device_inventory.parse_device_ref(token)
+    if parsed is None:
+        return {"ok": False, "error": "invalid_device_ref", "device_ref": token}
+    kind, _link_id = parsed
+    if kind != "browser":
+        return {"ok": False, "error": "media_control_browser_only", "device_ref": token, "kind": kind}
+    device = _device_inventory.get_device(token)
+    if device is None:
+        return {"ok": False, "error": "device_not_found", "device_ref": token}
+    identity = _mapping(device.get("identity"))
+    observation = _mapping(device.get("observation"))
+    parent_ref = _browser_parent_device_ref(token, identity)
+    parent_id = _browser_parent_device_id(token, identity)
+    input_device_id_present, input_device_id_raw = _first_provided(media_audio_input_device_id, audio_input_device_id)
+    input_label_present, input_label_raw = _first_provided(media_audio_input_label, audio_input_label)
+    output_device_id_present, output_device_id_raw = _first_provided(media_audio_output_device_id, audio_output_device_id)
+    output_label_present, output_label_raw = _first_provided(media_audio_output_label, audio_output_label)
+    input_device_id = _text(input_device_id_raw) if input_device_id_present else ""
+    input_label = _text(input_label_raw) if input_label_present else ""
+    output_device_id = _text(output_device_id_raw) if output_device_id_present else ""
+    output_label = _text(output_label_raw) if output_label_present else ""
+    output_volume = _clamped_unit_float(
+        media_audio_output_volume if media_audio_output_volume is not None else volume
+    )
+    output_muted = _optional_bool(
+        media_audio_output_muted if media_audio_output_muted is not None else muted
+    )
+    issued_at = time.time()
+    rid = _text(request_id) or f"browser-media-{uuid.uuid4().hex[:12]}"
+    media_preferences: dict[str, Any] = {}
+    if input_device_id_present:
+        media_preferences["audioInputDeviceId"] = input_device_id
+    if input_label_present:
+        media_preferences["audioInputLabel"] = input_label
+    if output_device_id_present:
+        media_preferences["audioOutputDeviceId"] = output_device_id
+    if output_label_present:
+        media_preferences["audioOutputLabel"] = output_label
+    if output_volume is not None:
+        media_preferences["audioOutputVolume"] = output_volume
+    if output_muted is not None:
+        media_preferences["audioOutputMuted"] = output_muted
+    payload = {
+        "schema": "adaos.browser.media_control.request.v1",
+        "request_id": rid,
+        "device_ref": parent_ref,
+        "target_device_ref": parent_ref,
+        "target_browser_device_id": parent_id,
+        "browser_device_id": parent_id,
+        "requested_ref": token,
+        "webspace_id": _text(webspace_id) or _text(observation.get("last_webspace_id")) or None,
+        "media_preferences": media_preferences,
+        "issued_at": issued_at,
+        "expires_at": issued_at + max(1.0, float(ttl_s or 12.0)),
+    }
+    try:
+        _access_links.touch_browser_session(
+            parent_id,
+            webspace_id=_text(webspace_id) or None,
+            media_audio_input_device_id=input_device_id if input_device_id_present else None,
+            media_audio_input_label=input_label if input_label_present else None,
+            media_audio_output_device_id=output_device_id if output_device_id_present else None,
+            media_audio_output_label=output_label if output_label_present else None,
+            media_volume=output_volume,
+            media_muted=output_muted,
+        )
+    except Exception:
+        pass
+    emitted = False
+    try:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit as bus_emit
+
+        bus_emit(get_ctx().bus, "browser.media_control.requested", payload, source="device_access")
+        emitted = True
+    except Exception:
+        emitted = False
+    return {
+        "ok": True,
+        "request_id": rid,
+        "event": "browser.media_control.requested",
+        "emitted": emitted,
+        "payload": payload,
+        "device_ref": parent_ref,
+    }
+
+
 __all__ = [
     "adopt_device",
     "add_device_alias",
@@ -1037,5 +1209,6 @@ __all__ = [
     "remove_device_alias",
     "rename_browser_device_name",
     "rename_device",
+    "set_browser_media_control",
     "set_device_lifetime",
 ]

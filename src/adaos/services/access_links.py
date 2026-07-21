@@ -168,6 +168,31 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    token = str(value or "").strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _clamped_float(value: Any, *, minimum: float = 0.0, maximum: float = 1.0) -> float | None:
+    try:
+        token = float(value)
+    except Exception:
+        return None
+    if token < minimum:
+        return minimum
+    if token > maximum:
+        return maximum
+    return token
+
+
 def _has_value(value: Any) -> bool:
     if value is None:
         return False
@@ -375,6 +400,7 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "os_name": str(data.get("os_name") or "").strip() or None,
         "form_factor": str(data.get("form_factor") or "").strip() or None,
         "user_agent": str(data.get("user_agent") or "").strip() or None,
+        "media_control": _mapping_or_none(data.get("media_control")),
     }
     if kind == "redevice":
         endpoint_assignment = _normalize_endpoint_assignment(
@@ -724,6 +750,60 @@ def authorize_link(kind: LinkKind, entry_id: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def _browser_media_control_patch(
+    *,
+    media_audio_input_device_id: str | None = None,
+    media_audio_input_label: str | None = None,
+    media_audio_output_device_id: str | None = None,
+    media_audio_output_label: str | None = None,
+    media_volume: str | float | int | None = None,
+    media_muted: str | bool | None = None,
+    media_audio_input_supported: str | bool | None = None,
+    media_audio_output_supported: str | bool | None = None,
+    media_audio_output_selection_supported: str | bool | None = None,
+) -> dict[str, Any]:
+    patch: dict[str, Any] = {}
+    selected_input = _text(media_audio_input_device_id)
+    selected_input_label = _text(media_audio_input_label)
+    selected_output = _text(media_audio_output_device_id)
+    selected_output_label = _text(media_audio_output_label)
+    input_selection_present = media_audio_input_device_id is not None or media_audio_input_label is not None
+    output_selection_present = media_audio_output_device_id is not None or media_audio_output_label is not None
+    if input_selection_present:
+        patch["selected_audio_input"] = {
+            "device_id": selected_input or None,
+            "label": selected_input_label or None,
+            "kind": "audioinput",
+        }
+    if output_selection_present:
+        patch["selected_audio_output"] = {
+            "device_id": selected_output or None,
+            "label": selected_output_label or None,
+            "kind": "audiooutput",
+        }
+    volume = _clamped_float(media_volume)
+    if volume is not None:
+        patch["volume"] = volume
+    muted = _optional_bool(media_muted)
+    if muted is not None:
+        patch["muted"] = muted
+    capabilities: dict[str, Any] = {}
+    for key, value in {
+        "audio_input_selection": media_audio_input_supported,
+        "audio_output_sink": media_audio_output_supported,
+        "audio_output_prompt": media_audio_output_selection_supported,
+    }.items():
+        flag = _optional_bool(value)
+        if flag is not None:
+            capabilities[key] = flag
+    if capabilities:
+        patch["capabilities"] = capabilities
+    if patch:
+        patch["schema_version"] = "browser-media-control.v1"
+        patch["updated_at"] = _now_ts()
+    return patch
+
+
 def touch_browser_session(
     device_id: str,
     *,
@@ -738,6 +818,15 @@ def touch_browser_session(
     user_agent: str | None = None,
     client_build_id: str | None = None,
     client_build_version: str | None = None,
+    media_audio_input_device_id: str | None = None,
+    media_audio_input_label: str | None = None,
+    media_audio_output_device_id: str | None = None,
+    media_audio_output_label: str | None = None,
+    media_volume: str | float | int | None = None,
+    media_muted: str | bool | None = None,
+    media_audio_input_supported: str | bool | None = None,
+    media_audio_output_supported: str | bool | None = None,
+    media_audio_output_selection_supported: str | bool | None = None,
 ) -> dict[str, Any] | None:
     token = str(device_id or "").strip()
     if not token:
@@ -773,6 +862,24 @@ def touch_browser_session(
         entry["client_build_id"] = str(client_build_id or "").strip() or None
     if client_build_version is not None:
         entry["client_build_version"] = str(client_build_version or "").strip() or None
+    media_patch = _browser_media_control_patch(
+        media_audio_input_device_id=media_audio_input_device_id,
+        media_audio_input_label=media_audio_input_label,
+        media_audio_output_device_id=media_audio_output_device_id,
+        media_audio_output_label=media_audio_output_label,
+        media_volume=media_volume,
+        media_muted=media_muted,
+        media_audio_input_supported=media_audio_input_supported,
+        media_audio_output_supported=media_audio_output_supported,
+        media_audio_output_selection_supported=media_audio_output_selection_supported,
+    )
+    if media_patch:
+        current_media = _mapping(entry.get("media_control"))
+        current_capabilities = _mapping(current_media.get("capabilities"))
+        next_capabilities = _mapping(media_patch.get("capabilities"))
+        if next_capabilities:
+            media_patch["capabilities"] = {**current_capabilities, **next_capabilities}
+        entry["media_control"] = {**current_media, **media_patch}
     entry = _updated(entry)
     saved = _put_entry(registry, "browser", entry)
     _save_registry(registry)

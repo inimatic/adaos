@@ -61,6 +61,7 @@ _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "browsers_skill:rename_selected_browser",
     "browsers_skill:rename_device",
     "browsers_skill:rename_browser_device_name",
+    "browsers_skill:set_browser_media_control",
     "notebook_skill:attach_note_file",
     "notebook_skill:attach_note_upload",
     "notebook_skill:create_note",

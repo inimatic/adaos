@@ -136,6 +136,58 @@ def test_device_inventory_reads_live_browser_snapshot_clients(monkeypatch) -> No
     assert by_ref["browser:browser-1::tab-1"]["observation"]["online"] is True
 
 
+def test_device_inventory_surfaces_browser_media_control_contract(monkeypatch) -> None:
+    _patch_sources(
+        monkeypatch,
+        browser_entries=[
+            {
+                "id": "browser-1",
+                "display_name": "Chrome",
+                "access_class": "device",
+                "online": True,
+                "connection_state": "connected",
+                "media_control": {
+                    "schema_version": "browser-media-control.v1",
+                    "selected_audio_input": {
+                        "device_id": "mic-1",
+                        "label": "Desk mic",
+                        "kind": "audioinput",
+                    },
+                    "selected_audio_output": {
+                        "device_id": "speaker-1",
+                        "label": "Speakers",
+                        "kind": "audiooutput",
+                    },
+                    "volume": 0.0,
+                    "muted": False,
+                    "capabilities": {
+                        "audio_input_selection": True,
+                        "audio_output_sink": True,
+                        "audio_output_prompt": False,
+                    },
+                    "updated_at": 999.0,
+                },
+            }
+        ],
+    )
+
+    item = device_inventory.list_devices(kind="browser")[0]
+
+    media = item["runtime"]["media_control"]
+    assert media["selected_audio_input"]["device_id"] == "mic-1"
+    assert media["selected_audio_output"]["device_id"] == "speaker-1"
+    assert media["volume"] == 0.0
+    assert media["muted"] is False
+    services = item["runtime"]["services"]
+    assert services["audio_input_endpoint"]["controls"]["select_device"] is True
+    assert services["audio_output_endpoint"]["enabled"] is True
+    assert services["audio_output_endpoint"]["controls"] == {
+        "select_device": True,
+        "set_volume": True,
+        "mute": True,
+    }
+
+
 def test_device_inventory_hides_detached_devices_by_default(monkeypatch) -> None:
     _patch_sources(
         monkeypatch,

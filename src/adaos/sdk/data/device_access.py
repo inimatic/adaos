@@ -335,6 +335,45 @@ def identify_device(
     )
 
 
+def set_browser_media_control(
+    device_ref: str,
+    *,
+    audio_input_device_id: str | None = None,
+    audio_input_label: str | None = None,
+    audio_output_device_id: str | None = None,
+    audio_output_label: str | None = None,
+    volume: float | int | str | None = None,
+    muted: bool | str | None = None,
+    media_audio_input_device_id: str | None = None,
+    media_audio_input_label: str | None = None,
+    media_audio_output_device_id: str | None = None,
+    media_audio_output_label: str | None = None,
+    media_audio_output_volume: float | int | str | None = None,
+    media_audio_output_muted: bool | str | None = None,
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    ttl_s: float = 12.0,
+) -> dict[str, Any]:
+    return _service.set_browser_media_control(
+        str(device_ref or ""),
+        audio_input_device_id=audio_input_device_id,
+        audio_input_label=audio_input_label,
+        audio_output_device_id=audio_output_device_id,
+        audio_output_label=audio_output_label,
+        volume=volume,
+        muted=muted,
+        media_audio_input_device_id=media_audio_input_device_id,
+        media_audio_input_label=media_audio_input_label,
+        media_audio_output_device_id=media_audio_output_device_id,
+        media_audio_output_label=media_audio_output_label,
+        media_audio_output_volume=media_audio_output_volume,
+        media_audio_output_muted=media_audio_output_muted,
+        request_id=request_id,
+        webspace_id=webspace_id,
+        ttl_s=ttl_s,
+    )
+
+
 def add_device_alias(
     device_ref: str,
     alias: str,

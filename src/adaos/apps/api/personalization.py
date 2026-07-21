@@ -36,6 +36,12 @@ _PREFERENCE_FIELDS = frozenset(
         "locale",
         "language",
         "timezone",
+        "media_audio_input_device_id",
+        "media_audio_input_label",
+        "media_audio_output_device_id",
+        "media_audio_output_label",
+        "media_audio_output_volume",
+        "media_audio_output_muted",
     )
 )
 _ID_RE = re.compile(r"[^A-Za-z0-9_.:@/-]+")
