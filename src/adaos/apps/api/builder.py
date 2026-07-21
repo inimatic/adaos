@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
-from adaos.services.builder import BuilderAutomationService, BuilderWorkbenchService, BuilderWorkspaceService
+from adaos.services.builder import (
+    BuilderAutomationService,
+    BuilderProjectCatalogService,
+    BuilderWorkbenchService,
+    BuilderWorkspaceService,
+)
 
 
 router = APIRouter(dependencies=[Depends(require_token)])
@@ -22,6 +27,10 @@ def _get_workbench_service() -> BuilderWorkbenchService:
 
 def _get_automation_service() -> BuilderAutomationService:
     return BuilderAutomationService.from_context()
+
+
+def _get_project_catalog_service() -> BuilderProjectCatalogService:
+    return BuilderProjectCatalogService.from_context()
 
 
 class BuilderDraftRequest(BaseModel):
@@ -227,6 +236,29 @@ def get_workbench_binding(
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
     return {"ok": True, "binding": service.get_workspace_binding(webspace_id)}
+
+
+@router.get("/workbench/projects")
+async def list_workbench_projects(
+    kind: str | None = None,
+    query: str | None = None,
+    limit: int = 200,
+    selected_object_type: str | None = None,
+    selected_object_id: str | None = None,
+    webspace_id: str | None = None,
+    service: BuilderProjectCatalogService = Depends(_get_project_catalog_service),
+) -> list[dict[str, Any]]:
+    try:
+        return service.list_projects(
+            kind=kind,
+            query=query,
+            limit=limit,
+            selected_object_type=selected_object_type,
+            selected_object_id=selected_object_id,
+            webspace_id=webspace_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workbench/open")

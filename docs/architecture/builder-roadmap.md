@@ -531,6 +531,14 @@ Open work:
   context. Revision 033 hydrates page state from
   `data/builder/selection`; `403` data-source failures no longer invalidate the
   browser session, and project selection does not refresh the Prompt workflow.
+- [x] `[must]` Keep Select Project off the dynamic skill/tool command path.
+  Revision 034 reads the bounded project catalog through
+  `GET /api/builder/workbench/projects`, passes the source webspace explicitly,
+  prefetches the workspace-scoped read, and caches the response until
+  `builder.project.catalog` invalidation. The endpoint reads manifests and
+  prompt summaries without the workspace lock, full prompt contexts, or
+  per-project preview resolution. Manifest headers are prewarmed and
+  invalidated by file identity rather than reparsing nested tool/runtime data.
 - [x] `[must]` Make scenario preview selection asynchronous. The SDK persists
   desired context and emits `builder.preview.desired`; the reconciler owns the
   bounded materialization and observed status while skill selection leaves the

@@ -770,6 +770,14 @@ async def lifespan(app: FastAPI):
     # 3.6) стартуем RouterService с локальной шиной
     _mount_browser_assets_static(app)
 
+    try:
+        from adaos.services.builder import BuilderProjectCatalogService
+
+        with _StartupTimer("prewarm_builder_project_catalog"):
+            await asyncio.to_thread(BuilderProjectCatalogService.from_context().list_projects, limit=5000)
+    except Exception:
+        logging.getLogger("adaos.api.server").debug("failed to prewarm Builder project catalog", exc_info=True)
+
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
     # Periodic liveness staler (hub only)

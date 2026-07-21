@@ -575,6 +575,21 @@ Project selection is a command/status flow:
 the complete Prompt workflow projection. Artifact writes use
 `project.content.changed` and may trigger the heavier refresh path.
 
+The Select Project catalog is a read model, not a Builder command. The browser
+loads it through `GET /api/builder/workbench/projects` with the explicit source
+`webspace_id`. The endpoint enumerates development project directories and
+reads only each manifest plus the bounded fields in `prompt_state.json`; it
+must not load full prompt context, call a dynamic skill, acquire the workspace
+command lock, or resolve preview topology once per project. The persisted
+source-to-preview binding is read once for the response. The browser caches the
+result under `builder.project.catalog` until a catalog mutation invalidates
+that tag. Revision 034 declares the workspace-scoped source for prefetch as
+soon as the Builder application schema is available. Opening the modal then
+uses the same semantic cache entry; if prefetch is still in flight, both
+consumers share its single `GET` (an HTTP CORS preflight may precede it).
+Modal node addressing must not add `node_id` parameters to this workspace read
+because doing so would create a different cache identity.
+
 Builder copy is locale-neutral at the SDK boundary. Static widget and modal
 fields carry semantic `*_i18n` references backed by scenario-owned `ru` and
 `en` resources. Dynamic SDK projections use the same sibling-field convention
@@ -624,6 +639,9 @@ Acceptance checks for project selection are:
 - the selection command returns before preview materialization completes;
 - repeated selections remain coalesced and do not create unbounded runtime
   records, YDoc snapshots, tasks, or memory growth.
+- opening Select Project does not invoke `builder_sdk_control_skill.list_projects`
+  or wait for the workspace command lock; the list is populated from the
+  bounded project-catalog read model.
 
 The workbench-facing control surface should include:
 
