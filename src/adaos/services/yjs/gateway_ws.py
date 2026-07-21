@@ -43,7 +43,7 @@ if YMessageType is None:
         SYNC = 0
         AWARENESS = 1
 
-from adaos.services.workspaces import ensure_workspace, get_workspace
+from adaos.services.workspaces import ensure_workspace, get_workspace, workspace_catalog_version
 from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario, write_runtime_bootstrap_state
 from adaos.services.yjs.doc import invalidate_live_map_value_cache
 from adaos.services.yjs.observers import attach_room_observers, forget_room_observers
@@ -5872,6 +5872,20 @@ class WorkspaceWebsocketServer(WebsocketServer):
 
 
 y_server = WorkspaceWebsocketServer(auto_clean_rooms=False)
+
+
+def live_webspace_ids(*, require_transport: bool = False) -> list[str]:
+    """Return already-created room ids without opening or seeding YDocs."""
+    room_ids = [
+        str(item or "").strip()
+        for item in getattr(y_server, "rooms", {}).keys()
+        if str(item or "").strip()
+    ]
+    if require_transport:
+        room_ids = [item for item in room_ids if _webspace_has_live_transports(item)]
+    return sorted(set(room_ids))
+
+
 _y_server_started = False
 _y_server_task: asyncio.Task[None] | None = None
 _room_locks: dict[str, asyncio.Lock] = {}
@@ -8105,7 +8119,15 @@ async def process_events_command(
                         ):
                             with room.ydoc.begin_transaction() as txn:
                                 data_map = room.ydoc.get_map("data")
-                                data_map.set(txn, "webspaces", {"items": listing})
+                                data_map.set(
+                                    txn,
+                                    "webspaces",
+                                    {
+                                        "schema": "adaos.workspace_catalog.v1",
+                                        "version": workspace_catalog_version(),
+                                        "items": listing,
+                                    },
+                                )
                         _log.debug("wrote webspaces listing to room webspace=%s items=%d", captured_ws, len(listing))
                 except Exception:
                     _log.debug("webspace listing sync failed", exc_info=True)

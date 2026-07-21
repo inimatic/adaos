@@ -15,12 +15,19 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 
 import y_py as Y
 import yaml
 
+from adaos.domain.project_events import (
+    BUILDER_CONTEXT_SELECTED,
+    PROJECT_CONTENT_CHANGED,
+    ProjectEventIdentity,
+    legacy_project_event_topic,
+)
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.capacity import get_local_capacity
 from adaos.services.node_config import load_config
@@ -87,9 +94,9 @@ def _is_control_flow_base_exception(exc: BaseException) -> bool:
 _MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT: dict[str, str] = {}
 _RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-_RESOLVED_WEBSPACE_CACHE_LIMIT = 64
+_RESOLVED_WEBSPACE_CACHE_LIMIT = 16
 _MATERIALIZED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-_MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
+_MATERIALIZED_WEBSPACE_CACHE_LIMIT = 1
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
 _DESKTOP_SCENARIOS_CACHE: dict[str, tuple[float, tuple[tuple[str, int, int], ...], list[Tuple[str, str]]]] = {}
@@ -466,14 +473,27 @@ def _should_skip_bootstrap_scenario_sync_rebuild(
     webspace_id: str,
     scenario_id: str | None,
 ) -> bool:
-    # Event source is not always preserved by the subscription adapter. Guard
-    # all repeated scenario sync events for the same webspace/scenario, so a
-    # noisy publisher cannot rebuild the desktop in a tight loop. Distinct
-    # scenario ids still pass through immediately.
+    scenario_token = str(scenario_id or "").strip() or "-"
+    if bool(evt.get("bootstrap_nudge")) and not bool(evt.get("force")):
+        rebuild_state = describe_webspace_rebuild_state(webspace_id)
+        state_scenario = str(rebuild_state.get("scenario_id") or "").strip() or "-"
+        state_status = str(rebuild_state.get("status") or "").strip().lower()
+        if state_scenario == scenario_token and (
+            bool(rebuild_state.get("pending")) or state_status == "ready"
+        ):
+            _log.debug(
+                "ignored bootstrap rebuild nudge covered by reconcile state webspace=%s scenario=%s status=%s pending=%s",
+                webspace_id,
+                scenario_token,
+                state_status,
+                bool(rebuild_state.get("pending")),
+            )
+            return True
+
+    # Compatibility guard for publishers that do not carry operation state.
     interval_s = _scenario_sync_rebuild_min_interval_s()
     if interval_s <= 0:
         return False
-    scenario_token = str(scenario_id or "").strip() or "-"
     key = f"bootstrap\0{webspace_id}\0{scenario_token}"
     now = time.monotonic()
     last_at = float(_SCENARIO_SYNC_REBUILD_AT.get(key) or 0.0)
@@ -2576,13 +2596,49 @@ def _get_cached_resolved_outputs(fingerprint: str) -> WebspaceResolverOutputs | 
     return _resolved_outputs_from_cache_payload(cached)
 
 
+def _approximate_cache_size_bytes(value: Any, seen: set[int] | None = None) -> int:
+    visited = seen if seen is not None else set()
+    object_id = id(value)
+    if object_id in visited:
+        return 0
+    visited.add(object_id)
+    size = int(sys.getsizeof(value, 0))
+    if isinstance(value, Mapping):
+        return size + sum(
+            _approximate_cache_size_bytes(key, visited)
+            + _approximate_cache_size_bytes(item, visited)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return size + sum(_approximate_cache_size_bytes(item, visited) for item in value)
+    return size
+
+
+def _cache_byte_limit(name: str, default_mb: int) -> int:
+    try:
+        value = int(str(os.getenv(name) or default_mb).strip())
+    except Exception:
+        value = default_mb
+    return max(1, value) * 1024 * 1024
+
+
 def _remember_resolved_outputs(fingerprint: str, resolved: WebspaceResolverOutputs) -> None:
     token = str(fingerprint or "").strip()
     if not token:
         return
-    _RESOLVED_WEBSPACE_CACHE[token] = _resolved_outputs_to_cache_payload(resolved)
+    payload = _resolved_outputs_to_cache_payload(resolved)
+    payload_size = _approximate_cache_size_bytes(payload)
+    max_bytes = _cache_byte_limit("ADAOS_WEBSPACE_RESOLVED_CACHE_MAX_MB", 32)
+    if payload_size > max_bytes:
+        return
+    payload["_cache_size_bytes"] = payload_size
+    _RESOLVED_WEBSPACE_CACHE[token] = payload
     _RESOLVED_WEBSPACE_CACHE.move_to_end(token)
-    while len(_RESOLVED_WEBSPACE_CACHE) > _RESOLVED_WEBSPACE_CACHE_LIMIT:
+    while (
+        len(_RESOLVED_WEBSPACE_CACHE) > _RESOLVED_WEBSPACE_CACHE_LIMIT
+        or sum(int(item.get("_cache_size_bytes") or 0) for item in _RESOLVED_WEBSPACE_CACHE.values())
+        > max_bytes
+    ):
         _RESOLVED_WEBSPACE_CACHE.popitem(last=False)
 
 
@@ -2710,7 +2766,7 @@ def _remember_materialized_worker_result_in_memory(
     cache_key: str,
     value: Mapping[str, Any],
 ) -> None:
-    _MATERIALIZED_WEBSPACE_CACHE[cache_key] = {
+    cached_value = {
         "created_at": value.get("created_at") or time.time(),
         "snapshot_update": bytes(value.get("snapshot_update") or b""),
         "state_vector": bytes(value.get("state_vector") or b""),
@@ -2720,8 +2776,18 @@ def _remember_materialized_worker_result_in_memory(
         "ydoc_timings_ms": _copy_timing_map(value.get("ydoc_timings_ms")) or {},
         "identity": dict(value.get("identity") or {}) if isinstance(value.get("identity"), Mapping) else {},
     }
+    cached_size = _approximate_cache_size_bytes(cached_value)
+    max_bytes = _cache_byte_limit("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_MAX_MB", 64)
+    if cached_size > max_bytes:
+        return
+    cached_value["_cache_size_bytes"] = cached_size
+    _MATERIALIZED_WEBSPACE_CACHE[cache_key] = cached_value
     _MATERIALIZED_WEBSPACE_CACHE.move_to_end(cache_key)
-    while len(_MATERIALIZED_WEBSPACE_CACHE) > _materialized_webspace_cache_limit():
+    while (
+        len(_MATERIALIZED_WEBSPACE_CACHE) > _materialized_webspace_cache_limit()
+        or sum(int(item.get("_cache_size_bytes") or 0) for item in _MATERIALIZED_WEBSPACE_CACHE.values())
+        > max_bytes
+    ):
         _MATERIALIZED_WEBSPACE_CACHE.popitem(last=False)
 
 
@@ -2747,7 +2813,7 @@ def _load_materialized_worker_result_from_disk(cache_key: str) -> Dict[str, Any]
         "created_at": raw.get("created_at") or path.stat().st_mtime,
         "snapshot_update": snapshot_update,
         "state_vector": _decode_cache_bytes(raw.get("state_vector_b64")),
-        "materialized_payload": _clone_json_like(payload),
+        "materialized_payload": payload,
         "rebuild_timings_ms": _copy_timing_map(raw.get("rebuild_timings_ms")) or {},
         "resolver_debug": dict(raw.get("resolver_debug") or {}),
         "ydoc_timings_ms": _copy_timing_map(raw.get("ydoc_timings_ms")) or {},
@@ -2803,7 +2869,7 @@ def _remember_materialized_worker_result_on_disk(
         "created_at": value.get("created_at") or time.time(),
         "snapshot_update_b64": _encode_cache_bytes(snapshot_update),
         "state_vector_b64": _encode_cache_bytes(bytes(value.get("state_vector") or b"")),
-        "materialized_payload": _clone_json_like(payload),
+        "materialized_payload": payload,
         "rebuild_timings_ms": _copy_timing_map(value.get("rebuild_timings_ms")) or {},
         "resolver_debug": dict(value.get("resolver_debug") or {}),
         "ydoc_timings_ms": _copy_timing_map(value.get("ydoc_timings_ms")) or {},
@@ -2859,7 +2925,7 @@ def _remember_materialized_worker_result(
         "created_at": time.time(),
         "snapshot_update": snapshot_update,
         "state_vector": bytes(worker_result.get("state_vector") or b""),
-        "materialized_payload": _clone_json_like(payload),
+        "materialized_payload": payload,
         "rebuild_timings_ms": _copy_timing_map(worker_result.get("rebuild_timings_ms")) or {},
         "resolver_debug": dict(worker_result.get("resolver_debug") or {}),
         "ydoc_timings_ms": _copy_timing_map(worker_result.get("ydoc_timings_ms")) or {},
@@ -3487,6 +3553,232 @@ def _scenario_switch_subprocess_timeout_s() -> float:
     except Exception:
         value = 180.0
     return max(30.0, value)
+
+
+def _materialization_worker_enabled() -> bool:
+    explicit = os.getenv("ADAOS_MATERIALIZATION_WORKER")
+    if explicit is not None:
+        return _env_flag_enabled("ADAOS_MATERIALIZATION_WORKER")
+    return not _env_flag_enabled("ADAOS_TESTING")
+
+
+def _materialization_worker_timeout_s() -> float:
+    raw = os.getenv("ADAOS_MATERIALIZATION_WORKER_TIMEOUT_S")
+    try:
+        value = float(str(raw or "180").strip())
+    except Exception:
+        value = 180.0
+    return max(10.0, value)
+
+
+def _materialization_worker_max_rss_bytes() -> int:
+    raw = os.getenv("ADAOS_MATERIALIZATION_WORKER_MAX_RSS_MB")
+    try:
+        value = int(str(raw or "2048").strip())
+    except Exception:
+        value = 2048
+    return max(256, value) * 1024 * 1024
+
+
+def _materialization_worker_max_result_bytes() -> int:
+    raw = os.getenv("ADAOS_MATERIALIZATION_WORKER_MAX_RESULT_MB")
+    try:
+        value = int(str(raw or "512").strip())
+    except Exception:
+        value = 512
+    return max(16, value) * 1024 * 1024
+
+
+async def _run_materialization_worker(
+    webspace_id: str,
+    *,
+    mode: str,
+    request_id: str | None = None,
+    scenario_id: str | None = None,
+    materialization_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    request = {
+        "schema": "adaos.webspace.materialization_worker_request.v1",
+        "mode": str(mode or "").strip(),
+        "webspace_id": str(webspace_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "scenario_id": str(scenario_id or "").strip() or None,
+        "materialization_identity": (
+            _clone_json_like(materialization_identity)
+            if isinstance(materialization_identity, Mapping)
+            else None
+        ),
+    }
+
+    started = time.perf_counter()
+    peak_rss = 0
+    with tempfile.TemporaryDirectory(prefix="adaos-materialize-") as temp_dir:
+        root = Path(temp_dir)
+        request_path = root / "request.json"
+        result_path = root / "result.json"
+        stdout_path = root / "stdout.log"
+        stderr_path = root / "stderr.log"
+        request_path.write_text(
+            json.dumps(request, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        cmd = [
+            sys.executable,
+            "-m",
+            "adaos.services.scenario.materialization_worker",
+            str(request_path),
+            str(result_path),
+        ]
+        env = os.environ.copy()
+        env["ADAOS_MATERIALIZATION_WORKER"] = "0"
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+
+        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr_file:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                creationflags=creationflags,
+            )
+            try:
+                import psutil
+
+                process = psutil.Process(proc.pid)
+            except Exception:
+                process = None
+
+            def _process_tree() -> list[Any]:
+                if process is None:
+                    return []
+                try:
+                    return [process, *process.children(recursive=True)]
+                except Exception:
+                    return [process]
+
+            def _process_tree_rss() -> int:
+                total = 0
+                for item in _process_tree():
+                    try:
+                        total += int(item.memory_info().rss)
+                    except Exception:
+                        continue
+                return total
+
+            async def _stop_process_tree() -> None:
+                descendants = _process_tree()[1:]
+                for child in reversed(descendants):
+                    try:
+                        child.terminate()
+                    except Exception:
+                        continue
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
+                        await proc.wait()
+                deadline = time.monotonic() + 5.0
+                alive = list(descendants)
+                while alive and time.monotonic() < deadline:
+                    remaining = []
+                    for child in alive:
+                        try:
+                            if child.is_running():
+                                remaining.append(child)
+                        except Exception:
+                            continue
+                    alive = remaining
+                    if alive:
+                        await asyncio.sleep(0.05)
+                for child in alive:
+                    try:
+                        child.kill()
+                    except Exception:
+                        continue
+
+            timeout_s = _materialization_worker_timeout_s()
+            max_rss = _materialization_worker_max_rss_bytes()
+            failure: str | None = None
+            wait_task = asyncio.create_task(proc.wait())
+            try:
+                while not wait_task.done():
+                    elapsed_s = time.perf_counter() - started
+                    if elapsed_s > timeout_s:
+                        failure = "materialization_worker_timeout"
+                        break
+                    if process is not None:
+                        try:
+                            current_rss = _process_tree_rss()
+                            peak_rss = max(peak_rss, current_rss)
+                            if current_rss > max_rss:
+                                failure = "materialization_worker_rss_limit"
+                                break
+                        except Exception:
+                            process = None
+                    try:
+                        await asyncio.wait_for(asyncio.shield(wait_task), timeout=0.05)
+                    except asyncio.TimeoutError:
+                        continue
+                if failure:
+                    await _stop_process_tree()
+                    await wait_task
+                    raise RuntimeError(
+                        f"{failure}: elapsed_ms={_elapsed_ms(started)} peak_rss_bytes={peak_rss}"
+                    )
+                returncode = int(await wait_task)
+            except BaseException:
+                await _stop_process_tree()
+                if not wait_task.done():
+                    await asyncio.shield(wait_task)
+                raise
+
+        stderr_tail = ""
+        try:
+            stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        except Exception:
+            pass
+        if not result_path.exists():
+            raise RuntimeError(
+                f"materialization_worker_no_result: returncode={returncode} stderr={stderr_tail}"
+            )
+        result_size = int(result_path.stat().st_size)
+        if result_size > _materialization_worker_max_result_bytes():
+            raise RuntimeError(f"materialization_worker_result_limit: bytes={result_size}")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if not isinstance(result, dict) or returncode != 0 or not bool(result.get("ok")):
+            detail = str(result.get("detail") if isinstance(result, dict) else "")
+            raise RuntimeError(
+                f"materialization_worker_failed: returncode={returncode} detail={detail} stderr={stderr_tail}"
+            )
+        child_final_rss = int(result.get("worker_rss_bytes") or 0)
+        worker_peak_rss = max(peak_rss, child_final_rss)
+        if worker_peak_rss > max_rss:
+            raise RuntimeError(
+                f"materialization_worker_rss_limit: peak_rss_bytes={worker_peak_rss}"
+            )
+        result["worker_peak_rss_bytes"] = worker_peak_rss
+        result["worker_result_bytes"] = result_size
+        result["worker_parent_elapsed_ms"] = _elapsed_ms(started)
+        snapshot_b64 = result.pop("snapshot_update_b64", None)
+        state_vector_b64 = result.pop("state_vector_b64", None)
+        if isinstance(snapshot_b64, str):
+            result["snapshot_update"] = base64.b64decode(snapshot_b64.encode("ascii"))
+        if isinstance(state_vector_b64, str):
+            result["state_vector"] = base64.b64decode(state_vector_b64.encode("ascii"))
+        payload = result.get("materialized_payload")
+        if isinstance(payload, Mapping):
+            result["entry"] = _resolved_outputs_from_cache_payload(payload).to_registry_entry()
+        return result
 
 
 def _scenario_switch_mode() -> str:
@@ -4379,6 +4671,7 @@ class WebspaceScenarioRuntime:
         self._last_materialized_payload: Dict[str, Any] | None = None
         self._last_rebuild_snapshot_update: bytes | None = None
         self._last_rebuild_state_vector: bytes | None = None
+        self._last_worker_diagnostics: Dict[str, Any] | None = None
 
     # --- scenario helpers -------------------------------------------------
 
@@ -6221,6 +6514,73 @@ class WebspaceScenarioRuntime:
         self._last_rebuild_ydoc_timings_ms = None
         self._last_rebuild_snapshot_update = None
         self._last_rebuild_state_vector = None
+        self._last_worker_diagnostics = None
+
+        if _materialization_worker_enabled():
+            worker_result = await _run_materialization_worker(
+                webspace_id,
+                mode="payload_only",
+                request_id=request_id,
+                scenario_id=scenario_id,
+                materialization_identity=materialization_identity,
+            )
+            _raise_if_rebuild_request_superseded(webspace_id, request_id)
+            payload = worker_result.get("materialized_payload")
+            if not isinstance(payload, Mapping):
+                raise RuntimeError("materialization_worker_missing_payload")
+            self._last_materialized_payload = dict(payload)
+            self._last_rebuild_timings_ms = _copy_timing_map(
+                worker_result.get("rebuild_timings_ms")
+            )
+            self._last_resolver_debug = dict(worker_result.get("resolver_debug") or {})
+            self._last_apply_summary = dict(worker_result.get("apply_summary") or {})
+            self._last_apply_phase_timings_ms = _copy_timing_map(
+                worker_result.get("apply_phase_timings_ms")
+            )
+            self._last_worker_diagnostics = {
+                "mode": "payload_only",
+                "elapsed_ms": worker_result.get("worker_parent_elapsed_ms"),
+                "child_elapsed_ms": worker_result.get("worker_elapsed_ms"),
+                "init_ms": worker_result.get("worker_init_ms"),
+                "materialize_ms": worker_result.get("worker_materialize_ms"),
+                "peak_rss_bytes": worker_result.get("worker_peak_rss_bytes"),
+                "result_bytes": worker_result.get("worker_result_bytes"),
+            }
+            worker_ydoc_timings = _copy_timing_map(worker_result.get("ydoc_timings_ms")) or {}
+            worker_ydoc_timings["worker_process"] = round(
+                float(worker_result.get("worker_parent_elapsed_ms") or 0.0),
+                3,
+            )
+            self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(
+                worker_ydoc_timings,
+                started_at=materialize_started,
+            )
+            resolved = _resolved_outputs_from_cache_payload(payload)
+            inputs = _materialized_payload_inputs(
+                webspace_id,
+                payload,
+                resolved,
+                materialization_identity=materialization_identity,
+            )
+            materialization_contract = _coerce_dict(inputs.metadata.get("materialization") or {})
+            materialization_snapshot = _build_materialization_snapshot_from_resolved(
+                webspace_id=webspace_id,
+                resolved=resolved,
+                compatibility_presence=inputs.compatibility_cache_presence,
+                rebuild_state=describe_webspace_rebuild_state(webspace_id),
+                required_branches=_normalize_materialization_required_branches(materialization_contract)
+                or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
+                snapshot_source="semantic_rebuild:payload_worker",
+                phase_name="complete",
+                stale=False,
+            )
+            if str(request_id or "").strip():
+                _set_webspace_rebuild_status_if_current(
+                    webspace_id,
+                    request_id,
+                    materialization=materialization_snapshot,
+                )
+            return resolved.to_registry_entry()
 
         async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
             _raise_if_rebuild_request_superseded(webspace_id, request_id)
@@ -6391,6 +6751,7 @@ class WebspaceScenarioRuntime:
         self._last_rebuild_snapshot_update = None
         self._last_rebuild_state_vector = None
         self._last_materialized_payload = None
+        self._last_worker_diagnostics = None
         use_live_room = bool(publish_live_room) if prefer_live_room is None else bool(prefer_live_room)
         try:
             if fresh_doc:
@@ -6400,7 +6761,7 @@ class WebspaceScenarioRuntime:
                     await ystore.start()
                     _record_timing(ydoc_timings, "ystore_start", stage_started)
                 else:
-                        ydoc_timings["ystore_start"] = 0.0
+                    ydoc_timings["ystore_start"] = 0.0
                 try:
                     stage_started = time.perf_counter()
                     worker_result = _get_cached_materialized_worker_result(materialization_identity)
@@ -6409,16 +6770,26 @@ class WebspaceScenarioRuntime:
                         ydoc_timings["fresh_doc_worker"] = 0.0
                         ydoc_timings["materialization_cache_hit"] = 0.0
                     else:
-                        worker_result = await asyncio.to_thread(
-                            self._rebuild_fresh_doc_snapshot_sync,
-                            webspace_id,
-                            request_id=request_id,
-                            initial_scenario_id=initial_scenario_id,
-                            materialization_identity=materialization_identity,
-                        )
+                        if _materialization_worker_enabled():
+                            worker_result = await _run_materialization_worker(
+                                webspace_id,
+                                mode="fresh_doc",
+                                request_id=request_id,
+                                scenario_id=initial_scenario_id,
+                                materialization_identity=materialization_identity,
+                            )
+                        else:
+                            worker_result = await asyncio.to_thread(
+                                self._rebuild_fresh_doc_snapshot_sync,
+                                webspace_id,
+                                request_id=request_id,
+                                initial_scenario_id=initial_scenario_id,
+                                materialization_identity=materialization_identity,
+                            )
                         _record_timing(ydoc_timings, "fresh_doc_worker", stage_started)
                         ydoc_timings["materialization_cache_miss"] = 0.0
                         _remember_materialized_worker_result(materialization_identity, worker_result)
+                    _raise_if_rebuild_request_superseded(webspace_id, request_id)
                     entry = worker_result["entry"]
                     snapshot_update = bytes(worker_result.get("snapshot_update") or b"")
                     state_vector = bytes(worker_result.get("state_vector") or b"")
@@ -6435,6 +6806,20 @@ class WebspaceScenarioRuntime:
                         if timing_key == "total":
                             continue
                         ydoc_timings[timing_key] = timing_value
+                    if worker_result.get("worker_parent_elapsed_ms") is not None:
+                        ydoc_timings["worker_process"] = round(
+                            float(worker_result.get("worker_parent_elapsed_ms") or 0.0),
+                            3,
+                        )
+                        self._last_worker_diagnostics = {
+                            "mode": "fresh_doc",
+                            "elapsed_ms": worker_result.get("worker_parent_elapsed_ms"),
+                            "child_elapsed_ms": worker_result.get("worker_elapsed_ms"),
+                            "init_ms": worker_result.get("worker_init_ms"),
+                            "materialize_ms": worker_result.get("worker_materialize_ms"),
+                            "peak_rss_bytes": worker_result.get("worker_peak_rss_bytes"),
+                            "result_bytes": worker_result.get("worker_result_bytes"),
+                        }
                     self._last_rebuild_timings_ms = _copy_timing_map(worker_result.get("rebuild_timings_ms"))
                     self._last_resolver_debug = dict(worker_result.get("resolver_debug") or {})
                     self._last_apply_summary = dict(worker_result.get("apply_summary") or {})
@@ -7105,22 +7490,76 @@ def _open_rebuild_ydoc_session(
             return async_get_ydoc(webspace_id)
 
 
-async def _sync_webspace_listing() -> None:
+async def _sync_webspace_listing(
+    webspace_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Publish the catalog only into rooms that already exist.
+
+    SQLite plus its monotonic catalog version is authoritative. This
+    compatibility projection must never open YDocs as a side effect.
+    """
     listing = _webspace_listing()
-    payload = {"items": listing}
-    rows = workspace_index.list_workspaces()
-    for row in rows:
-        async with _webspace_runtime_async_write_meta(
+    payload = {
+        "schema": "adaos.workspace_catalog.v1",
+        "version": workspace_index.workspace_catalog_version(),
+        "items": listing,
+    }
+    if webspace_ids is None:
+        try:
+            from adaos.services.yjs.gateway_ws import live_webspace_ids  # pylint: disable=import-outside-toplevel
+
+            targets = live_webspace_ids(require_transport=True)
+        except Exception:
+            targets = []
+    else:
+        targets = sorted(
+            {
+                str(item or "").strip()
+                for item in webspace_ids
+                if str(item or "").strip()
+            }
+        )
+    updated: list[str] = []
+    skipped: list[str] = []
+    for webspace_id in targets:
+        def _mutator(doc: Any, txn: Any) -> None:
+            data_map = doc.get_map("data")
+            _set_map_value_if_changed(data_map, txn, "webspaces", payload)
+
+        if mutate_live_room(
+            webspace_id,
+            _mutator,
             root_names=["data"],
             source="webspace_runtime.sync_listing",
+            owner="core:webspace_runtime",
+            channel="core.webspace_runtime.catalog",
         ):
-            async with async_get_ydoc(row.workspace_id) as ydoc:
-                data_map = ydoc.get_map("data")
-                with ydoc.begin_transaction() as txn:
-                    _set_map_value_if_changed(data_map, txn, "webspaces", payload)
+            updated.append(webspace_id)
+        else:
+            skipped.append(webspace_id)
+    return {
+        "catalog_version": payload["version"],
+        "targeted": targets,
+        "updated": updated,
+        "skipped_not_live": skipped,
+    }
 
 
-def _schedule_webspace_listing_sync(*, reason: str) -> dict[str, Any]:
+async def _sync_webspace_listing_target(webspace_id: str) -> dict[str, Any] | None:
+    """Call the targeted catalog projection with legacy test/plugin fallback."""
+    try:
+        return await _sync_webspace_listing([webspace_id])
+    except TypeError as exc:
+        if "positional argument" not in str(exc) and "given" not in str(exc):
+            raise
+        return await _sync_webspace_listing()
+
+
+def _schedule_webspace_listing_sync(
+    *,
+    reason: str,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
     global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
 
     current = _WEBSPACE_LISTING_SYNC_TASK
@@ -7135,7 +7574,10 @@ def _schedule_webspace_listing_sync(*, reason: str) -> dict[str, Any]:
     async def _runner() -> None:
         started = time.perf_counter()
         try:
-            await _sync_webspace_listing()
+            if webspace_id:
+                await _sync_webspace_listing_target(webspace_id)
+            else:
+                await _sync_webspace_listing()
             _log.info(
                 "post-ready webspace listing sync completed reason=%s duration_ms=%.3f",
                 reason,
@@ -7528,8 +7970,11 @@ class WebspaceService:
             infos.append(_webspace_info_from_row(row, local_display=local_display))
         return infos
 
-    async def _sync_listing(self) -> None:
-        await _sync_webspace_listing()
+    async def _sync_listing(self, webspace_id: str | None = None) -> None:
+        if webspace_id:
+            await _sync_webspace_listing_target(webspace_id)
+        else:
+            await _sync_webspace_listing()
 
     async def create(
         self,
@@ -7556,7 +8001,7 @@ class WebspaceService:
         if isinstance(scenario_ref, Mapping):
             row = workspace_index.set_workspace_home_scenario_ref_overlay(webspace_id, dict(scenario_ref))
         await _seed_webspace_from_scenario(webspace_id, scenario_id, dev=dev)
-        await self._sync_listing()
+        await self._sync_listing(webspace_id)
         return _webspace_info_from_row(row)
 
     async def rename(self, webspace_id: str, title: str) -> Optional[WebspaceInfo]:
@@ -7575,7 +8020,7 @@ class WebspaceService:
             kind=row.effective_kind,
             source_mode=row.effective_source_mode,
         )
-        await self._sync_listing()
+        await self._sync_listing(webspace_id)
         return _webspace_info_from_row(row)
 
     async def update_metadata(
@@ -7613,7 +8058,7 @@ class WebspaceService:
         updated = row if not manifest_kwargs else workspace_index.set_workspace_manifest(webspace_id, **manifest_kwargs)
         if home_scenario_ref is not _HOME_SCENARIO_REF_UNSET:
             updated = workspace_index.set_workspace_home_scenario_ref_overlay(webspace_id, home_scenario_ref)
-        await self._sync_listing()
+        await self._sync_listing(webspace_id)
         return _webspace_info_from_row(updated)
 
     async def set_home_scenario(
@@ -7634,7 +8079,7 @@ class WebspaceService:
         row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
         if home_scenario_ref is not _HOME_SCENARIO_REF_UNSET:
             row = workspace_index.set_workspace_home_scenario_ref_overlay(webspace_id, home_scenario_ref)
-        await self._sync_listing()
+        await self._sync_listing(webspace_id)
         return _webspace_info_from_row(row)
 
     async def ensure_dev_for_scenario(
@@ -7701,7 +8146,7 @@ class WebspaceService:
                 pass
         except Exception:
             _log.warning("failed to reset ystore for webspace=%s", webspace_id, exc_info=True)
-        await self._sync_listing()
+        await self._sync_listing(webspace_id)
         return True
 
     async def refresh(self) -> None:
@@ -8462,7 +8907,7 @@ async def rebuild_webspace_from_sources(
 
         if _scenario_switch_inline_listing_sync_enabled():
             stage_started = time.perf_counter()
-            await _sync_webspace_listing()
+            await _sync_webspace_listing_target(webspace_id)
             _record_timing(timings_ms, "fresh_doc_sync_listing", stage_started)
         else:
             timings_ms["fresh_doc_sync_listing_deferred"] = 0.0
@@ -8543,7 +8988,7 @@ async def rebuild_webspace_from_sources(
             _record_timing(timings_ms, "project_scenario_payload", stage_started)
 
         stage_started = time.perf_counter()
-        await _sync_webspace_listing()
+        await _sync_webspace_listing_target(webspace_id)
         _record_timing(timings_ms, "sync_listing", stage_started)
 
     ctx = get_ctx()
@@ -8798,6 +9243,7 @@ async def rebuild_webspace_from_sources(
     ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
     resolver_debug = dict(getattr(runtime, "_last_resolver_debug", None) or {})
     apply_summary = dict(getattr(runtime, "_last_apply_summary", None) or {})
+    worker_diagnostics = dict(getattr(runtime, "_last_worker_diagnostics", None) or {})
     raw_materialized_payload = getattr(runtime, "_last_materialized_payload", None)
     materialized_payload = (
         _clone_json_like(raw_materialized_payload)
@@ -9072,6 +9518,7 @@ async def rebuild_webspace_from_sources(
         "switch_timings_ms": effective_switch_timings,
         "semantic_rebuild_timings_ms": semantic_timings,
         "ydoc_timings_ms": ydoc_timings,
+        "materialization_worker": worker_diagnostics or None,
         "phase_timings_ms": phase_timings,
         "materialization": final_materialization,
         "materialization_identity": effective_materialization_identity,
@@ -9346,6 +9793,7 @@ asyncio.run(_main())
         try:
             parsed["post_ready_listing_sync"] = _schedule_webspace_listing_sync(
                 reason="scenario_switch_worker_ready",
+                webspace_id=webspace_id,
             )
         except Exception as exc:
             parsed["post_ready_listing_sync"] = {
@@ -10136,7 +10584,7 @@ async def switch_webspace_scenario(
             _record_timing(timings_ms, "persist_home_scenario", stage_started)
 
             stage_started = time.perf_counter()
-            await _sync_webspace_listing()
+            await _sync_webspace_listing_target(webspace_id)
             _record_timing(timings_ms, "sync_listing", stage_started)
 
         finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
@@ -10164,7 +10612,7 @@ async def switch_webspace_scenario(
             _record_timing(timings_ms, "persist_home_scenario", stage_started)
 
             stage_started = time.perf_counter()
-            await _sync_webspace_listing()
+            await _sync_webspace_listing_target(webspace_id)
             _record_timing(timings_ms, "sync_listing", stage_started)
 
         if wait_for_rebuild:
@@ -10337,7 +10785,7 @@ async def switch_webspace_scenario(
         _record_timing(timings_ms, "persist_home_scenario", stage_started)
 
         stage_started = time.perf_counter()
-        await _sync_webspace_listing()
+        await _sync_webspace_listing_target(webspace_id)
         _record_timing(timings_ms, "sync_listing", stage_started)
 
     if not wait_for_rebuild:
@@ -10597,19 +11045,47 @@ async def reload_preview_webspaces_for_project(
             "error": "project_identity_required",
         }
 
+    # Only explicit Builder preview relations are consumers. A DEV workspace
+    # is not a subscription merely because its home scenario happens to match.
+    try:
+        from adaos.services.builder.workbench import BuilderWorkbenchService
+
+        workbench = BuilderWorkbenchService.from_context()
+        workbench.list_workspace_bindings()  # migrate legacy binding files first
+        relations = workbench.relationships.list()
+    except Exception:
+        relations = []
+
     targets: list[tuple[str, str]] = []
-    for row in workspace_index.list_workspaces():
-        if not row.is_dev:
+    seen_targets: set[str] = set()
+    for relation in relations:
+        webspace_id = str(relation.target_webspace_id or "").strip()
+        if not webspace_id or webspace_id in seen_targets:
             continue
-        home_scenario = str(row.effective_home_scenario or "").strip()
+        row = workspace_index.get_workspace(webspace_id)
+        if row is None:
+            _log.info(
+                "ignoring stale preview relation target=%s project=%s:%s",
+                webspace_id,
+                object_type,
+                object_id,
+            )
+            continue
+        home_scenario = str(
+            getattr(row, "effective_home_scenario", "")
+            or relation.metadata.get("scenario_id")
+            or ""
+        ).strip()
         if not home_scenario:
             continue
         if object_type == "scenario":
             if home_scenario == object_id:
-                targets.append((row.workspace_id, home_scenario))
+                targets.append((webspace_id, home_scenario))
+                seen_targets.add(webspace_id)
             continue
         try:
-            manifest = scenarios_loader.read_manifest(home_scenario, space=row.effective_source_mode)
+            source_mode = str(getattr(row, "effective_source_mode", "dev") or "dev")
+            manifest = scenarios_loader.read_manifest(home_scenario, space=source_mode)
             depends_raw = manifest.get("depends") or []
             depends = {
                 str(item).strip()
@@ -10617,11 +11093,12 @@ async def reload_preview_webspaces_for_project(
                 if str(item).strip()
             }
             if object_id in depends:
-                targets.append((row.workspace_id, home_scenario))
+                targets.append((webspace_id, home_scenario))
+                seen_targets.add(webspace_id)
         except Exception:
             _log.debug(
                 "failed to resolve scenario depends for preview webspace=%s home=%s",
-                row.workspace_id,
+                webspace_id,
                 home_scenario,
                 exc_info=True,
             )
@@ -10833,12 +11310,11 @@ async def _on_desktop_scenario_set(evt: Dict[str, Any]) -> None:
     )
 
 
-@subscribe("prompt.project.changed")
-async def _on_prompt_project_changed(evt: Dict[str, Any]) -> None:
+@subscribe(PROJECT_CONTENT_CHANGED)
+async def _on_project_content_changed(evt: Dict[str, Any]) -> None:
     payload = _payload(evt)
-    object_type = str(payload.get("object_type") or "").strip().lower()
-    object_id = str(payload.get("object_id") or "").strip()
-    if object_type not in {"scenario", "skill"} or not object_id:
+    identity = ProjectEventIdentity.from_payload(payload)
+    if identity is None:
         return
     reason = str(payload.get("reason") or "").strip()
     if reason in {
@@ -10847,16 +11323,28 @@ async def _on_prompt_project_changed(evt: Dict[str, Any]) -> None:
     }:
         _log.debug(
             "prompt project change uses builder-managed preview refresh; skipping runtime reload object=%s:%s reason=%s",
-            object_type,
-            object_id,
+            identity.kind,
+            identity.project_id,
             reason,
         )
         return
     await reload_preview_webspaces_for_project(
-        object_type,
-        object_id,
+        identity.kind,
+        identity.project_id,
         reason=reason or None,
     )
+
+
+@subscribe("prompt.project.changed")
+async def _on_prompt_project_changed(evt: Dict[str, Any]) -> None:
+    """Compatibility adapter for the former overloaded Prompt IDE event."""
+
+    payload = _payload(evt)
+    reason = str(payload.get("reason") or "").strip()
+    if legacy_project_event_topic(reason) == BUILDER_CONTEXT_SELECTED:
+        _log.debug("legacy project selection does not reload previews reason=%s", reason or "-")
+        return
+    await _on_project_content_changed(payload)
 
 
 __all__ = [

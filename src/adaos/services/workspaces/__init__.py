@@ -34,6 +34,7 @@ from .index import (
     set_display_name,
     delete_workspace,
     reset_webspaces,
+    workspace_catalog_version,
 )
 
 __all__ = [
@@ -70,4 +71,5 @@ __all__ = [
     "set_display_name",
     "delete_workspace",
     "reset_webspaces",
+    "workspace_catalog_version",
 ]

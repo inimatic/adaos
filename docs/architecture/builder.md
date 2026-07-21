@@ -141,6 +141,11 @@ the dialog stream and UI-revision restore operation. The detailed capability
 mapping, migration checklist, and deferred granularity work live in
 [Builder SDK Boundary](builder-sdk-boundary.md).
 
+Project selection and preview materialization follow the explicit topology,
+event, reconcile, catalog, and process-isolation contracts in
+[Builder Preview Runtime](builder-preview-runtime.md). A preview webspace ID is
+opaque; `-dev` is accepted only while migrating an existing binding.
+
 ## Relationship To Scenarios
 
 Scenarios remain the orchestration and desktop/workflow unit.

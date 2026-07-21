@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 import yaml
 
+from adaos.domain.project_events import PROJECT_CONTENT_CHANGED, ProjectEventIdentity
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkError
 
@@ -47,6 +48,31 @@ class DeveloperProjectError(SdkError):
 
 class ProjectNotFoundError(DeveloperProjectError):
     """Raised when a requested DEV project does not exist."""
+
+
+def _publish_content_changed(
+    kind: str,
+    project_id: str,
+    *,
+    reason: str,
+    changed_paths: list[str] | None = None,
+) -> None:
+    try:
+        from adaos.sdk.data.events import publish
+
+        identity = ProjectEventIdentity(kind=_kind(kind), project_id=_project_id(project_id))
+        publish(
+            PROJECT_CONTENT_CHANGED,
+            identity.payload(
+                reason=str(reason or "content_changed").strip() or "content_changed",
+                changed_paths=list(changed_paths or []),
+            ),
+            source="sdk.developer.projects",
+        )
+    except Exception:
+        # Local SDK operations remain usable in tests and offline tooling that
+        # intentionally do not initialize the runtime event bus.
+        return
 
 
 def _kind(value: str) -> ProjectKind:
@@ -238,7 +264,14 @@ def update_metadata(
                 payload[key] = value
         _write_manifest(path, payload)
         updated.append(path.name)
-    return {**describe(normalized_kind, normalized_id), "updated_manifests": updated}
+    result = {**describe(normalized_kind, normalized_id), "updated_manifests": updated}
+    _publish_content_changed(
+        normalized_kind,
+        normalized_id,
+        reason="project_metadata_updated",
+        changed_paths=updated,
+    )
+    return result
 
 
 def find_scenario_root(project_id: str) -> Path | None:
@@ -323,7 +356,7 @@ def read_file(kind: str, project_id: str, path: str, *, max_bytes: int = 131_072
     truncated = len(raw) > maximum
     content = raw[:maximum].decode("utf-8", errors="replace")
     editable, reason = _editable(relative, full)
-    return {
+    result = {
         "ok": True,
         "kind": _kind(kind),
         "project_id": _project_id(project_id),
@@ -334,6 +367,7 @@ def read_file(kind: str, project_id: str, path: str, *, max_bytes: int = 131_072
         "editable": editable and not truncated,
         "readonly_reason": reason or ("file_too_large" if truncated else ""),
     }
+    return result
 
 
 def write_file(
@@ -357,13 +391,20 @@ def write_file(
     temporary = full.with_name(f".{full.name}.tmp")
     temporary.write_bytes(raw)
     temporary.replace(full)
-    return {
+    result = {
         "ok": True,
         "kind": _kind(kind),
         "project_id": _project_id(project_id),
         "path": relative,
         "size_bytes": len(raw),
     }
+    _publish_content_changed(
+        _kind(kind),
+        _project_id(project_id),
+        reason="project_file_written",
+        changed_paths=[relative],
+    )
+    return result
 
 
 def list_templates(kind: str) -> list[dict[str, Any]]:
@@ -394,7 +435,9 @@ def create(kind: str, project_id: str, *, template: str | None = None) -> dict[s
         if normalized_kind == "skill"
         else service.create_scenario(normalized_id, template=template)
     )
-    return _jsonable(result)
+    payload = _jsonable(result)
+    _publish_content_changed(normalized_kind, normalized_id, reason="project_created")
+    return payload
 
 
 def push(
@@ -408,7 +451,9 @@ def push(
     normalized_id = _project_id(project_id)
     service = _service()
     method = service.push_skill if normalized_kind == "skill" else service.push_scenario
-    return _jsonable(method(normalized_id, message=message, metadata=metadata))
+    result = _jsonable(method(normalized_id, message=message, metadata=metadata))
+    _publish_content_changed(normalized_kind, normalized_id, reason="project_pushed")
+    return result
 
 
 def update(kind: str, project_id: str) -> dict[str, Any]:
@@ -416,7 +461,9 @@ def update(kind: str, project_id: str) -> dict[str, Any]:
     normalized_id = _project_id(project_id)
     service = _service()
     method = service.update_skill if normalized_kind == "skill" else service.update_scenario
-    return _jsonable(method(normalized_id))
+    result = _jsonable(method(normalized_id))
+    _publish_content_changed(normalized_kind, normalized_id, reason="project_updated")
+    return result
 
 
 def publish(
@@ -431,7 +478,10 @@ def publish(
     normalized_id = _project_id(project_id)
     service = _service()
     method = service.publish_skill if normalized_kind == "skill" else service.publish_scenario
-    return _jsonable(method(normalized_id, bump=bump, force=force, dry_run=dry_run))
+    result = _jsonable(method(normalized_id, bump=bump, force=force, dry_run=dry_run))
+    if not dry_run:
+        _publish_content_changed(normalized_kind, normalized_id, reason="project_published")
+    return result
 
 
 def delete(kind: str, project_id: str, *, remove_local: bool = True) -> dict[str, Any]:
@@ -449,7 +499,9 @@ def delete(kind: str, project_id: str, *, remove_local: bool = True) -> dict[str
             raise DeveloperProjectError("refusing to remove project outside DEV root")
         shutil.rmtree(resolved)
         removed = True
-    return {**dict(result or {}), "local_removed": removed}
+    payload = {**dict(result or {}), "local_removed": removed}
+    _publish_content_changed(normalized_kind, normalized_id, reason="project_deleted")
+    return payload
 
 
 __all__ = [

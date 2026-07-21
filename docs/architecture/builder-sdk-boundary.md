@@ -68,9 +68,11 @@ stored directly by Prompt IDE handlers:
 - read the current source-to-dev-webspace binding;
 - reload or materialize a validated Builder revision.
 
-Source identity is canonical: receiving `desktop-dev` as the current Builder
-webspace resolves back to source `desktop`, and its paired preview remains
-`desktop-dev`. SDK consumers must never derive `desktop-dev-dev`.
+Source identity is resolved through the persisted Builder preview relation.
+Preview IDs are opaque and SDK consumers never append or remove `-dev`.
+The one nested exception is self-hosted Builder development: a DEV preview
+running Builder may own one terminal project preview. See
+[Builder Preview Runtime](builder-preview-runtime.md).
 
 Skills do not persist workbench bindings or call webspace runtime services.
 
@@ -253,7 +255,7 @@ Tags indicate priority, not implementation order:
   dialog against a dedicated webspace.
 - [x] `[must]` Render a project with no Automation session as a valid `idle`
   projection without starting autonomous work.
-- [x] `[must]` Canonicalize source/DEV preview identity, use native new-window
+- [x] `[must]` Resolve source/preview identity through explicit relations, use native new-window
   navigation, and render QR locally without a third-party QR endpoint.
 - [x] `[must]` Restore chat from the canonical conversation/project thread and
   surface Automation terminal diagnostics and evidence paths without requiring

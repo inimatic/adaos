@@ -178,6 +178,13 @@ YStore snapshots and room management already separate persisted snapshotting
 from live in-memory docs. The missing step is not transport replacement, but
 clear ownership of what inside Yjs is live, canonical, or derived.
 
+The workspace listing now follows that ownership split: SQLite is the
+versioned catalog authority, REST returns the complete versioned catalog, and
+`data.webspaces` is a compatibility projection into existing live rooms only.
+Catalog changes must not open every YDoc. Builder preview pairing is likewise
+stored as an explicit relation rather than inferred from a webspace suffix;
+see [Builder Preview Runtime](builder-preview-runtime.md).
+
 ### Current mapping: projection model
 
 The projection model already exists as a separate abstraction:

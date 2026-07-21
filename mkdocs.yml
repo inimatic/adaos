@@ -184,6 +184,7 @@ nav:
       - Builder: architecture/builder.md
       - Builder Roadmap: architecture/builder-roadmap.md
       - Builder SDK Boundary: architecture/builder-sdk-boundary.md
+      - Builder Preview Runtime: architecture/builder-preview-runtime.md
       - Infrascope Roadmap: architecture/infrascope-roadmap.md
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
       - Device Access and Browsers: architecture/device-access-and-browsers.md

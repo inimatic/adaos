@@ -3269,33 +3269,38 @@ def test_phase3_reload_target_preserves_manifest_home_before_current(monkeypatch
     assert scenario_resolution == "manifest_home"
 
 
-def test_sync_webspace_listing_skips_unchanged_payload(monkeypatch) -> None:
-    webspace_id = "phase2-listing-noop"
-    ensure_workspace(webspace_id)
+def test_sync_webspace_listing_never_opens_non_live_documents(monkeypatch) -> None:
+    listing = [{"id": "preview-live", "title": "Preview"}]
+    mutated: list[str] = []
 
-    listing = [{"id": webspace_id, "title": "Phase 2 Listing"}]
-    data_map = _CountingMap({"webspaces": {"items": listing}})
-    fake_state = {
-        "ui": _FakeMap(),
-        "registry": _FakeMap(),
-        "data": data_map,
-    }
-
+    monkeypatch.setattr(webspace_runtime_module, "_webspace_listing", lambda: listing)
     monkeypatch.setattr(
         webspace_runtime_module.workspace_index,
-        "list_workspaces",
-        lambda: [SimpleNamespace(workspace_id=webspace_id)],
+        "workspace_catalog_version",
+        lambda: 7,
     )
-    monkeypatch.setattr(webspace_runtime_module, "_webspace_listing", lambda: listing)
     monkeypatch.setattr(
         webspace_runtime_module,
         "async_get_ydoc",
-        lambda _webspace_id: _FakeAsyncDoc(fake_state),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not open YDoc")),
     )
 
-    asyncio.run(webspace_runtime_module._sync_webspace_listing())
+    def _mutate(webspace_id, _mutator, **_kwargs):
+        if webspace_id != "preview-live":
+            return False
+        mutated.append(webspace_id)
+        return True
 
-    assert data_map.set_count == 0
+    monkeypatch.setattr(webspace_runtime_module, "mutate_live_room", _mutate)
+
+    result = asyncio.run(
+        webspace_runtime_module._sync_webspace_listing(["preview-live", "stale-preview"])
+    )
+
+    assert mutated == ["preview-live"]
+    assert result["catalog_version"] == 7
+    assert result["updated"] == ["preview-live"]
+    assert result["skipped_not_live"] == ["stale-preview"]
 
 
 def test_webspace_listing_includes_local_node_metadata(monkeypatch) -> None:
@@ -3566,6 +3571,29 @@ def test_reload_preview_webspaces_for_scenario_project(monkeypatch) -> None:
         source_mode="dev",
         home_scenario="other_scenario",
     )
+    from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
+
+    relationships = WebspaceRelationshipRegistry.from_context()
+    relationships.ensure(
+        "builder-source-a",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id=scenario_id,
+        legacy_target_webspace_id=preview_a,
+    )
+    relationships.ensure(
+        "builder-source-b",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="other_scenario",
+        legacy_target_webspace_id=preview_b,
+    )
+    ensure_workspace("stale-dev-preview")
+    set_workspace_manifest(
+        "stale-dev-preview",
+        display_name="DEV: stale",
+        kind="dev",
+        source_mode="dev",
+        home_scenario=scenario_id,
+    )
 
     captured: list[tuple[str, str, str]] = []
 
@@ -3597,6 +3625,14 @@ def test_reload_preview_webspaces_for_skill_dependency(monkeypatch) -> None:
         kind="dev",
         source_mode="dev",
         home_scenario="demo_scenario",
+    )
+    from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
+
+    WebspaceRelationshipRegistry.from_context().ensure(
+        "builder-source-skill",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="demo_scenario",
+        legacy_target_webspace_id=preview,
     )
 
     async def _fake_reload(webspace_id: str, *, scenario_id: str | None = None, action: str = "reload") -> dict[str, object]:

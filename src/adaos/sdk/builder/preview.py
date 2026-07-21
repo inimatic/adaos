@@ -7,6 +7,8 @@ import inspect
 from collections.abc import Mapping
 from typing import Any
 
+from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, BUILDER_PREVIEW_DESIRED
+
 
 def _service():
     from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -31,20 +33,29 @@ def _complete(awaitable: Any) -> tuple[Any, bool]:
     return None, True
 
 
+def _has_running_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 def dev_webspace_id(source_webspace_id: str | None = None) -> str:
-    """Return the canonical development webspace for a source webspace."""
+    """Return the explicitly paired preview webspace for a Builder host."""
 
-    from adaos.services.builder.workbench import dev_webspace_id_for_source
-
-    return dev_webspace_id_for_source(source_webspace_id)
+    binding = _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
+    return str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
 
 
 def canonical_source_webspace_id(webspace_id: str | None = None) -> str:
-    """Return the source id for either a source or its paired DEV webspace."""
+    """Resolve the Builder host using explicit relation topology."""
 
-    from adaos.services.builder.workbench import source_webspace_id_for
-
-    return source_webspace_id_for(webspace_id)
+    service = _service()
+    resolve = getattr(service, "resolve_source_webspace_id", None)
+    if callable(resolve):
+        return str(resolve(webspace_id)).strip()
+    return str(webspace_id or "desktop").strip() or "desktop"
 
 
 def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
@@ -78,13 +89,14 @@ def ensure(
 ) -> dict[str, Any]:
     source = canonical_source_webspace_id(source_webspace_id)
     service = _service()
+    effective_wait = bool(wait_for_rebuild or not _has_running_loop())
     result, scheduled = _complete(
         service.ensure_dev_webspace(
             source,
             active_draft_id=active_draft_id,
             runtime_scenario_id=runtime_scenario_id,
             preview_state=preview_state,
-            wait_for_rebuild=wait_for_rebuild,
+            wait_for_rebuild=effective_wait,
         )
     )
     if scheduled:
@@ -116,13 +128,28 @@ def select_project(
     if not project_id:
         raise ValueError("object_id is required")
     if kind != "scenario":
-        return {
+        result = {
             "ok": True,
             "selected": False,
             "object_type": kind,
             "object_id": project_id,
             "source_webspace_id": source,
         }
+        if publish_event:
+            from adaos.sdk.data.events import publish
+
+            publish(
+                BUILDER_CONTEXT_SELECTED,
+                {
+                    "source_webspace_id": source,
+                    "project_kind": kind,
+                    "project_id": project_id,
+                    "object_type": kind,
+                    "object_id": project_id,
+                },
+                source="sdk.builder.preview",
+            )
+        return result
 
     service = _service()
     binding = _plain(
@@ -130,17 +157,19 @@ def select_project(
             source_webspace_id=source,
             active_draft_id=None,
             runtime_scenario_id=project_id,
-            persist_projection=True,
+            persist_projection=not ensure_ready,
         )
     )
     ensured: dict[str, Any] | None = None
-    if ensure_ready:
+    deferred_to_event = bool(ensure_ready and not wait_for_rebuild and not _has_running_loop())
+    if ensure_ready and not deferred_to_event:
+        effective_wait = bool(wait_for_rebuild or not _has_running_loop())
         result, scheduled = _complete(
             service.ensure_dev_webspace(
                 source,
                 active_draft_id=None,
                 runtime_scenario_id=project_id,
-                wait_for_rebuild=wait_for_rebuild,
+                wait_for_rebuild=effective_wait,
             )
         )
         ensured = (
@@ -148,16 +177,51 @@ def select_project(
             if scheduled
             else _plain(result)
         )
+    elif deferred_to_event:
+        # Synchronous skill handlers cannot safely keep an asyncio task alive
+        # after returning. The canonical desired event hands ownership to the
+        # persistent runtime loop instead of blocking the skill response.
+        ensured = {
+            "ok": True,
+            "scheduled": True,
+            "via": BUILDER_PREVIEW_DESIRED,
+            "runtime_scenario_id": project_id,
+            "dev_webspace_id": str(
+                binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+            ).strip(),
+        }
+    preview_id = str(
+        (ensured or {}).get("preview_webspace_id")
+        or (ensured or {}).get("dev_webspace_id")
+        or binding.get("preview_webspace_id")
+        or binding.get("dev_webspace_id")
+        or dev_webspace_id(source)
+        or ""
+    ).strip()
     if publish_event:
         from adaos.sdk.data.events import publish
 
         publish(
-            "builder.preview.selected",
+            BUILDER_CONTEXT_SELECTED,
             {
                 "source_webspace_id": source,
+                "project_kind": "scenario",
+                "project_id": project_id,
+                "object_type": "scenario",
+                "object_id": project_id,
+            },
+            source="sdk.builder.preview",
+        )
+        publish(
+            BUILDER_PREVIEW_DESIRED,
+            {
+                "source_webspace_id": source,
+                "preview_webspace_id": preview_id,
                 "object_type": "scenario",
                 "object_id": project_id,
                 "scenario_id": project_id,
+                "reconciled": bool(ensure_ready and not deferred_to_event),
+                "wait_for_rebuild": bool(wait_for_rebuild),
             },
             source="sdk.builder.preview",
         )
@@ -167,7 +231,8 @@ def select_project(
         "object_type": "scenario",
         "object_id": project_id,
         "source_webspace_id": source,
-        "dev_webspace_id": dev_webspace_id(source),
+        "dev_webspace_id": preview_id,
+        "preview_webspace_id": preview_id,
         "binding": binding,
         "ensure": ensured,
     }
@@ -189,7 +254,7 @@ def snapshot(
     *,
     preview_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    source = globals()["source_webspace_id"](source_webspace_id)
+    source = canonical_source_webspace_id(source_webspace_id)
     return _plain(_service().snapshot(source, preview_state=preview_state))
 
 

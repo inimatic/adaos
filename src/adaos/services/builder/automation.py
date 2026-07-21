@@ -752,8 +752,6 @@ class BuilderAutomationService:
 
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
-                from adaos.services.builder.workbench import dev_webspace_id_for_source
-                from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario
 
                 binding = asyncio.run(
                     BuilderWorkbenchService(state_dir=self.state_dir).ensure_dev_webspace(
@@ -762,22 +760,14 @@ class BuilderAutomationService:
                         wait_for_rebuild=True,
                     )
                 )
-                dev_webspace_id = (
-                    str(binding.get("dev_webspace_id") or "").strip()
-                    or dev_webspace_id_for_source(webspace_id)
-                )
-                readiness["materialization"] = asyncio.run(
-                    reload_webspace_from_scenario(
-                        dev_webspace_id,
-                        scenario_id=object_id,
-                        action="reload",
-                        event_payload={
-                            "source": "builder.automation",
-                            "_meta": {"cmd_id": f"automation:{session.get('current_task_id') or object_id}"},
-                        },
-                    )
-                )
-                if not bool(readiness["materialization"].get("ok", True)):
+                runtime = binding.get("runtime") if isinstance(binding.get("runtime"), Mapping) else {}
+                readiness["materialization"] = {
+                    **dict(runtime),
+                    "preview_webspace_id": str(
+                        binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+                    ).strip(),
+                }
+                if not bool(readiness["materialization"].get("ok", False)):
                     raise RuntimeError(
                         str(readiness["materialization"].get("error") or "dev webspace reload failed")
                     )
@@ -893,7 +883,7 @@ class BuilderAutomationService:
         """Run package-external DEV lifecycle steps owned by the orchestrator."""
         from adaos.adapters.db import SqliteSkillRegistry
         from adaos.services.agent_context import get_ctx
-        from adaos.services.builder.workbench import dev_webspace_id_for_source
+        from adaos.services.builder.workbench import BuilderWorkbenchService
         from adaos.services.skill.manager import SkillManager
 
         ctx = get_ctx()
@@ -907,12 +897,18 @@ class BuilderAutomationService:
             settings=ctx.settings,
         )
         prepared = manager.prepare_dev_runtime(skill_id, run_tests=False)
+        binding = BuilderWorkbenchService(state_dir=self.state_dir).get_workspace_binding(webspace_id)
+        preview_webspace_id = str(
+            binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+        ).strip()
+        if not preview_webspace_id:
+            raise RuntimeError("Builder preview relation is missing")
         slot = manager.activate_for_space(
             skill_id,
             version=prepared.version,
             slot=prepared.slot,
             space="dev",
-            webspace_id=dev_webspace_id_for_source(webspace_id),
+            webspace_id=preview_webspace_id,
             defer_webspace_rebuild=True,
         )
         status = manager.dev_runtime_status(skill_id)

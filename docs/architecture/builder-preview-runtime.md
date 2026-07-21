@@ -1,0 +1,191 @@
+# Builder Preview Runtime
+
+Status: implemented architecture contract.
+
+This document defines project selection, Builder preview ownership, and
+webspace materialization. It replaces the former convention where a preview
+was inferred by appending `-dev` and where one project event represented both
+UI selection and artifact mutation.
+
+## Invariants
+
+- A Builder host and its preview are paired by a persisted relation, never by
+  parsing either webspace ID.
+- Selecting a project changes Builder context and only the paired preview. It
+  does not reload the Builder host or scan unrelated DEV webspaces.
+- A desired preview scenario is not reported as observed until reconcile has
+  completed. Every new desired state has a monotonic generation and operation
+  ID.
+- YDoc-heavy materialization runs outside the API process in production. The
+  API process remains the only owner that applies a returned snapshot to
+  YStore or a live room.
+- The workspace catalog is authoritative in SQLite and has a monotonic
+  version. Compatibility projection to Yjs may update existing rooms but must
+  never open every workspace document.
+
+## Event Contracts
+
+The canonical topics have one meaning each:
+
+| Topic | Meaning | May rebuild preview |
+| --- | --- | --- |
+| `builder.context.selected` | Builder UI selected a skill or scenario | no |
+| `builder.preview.desired` | paired preview should converge to a scenario | yes, paired target only |
+| `builder.preview.observed` | desired generation is now materialized | no; this is a fact |
+| `project.content.changed` | project files or metadata changed | yes, explicit subscribers only |
+
+`prompt.project.changed` remains a compatibility input. Reasons
+`project_loaded`, `project_selected`, `builder_project_created`, and
+`builder_project_switched` map to context selection; other reasons map to
+content change. This matters for installed Builder versions that emit the
+legacy selection event together with `builder.preview.selected`: the former
+must not trigger a duplicate reload. New code must publish canonical topics
+directly.
+
+Skill and API page data sources derive their request identity from the
+resolved target, parameters, body, current webspace, and referenced page
+state. A state update reloads a source only when this identity changes.
+Targeted invalidation remains available for content writes and is not needed
+for ordinary selection.
+
+## Explicit Topology
+
+`webspace_relations` stores one outgoing preview relation per Builder host and
+one incoming owner per preview. New preview IDs are opaque `preview-*` values.
+Existing binding files may adopt a legacy ID such as `dev1-dev` during
+migration, but the suffix has no runtime semantics.
+
+Two purposes are valid:
+
+- `builder_project_preview`: an ordinary terminal preview;
+- `builder_self_host`: a preview that runs the Builder scenario and can itself
+  act as a Builder host.
+
+The only permitted nested shape is:
+
+```text
+production Builder host
+  -> builder_self_host (Builder loaded from DEV)
+       -> builder_project_preview (scenario selected in that Builder)
+```
+
+An ordinary preview cannot own a child, and the child preview cannot own a
+grandchild. When the outer host switches from Builder to an ordinary scenario,
+the child relation is detached; its workspace is retained for explicit
+cleanup or diagnostics.
+
+Deleting a source or preview workspace removes every incident relation in the
+same SQLite transaction as the catalog row. Catalog reset clears relations as
+well. Content-change fanout ignores relation targets that no longer have a
+workspace manifest, so stale topology cannot recreate deleted previews.
+
+## Reconcile State
+
+Builder preview state is persisted under
+`state/builder/workbench/runtime/<source>.json` with schema
+`adaos.builder.preview_runtime.v1`. Important fields are:
+
+- `source_webspace_id` and `preview_webspace_id`;
+- selected project and desired/observed scenarios;
+- `generation` and `operation_id`;
+- `status`: `idle`, `requested`, `running`, `accepted`, `ready`, or `failed`;
+- timestamps, error, and the bounded apply result.
+
+Repeated identical requests coalesce. A newer generation supersedes an older
+result and is reconciled next. The apply lease is process-wide per Builder
+source, so a skill daemon thread and the main runtime event loop cannot start
+parallel materializations for the same preview. State updates use a separate
+thread-safe lock and remain writable while apply is running. `accepted` means
+the scenario switch was accepted for background rebuild; only `ready` advances
+`observed_scenario`.
+
+## Materialization Boundary
+
+Production defaults `ADAOS_MATERIALIZATION_WORKER=1`. Each materialization is
+performed by `adaos.services.scenario.materialization_worker` in a one-shot
+process. Two modes are supported:
+
+- `payload_only`: resolve immutable effective branches for live-room apply;
+- `fresh_doc`: additionally return encoded snapshot update and state vector.
+
+The child initializes read context, creates/reads YDocs, and returns JSON plus
+base64-encoded bytes. It does not mutate the parent live room. The parent
+checks the current request generation, applies the result, and then the child
+exit releases the native `y_py` allocator heap.
+
+The parent supervises the complete Windows process tree (venv launcher and
+base interpreter), not just the launcher PID. Timeout, cancellation, and RSS
+limit failures terminate all descendants before the reconcile slot is
+released, so superseding selections cannot accumulate orphan workers.
+
+Operational limits:
+
+| Setting | Default |
+| --- | --- |
+| `ADAOS_MATERIALIZATION_WORKER_TIMEOUT_S` | 180 seconds |
+| `ADAOS_MATERIALIZATION_WORKER_MAX_RSS_MB` | 2048 MiB |
+| `ADAOS_MATERIALIZATION_WORKER_MAX_RESULT_MB` | 512 MiB |
+| `ADAOS_WEBSPACE_RESOLVED_CACHE_MAX_MB` | 32 MiB |
+| `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_MAX_MB` | 64 MiB |
+| `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_LIMIT` | 1 entry |
+
+Tests disable the process boundary by default under `ADAOS_TESTING`; tests for
+the boundary may explicitly enable it.
+
+## Workspace Catalog
+
+`workspace_catalog_state.version` increments in the same SQLite transaction
+as a real create, manifest update, delete, normalization, or reset. Idempotent
+manifest writes do not increment it. `GET /api/node/yjs/webspaces` returns
+`catalog_version` with the full catalog.
+
+The Yjs compatibility payload is:
+
+```json
+{
+  "schema": "adaos.workspace_catalog.v1",
+  "version": 42,
+  "items": []
+}
+```
+
+Catalog projection uses `mutate_live_room` and only existing targeted or active
+rooms. It must not call `async_get_ydoc` to fan out over catalog rows.
+
+## Acceptance Checks
+
+A project-selection regression test or smoke run must demonstrate:
+
+1. Builder request identity changes from the old project to the selected one.
+2. The Builder host YWS connection is not closed or recreated.
+3. Only the explicitly paired preview receives a scenario switch/materialize
+   operation; stale or unrelated DEV workspaces receive none.
+4. Repeating the same selection 100 times produces one generation/apply and a
+   bounded runtime-state file set.
+5. Rapid superseding selection converges to the latest generation.
+6. Repeated process-isolated materialization reaches a parent RSS plateau;
+   worker peak RSS, result size, and phase timings are present in diagnostics.
+7. Catalog updates do not create Yjs rooms and idempotent metadata writes do
+   not advance catalog version.
+
+## Local Verification Evidence
+
+The implementation smoke on 2026-07-21 used the real `dev1-dev` preview with
+`prototype_app_c6b08e41` in five separate `payload_only` worker processes:
+
+- wall time: 4.06-4.33 seconds per operation;
+- resolver/materialization time: 3.04-3.17 seconds;
+- child interpreter RSS: 99.4-101.0 MiB;
+- serialized result: 0.599 MiB;
+- parent RSS reached 61.9 MiB by the third operation and remained there;
+- total parent RSS increase over the series: 5.75 MiB.
+
+A supervisor smoke measured 115.3 MiB peak RSS for the complete launcher plus
+interpreter process tree. Cancelling an active materialization terminated both
+PIDs; no descendant remained alive after cancellation.
+
+The process boundary therefore adds roughly one second to this local cold
+path, while removing native YDoc heap retention from the long-lived API
+process. The acceptance suite also covers 100 identical selections
+(one generation/apply), 100 distinct sequential selections (one bounded state
+file), and a superseded in-flight generation converging to the latest target.

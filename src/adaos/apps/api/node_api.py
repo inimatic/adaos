@@ -77,6 +77,7 @@ from adaos.services.scenario.webspace_runtime import (
     set_current_webspace_home,
     switch_webspace_scenario,
 )
+from adaos.services.workspaces import index as workspace_index
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime import SkillDirectoryNotFoundError, find_skill_dir
 from adaos.services.realtime_sidecar import (
@@ -4913,6 +4914,7 @@ async def node_yjs_webspaces() -> dict[str, Any]:
     return {
         "ok": True,
         "accepted": True,
+        "catalog_version": workspace_index.workspace_catalog_version(),
         "items": items,
     }
 

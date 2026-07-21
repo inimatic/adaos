@@ -82,7 +82,10 @@ class _PreviewService:
         return {"ok": True, "source_webspace_id": source_webspace_id, **kwargs}
 
     def get_workspace_binding(self, source_webspace_id):
-        return {"ok": True, "source_webspace_id": source_webspace_id}
+        return {"ok": True, "source_webspace_id": source_webspace_id, "preview_webspace_id": "preview-alpha"}
+
+    def resolve_source_webspace_id(self, webspace_id):
+        return "dev1-builder" if webspace_id == "dev1-builder" else str(webspace_id or "desktop")
 
     def open_dev_webspace(self, source_webspace_id, *, base_url=None):
         return {"ok": True, "source_webspace_id": source_webspace_id, "base_url": base_url}
@@ -108,25 +111,26 @@ def test_preview_facade_selects_and_ensures_scenario(monkeypatch) -> None:
             "source_webspace_id": "desktop",
             "active_draft_id": None,
             "runtime_scenario_id": "builder",
-            "persist_projection": True,
+            "persist_projection": False,
         }
     ]
 
 
-def test_preview_facade_canonicalizes_current_dev_webspace(monkeypatch) -> None:
+def test_preview_facade_uses_explicit_service_topology(monkeypatch) -> None:
     service = _PreviewService()
     monkeypatch.setattr(preview, "_service", lambda: service)
 
-    binding = preview.get_binding("dev1-dev")
-    opened = preview.open_workspace("dev1-dev")
+    binding = preview.get_binding("dev1-builder")
+    opened = preview.open_workspace("dev1-builder")
 
-    assert preview.canonical_source_webspace_id("dev1-dev") == "dev1"
-    assert binding["source_webspace_id"] == "dev1"
-    assert opened["source_webspace_id"] == "dev1"
+    assert preview.canonical_source_webspace_id("dev1-builder") == "dev1-builder"
+    assert binding["source_webspace_id"] == "dev1-builder"
+    assert opened["source_webspace_id"] == "dev1-builder"
 
 
 def test_preview_facade_does_not_bind_skill_project(monkeypatch) -> None:
-    monkeypatch.setattr(preview, "_service", lambda: (_ for _ in ()).throw(AssertionError("service must not load")))
+    service = _PreviewService()
+    monkeypatch.setattr(preview, "_service", lambda: service)
 
     result = preview.select_project("skill", "builder_skill", publish_event=False)
 
@@ -137,6 +141,7 @@ def test_preview_facade_does_not_bind_skill_project(monkeypatch) -> None:
         "object_id": "builder_skill",
         "source_webspace_id": "desktop",
     }
+    assert service.selected == []
 
 
 def test_artifact_checkpoint_forwards_public_metadata(monkeypatch) -> None:

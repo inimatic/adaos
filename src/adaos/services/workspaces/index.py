@@ -68,13 +68,21 @@ def _workspace_event_payload(row: "WebspaceManifest") -> dict[str, Any]:
         "owner_scope": row.owner_scope,
         "profile_scope": row.profile_scope,
         "device_binding": row.device_binding,
+        "catalog_version": workspace_catalog_version(),
     }
 
 
 def _emit_workspace_event(event_type: str, row: "WebspaceManifest" | None = None, *, workspace_id: str | None = None) -> None:
     try:
         ctx = get_ctx()
-        payload = _workspace_event_payload(row) if row is not None else {"workspace_id": str(workspace_id or "").strip()}
+        payload = (
+            _workspace_event_payload(row)
+            if row is not None
+            else {
+                "workspace_id": str(workspace_id or "").strip(),
+                "catalog_version": workspace_catalog_version(),
+            }
+        )
         emit(ctx.bus, event_type, payload, "workspaces.index")
     except Exception:
         pass
@@ -313,13 +321,13 @@ def _is_dev_workspace_id(value: Any) -> bool:
 
 
 def _infer_kind(workspace_id: str, display_name: Optional[str], kind: Optional[str]) -> str:
-    # The paired dev webspace contract reserves the -dev suffix. Repair stale
-    # rows before honoring their explicitly persisted workspace classification.
-    if _is_dev_workspace_id(workspace_id):
-        return KIND_DEV
     explicit = _normalize_kind(kind)
     if explicit:
         return explicit
+    # Compatibility only for manifests created before kind was persisted.
+    # The suffix classifies a legacy row; it never establishes a relation.
+    if _is_dev_workspace_id(workspace_id):
+        return KIND_DEV
     if _is_dev_display_name(display_name):
         return KIND_DEV
     return KIND_WORKSPACE
@@ -632,6 +640,64 @@ def _ensure_schema(con) -> None:
             con.execute(f"ALTER TABLE y_workspaces ADD COLUMN {name} {ddl}")
         except sqlite3.OperationalError:
             pass
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspace_catalog_state(
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            version INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT OR IGNORE INTO workspace_catalog_state(singleton, version, updated_at)
+        VALUES(1, 0, 0)
+        """
+    )
+
+
+def _bump_workspace_catalog_version(con) -> int:
+    import time as _time
+
+    updated_at = int(_time.time() * 1000)
+    con.execute(
+        """
+        UPDATE workspace_catalog_state
+        SET version=version + 1, updated_at=?
+        WHERE singleton=1
+        """,
+        (updated_at,),
+    )
+    row = con.execute(
+        "SELECT version FROM workspace_catalog_state WHERE singleton=1"
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _delete_workspace_relations(con, workspace_id: str | None = None) -> None:
+    relation_table = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='webspace_relations'"
+    ).fetchone()
+    if relation_table is None:
+        return
+    if workspace_id is None:
+        con.execute("DELETE FROM webspace_relations")
+        return
+    con.execute(
+        "DELETE FROM webspace_relations WHERE source_webspace_id=? OR target_webspace_id=?",
+        (workspace_id, workspace_id),
+    )
+
+
+def workspace_catalog_version() -> int:
+    sql = get_ctx().sql
+    with sql.connect() as con:
+        _ensure_schema(con)
+        row = con.execute(
+            "SELECT version FROM workspace_catalog_state WHERE singleton=1"
+        ).fetchone()
+    return int(row[0] if row else 0)
 
 
 def get_workspace(workspace_id: str) -> Optional[WebspaceManifest]:
@@ -650,6 +716,7 @@ def get_workspace(workspace_id: str) -> Optional[WebspaceManifest]:
             dirty = _manifest_needs_persisted_defaults(raw_manifest)
             manifest = _persist_manifest_defaults(con, raw_manifest)
             if dirty:
+                _bump_workspace_catalog_version(con)
                 con.commit()
     if not row:
         return None
@@ -671,6 +738,7 @@ def list_workspaces() -> List[WebspaceManifest]:
                 dirty = True
             rows.append(_persist_manifest_defaults(con, manifest))
         if dirty:
+            _bump_workspace_catalog_version(con)
             con.commit()
     if not rows:
         rows = [ensure_workspace(default_webspace_id())]
@@ -696,6 +764,7 @@ def normalize_workspaces() -> int:
             _persist_manifest_defaults(con, manifest)
             updated += 1
         if updated:
+            _bump_workspace_catalog_version(con)
             con.commit()
     return updated
 
@@ -719,6 +788,7 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
             dirty = _manifest_needs_persisted_defaults(raw_manifest)
             manifest = _persist_manifest_defaults(con, raw_manifest)
             if dirty:
+                _bump_workspace_catalog_version(con)
                 con.commit()
             return manifest
 
@@ -749,6 +819,7 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
                 None,
             ),
         )
+        _bump_workspace_catalog_version(con)
         con.commit()
         manifest = WebspaceManifest(
             workspace_id=workspace_id,
@@ -792,6 +863,18 @@ def set_workspace_manifest(
     next_device_binding = current.device_binding if device_binding is _UNSET else _normalize_optional_text(device_binding)
     next_ui_overlay_json = current.ui_overlay_json if ui_overlay_json is _UNSET else _encode_ui_overlay_json(ui_overlay_json)
 
+    if (
+        next_display_name == current.display_name
+        and resolved_kind == current.kind
+        and next_home_scenario == current.home_scenario
+        and resolved_source_mode == current.source_mode
+        and next_owner_scope == current.owner_scope
+        and next_profile_scope == current.profile_scope
+        and next_device_binding == current.device_binding
+        and next_ui_overlay_json == current.ui_overlay_json
+    ):
+        return current
+
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)
@@ -814,6 +897,7 @@ def set_workspace_manifest(
                 workspace_id,
             ),
         )
+        _bump_workspace_catalog_version(con)
         con.commit()
     row = get_workspace(workspace_id)
     if not row:
@@ -831,8 +915,14 @@ def delete_workspace(workspace_id: str) -> None:
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)
-        con.execute("DELETE FROM y_workspaces WHERE workspace_id=?", (workspace_id,))
+        cur = con.execute("DELETE FROM y_workspaces WHERE workspace_id=?", (workspace_id,))
+        deleted = int(cur.rowcount or 0) > 0
+        if deleted:
+            _delete_workspace_relations(con, workspace_id)
+            _bump_workspace_catalog_version(con)
         con.commit()
+    if not deleted:
+        return
     _emit_workspace_event("workspace.deleted", workspace_id=workspace_id)
     try:
         path = ystore_path_for_webspace(workspace_id)
@@ -848,6 +938,7 @@ def reset_webspaces(rows: Iterable[WorkspaceRow]) -> None:
     with sql.connect() as con:
         _ensure_schema(con)
         con.execute("DELETE FROM y_workspaces")
+        _delete_workspace_relations(con)
         con.executemany(
             """
             INSERT INTO y_workspaces(
@@ -872,13 +963,17 @@ def reset_webspaces(rows: Iterable[WorkspaceRow]) -> None:
                 for row in normalized_rows
             ],
         )
+        _bump_workspace_catalog_version(con)
         con.commit()
     try:
         ctx = get_ctx()
         emit(
             ctx.bus,
             "workspace.reset",
-            {"workspace_ids": [row.workspace_id for row in normalized_rows]},
+            {
+                "workspace_ids": [row.workspace_id for row in normalized_rows],
+                "catalog_version": workspace_catalog_version(),
+            },
             "workspaces.index",
         )
     except Exception:

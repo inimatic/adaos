@@ -88,9 +88,21 @@ from .personalization_access import (
     validate_capabilities,
     validate_capability,
 )
+from .project_events import (
+    BUILDER_CONTEXT_SELECTED,
+    BUILDER_PREVIEW_DESIRED,
+    BUILDER_PREVIEW_OBSERVED,
+    PROJECT_CONTENT_CHANGED,
+    ProjectEventIdentity,
+    legacy_project_event_topic,
+    normalize_project_kind,
+)
 
 __all__ = [
     "ClientSubscriptionRecord",
+    "BUILDER_CONTEXT_SELECTED",
+    "BUILDER_PREVIEW_DESIRED",
+    "BUILDER_PREVIEW_OBSERVED",
     "Event",
     "EventEnvelope",
     "ProcessSpec",
@@ -98,6 +110,8 @@ __all__ = [
     "ProjectionRecord",
     "ProjectionStatus",
     "ProjectionSubscription",
+    "PROJECT_CONTENT_CHANGED",
+    "ProjectEventIdentity",
     "ActorRef",
     "ActorContext",
     "AuditRecord",
@@ -152,6 +166,7 @@ __all__ = [
     "make_client_subscription_record",
     "make_projection_record",
     "make_projection_subscription",
+    "legacy_project_event_topic",
     "modal_projection_key",
     "node_scoped_projection_key",
     "normalize_client_subscription_record",
@@ -159,6 +174,7 @@ __all__ = [
     "normalize_projection_access_metadata",
     "normalize_projection_record",
     "normalize_projection_subscription",
+    "normalize_project_kind",
     "page_projection_key",
     "panel_projection_key",
     "personalization_access_contract_snapshot",

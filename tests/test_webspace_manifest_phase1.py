@@ -495,7 +495,7 @@ def test_get_workspace_backfills_legacy_manifest_defaults() -> None:
     assert stored == ("dev", "dev")
 
 
-def test_get_workspace_repairs_dev_suffix_manifest_classification() -> None:
+def test_get_workspace_preserves_explicit_kind_despite_legacy_dev_suffix() -> None:
     webspace_id = "source-dev"
     ctx = get_ctx()
 
@@ -522,9 +522,9 @@ def test_get_workspace_repairs_dev_suffix_manifest_classification() -> None:
     row = get_workspace(webspace_id)
 
     assert row is not None
-    assert row.kind == "dev"
-    assert row.source_mode == "dev"
-    assert row.is_dev is True
+    assert row.kind == "workspace"
+    assert row.source_mode == "workspace"
+    assert row.is_dev is False
 
     with ctx.sql.connect() as con:
         stored = con.execute(
@@ -532,7 +532,7 @@ def test_get_workspace_repairs_dev_suffix_manifest_classification() -> None:
             (webspace_id,),
         ).fetchone()
 
-    assert stored == ("dev", "dev")
+    assert stored == ("workspace", "workspace")
 
 
 def test_get_workspace_repairs_stale_ystore_path() -> None:
@@ -688,6 +688,7 @@ def test_set_workspace_manifest_emits_workspace_event(monkeypatch) -> None:
                 "owner_scope": None,
                 "profile_scope": None,
                 "device_binding": "tablet-1",
+                "catalog_version": workspace_index_module.workspace_catalog_version(),
             },
             "workspaces.index",
         )

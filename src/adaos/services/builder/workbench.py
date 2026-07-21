@@ -11,9 +11,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from adaos.domain.project_events import BUILDER_PREVIEW_DESIRED, BUILDER_PREVIEW_OBSERVED
 from adaos.sdk.core.decorators import subscribe
+from adaos.services.builder.preview_reconciler import BuilderPreviewReconciler
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.webspace_id import coerce_webspace_id
+from adaos.services.workspaces.relations import (
+    BUILDER_PROJECT_PREVIEW,
+    BUILDER_SELF_HOST,
+    WebspaceRelationshipRegistry,
+    relation_purpose_for_scenario,
+)
 
 
 BUILDER_WORKBENCH_SCENARIO_ID = "prompt_engineer_scenario"
@@ -32,16 +40,23 @@ def safe_source_webspace_id(value: Any) -> str:
 
 
 def source_webspace_id_for(value: Any) -> str:
-    """Return the source id for either a source or its paired DEV webspace."""
-
+    """Resolve a Builder host from explicit topology, without parsing its id."""
     token = safe_source_webspace_id(value)
-    if token.endswith("-dev") and len(token) > len("-dev"):
-        return token[: -len("-dev")]
-    return token
+    try:
+        return WebspaceRelationshipRegistry.from_context().resolve_builder_host(token)
+    except Exception:
+        return token
 
 
 def dev_webspace_id_for_source(source_webspace_id: Any) -> str:
-    return f"{source_webspace_id_for(source_webspace_id)}-dev"
+    """Compatibility lookup for the explicitly paired preview webspace."""
+
+    source = source_webspace_id_for(source_webspace_id)
+    registry = WebspaceRelationshipRegistry.from_context()
+    relation = registry.get_outgoing(source)
+    if relation is None:
+        relation, _created = registry.ensure(source, purpose=BUILDER_PROJECT_PREVIEW)
+    return relation.target_webspace_id
 
 
 def _now() -> float:
@@ -72,6 +87,8 @@ def _binding_semantic_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -
     keys = (
         "source_webspace_id",
         "dev_webspace_id",
+        "preview_webspace_id",
+        "relationship",
         "scenario_id",
         "runtime_scenario_id",
         "purpose",
@@ -117,6 +134,8 @@ def _draft_runtime_scenario_id(state_dir: Path | None, draft_id: str | None) -> 
 class BuilderWorkbenchService:
     state_dir: Path | None = None
     webspace_service: Any | None = None
+    relationship_registry: WebspaceRelationshipRegistry | None = None
+    preview_reconciler: BuilderPreviewReconciler | None = None
 
     @classmethod
     def from_context(cls) -> "BuilderWorkbenchService":
@@ -134,6 +153,75 @@ class BuilderWorkbenchService:
     def snapshot_path(self, source_webspace_id: str) -> Path:
         return self.root / "snapshots" / f"{safe_source_webspace_id(source_webspace_id)}.json"
 
+    @property
+    def relationships(self) -> WebspaceRelationshipRegistry:
+        if self.relationship_registry is None:
+            self.relationship_registry = WebspaceRelationshipRegistry.from_context()
+        return self.relationship_registry
+
+    @property
+    def reconciler(self) -> BuilderPreviewReconciler:
+        if self.preview_reconciler is None:
+            self.preview_reconciler = BuilderPreviewReconciler(state_dir=self.state_dir)
+        return self.preview_reconciler
+
+    def resolve_source_webspace_id(self, value: Any) -> str:
+        token = safe_source_webspace_id(value)
+        incoming = self.relationships.get_incoming(token)
+        if incoming is not None:
+            return token if incoming.purpose == BUILDER_SELF_HOST else incoming.source_webspace_id
+
+        bindings_root = self.root / "bindings"
+        for path in bindings_root.glob("*.json") if bindings_root.is_dir() else ():
+            legacy = _read_json(path)
+            if str(legacy.get("dev_webspace_id") or legacy.get("preview_webspace_id") or "").strip() != token:
+                continue
+            source = safe_source_webspace_id(legacy.get("source_webspace_id") or path.stem)
+            scenario_id = str(legacy.get("runtime_scenario_id") or "").strip() or None
+            relation, _created = self.relationships.ensure(
+                source,
+                purpose=relation_purpose_for_scenario(scenario_id),
+                scenario_id=scenario_id,
+                legacy_target_webspace_id=token,
+                metadata={"migrated_from": "builder_workbench_binding"},
+            )
+            return token if relation.purpose == BUILDER_SELF_HOST else source
+        return self.relationships.resolve_builder_host(token)
+
+    def _ensure_preview_relation(
+        self,
+        source_webspace_id: str,
+        *,
+        scenario_id: str | None,
+        legacy_target_webspace_id: str | None = None,
+    ):
+        return self.relationships.ensure(
+            source_webspace_id,
+            purpose=relation_purpose_for_scenario(scenario_id),
+            scenario_id=scenario_id,
+            legacy_target_webspace_id=legacy_target_webspace_id,
+            metadata={"owner": "builder.workbench"},
+        )
+
+    def list_workspace_bindings(self) -> list[dict[str, Any]]:
+        bindings: list[dict[str, Any]] = []
+        sources: set[str] = set()
+        root = self.root / "bindings"
+        if root.is_dir():
+            for path in root.glob("*.json"):
+                raw = _read_json(path)
+                source = safe_source_webspace_id(raw.get("source_webspace_id") or path.stem)
+                if source in sources:
+                    continue
+                sources.add(source)
+                bindings.append(self.get_workspace_binding(source))
+        for relation in self.relationships.list():
+            if relation.source_webspace_id in sources:
+                continue
+            sources.add(relation.source_webspace_id)
+            bindings.append(self.get_workspace_binding(relation.source_webspace_id))
+        return bindings
+
     async def ensure_dev_webspace(
         self,
         source_webspace_id: str | None = None,
@@ -144,14 +232,23 @@ class BuilderWorkbenchService:
         preview_state: Mapping[str, Any] | None = None,
         wait_for_rebuild: bool = True,
     ) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
-        dev_id = dev_webspace_id_for_source(source_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         workbench_scenario = str(scenario_id or "").strip() or BUILDER_WORKBENCH_SCENARIO_ID
         runtime_scenario = (
             str(runtime_scenario_id or "").strip()
             or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
             or BUILDER_RUNTIME_FALLBACK_SCENARIO_ID
         )
+        legacy_binding = _read_json(self.binding_path(source_id))
+        legacy_target = str(
+            legacy_binding.get("preview_webspace_id") or legacy_binding.get("dev_webspace_id") or ""
+        ).strip() or None
+        relation, relation_created = self._ensure_preview_relation(
+            source_id,
+            scenario_id=runtime_scenario,
+            legacy_target_webspace_id=legacy_target,
+        )
+        dev_id = relation.target_webspace_id
         created = False
         info_payload: dict[str, Any] = {}
         runtime_payload: dict[str, Any] = {}
@@ -178,54 +275,71 @@ class BuilderWorkbenchService:
                 kind = str(getattr(existing, "kind", "") or "").strip()
                 if kind and kind != "dev":
                     raise ValueError(f"paired webspace {dev_id!r} exists but is not a dev webspace")
-                home = str(getattr(existing, "home_scenario", "") or "").strip()
-                if home != runtime_scenario:
-                    updated = await svc.set_home_scenario(dev_id, runtime_scenario)
-                    existing = updated or existing
             info_payload = _info_to_dict(existing)
             if runtime_scenario and self.webspace_service is None:
                 try:
                     from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario, switch_webspace_scenario
 
-                    event_payload = {
-                        "source": "builder.workbench",
-                        "source_webspace_id": source_id,
-                        "active_draft_id": active_draft_id,
-                    }
-                    switch_payload = await switch_webspace_scenario(
-                        dev_id,
-                        runtime_scenario,
-                        set_home=True,
-                        wait_for_rebuild=wait_for_rebuild,
+                    _requested, coalesced = self.reconciler.request(
+                        source_webspace_id=source_id,
+                        preview_webspace_id=dev_id,
+                        project_kind="scenario",
+                        project_id=runtime_scenario,
+                        desired_scenario=runtime_scenario,
+                    )
+
+                    async def _apply_preview(record: Mapping[str, Any]) -> Mapping[str, Any]:
+                        desired = str(record.get("desired_scenario") or "").strip()
+                        preview_id = str(record.get("preview_webspace_id") or "").strip()
+                        switch_payload = await switch_webspace_scenario(
+                            preview_id,
+                            desired,
+                            set_home=True,
+                            # Reconcile owns the background boundary. Waiting here keeps
+                            # one materialization in flight while newer desired states
+                            # coalesce behind it.
+                            wait_for_rebuild=True,
+                            request_id=str(record.get("operation_id") or "").strip() or None,
+                            request_source="builder.workbench.reconciler",
+                        )
+                        skip_reason = (
+                            str(switch_payload.get("skip_reason") or "").strip()
+                            if isinstance(switch_payload, Mapping)
+                            else ""
+                        )
+                        if skip_reason and skip_reason not in {
+                            "already_current",
+                            "already_current_ready",
+                            "already_pending_rebuild",
+                        }:
+                            return await reload_webspace_from_scenario(
+                                preview_id,
+                                scenario_id=desired,
+                                action="reload",
+                                event_payload={
+                                    "source": "builder.workbench.reconciler",
+                                    "source_webspace_id": source_id,
+                                    "operation_id": record.get("operation_id"),
+                                },
+                            )
+                        return switch_payload
+
+                    reconciled = await self.reconciler.reconcile(
+                        source_id,
+                        _apply_preview,
+                        wait=wait_for_rebuild,
                     )
                     runtime_payload = {
-                        "ok": bool(switch_payload.get("ok", True)) if isinstance(switch_payload, dict) else True,
+                        "ok": str(reconciled.get("status") or "") != "failed",
                         "webspace_id": dev_id,
                         "scenario_id": runtime_scenario,
-                        "switch": switch_payload,
+                        "coalesced": coalesced,
+                        "switch": reconciled.get("result"),
+                        "error": reconciled.get("error"),
+                        "preview_runtime": reconciled,
                     }
-                    skip_reason = str(switch_payload.get("skip_reason") or "").strip() if isinstance(switch_payload, dict) else ""
-                    needs_recovery_reload = bool(skip_reason) and skip_reason not in {
-                        "already_current",
-                        "already_current_ready",
-                        "already_pending_rebuild",
-                    }
-                    if isinstance(switch_payload, dict) and needs_recovery_reload:
-                        reload_payload = await reload_webspace_from_scenario(
-                            dev_id,
-                            scenario_id=runtime_scenario,
-                            action="reload",
-                            event_payload=event_payload,
-                        )
-                        runtime_payload = {
-                            "ok": bool(reload_payload.get("ok", True)) if isinstance(reload_payload, dict) else True,
-                            "webspace_id": dev_id,
-                            "scenario_id": runtime_scenario,
-                            "switch": switch_payload,
-                            "reload": reload_payload,
-                        }
                 except BaseException as exc:
-                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                         raise
                     runtime_payload = {
                         "ok": False,
@@ -233,11 +347,25 @@ class BuilderWorkbenchService:
                         "detail": f"{type(exc).__name__}: {exc}",
                     }
             elif runtime_scenario:
+                _requested, coalesced = self.reconciler.request(
+                    source_webspace_id=source_id,
+                    preview_webspace_id=dev_id,
+                    project_kind="scenario",
+                    project_id=runtime_scenario,
+                    desired_scenario=runtime_scenario,
+                )
+
+                async def _accept_injected(_record: Mapping[str, Any]) -> Mapping[str, Any]:
+                    return {"ok": True, "accepted": True, "skipped": "injected_webspace_service"}
+
+                reconciled = await self.reconciler.reconcile(source_id, _accept_injected, wait=True)
                 runtime_payload = {
                     "ok": True,
                     "skipped": "injected_webspace_service",
                     "webspace_id": dev_id,
                     "scenario_id": runtime_scenario,
+                    "coalesced": coalesced,
+                    "preview_runtime": reconciled,
                 }
         except Exception as exc:
             info_payload = {"ok": False, "error": "dev_webspace_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
@@ -251,42 +379,61 @@ class BuilderWorkbenchService:
             persist_projection=False,
         )
         binding["created"] = created
+        binding["relationship_created"] = relation_created
         binding["dev_webspace"] = info_payload
         binding["runtime"] = runtime_payload
+        binding["preview_runtime"] = self.reconciler.describe(source_id)
         await self.publish_projection(source_id, preview_state=preview_state)
         return binding
 
     def get_workspace_binding(self, source_webspace_id: str | None = None) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         existing = _read_json(self.binding_path(source_id))
         if existing:
             normalized = dict(existing)
-            dev_id = str(normalized.get("dev_webspace_id") or dev_webspace_id_for_source(source_id)).strip()
             active_draft_id = str(normalized.get("active_draft_id") or "").strip() or None
             runtime_scenario_id = str(normalized.get("runtime_scenario_id") or "").strip() or None
+            relation, _created = self._ensure_preview_relation(
+                source_id,
+                scenario_id=runtime_scenario_id,
+                legacy_target_webspace_id=str(
+                    normalized.get("preview_webspace_id") or normalized.get("dev_webspace_id") or ""
+                ).strip() or None,
+            )
+            dev_id = relation.target_webspace_id
             refreshed_dialog = self.dialog_widget_config(
                 source_id,
                 active_draft_id=active_draft_id,
                 runtime_scenario_id=runtime_scenario_id,
                 dev_webspace_id=dev_id,
             )
-            if normalized.get("dialog") != refreshed_dialog:
+            relation_payload = relation.to_dict()
+            if (
+                normalized.get("dialog") != refreshed_dialog
+                or normalized.get("preview_webspace_id") != dev_id
+                or normalized.get("relationship") != relation_payload
+            ):
                 normalized["source_webspace_id"] = source_id
                 normalized["dev_webspace_id"] = dev_id
+                normalized["preview_webspace_id"] = dev_id
+                normalized["relationship"] = relation_payload
                 normalized["dialog"] = refreshed_dialog
                 normalized["updated_at"] = _now()
                 _write_json(self.binding_path(source_id), normalized)
             return normalized
+        relation, _created = self._ensure_preview_relation(source_id, scenario_id=None)
         return {
             "source_webspace_id": source_id,
-            "dev_webspace_id": dev_webspace_id_for_source(source_id),
+            "dev_webspace_id": relation.target_webspace_id,
+            "preview_webspace_id": relation.target_webspace_id,
+            "relationship": relation.to_dict(),
             "scenario_id": BUILDER_WORKBENCH_SCENARIO_ID,
             "runtime_scenario_id": None,
             "purpose": "builder_prompt_ide",
             "active_draft_id": None,
             "dialog": self.dialog_widget_config(
                 source_id,
-                dev_webspace_id=dev_webspace_id_for_source(source_id),
+                dev_webspace_id=relation.target_webspace_id,
             ),
             "created_at": None,
             "updated_at": None,
@@ -302,21 +449,33 @@ class BuilderWorkbenchService:
         runtime_scenario_id: str | None = None,
         persist_projection: bool = True,
     ) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         now = _now()
         existing = _read_json(self.binding_path(source_id))
-        dev_id = str(dev_webspace_id or existing.get("dev_webspace_id") or dev_webspace_id_for_source(source_id)).strip()
         runtime_id = (
             str(runtime_scenario_id or "").strip()
             or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
             or existing.get("runtime_scenario_id")
             or None
         )
+        relation, _created = self._ensure_preview_relation(
+            source_id,
+            scenario_id=str(runtime_id or "").strip() or None,
+            legacy_target_webspace_id=str(
+                dev_webspace_id
+                or existing.get("preview_webspace_id")
+                or existing.get("dev_webspace_id")
+                or ""
+            ).strip() or None,
+        )
+        dev_id = relation.target_webspace_id
         scenario_token = str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip()
         active_draft_token = str(active_draft_id or "").strip() or None
         binding = {
             "source_webspace_id": source_id,
             "dev_webspace_id": dev_id,
+            "preview_webspace_id": dev_id,
+            "relationship": relation.to_dict(),
             "scenario_id": scenario_token,
             "runtime_scenario_id": runtime_id,
             "purpose": "builder_prompt_ide",
@@ -371,8 +530,14 @@ class BuilderWorkbenchService:
         runtime_scenario_id: str | None = None,
         dev_webspace_id: str | None = None,
     ) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
-        dev_id = str(dev_webspace_id or dev_webspace_id_for_source(source_id)).strip()
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        relation = self.relationships.get_outgoing(source_id)
+        if relation is None:
+            relation, _created = self._ensure_preview_relation(
+                source_id,
+                scenario_id=str(runtime_scenario_id or "").strip() or None,
+            )
+        dev_id = str(dev_webspace_id or relation.target_webspace_id).strip()
         try:
             from adaos.services.conversation_links import ensure_builder_topic
 
@@ -461,7 +626,7 @@ class BuilderWorkbenchService:
         }
 
     def list_development_skills(self, source_webspace_id: str | None = None) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
         drafts: list[dict[str, Any]] = []
         drafts_root = Path(self.state_dir or current_state_dir()) / "builder" / "drafts"
@@ -490,7 +655,7 @@ class BuilderWorkbenchService:
         return {"ok": True, "source_webspace_id": source_id, "active_draft_id": binding.get("active_draft_id"), "items": drafts}
 
     def delete_development_skill(self, draft_id: str, source_webspace_id: str | None = None) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         token = str(draft_id or "").strip()
         if not token:
             return {"ok": False, "error": "draft_id_required"}
@@ -582,7 +747,7 @@ class BuilderWorkbenchService:
         }
 
     def snapshot(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
         snapshot = {
             "schema": "adaos.builder.workbench.v1",
@@ -590,6 +755,7 @@ class BuilderWorkbenchService:
             "binding": binding,
             "dialog": binding.get("dialog") if isinstance(binding.get("dialog"), dict) else self.dialog_widget_config(source_id),
             "development_skills": self.list_development_skills(source_id).get("items", []),
+            "preview_runtime": self.reconciler.describe(source_id),
             "preview_state": dict(preview_state or {}),
             "updated_at": _now(),
         }
@@ -597,7 +763,7 @@ class BuilderWorkbenchService:
         return snapshot
 
     async def publish_projection(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        source_id = safe_source_webspace_id(source_webspace_id)
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
         snapshot = self.snapshot(source_id, preview_state=preview_state)
         targets = [source_id, str(snapshot["binding"].get("dev_webspace_id") or "")]
         published: list[str] = []
@@ -647,9 +813,12 @@ async def _on_builder_workbench_ensure_requested(evt: Any) -> None:
     )
 
 
+@subscribe(BUILDER_PREVIEW_DESIRED)
 @subscribe("builder.preview.selected")
 async def _on_builder_preview_selected(evt: Any) -> None:
     payload = _payload_from_event(evt)
+    if bool(payload.get("reconciled")):
+        return
     scenario_id = str(payload.get("scenario_id") or payload.get("object_id") or "").strip()
     object_type = str(payload.get("object_type") or "scenario").strip().lower()
     if object_type != "scenario" or not scenario_id:
@@ -674,4 +843,22 @@ async def _on_builder_preview_selected(evt: Any) -> None:
         active_draft_id=str(payload.get("draft_id") or "").strip() or None,
         runtime_scenario_id=scenario_id,
         preview_state=payload.get("preview_state") if isinstance(payload.get("preview_state"), Mapping) else None,
+        wait_for_rebuild=bool(payload.get("wait_for_rebuild", False)),
     )
+
+
+@subscribe(BUILDER_PREVIEW_OBSERVED)
+async def _on_builder_preview_observed(evt: Any) -> None:
+    payload = _payload_from_event(evt)
+    source_webspace_id = str(payload.get("source_webspace_id") or "").strip()
+    operation_id = str(payload.get("operation_id") or "").strip()
+    if not source_webspace_id or not operation_id:
+        return
+    service = BuilderWorkbenchService()
+    current = service.reconciler.describe(source_webspace_id)
+    if (
+        str(current.get("operation_id") or "").strip() != operation_id
+        or str(current.get("status") or "").strip() != "ready"
+    ):
+        return
+    await service.publish_projection(source_webspace_id)

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Iterable
 import anyio
 
 from adaos.sdk.core.decorators import subscribe
+from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, PROJECT_CONTENT_CHANGED, ProjectEventIdentity
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
@@ -1170,6 +1171,8 @@ async def _on_workflow_set_state(evt: Dict[str, Any]) -> None:
         )
 
 
+@subscribe(BUILDER_CONTEXT_SELECTED)
+@subscribe(PROJECT_CONTENT_CHANGED)
 @subscribe("prompt.project.changed")
 async def _on_prompt_project_changed_refresh_workflow(evt: Dict[str, Any]) -> None:
     """
@@ -1180,10 +1183,11 @@ async def _on_prompt_project_changed_refresh_workflow(evt: Dict[str, Any]) -> No
     repeatedly calling read-only skill tools.
     """
     payload = _payload(evt)
-    object_type = str(payload.get("object_type") or "").strip().lower()
-    object_id = str(payload.get("object_id") or "").strip()
-    if object_type not in {"skill", "scenario"} or not object_id:
+    identity = ProjectEventIdentity.from_payload(payload)
+    if identity is None:
         return
+    object_type = identity.kind
+    object_id = identity.project_id
     webspace_id = _resolve_webspace_id(payload)
     reason = str(payload.get("reason") or "").strip()
     if object_type == "scenario" and reason in {"builder_project_created", "builder_project_switched"}:

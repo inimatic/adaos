@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,17 +19,18 @@ from adaos.services.builder.workbench import (
 )
 
 
-def test_dev_webspace_id_uses_safe_source_suffix() -> None:
+def test_preview_webspace_id_is_opaque_and_source_ids_are_not_parsed() -> None:
     assert safe_source_webspace_id("desktop") == "desktop"
     assert safe_source_webspace_id("Prompt IDE / Lab") == "Prompt-IDE-Lab"
-    assert dev_webspace_id_for_source("desktop") == "desktop-dev"
-    assert dev_webspace_id_for_source("Prompt IDE / Lab") == "Prompt-IDE-Lab-dev"
-    assert source_webspace_id_for("desktop-dev") == "desktop"
-    assert dev_webspace_id_for_source("desktop-dev") == "desktop-dev"
+    preview_id = dev_webspace_id_for_source("desktop")
+    assert preview_id.startswith("preview-")
+    assert preview_id != "desktop-dev"
+    assert dev_webspace_id_for_source("desktop") == preview_id
+    assert source_webspace_id_for("unrelated-dev") == "unrelated-dev"
 
 
 @pytest.mark.asyncio
-async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_path: Path) -> None:
+async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path: Path) -> None:
     calls: list[tuple[str, str, str, bool]] = []
 
     class _Webspaces:
@@ -53,7 +55,10 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
 
     binding = await service.ensure_dev_webspace("desktop", active_draft_id="draft.shopping")
     assert binding["source_webspace_id"] == "desktop"
-    assert binding["dev_webspace_id"] == "desktop-dev"
+    preview_id = binding["preview_webspace_id"]
+    assert preview_id.startswith("preview-")
+    assert binding["dev_webspace_id"] == preview_id
+    assert binding["relationship"]["target_webspace_id"] == preview_id
     assert binding["scenario_id"] == "prompt_engineer_scenario"
     assert binding["runtime_scenario_id"] == "web_desktop"
     assert binding["active_draft_id"] == "draft.shopping"
@@ -63,14 +68,14 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert binding["dialog"]["topic_id"] == "builder:desktop:draft.shopping"
     assert binding["dialog"]["meta"]["thread_id"] == "thread.builder.desktop.draft.shopping"
     assert binding["dialog"]["meta"]["builder_topic"]["active_draft_id"] == "draft.shopping"
-    assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
+    assert calls == [(preview_id, "DEV: desktop", "web_desktop", True)]
 
     reused = await service.ensure_dev_webspace("desktop", active_draft_id="draft.next")
     assert reused["created"] is False
     assert reused["active_draft_id"] == "draft.next"
     assert reused["dialog"]["thread_id"] == "thread.builder.desktop.draft.next"
-    assert calls == [("desktop-dev", "DEV: desktop", "web_desktop", True)]
-    assert service.webspace_service.items["desktop-dev"].home_scenario == "web_desktop"
+    assert calls == [(preview_id, "DEV: desktop", "web_desktop", True)]
+    assert service.webspace_service.items[preview_id].home_scenario == "web_desktop"
 
     selected = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
     assert selected["runtime_scenario_id"] == "demo_scenario"
@@ -78,12 +83,12 @@ async def test_ensure_dev_webspace_creates_deterministic_prompt_ide_binding(tmp_
     assert selected["dialog"]["thread_id"] == "prompt-project:scenario:demo_scenario"
     assert selected["dialog"]["topic_id"] == "prompt-project:scenario:demo_scenario"
     assert selected["dialog"]["meta"]["conversation_topic_id"] == "prompt-project:scenario:demo_scenario"
-    assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
+    assert selected["preview_webspace_id"] == preview_id
 
     opened = await service.open_dev_webspace_ready("desktop", base_url="http://localhost:8100")
-    assert opened["url"] == "http://localhost:8100/?webspace=desktop-dev"
+    assert opened["url"] == f"http://localhost:8100/?webspace={preview_id}"
     assert opened["binding"]["runtime_scenario_id"] == "demo_scenario"
-    assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
+    assert service.webspace_service.items[preview_id].home_scenario == "web_desktop"
 
 
 @pytest.mark.asyncio
@@ -115,7 +120,7 @@ async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip
         {"ok": True, "switch_skipped": True, "skip_reason": "already_current_ready", "scenario_id": "demo_scenario"},
     ]
 
-    async def _switch(webspace_id: str, scenario_id: str, *, set_home=None, wait_for_rebuild=True):
+    async def _switch(webspace_id: str, scenario_id: str, *, set_home=None, wait_for_rebuild=True, **_kwargs):
         switch_calls.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
         return switch_results.pop(0)
 
@@ -130,21 +135,22 @@ async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip
     service = BuilderWorkbenchService(state_dir=tmp_path / "state")
 
     first = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
+    preview_id = first["preview_webspace_id"]
     assert first["runtime"]["switch"]["scenario_id"] == "demo_scenario"
     assert reload_calls == []
 
     second = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
-    assert second["runtime"]["switch"]["skip_reason"] == "already_current_ready"
+    assert second["runtime"]["coalesced"] is True
+    assert second["runtime"]["switch"]["scenario_id"] == "demo_scenario"
     assert "reload" not in second["runtime"]
     assert switch_calls == [
-        ("desktop-dev", "demo_scenario", True, True),
-        ("desktop-dev", "demo_scenario", True, True),
+        (preview_id, "demo_scenario", True, True),
     ]
     assert reload_calls == []
 
 
 @pytest.mark.asyncio
-async def test_ensure_dev_webspace_can_switch_without_waiting_for_rebuild(monkeypatch, tmp_path: Path) -> None:
+async def test_ensure_dev_webspace_schedules_reconcile_but_waits_inside_single_worker(monkeypatch, tmp_path: Path) -> None:
     class _Webspaces:
         def list(self, mode: str = "mixed"):
             return []
@@ -156,7 +162,7 @@ async def test_ensure_dev_webspace_can_switch_without_waiting_for_rebuild(monkey
 
     switch_calls: list[tuple[str, str, bool | None, bool]] = []
 
-    async def _switch(webspace_id: str, scenario_id: str, *, set_home=None, wait_for_rebuild=True):
+    async def _switch(webspace_id: str, scenario_id: str, *, set_home=None, wait_for_rebuild=True, **_kwargs):
         switch_calls.append((webspace_id, scenario_id, set_home, wait_for_rebuild))
         return {"ok": True, "scenario_id": scenario_id, "background_rebuild": not wait_for_rebuild}
 
@@ -170,8 +176,74 @@ async def test_ensure_dev_webspace_can_switch_without_waiting_for_rebuild(monkey
         wait_for_rebuild=False,
     )
 
-    assert result["runtime"]["switch"]["background_rebuild"] is True
-    assert switch_calls == [("desktop-dev", "demo_scenario", True, False)]
+    await asyncio.sleep(0)
+    preview_id = result["preview_webspace_id"]
+    assert service.reconciler.describe("desktop")["status"] in {"ready", "running"}
+    assert switch_calls == [(preview_id, "demo_scenario", True, True)]
+
+
+@pytest.mark.asyncio
+async def test_rapid_preview_switches_keep_one_materialization_in_flight(monkeypatch, tmp_path: Path) -> None:
+    class _Webspaces:
+        def __init__(self) -> None:
+            self.items: dict[str, SimpleNamespace] = {}
+
+        def list(self, mode: str = "mixed"):
+            return list(self.items.values())
+
+        async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
+            item = SimpleNamespace(
+                id=requested_id,
+                title=title,
+                kind="dev",
+                source_mode="dev",
+                home_scenario=scenario_id,
+            )
+            self.items[requested_id] = item
+            return item
+
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls: list[str] = []
+    active = 0
+    max_active = 0
+
+    async def _switch(_webspace_id: str, scenario_id: str, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        calls.append(scenario_id)
+        try:
+            if scenario_id == "first":
+                first_started.set()
+                await release_first.wait()
+            return {"ok": True, "accepted": True, "scenario_id": scenario_id}
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(webspace_runtime, "WebspaceService", _Webspaces)
+    monkeypatch.setattr(webspace_runtime, "switch_webspace_scenario", _switch)
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    await service.ensure_dev_webspace("desktop", runtime_scenario_id="first", wait_for_rebuild=False)
+    await first_started.wait()
+    await service.ensure_dev_webspace("desktop", runtime_scenario_id="second", wait_for_rebuild=False)
+
+    assert calls == ["first"]
+    assert max_active == 1
+    release_first.set()
+
+    for _index in range(20):
+        if service.reconciler.describe("desktop").get("status") == "ready":
+            break
+        await asyncio.sleep(0)
+
+    state = service.reconciler.describe("desktop")
+    assert calls == ["first", "second"]
+    assert max_active == 1
+    assert state["observed_scenario"] == "second"
 
 
 @pytest.mark.asyncio
@@ -198,8 +270,7 @@ async def test_ensure_dev_webspace_reports_yjs_panic_without_raising(monkeypatch
     result = await service.ensure_dev_webspace("desktop", runtime_scenario_id="demo_scenario")
 
     assert result["runtime"]["ok"] is False
-    assert result["runtime"]["error"] == "dev_runtime_reload_failed"
-    assert "_YjsPanic" in result["runtime"]["detail"]
+    assert "_YjsPanic" in result["runtime"]["error"]
 
 
 def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> None:
@@ -396,7 +467,8 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
 
     response = client.post("/api/builder/workbench/active-draft", json={"webspace_id": "desktop", "draft_id": "draft.one"})
     assert response.status_code == 200
-    assert response.json()["binding"]["dev_webspace_id"] == "desktop-dev"
+    preview_id = response.json()["binding"]["preview_webspace_id"]
+    assert preview_id.startswith("preview-")
 
     response = client.get("/api/builder/workbench/binding", params={"webspace_id": "desktop"})
     assert response.status_code == 200
@@ -411,9 +483,9 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
         },
     )
     assert response.status_code == 200
-    assert response.json()["url"] == "http://localhost:8100/?webspace=desktop-dev"
+    assert response.json()["url"] == f"http://localhost:8100/?webspace={preview_id}"
     assert response.json()["binding"]["runtime_scenario_id"] == "demo_scenario"
-    assert service.webspace_service.items["desktop-dev"].home_scenario == "demo_scenario"
+    assert service.webspace_service.items[preview_id].home_scenario == "web_desktop"
 
     response = client.get("/api/builder/workbench/dialog-widget", params={"webspace_id": "desktop"})
     assert response.status_code == 200
