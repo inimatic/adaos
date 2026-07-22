@@ -75,7 +75,11 @@ The production strategy is baseline-first with parallel upgrade:
 6. Demote commands/events to `/ws` and sync to `/yws` quickly on direct-path
    failure. Demotion must not mark the whole browser offline if the baseline
    path is still healthy.
-7. Keep HTTP request-scoped actions, snapshots, and diagnostics as the brownout
+7. While the baseline path remains healthy, keep one bounded recovery timer for
+   the preferred direct path. A disconnect grace period, failed probe, backoff,
+   or cooldown must always end in another scheduled probe; a page reload must
+   never be required to promote the connection back to WebRTC.
+8. Keep HTTP request-scoped actions, snapshots, and diagnostics as the brownout
    fallback. Long polling may be used for last-resort progress/diagnostics, but
    it is not the steady-state realtime channel.
 
@@ -153,6 +157,8 @@ Required for a reliable hub-browser quality bar:
 - [x] Surface the selected transport and fallback reason per semantic channel.
 - [x] Define the production protocol strategy as baseline-first with parallel
       WebRTC upgrade and explicit demotion.
+- [x] Re-arm WebRTC promotion after disconnect grace, retry backoff, and
+      in-memory cooldown without requiring browser reload.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
 - [ ] Report Yjs first-sync latency and pressure as hub-browser quality gates.
 - [ ] Record browser route/WebRTC/YWS fallback windows in the incident registry.
