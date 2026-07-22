@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/adaos-y-py-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.adaos/build/y-py-target
     strategy:
       fail-fast: false
       matrix:

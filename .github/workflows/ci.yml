@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/adaos-y-py-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.adaos/build/y-py-target
       PYTHONIOENCODING: utf-8
       MONOREPO_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaoskills.git' }}
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -97,7 +97,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 75
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/adaos-y-py-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.adaos/build/y-py-target
       PYTHONIOENCODING: utf-8
       MONOREPO_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaoskills.git' }}
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
