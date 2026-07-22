@@ -503,7 +503,14 @@ def _route_tunnel_supervisor_http_endpoint() -> tuple[str, int] | None:
 
 
 def _route_tunnel_supervisor_runtime_endpoint() -> tuple[str, int] | None:
-    return _route_tunnel_supervisor_state_endpoint() or _route_tunnel_supervisor_http_endpoint()
+    endpoint = _route_tunnel_supervisor_state_endpoint()
+    if endpoint is not None:
+        return endpoint
+    # Process-local status snapshots must never synchronously call back into
+    # the single-threaded supervisor that is currently building the snapshot.
+    if str(os.getenv("ADAOS_REALTIME_CHILD") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    return _route_tunnel_supervisor_http_endpoint()
 
 
 def _route_tunnel_listener_url(*, host: str, port: int, path: str) -> str:

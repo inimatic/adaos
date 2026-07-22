@@ -256,6 +256,30 @@ def test_realtime_sidecar_route_tunnel_discovers_runtime_from_persisted_supervis
     assert listeners["yws"]["upstream_url"] == "ws://127.0.0.1:8788/yws"
 
 
+def test_realtime_sidecar_parent_snapshot_does_not_http_probe_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADAOS_REALTIME_CHILD", raising=False)
+    monkeypatch.setattr(realtime_sidecar_mod, "_route_tunnel_supervisor_state_endpoint", lambda: None)
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_route_tunnel_supervisor_http_endpoint",
+        lambda: (_ for _ in ()).throw(AssertionError("parent status snapshot must not call supervisor HTTP")),
+    )
+
+    assert realtime_sidecar_mod._route_tunnel_supervisor_runtime_endpoint() is None
+
+
+def test_realtime_sidecar_child_can_fallback_to_supervisor_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_CHILD", "1")
+    monkeypatch.setattr(realtime_sidecar_mod, "_route_tunnel_supervisor_state_endpoint", lambda: None)
+    monkeypatch.setattr(realtime_sidecar_mod, "_route_tunnel_supervisor_http_endpoint", lambda: ("127.0.0.1", 8778))
+
+    assert realtime_sidecar_mod._route_tunnel_supervisor_runtime_endpoint() == ("127.0.0.1", 8778)
+
+
 def test_realtime_sidecar_route_tunnel_refreshes_upstream_after_slot_switch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

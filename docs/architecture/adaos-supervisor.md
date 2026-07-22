@@ -235,6 +235,11 @@ The supervisor is not the authority for:
 - whether transport-level path selection is healthy beyond its delegated runtimes
 - business-policy decisions inside degraded hub execution
 
+Supervisor status assembly must remain process-local and non-blocking. In
+particular, a sidecar snapshot built inside the supervisor may read persisted
+runtime state but must not synchronously call the supervisor's own HTTP API;
+only the separate sidecar child process may use that HTTP fallback.
+
 But the supervisor must remain able to enforce locally visible continuity guards exposed by the runtime model, for example:
 
 - defer member update while member-owned live media remains active
