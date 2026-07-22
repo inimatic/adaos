@@ -116,6 +116,20 @@ For the target browser contract, the same rule can be expressed as:
 Skills and scenarios should not invent a second hidden state vocabulary on top
 of those three families when designing semantic browser surfaces.
 
+Named-entity and lookup projections are part of the reconnect-stable Yjs
+contract, but their source aggregation is not a foreground UI action. Runtime
+diagnostics expose `named_entities.projection.last_timings_ms` with source
+breakdown keys such as `source.devices`, `source.lookups`,
+`registry.collect_sources`, and `registry.payload`. A projection may report
+`last_snapshot_mode=deferred_room_not_ready`; that means the registry refresh
+was intentionally left pending until the live room became ready instead of
+building a payload that could not be applied.
+
+`collect_desktop_lookup_tables` caches baseline skill/scenario lookup buckets
+by manifest file stamps for a short TTL. The requested `webspace_id` is added
+after the cache read, so repeated desktop/dev preview refreshes do not rescan
+all manifests while still preserving workspace-local lookup identity.
+
 ## Stream Receivers
 
 `webui.json` can now declare transport-independent browser receivers:
@@ -720,6 +734,7 @@ pointer-only scenario switch can be evaluated against real runtime slices:
 * `apply_summary.phases.structure`
 * `apply_summary.phases.interactive`
 * `apply_summary.fingerprint_unchanged_branches`
+* `apply_summary.trusted_previous_fingerprint_patch_branches`
 
 For repeated operator measurements, use:
 
@@ -787,12 +802,24 @@ grew too large.
 
 When replay pressure does trigger compaction, YStore can now also schedule a
 debounced auto-backup to disk and attempt to collapse the in-memory log to a
-single base snapshot. This is intended to shorten later cold-room replay
-paths, not to change the semantic source of truth. The related knobs are:
+single base snapshot. If concurrent writes append while the snapshot is being
+encoded, the compacted prefix is kept as the new base and the newer updates
+remain as the replay tail; a short retry is scheduled when that tail is still
+over the soft pressure threshold. This is intended to shorten later cold-room
+replay paths, not to change the semantic source of truth. The related knobs are:
 
 * `ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT`
 * `ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC`
 * `ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC`
+* `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_BYTES` (default 1 MiB)
+* `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_ENTRIES` (default half of the
+  replay window, at least 4)
+* `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_DEBOUNCE_SEC` (default 1s)
+
+The replay-pressure auto-backup is a soft latency guard. It can compact long
+before the hard replay byte or entry limits are reached, so repeated UI
+switching does not leave the next detached YDoc open paying for megabytes of
+bounded-but-slow replay.
 
 Operator-triggered room reset/reload now also uses that same storage path more
 deliberately: after a live YRoom is dropped, the runtime releases the old room

@@ -35,6 +35,38 @@ def test_desktop_lookup_tables_collect_workspace_ids() -> None:
     assert any(entry.get("lookup") == "scenario_id" for entry in rasa_entries)
 
 
+def test_desktop_lookup_tables_reuses_baseline_cache_across_webspaces(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    import adaos.services.nlu_lookup_tables as lookups
+
+    lookups._BASELINE_BUCKET_CACHE.clear()
+    calls = {"json": 0, "yaml": 0}
+    original_read_json = lookups._read_json
+    original_read_yaml = lookups._read_yaml
+
+    def _count_json(path):
+        calls["json"] += 1
+        return original_read_json(path)
+
+    def _count_yaml(path):
+        calls["yaml"] += 1
+        return original_read_yaml(path)
+
+    monkeypatch.setattr(lookups, "_read_json", _count_json)
+    monkeypatch.setattr(lookups, "_read_yaml", _count_yaml)
+
+    first = lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="desktop")
+    first_calls = dict(calls)
+    second = lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="dev1")
+
+    assert first["webspace_id"] == "desktop"
+    assert second["webspace_id"] == "dev1"
+    assert lookups.lookup_values(first, "webspace_id") == ["desktop"]
+    assert lookups.lookup_values(second, "webspace_id") == ["dev1"]
+    assert calls == first_calls
+    assert first_calls["json"] > 0
+
+
 @pytest.mark.anyio
 async def test_desktop_lookup_tables_overlay_live_yjs_registry() -> None:
     from adaos.services.agent_context import get_ctx

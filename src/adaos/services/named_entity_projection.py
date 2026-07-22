@@ -349,6 +349,7 @@ def _new_reconcile_state(webspace_id: str) -> dict[str, Any]:
         "dirty_sources": set(),
         "fingerprint_hints": {},
         "fingerprint_hints_complete": True,
+        "allow_detached_build": False,
         "last_reason": None,
         "last_outcome": None,
         "last_error": None,
@@ -482,9 +483,46 @@ async def _run_reconciler(webspace_id: str) -> None:
     current_task = asyncio.current_task()
     try:
         while True:
+            total_started = time.perf_counter()
+            room_generation = _current_live_room_generation(webspace_id)
             with _RECONCILE_LOCK:
                 state = _reconcile_state(webspace_id)
                 target_generation = int(state["requested_generation"])
+                allow_detached_build = bool(state.get("allow_detached_build"))
+                if room_generation is None and not allow_detached_build:
+                    state["pending"] = True
+                    state["last_outcome"] = "pending_room"
+                    state["last_error"] = None
+                    state["last_snapshot_mode"] = "deferred_room_not_ready"
+                    state["last_command"] = {
+                        "accepted": False,
+                        "applied": False,
+                        "changed": False,
+                        "reason": "room_not_ready",
+                        "handoff": "skipped",
+                        "room_generation": None,
+                        "expected_room_generation": None,
+                        "queue_ms": 0.0,
+                        "apply_ms": 0.0,
+                        "total_ms": 0.0,
+                        "update_bytes": 0,
+                        "encode_mode": "none",
+                        "projection_patch_mode": "deferred",
+                        "changed_ref_total": 0,
+                        "error": None,
+                    }
+                    state["last_updated_at"] = time.time()
+                    state["in_flight"] = False
+                    with _DIAGNOSTICS_LOCK:
+                        _DIAGNOSTICS["reconcile_total"] = int(_DIAGNOSTICS.get("reconcile_total") or 0) + 1
+                    _record_projection_attempt(
+                        webspace_id=webspace_id,
+                        outcome="pending",
+                        payload_bytes=0,
+                        timings_ms={"deferred_room_not_ready": _elapsed_ms(total_started)},
+                        snapshot_mode="deferred_room_not_ready",
+                    )
+                    return
                 refresh = bool(state["refresh_required"])
                 refresh_all = bool(state["refresh_all_required"])
                 dirty_sources = tuple(sorted(state["dirty_sources"]))
@@ -495,9 +533,9 @@ async def _run_reconciler(webspace_id: str) -> None:
                 state["dirty_sources"].clear()
                 state["fingerprint_hints"].clear()
                 state["fingerprint_hints_complete"] = True
+                state["allow_detached_build"] = False
                 state["in_flight"] = True
                 state["last_error"] = None
-            total_started = time.perf_counter()
             build_started = time.perf_counter()
             if refresh:
                 registry = named_entities.get_named_entity_registry()
@@ -526,9 +564,15 @@ async def _run_reconciler(webspace_id: str) -> None:
                 )
                 snapshot_mode = "cache"
             timings_ms = {"snapshot_build": _elapsed_ms(build_started)}
+            try:
+                for source, value in dict(getattr(snapshot, "source_timings_ms", {}) or {}).items():
+                    timings_ms[f"source.{source}"] = float(value)
+                for phase, value in dict(getattr(snapshot, "phase_timings_ms", {}) or {}).items():
+                    timings_ms[f"registry.{phase}"] = float(value)
+            except Exception:
+                pass
             payload_bytes = _payload_size_bytes(snapshot.payload)
             apply_started = time.perf_counter()
-            room_generation = _current_live_room_generation(webspace_id)
             with _RECONCILE_LOCK:
                 state = _reconcile_state(webspace_id)
                 applied_revision = int(state.get("applied_revision") or 0)
@@ -675,6 +719,7 @@ async def request_named_entity_projection(
     wait: bool = False,
     dirty_sources: Iterable[str] | None = None,
     fingerprint_hints: Mapping[str, str] | None = None,
+    allow_detached_build: bool = False,
 ) -> dict[str, Any]:
     webspace = str(webspace_id or default_webspace_id()).strip() or default_webspace_id()
     loop = asyncio.get_running_loop()
@@ -704,6 +749,8 @@ async def request_named_entity_projection(
                 if not fingerprint_hints:
                     state["fingerprint_hints_complete"] = False
         state["last_reason"] = str(reason or "registry_changed")
+        if allow_detached_build or wait:
+            state["allow_detached_build"] = True
         task = state.get("task")
         if not isinstance(task, asyncio.Task) or task.done():
             task = loop.create_task(_run_reconciler(webspace), name=f"named-entity-projection:{webspace}")
@@ -733,6 +780,7 @@ async def project_named_entity_registry(*, webspace_id: str | None = None) -> di
         reason="explicit_projection",
         refresh=True,
         wait=True,
+        allow_detached_build=True,
     )
     return dict(named_entities.named_entity_registry_snapshot(webspace_id=webspace).payload)
 

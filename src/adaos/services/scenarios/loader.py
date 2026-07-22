@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -18,6 +19,15 @@ _MANIFEST_CACHE: Dict[Tuple[str, str], Tuple[Tuple[str, int, int], Dict[str, Any
 def _file_stamp(path: Path) -> Tuple[str, int, int]:
     stat = path.stat()
     return (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _safe_file_stamp(path: Path) -> Tuple[str, int, int] | None:
+    try:
+        if not path.is_file():
+            return None
+        return _file_stamp(path)
+    except Exception:
+        return None
 
 
 def _read_cached_mapping_file(
@@ -151,6 +161,57 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
     return {}
 
 
+def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -> str:
+    """
+    Return a cheap filesystem fingerprint for the scenario source.
+
+    Runtime materialization cache keys need to change when the source scenario
+    changes, but computing that key must not parse every skill or rebuild the
+    scenario. Track the files that can feed read_content/read_manifest,
+    including Builder UI manifests referenced from scenario.json.
+    """
+    token = str(scenario_id or "").strip()
+    if not token:
+        return ""
+    normalized_space = "dev" if str(space or "").strip() == "dev" else "workspace"
+    files: list[tuple[str, int, int]] = []
+    for root in _candidate_roots(token, normalized_space):
+        root = Path(root)
+        for name in ("scenario.yaml", "scenario.json"):
+            stamp = _safe_file_stamp(root / name)
+            if stamp is not None:
+                files.append(stamp)
+        content_path = root / "scenario.json"
+        if content_path.is_file():
+            try:
+                raw = json.loads(content_path.read_text(encoding="utf-8-sig") or "{}")
+            except Exception:
+                raw = {}
+            ui = raw.get("ui") if isinstance(raw, dict) and isinstance(raw.get("ui"), dict) else {}
+            manifest_name = str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
+            if manifest_name:
+                try:
+                    manifest_path = (root / manifest_name).resolve()
+                    root_resolved = root.resolve()
+                    if manifest_path.parent == root_resolved:
+                        stamp = _safe_file_stamp(manifest_path)
+                        if stamp is not None:
+                            files.append(stamp)
+                except Exception:
+                    pass
+        if files:
+            break
+    if not files:
+        return ""
+    snapshot = {
+        "scenario_id": token,
+        "space": normalized_space,
+        "files": files,
+    }
+    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:16]
+
+
 def _resolve_ui_manifest(content: Dict[str, Any], *, scenario_root: Path) -> Dict[str, Any]:
     """Resolve a Builder-owned scenario ``webui.json`` into runtime content.
 
@@ -241,4 +302,12 @@ def invalidate_cache(*, scenario_id: str | None = None, space: str | None = None
         _MANIFEST_CACHE.pop(key, None)
 
 
-__all__ = ["scenario_root", "read_manifest", "read_content", "scenario_exists", "invalidate_cache"]
+__all__ = [
+    "scenario_root",
+    "scenario_root_for_space",
+    "read_manifest",
+    "read_content",
+    "scenario_exists",
+    "scenario_source_fingerprint",
+    "invalidate_cache",
+]

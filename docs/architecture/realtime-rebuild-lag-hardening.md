@@ -183,5 +183,20 @@ When diagnosing a rebuild lag incident:
 6. Correlate `named_entities.projection` with `yjs.live_room_command`; a large
    snapshot-build value points to source aggregation, queue time points to
    owner-loop contention, and apply time/update bytes point to Yjs mutation.
+   Source breakdown keys such as `source.devices`, `source.lookups`,
+   `registry.collect_sources`, and `registry.payload` identify whether the
+   cost is device inventory, manifest lookup aggregation, payload hashing, or
+   the Yjs owner mutation. `deferred_room_not_ready` is expected during cold
+   room attach and means payload construction was skipped until `room_ready`.
 7. Check `last_snapshot_mode`, `projection_patch_mode`, room generation, and
    `fingerprint_skip_total` before attributing repeated events to coalescing.
+8. For cold reconnect lag, separate startup event handlers from scenario
+   switch cost. `browsers_skill`, diagnostics, notebook, voice/chat, and other
+   stream snapshot handlers may run during browser attach; they should schedule
+   projection work and avoid synchronous snapshot construction in subscription
+   handlers.
+9. If `scenario_projection_sync` is dominated by `ystore_apply_updates`, inspect
+   `replay_window_entries`, `replay_window_bytes`, `last_auto_backup_reason`,
+   and `auto_backup_inflight`. Replay pressure detected during an auto-backup
+   cooldown should leave a delayed backup scheduled; otherwise the next cold
+   room open can pay the replay cost before compaction has a chance to run.

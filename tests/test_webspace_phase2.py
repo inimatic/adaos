@@ -2769,6 +2769,125 @@ def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> No
     assert not list(tmp_path.glob("*.json"))
 
 
+def test_payload_only_materialized_worker_cache_round_trips_without_snapshot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
+
+    webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE.clear()  # noqa: SLF001
+    identity = {
+        "key_hash": "payload-cache-key",
+        "key": "payload-cache-key",
+        "webspace_id": "desktop-dev",
+        "scenario_id": "todo_scenario",
+    }
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop-dev",
+        scenario_id="todo_scenario",
+        source_mode="dev",
+        application={"desktop": {"pageSchema": {"id": "page", "widgets": []}}},
+        catalog={"apps": [{"id": "todo"}], "widgets": []},
+        registry={"modals": [], "widgets": []},
+        installed={"apps": ["todo"], "widgets": []},
+        desktop={"pageSchema": {"id": "page", "widgets": []}},
+        webio={"receivers": {}},
+        routing={"routes": {}},
+        skill_decls=[],
+    )
+    payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
+    worker_result = {
+        "materialized_payload": payload,
+        "rebuild_timings_ms": {"total": 123.0},
+        "resolver_debug": {"source": "test"},
+        "apply_summary": {"payload_only": True},
+        "ydoc_timings_ms": {"total": 456.0},
+    }
+
+    webspace_runtime_module._remember_materialized_worker_result(  # noqa: SLF001
+        identity,
+        worker_result,
+        cache_mode="payload_only",
+        require_snapshot=False,
+    )
+    webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE.clear()  # noqa: SLF001
+
+    cached = webspace_runtime_module._get_cached_materialized_worker_result(  # noqa: SLF001
+        identity,
+        cache_mode="payload_only",
+        require_snapshot=False,
+    )
+    fresh_doc_cached = webspace_runtime_module._get_cached_materialized_worker_result(identity)  # noqa: SLF001
+
+    assert cached is not None
+    assert cached["snapshot_update"] == b""
+    assert cached["materialized_payload"]["scenario_id"] == "todo_scenario"
+    assert cached["materialization_cache"]["hit"] is True
+    assert cached["materialization_cache"]["source"] == "disk"
+    assert cached["materialization_cache"]["mode"] == "payload_only"
+    assert cached["apply_summary"]["payload_only"] is True
+    assert fresh_doc_cached is None
+
+    dropped = webspace_runtime_module._drop_materialized_cache_for_webspace(  # noqa: SLF001
+        "desktop-dev",
+        scenario_id="todo_scenario",
+    )
+    assert dropped == {"memory": 1, "disk": 1}
+
+
+def test_materialization_cache_invalidation_without_scenario_drops_whole_webspace(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
+
+    webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE.clear()  # noqa: SLF001
+    webspace_runtime_module._SKILL_SOURCE_FINGERPRINT_CACHE["workspace"] = (123.0, "stale")  # noqa: SLF001
+    for scenario_id in ("builder", "web_desktop"):
+        identity = {
+            "key_hash": f"{scenario_id}-cache-key",
+            "key": f"{scenario_id}-cache-key",
+            "webspace_id": "desktop",
+            "scenario_id": scenario_id,
+        }
+        resolved = webspace_runtime_module.WebspaceResolverOutputs(
+            webspace_id="desktop",
+            scenario_id=scenario_id,
+            source_mode="workspace",
+            application={"desktop": {"pageSchema": {"id": scenario_id, "widgets": []}}},
+            catalog={"apps": [], "widgets": []},
+            registry={"modals": [], "widgets": []},
+            installed={"apps": [], "widgets": []},
+            desktop={"pageSchema": {"id": scenario_id, "widgets": []}},
+            webio={"receivers": {}},
+            routing={"routes": {}},
+            skill_decls=[],
+        )
+        payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
+        webspace_runtime_module._remember_materialized_worker_result(  # noqa: SLF001
+            identity,
+            {
+                "snapshot_update": b"snapshot",
+                "state_vector": b"state-vector",
+                "materialized_payload": payload,
+                "rebuild_timings_ms": {"total": 1.0},
+                "resolver_debug": {"source": "test"},
+                "ydoc_timings_ms": {"total": 1.0},
+            },
+        )
+
+    result = webspace_runtime_module.invalidate_webspace_materialization_cache(
+        "desktop",
+        reason="skill_activate:test",
+        action="skill_activation_sync",
+        source_of_truth="skill_runtime",
+    )
+
+    assert result["materialization"]["cache_drop_scope"] == "webspace"
+    assert result["materialization"]["cache_dropped"] == {"memory": 2, "disk": 2}
+    assert not webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE  # noqa: SLF001
+    assert not webspace_runtime_module._SKILL_SOURCE_FINGERPRINT_CACHE  # noqa: SLF001
+    assert not list(tmp_path.glob("*.json"))
+
+
 def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materialization(monkeypatch) -> None:
     webspace_id = "phase2-same-current-mismatch"
     ensure_workspace(webspace_id)
@@ -4764,6 +4883,95 @@ def test_phase5_apply_trusts_previous_materialized_fingerprint_without_live_bran
     assert summary["branch_apply_modes"]["data.webio"] == "trusted_previous_fingerprint_unchanged"
     assert summary["trusted_fingerprint_unchanged_paths"] == ["data.webio"]
     assert summary["branch_timings_ms"]["data.webio"]["presence_check"] >= 0.0
+
+
+def test_phase5_apply_trusts_previous_materialized_fingerprint_for_patch_base(monkeypatch) -> None:
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)
+
+    live_catalog_sentinel = object()
+    original_fingerprint = webspace_runtime_module._fingerprint_json_like
+
+    def _fingerprint(value):
+        if value is live_catalog_sentinel:
+            raise AssertionError("trusted patch base should not fingerprint live data.catalog")
+        return original_fingerprint(value)
+
+    monkeypatch.setattr(webspace_runtime_module, "_fingerprint_json_like", _fingerprint)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_trust_previous_materialized_branch_fingerprints_enabled",
+        lambda: True,
+    )
+
+    previous_catalog = {"apps": [{"id": "old"}], "widgets": []}
+    next_catalog = {"apps": [{"id": "new"}], "widgets": []}
+    previous_catalog_fingerprint = original_fingerprint(previous_catalog)
+    next_catalog_fingerprint = original_fingerprint(next_catalog)
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="phase5-trusted-patch-base",
+        scenario_id="builder",
+        source_mode="workspace",
+        application={"desktop": {"pageSchema": {"id": "next"}}},
+        catalog=next_catalog,
+        registry={"modals": [], "widgets": []},
+        installed={"apps": [], "widgets": []},
+        desktop={"installed": {"apps": [], "widgets": []}},
+        webio={"receivers": {}},
+        routing={"routes": {}},
+        skill_decls=[],
+    )
+    previous = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id=resolved.webspace_id,
+        scenario_id="web_desktop",
+        source_mode="workspace",
+        application=resolved.application,
+        catalog=previous_catalog,
+        registry=resolved.registry,
+        installed=resolved.installed,
+        desktop=resolved.desktop,
+        webio=resolved.webio,
+        routing=resolved.routing,
+        skill_decls=[],
+    )
+    fake_state = {
+        "ui": _CountingMap({"application": previous.application, "current_scenario": previous.scenario_id}),
+        "registry": _CountingMap(
+            {
+                "merged": previous.registry,
+                "runtime_meta": {
+                    webspace_runtime_module._RUNTIME_META_EFFECTIVE_BRANCH_FINGERPRINTS_KEY: {
+                        "data.catalog": previous_catalog_fingerprint,
+                    }
+                },
+            }
+        ),
+        "data": _CountingMap(
+            {
+                "catalog": live_catalog_sentinel,
+                "installed": previous.installed,
+                "desktop": previous.desktop,
+                "webio": previous.webio,
+                "routing": previous.routing,
+            }
+        ),
+        "runtime": _CountingMap({"environment": webspace_runtime_module.runtime_environment_payload()}),
+    }
+
+    runtime._apply_resolved_state_in_doc(
+        _FakeDoc(fake_state),
+        "phase5-trusted-patch-base",
+        resolved,
+        previous_resolved=previous,
+        resolved_branch_fingerprints_override={"data.catalog": next_catalog_fingerprint},
+        previous_branch_fingerprints_override={"data.catalog": previous_catalog_fingerprint},
+    )
+
+    summary = runtime._last_apply_summary or {}
+    assert summary["trusted_previous_fingerprint_patch_paths"] == ["data.catalog"]
+    assert summary["branch_timings_ms"]["data.catalog"]["previous_fingerprint_trusted"] >= 0.0
+    assert "previous_actual_fingerprint" not in summary["branch_timings_ms"]["data.catalog"]
+    assert fake_state["data"].get("catalog") == next_catalog
 
 
 def test_phase5_derive_phase_timings_uses_semantic_phase_breakdown() -> None:

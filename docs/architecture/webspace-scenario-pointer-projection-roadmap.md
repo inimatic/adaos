@@ -122,6 +122,24 @@ ownership model, see:
   does not auto-persist `home_scenario` for dev webspaces. Persisting home is an
   explicit `set_home=true` operation, so repeated preview/browse switches do
   not pay workspace-listing sync cost or mutate restart defaults by accident.
+- Hot-switch hardening checkpoint as of 2026-07-22:
+  builder/web_desktop scenario toggles use payload-only materialization cache
+  entries keyed by source fingerprints and active skill declaration stamps.
+  Live-room apply trusts runtime-owned previous branch fingerprints for patch
+  base verification, so ordinary toggles avoid re-reading large live YDoc
+  branches. YStore auto-backup now treats replay pressure as durable work even
+  during the auto-backup cooldown: if a replay tail appears immediately after a
+  backup, a delayed backup is scheduled instead of waiting for another write.
+  This prevents cold `scenario_projection_sync` from paying a multi-second
+  replay cost on the next room open.
+- Startup projection checkpoint as of 2026-07-22:
+  named-entity projection defers expensive registry snapshot construction while
+  the target live room is not ready, keeping the dirty source set pending until
+  `room_ready`. Registry diagnostics now include per-source timings
+  (`source.static`, `source.subnet`, `source.devices`, `source.lookups`) and
+  registry phases. NLU lookup baseline buckets are cached by workspace manifest
+  stamps and a short TTL, while the requested `webspace_id` remains uncached per
+  call.
 
 ## Implementation Anchors
 
@@ -565,6 +583,15 @@ runtime can skip reopening that heavy branch for deep equality checks. This is
 an intermediate fast-path before full top-level diff-apply, and benchmark/apply
 diagnostics now surface those `fingerprint_unchanged_branches` counts.
 
+The same runtime-owned fingerprints are also trusted as the previous
+materialized branch identity during live-room payload apply. When the previous
+materialized payload fingerprint matches
+`registry.runtime_meta.effective_branch_fingerprints`, patch/diff application
+does not re-hash the large live branch just to verify the patch base. This is
+valid because effective branches are runtime-owned materialization output, not
+browser-owned collaborative data. Diagnostics surface
+`trusted_previous_fingerprint_patch_branches` when this path is used.
+
 Bootstrap compatibility fallback now also stays on the incremental YStore path
 when possible: if the default webspace has to seed legacy compatibility caches,
 bootstrap writes a diff update over the already-open document and only falls
@@ -744,13 +771,25 @@ windows over time, even when many small diff updates accumulate.
 
 To reduce repeated cold-open cost after replay pressure, YStore can now also
 schedule a debounced auto-backup after pressure compaction. That backup writes
-an up-to-date snapshot file and, when no newer writes raced ahead, collapses
-the in-memory log to a single base snapshot (`backup_compaction`). The knobs
-are:
+an up-to-date snapshot file and collapses the in-memory log. If concurrent
+writes append while the backup is encoding, YStore compacts the already-encoded
+prefix and preserves the newer replay tail (`backup_prefix_compaction`) instead
+of leaving the whole replay log inflated. If that tail still exceeds the soft
+pressure threshold, a short retry compaction is scheduled. The knobs are:
 
 - `ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT`
 - `ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC`
 - `ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC`
+- `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_BYTES` (default 1 MiB)
+- `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_ENTRIES` (default half of the
+  replay window, at least 4)
+- `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_DEBOUNCE_SEC` (default 1s)
+
+This soft replay-pressure path is intentionally separate from the hard
+`ADAOS_YSTORE_MAX_REPLAY_BYTES` / `ADAOS_YSTORE_MAX_UPDATES` limits. The hard
+limits keep the runtime bounded; the soft path keeps interactive reopen and
+scenario-projection latency from degrading while the tail is still technically
+within bounds.
 
 Operator recovery paths were also tightened so performance work is not masked
 by recovery fan-out:

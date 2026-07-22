@@ -2424,6 +2424,8 @@ class BootstrapService:
                                 tasks.sort(key=lambda t: (0 if t is asyncio.current_task() else 1, t.get_name()))
                                 lines: list[str] = []
                                 for t in tasks[:dump_top]:
+                                    frames = None
+                                    top = None
                                     try:
                                         frames = t.get_stack(limit=1)
                                         top = frames[-1] if frames else None
@@ -2436,6 +2438,14 @@ class BootstrapService:
                                         lines.append(f"- task={t.get_name()} done={t.done()} cancelled={t.cancelled()} at={loc}")
                                     except Exception:
                                         continue
+                                    finally:
+                                        # Do not keep frame objects in the lag
+                                        # monitor coroutine. Frames can retain
+                                        # y_py locals and later release them from
+                                        # an unrelated thread during GC.
+                                        del top
+                                        del frames
+                                del tasks
                                 try:
                                     backlog_fn = getattr(core_bus, "backlog_snapshot", None)
                                     backlog = backlog_fn() if callable(backlog_fn) else {}

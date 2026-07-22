@@ -818,6 +818,7 @@ def _compact_materialized_payload_apply_result_for_log(value: Any) -> dict[str, 
                 "diff_applied_branches",
                 "patch_applied_branches",
                 "trusted_fingerprint_unchanged_branches",
+                "trusted_previous_fingerprint_patch_branches",
                 "fingerprint_unchanged_branches",
                 "stale_fingerprint_branches",
             )

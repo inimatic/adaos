@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -879,6 +880,98 @@ async def test_project_named_entity_registry_stays_pending_without_live_room(mon
     assert diagnostics["detached_total"] == 0
     assert diagnostics["last_payload_bytes"] > 0
     assert diagnostics["last_timings_ms"]["snapshot_build"] >= 0
+
+
+@pytest.mark.anyio
+async def test_named_entity_projection_defers_background_build_until_room_ready(monkeypatch) -> None:
+    from adaos.services import named_entity_projection
+
+    webspace_id = f"named-entities-{uuid4().hex}"
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    calls = {source: 0 for source in named_entities.REGISTRY_SOURCES}
+    original = service.list_source_entities
+
+    def _counted(source, **kwargs):
+        calls[source] += 1
+        return original(source, **kwargs)
+
+    room_generation: int | None = None
+    applied: list[tuple[int, tuple[str, ...] | None]] = []
+
+    async def _applied(snapshot, **kwargs):
+        changed_refs = kwargs.get("changed_refs")
+        applied.append(
+            (
+                snapshot.revision,
+                tuple(changed_refs) if changed_refs is not None else None,
+            )
+        )
+        return {
+            "accepted": True,
+            "written": True,
+            "payload": dict(snapshot.payload),
+            "command": {
+                "accepted": True,
+                "applied": True,
+                "changed": True,
+                "reason": "applied",
+                "room_generation": room_generation,
+            },
+        }
+
+    monkeypatch.setattr(service, "list_source_entities", _counted)
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
+    monkeypatch.setattr(named_entity_projection, "_current_live_room_generation", lambda _webspace_id: room_generation)
+    monkeypatch.setattr(named_entity_projection, "_apply_snapshot_to_live_room", _applied)
+    named_entity_projection.reset_named_entity_projection_diagnostics()
+    named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
+    named_entities.clear_named_entity_registry(webspace_id=webspace_id)
+
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="browser_session.changed",
+        refresh=True,
+        wait=False,
+        dirty_sources=("devices",),
+    )
+    reconcile = {}
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        reconcile = named_entity_projection.named_entity_projection_reconciler_snapshot(webspace_id=webspace_id)
+        states = reconcile.get("states") if isinstance(reconcile, dict) else None
+        if isinstance(states, list) and states and states[0].get("last_snapshot_mode") == "deferred_room_not_ready":
+            break
+
+    assert calls == {source: 0 for source in named_entities.REGISTRY_SOURCES}
+    assert applied == []
+    assert reconcile["pending_total"] == 1
+    assert reconcile["states"][0]["last_snapshot_mode"] == "deferred_room_not_ready"
+    assert reconcile["states"][0]["dirty_sources"] == ["devices"]
+
+    room_generation = 7
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="room_ready",
+        refresh=False,
+        wait=True,
+    )
+
+    assert calls == {"static": 1, "subnet": 1, "devices": 1, "lookups": 1}
+    assert applied == [(1, None)]
+    diagnostics = named_entity_projection.named_entity_projection_diagnostics_snapshot()
+    assert diagnostics["pending_total"] == 1
+    assert diagnostics["live_room_total"] == 1
+    assert diagnostics["last_snapshot_mode"] == "source_refresh"
 
 
 @pytest.mark.anyio

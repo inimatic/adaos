@@ -130,10 +130,32 @@ Operational limits:
 | `ADAOS_MATERIALIZATION_WORKER_MAX_RESULT_MB` | 512 MiB |
 | `ADAOS_WEBSPACE_RESOLVED_CACHE_MAX_MB` | 32 MiB |
 | `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_MAX_MB` | 64 MiB |
-| `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_LIMIT` | 1 entry |
+| `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_LIMIT` | 8 entries |
+| `ADAOS_WEBSPACE_SKILL_SOURCE_FINGERPRINT_TTL_S` | 600 seconds |
+| `ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS` | enabled |
 
 Tests disable the process boundary by default under `ADAOS_TESTING`; tests for
 the boundary may explicitly enable it.
+
+Scenario-switch materialization uses an explicit identity derived from
+`webspace_id`, `scenario_id`, source mode, scenario file stamps, and active
+skill UI declaration stamps. The cache has separate namespaces for full
+fresh-doc snapshots and payload-only materializations so a fast switch cannot
+reuse a payload where a YJS snapshot is required. Runtime mutations without a
+specific scenario id invalidate all materialized entries for the webspace;
+scenario-specific mutations may drop only that scenario.
+Skill source fingerprinting is event-invalidated by skill install/update/
+rollback and uses `ADAOS_WEBSPACE_SKILL_SOURCE_FINGERPRINT_TTL_S` only as a
+fallback for out-of-band file edits. It should not rescan active skill source
+trees during ordinary hot scenario switching.
+
+Live-room materialized payload apply trusts runtime-owned
+`registry.runtime_meta.effective_branch_fingerprints` by default when the
+previous materialized payload supplies the same branch fingerprint. This avoids
+reading and hashing large live YDoc branches during ordinary
+builder/web_desktop toggles. The flag
+`ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS=0` is a
+diagnostic escape hatch, not the target architecture.
 
 ## Workspace Catalog
 

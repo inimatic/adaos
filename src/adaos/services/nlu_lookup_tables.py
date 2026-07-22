@@ -3,6 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import threading
+import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -23,6 +27,16 @@ DEFAULT_DESKTOP_MODAL_IDS = (
     "notification_history",
 )
 DEFAULT_DESKTOP_APP_IDS = ("nlu_teacher_app",)
+
+_BASELINE_BUCKET_CACHE_LOCK = threading.RLock()
+_BASELINE_BUCKET_CACHE: dict[str, tuple[float, tuple[Any, ...], dict[str, dict[str, dict[str, Any]]]]] = {}
+
+
+def _baseline_bucket_cache_ttl_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("ADAOS_NLU_LOOKUP_BASELINE_CACHE_TTL_S", "30") or "30"))
+    except Exception:
+        return 30.0
 
 
 def _hash_payload(payload: Any) -> str:
@@ -87,6 +101,14 @@ def _read_yaml(path: Path) -> Any:
     except Exception:
         _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
         return None
+
+
+def _path_stamp(path: Path) -> tuple[str, int, int] | tuple[str, str]:
+    try:
+        stat = path.stat()
+        return (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+    except Exception:
+        return (str(path), "missing")
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -381,6 +403,72 @@ def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], 
                     break
 
 
+def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
+    package_workspace = _package_workspace_dir(ctx)
+    parts: list[Any] = []
+    skill_roots = _unique_paths(
+        [
+            _path_from_ctx(ctx, "skills_dir"),
+            package_workspace / "skills" if package_workspace else None,
+        ]
+    )
+    for skills_dir in skill_roots:
+        parts.append(("skills_dir", _path_stamp(skills_dir)))
+        if not skills_dir.exists():
+            continue
+        try:
+            skill_dirs = sorted(
+                child for child in skills_dir.iterdir() if child.is_dir() and not child.name.startswith(".")
+            )
+        except Exception:
+            skill_dirs = []
+        for skill_dir in skill_dirs:
+            parts.append(("skill", skill_dir.name, _path_stamp(skill_dir)))
+            parts.append(("skill_yaml", _path_stamp(skill_dir / "skill.yaml")))
+            parts.append(("skill_yml", _path_stamp(skill_dir / "skill.yml")))
+            parts.append(("webui", _path_stamp(skill_dir / "webui.json")))
+
+    scenario_roots = _unique_paths(
+        [
+            _path_from_ctx(ctx, "scenarios_dir"),
+            package_workspace / "scenarios" if package_workspace else None,
+        ]
+    )
+    for scenarios_dir in scenario_roots:
+        parts.append(("scenarios_dir", _path_stamp(scenarios_dir)))
+        if not scenarios_dir.exists():
+            continue
+        try:
+            scenario_dirs = sorted(child for child in scenarios_dir.iterdir() if child.is_dir())
+        except Exception:
+            scenario_dirs = []
+        for scenario_root in scenario_dirs:
+            parts.append(("scenario", scenario_root.name, _path_stamp(scenario_root)))
+            for file_name in ("scenario.json", "scenario.yaml", "scenario.yml"):
+                parts.append(("scenario_file", scenario_root.name, file_name, _path_stamp(scenario_root / file_name)))
+    return tuple(parts)
+
+
+def _collect_cached_baseline_buckets(ctx: AgentContext) -> dict[str, dict[str, dict[str, Any]]]:
+    ttl_s = _baseline_bucket_cache_ttl_s()
+    cache_key = "baseline"
+    stamp = _baseline_bucket_cache_stamp(ctx)
+    now = time.monotonic()
+    if ttl_s > 0:
+        with _BASELINE_BUCKET_CACHE_LOCK:
+            cached = _BASELINE_BUCKET_CACHE.get(cache_key)
+            if cached is not None and cached[0] > now and cached[1] == stamp:
+                return deepcopy(cached[2])
+    buckets = _empty_buckets()
+    _collect_workspace_manifests(buckets, ctx)
+    _collect_builtin_desktop_defaults(buckets)
+    _collect_node_refs(buckets, ctx)
+    if ttl_s > 0:
+        with _BASELINE_BUCKET_CACHE_LOCK:
+            _BASELINE_BUCKET_CACHE[cache_key] = (now + ttl_s, stamp, deepcopy(buckets))
+    return buckets
+
+
 def _collect_node_refs(buckets: dict[str, dict[str, dict[str, Any]]], ctx: AgentContext) -> None:
     config = getattr(ctx, "config", None)
     for attr in ("node_id", "node_name", "node_ref"):
@@ -436,11 +524,8 @@ def _empty_buckets() -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def _collect_baseline_buckets(ctx: AgentContext, *, webspace_id: str) -> dict[str, dict[str, dict[str, Any]]]:
-    buckets = _empty_buckets()
+    buckets = _collect_cached_baseline_buckets(ctx)
     _add(buckets, "webspace_id", webspace_id, source="request.webspace_id")
-    _collect_workspace_manifests(buckets, ctx)
-    _collect_builtin_desktop_defaults(buckets)
-    _collect_node_refs(buckets, ctx)
     return buckets
 
 

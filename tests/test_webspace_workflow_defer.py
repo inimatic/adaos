@@ -252,6 +252,9 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
 
     assert result["accepted"] is True
     assert result["payload_only_rebuild"] is True
+    assert isinstance(result["materialization_identity"], dict)
+    assert result["materialization_identity"]["scenario_id"] == "prompt_engineer_scenario"
+    assert result["materialization_identity"]["key_hash"]
     assert materialize_calls == [
         (
             "phase2-payload-only-switch",
