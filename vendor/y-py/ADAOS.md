@@ -46,3 +46,9 @@ editable-build metadata discovery from traversing Rust build artifacts.
 AdaOS resolves `y-py` from this directory through `tool.uv.sources`. Release
 wheels are built by `.github/workflows/y-py-wheels.yml` for Windows, Linux,
 and macOS.
+
+The published binary set is available from the GitHub release
+[`y-py-v0.6.2-adaos.1`](https://github.com/inimatic/adaos/releases/tag/y-py-v0.6.2-adaos.1).
+The Linux wheel must retain a `manylinux_2_17` or older compatibility tag; a
+wheel linked directly on a newer Linux host is not an acceptable release
+artifact even when its filename is manually tagged.

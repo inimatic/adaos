@@ -188,7 +188,27 @@ interpreter process tree. Cancelling an active materialization terminated both
 PIDs; no descendant remained alive after cancellation.
 
 The process boundary therefore adds roughly one second to this local cold
-path, while removing native YDoc heap retention from the long-lived API
-process. The acceptance suite also covers 100 identical selections
+path while enforcing timeout, result-size, and peak-RSS budgets. Native YDoc
+heap release is owned by the patched Yrs store model documented in
+[Yjs Runtime Ownership](yjs-runtime-ownership.md), not by process churn. The
+acceptance suite also covers 100 identical selections
 (one generation/apply), 100 distinct sequential selections (one bounded state
 file), and a superseded in-flight generation converging to the latest target.
+
+The 2026-07-22 browser acceptance used the real `dev1` Builder surface and its
+paired `dev1-dev` preview:
+
+- **Choose project** rendered all 21 projects in 879 ms without a loading state
+  or spinner;
+- selecting `Prototype App E5` kept `dev1` on `builder/ready` for every poll;
+- only `dev1-dev` entered pending materialization and converged to
+  `prototype_app_4d5758e5/ready` in 6.49 seconds;
+- the Builder page remained mounted and displayed the selected project while
+  the preview rebuilt;
+- a 52-switch live soak reached a bounded private-memory plateau; the final
+  40-switch window was 304.1-318.5 MiB with a -0.019 MiB/switch slope over its
+  last 20 samples.
+
+This verifies that project selection is a Builder data/context change. It does
+not switch or reload the Builder host scenario. Scenario materialization is
+owned only by the explicitly related preview webspace.

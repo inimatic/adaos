@@ -51,6 +51,15 @@ release. Normal repository installs build the same pinned source through
 `uv.lock`; Rust output must stay outside `vendor/y-py` so Python metadata
 discovery never traverses Cargo artifacts.
 
+The
+[`y-py-v0.6.2-adaos.1` release](https://github.com/inimatic/adaos/releases/tag/y-py-v0.6.2-adaos.1)
+is the canonical binary distribution for this transition. Its Linux artifact
+targets `manylinux_2_17` rather than the build host glibc, so it remains
+loadable on the Ubuntu 20.04 acceptance host.
+The workflow can be rerun with `workflow_dispatch` and an existing
+`release_tag`; reruns replace release assets instead of moving the version
+tag.
+
 Release wheels are delivery artifacts for packaged runtimes. Repository
 development intentionally resolves the vendored source, so a local Rust
 toolchain remains required even if a release wheel was installed separately.
@@ -110,6 +119,37 @@ snapshot. The bounded range in the fork is allocator reuse, not retained YDoc
 stores. Materialization latency remains the baseline for the separate
 parallelization work; memory cleanup must not be reintroduced as a performance
 strategy.
+
+### Release acceptance, 2026-07-22
+
+The release matrix built and tested CPython 3.11 wheels for Windows x86-64,
+Linux x86-64 (`manylinux_2_17`), and macOS arm64. The Windows and Linux wheels
+both passed `tests/test_yjs_native_memory.py`; the broader Builder/Yjs/webspace
+set passed 501 tests on Ubuntu 20.04 with Python 3.11.15.
+
+The Linux release-wheel soak applied, accessed, and dropped a 2 MB YDoc 300
+times after warm-up. USS changed by 8 KiB in total, with a last-150-cycle slope
+of 409.6 bytes per ten cycles. Apply latency was 37.17 ms p50 and 40.67 ms p95.
+
+A live Windows A/B used the real `builder_sdk_control_skill:select_preview`
+path and alternated `builder` with `streaming_recipe_book_eval`:
+
+- public 0.6.2: 12 switches grew private commit by 38.3 MiB and RSS by
+  46.8 MiB; private growth was 3.19 MiB per switch;
+- fork warm-up: the first 12 switches grew private commit by 20.5 MiB, then
+  reached allocator reuse;
+- fork plateau: another 40 switches stayed within 304.1-318.5 MiB private
+  commit; the last-20-switch slope was -0.019 MiB per switch;
+- the Angular dev server stayed at 1298.3 MiB private commit throughout both
+  runs, so the measured change belongs to the Python runtime;
+- after the old-runtime run, room buffers and waiting senders were zero;
+  waiting receivers equaled the five active rooms. The growth was therefore
+  not a queue blocked on a closed channel.
+
+On the 40-switch plateau, end-to-end readiness was 5.770 s p50 and 6.995 s
+p95. Rebuild time was 4.175 s p50 and 4.936 s p95. These timings remain the
+input to materialization parallelism work; they are not part of the ownership
+fix.
 
 ## Upgrade Rules
 
