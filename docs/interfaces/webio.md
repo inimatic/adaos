@@ -840,6 +840,12 @@ surface the phase as `materialization=transition:<state>` rather than showing
 full materialization readiness; that guard belongs to the action/data layer,
 not to link availability.
 
+The compact browser endpoint `/api/node/reliability/summary` must preserve the
+same signal as `stateSync.materialization.transitionExpected` with
+`readinessState`, `currentScenario`, `targetScenario`, and `missingBranches`.
+The client should not have to call the full reliability endpoint only to learn
+that hydration is an expected staged transition.
+
 For hot scenario switches, the backend should also avoid opening a read-only
 YDoc only to compare the previous materialized scenario. That check is needed
 only when the requested scenario already matches the current selector and the
