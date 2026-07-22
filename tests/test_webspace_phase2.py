@@ -2158,6 +2158,7 @@ def test_switch_webspace_scenario_defers_selector_until_atomic_materialization(m
     assert result["selector_commit_mode"] == "materialization_transaction"
     assert result["timings_ms"]["defer_switch_pointer"] == 0.0
     assert "write_switch_pointer" not in result["timings_ms"]
+    assert "time_to_pointer_update" not in result["phase_timings_ms"]
     assert fake_state["ui"]["current_scenario"] == "web_desktop"
     assert scheduled == [webspace_id]
 
@@ -5005,6 +5006,34 @@ def test_phase5_derive_phase_timings_uses_semantic_phase_breakdown() -> None:
     assert phase_timings["time_to_pointer_update"] == 3.5
     assert phase_timings["time_to_first_structure"] == 9.0
     assert phase_timings["time_to_interactive_focus"] == 11.0
+    assert phase_timings["time_to_full_hydration"] == 12.0
+
+
+def test_phase5_atomic_commit_reports_selector_visible_at_full_hydration() -> None:
+    phase_timings = webspace_runtime_module._derive_phase_timings(
+        switch_timings_ms={
+            "describe_state_before": 0.5,
+            "resolve_manifest_policy": 0.5,
+            "validate_scenario": 1.0,
+            "defer_switch_pointer": 0.0,
+            "total": 4.0,
+        },
+        rebuild_timings_ms={"projection_refresh": 2.0, "total": 10.0},
+        semantic_rebuild_timings_ms={
+            "collect_inputs": 1.0,
+            "resolve": 1.0,
+            "apply_structure": 1.0,
+            "apply_interactive": 2.0,
+            "total": 6.0,
+        },
+        switch_mode="pointer_only",
+    )
+
+    assert phase_timings is not None
+    assert phase_timings["time_to_accept"] == 4.0
+    assert phase_timings["time_to_pointer_update"] == 12.0
+    assert phase_timings["time_to_first_structure"] == 12.0
+    assert phase_timings["time_to_interactive_focus"] == 12.0
     assert phase_timings["time_to_full_hydration"] == 12.0
 
 
