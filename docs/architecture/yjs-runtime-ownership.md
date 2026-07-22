@@ -60,8 +60,12 @@ The workflow can be rerun with `workflow_dispatch` and an existing
 `release_tag`; reruns replace release assets instead of moving the version
 tag.
 
-Release wheels are delivery artifacts for packaged runtimes. Repository
-development intentionally resolves the vendored source, so a local Rust
+Release wheels are delivery artifacts for packaged runtimes. The platform
+requirements in `pyproject.toml` point Linux x86-64, Windows AMD64, and macOS
+ARM64 installs at those immutable release assets; a normal `pip install` must
+not depend on a private package index or silently fall back to public
+`y-py 0.6.2`. Repository development intentionally overrides that dependency
+with `[tool.uv.sources]` and resolves the vendored source, so a local Rust
 toolchain remains required even if a release wheel was installed separately.
 
 ## Thread Ownership
