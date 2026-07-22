@@ -581,19 +581,32 @@ that scenario is already `scheduled` or `running`. Control responses now
 surface both skip metadata and the current rebuild status so retries can stay
 cheap without becoming opaque.
 
-Default scenario switch now uses a `pointer_only` contract: validate the
-target, update `ui.current_scenario`, and let semantic rebuild own effective
-branch hydration. The older feature flag
+Default scenario switch keeps the `pointer_only` compatibility label, but its
+live publication contract is now atomic: validate the target, persist the
+desired scenario in the webspace control state, materialize the effective
+branches, then commit `ui.current_scenario` and those branches to the live room
+in one Yjs transaction. The selector is not published to the live document
+before the projection is ready. The older feature flag
 `ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH=1` remains accepted as an explicit
-pointer-path compatibility alias, but pointer writes are now the normal path
-instead of the opt-in experiment.
+eager-pointer compatibility mode. Deployments can also disable the atomic
+commit with `ADAOS_WEBSPACE_SCENARIO_SWITCH_ATOMIC_LIVE_COMMIT=0`, but that is
+a rollback mode rather than the target architecture.
+
+This transaction is the scenario-switch commit barrier. A browser must never
+observe a new selector paired with branches from the previous scenario as the
+successful final state. Materialized-payload apply reasserts the selector even
+when the room already contains the target value, so the final update remains
+an explicit selector/projection commit. The response exposes
+`selector_commit_mode=materialization_transaction`; legacy paths report
+`eager_pointer`.
 
 The remaining `materialize_and_copy` path has now been removed entirely.
 Scenario switch no longer loads `scenario.json` or writes
 `ui.scenarios`, `registry.scenarios`, or `data.scenarios` on the hot path.
-The only switch-time state mutation is the scenario pointer plus minimal
-manifest/home bookkeeping; semantic rebuild remains the sole owner of
-effective runtime branches after reconcile.
+The only immediate switch-time mutation is minimal manifest/control-state
+bookkeeping. The live scenario pointer is part of the later materialization
+transaction; semantic rebuild remains the sole owner of effective runtime
+branches after reconcile.
 
 Bootstrap fallback now follows the same ownership model. When canonical
 scenario projection is unavailable during startup, bootstrap seeds only the
@@ -602,16 +615,25 @@ normal semantic rebuild. Emergency startup no longer writes `ui.application`,
 `data.catalog`, `data.installed`, `data.desktop`, or `registry.merged`
 directly.
 
-When an active live room is already attached, pointer-only switch can now also
-update `ui.current_scenario` in-memory first and persist that pointer
-stale-safely in the background. This removes one avoidable store-backed YDoc
-open from the hot path while keeping persistence convergence explicit.
+When an active live room is already attached, the final materialized payload is
+applied without closing YWS or WebRTC data channels. Avoiding the early pointer
+write removes one live-room mutation from the hot path and prevents a missed
+small update from leaving a browser on a permanently split selector/projection
+state.
+
+Clients validate scenario-switch and go-home hydration against the scenario id
+returned in the command acknowledgement. If a connected client still has a
+semantically inconsistent live document, it may use the authoritative
+materialization snapshot as a render-only overlay for that exact acknowledged
+scenario. The overlay has a short TTL, never mutates or republishes the local
+YDoc, and does not upgrade live state-sync health; it is recovery containment,
+not a second collaborative source of truth.
 
 Current rollback guidance if pointer-only switch regresses runtime behavior:
 
-- if `ui.current_scenario` flips quickly but the visible UI stays stale until a
-  late rebuild or never catches up, suspect a remaining consumer that still
-  depends on legacy `ui.scenarios`, `registry.scenarios`, or `data.scenarios`
+- if `ui.current_scenario` flips before the visible projection, first verify
+  `selector_commit_mode`; this is valid only in explicit `eager_pointer`
+  rollback mode, otherwise it is a commit-barrier regression
 - compare `phase_timings_ms`, `compatibility_caches`, and resolver diagnostics
   before changing code: `legacy_fallback_active`, `missing_branches`, and the
   rebuild/materialization state now identify whether the gap is in backend

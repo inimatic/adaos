@@ -887,6 +887,15 @@ Current status:
   reports `transition_expected`, while healthy attached Yjs channels remain
   availability-usable during `pending_structure`, `first_paint`,
   `interactive`, and `hydrating`
+- default scenario switching now treats `ui.current_scenario` plus the
+  effective `ui`, `data`, `registry`, and runtime materialization branches as
+  one live-room commit barrier; desired control state may advance while the
+  old render remains visible, but the new selector is not published before its
+  projection
+- scenario-switch and go-home clients validate the final render against the
+  scenario returned by the command acknowledgement; exact-scenario HTTP
+  recovery is render-only, TTL-bounded, and leaves live state-sync degraded
+  until Yjs converges
 - the scenario-switch command no longer opens a read-only YDoc to probe the
   previous materialized scenario on ordinary transitions; that probe is
   reserved for same-current idempotency checks where a stale materialization

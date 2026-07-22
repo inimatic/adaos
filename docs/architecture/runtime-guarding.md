@@ -505,7 +505,7 @@ Target contract:
 - Scenario switch commands are control-plane acknowledgements. The default response must stay small: accepted state, webspace id, scenario id, timing guard, and no embedded runtime dump.
 - Heavy runtime/materialization payloads are diagnostic details only. They are requested explicitly with debug/detail flags or by operator tools, not on the happy path.
 - Readiness signals that drive browser chrome, such as YJS red/green state, must be derived from the same effective Yjs materialization contract that renders the UI.
-- HTTP diagnostics must not become a second source of truth for rendered desktop state. If HTTP diagnostics disagree with live Yjs materialization, the mismatch is an observability defect.
+- HTTP diagnostics must not become an unbounded second source of truth for rendered desktop state. A narrow recovery exception is allowed when a command acknowledgement names the expected scenario and live Yjs is semantically inconsistent: the client may use an exact-scenario materialization snapshot as a render-only overlay with a short TTL. It must not write that snapshot into Yjs or report live state-sync as healthy, and the server must still repair the selector/projection commit contract.
 
 Roadmap:
 
@@ -514,6 +514,8 @@ Roadmap:
 - [x] Read live Yjs nested maps/arrays correctly in reliability materialization checks.
 - [x] Stop polling heavy `materialization?include_runtime=1` from the scenario-switch happy path.
 - [x] Make `/api/node/yjs/webspaces/{id}/scenario` return a minimal ack by default.
+- [x] Commit scenario selector and effective branches atomically to the live room on the default switch path.
+- [x] Validate go-home/scenario hydration against the acknowledged scenario and bound HTTP render recovery by scenario plus TTL.
 - [ ] Add an explicit small Yjs service/status node for browser-visible materialization health.
 - [ ] Move large materialization/runtime diagnostics behind a details/debug interaction in the UI.
 - [ ] Add regression coverage that scenario switching does not close `/yws/{webspace}`.

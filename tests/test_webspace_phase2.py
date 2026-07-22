@@ -2116,6 +2116,52 @@ def test_switch_webspace_scenario_default_pointer_only_can_schedule_background_r
     assert "time_to_full_hydration" not in result["phase_timings_ms"]
 
 
+def test_switch_webspace_scenario_defers_selector_until_atomic_materialization(monkeypatch) -> None:
+    webspace_id = "phase2-scenario-atomic-selector"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Phase 2 Atomic Selector",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+    fake_state = _patch_switch_dependencies(
+        monkeypatch,
+        state={
+            "ui": _FakeMap({"current_scenario": "web_desktop"}),
+            "registry": _FakeMap(),
+            "data": _FakeMap(),
+        },
+    )
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_scenario_switch_atomic_live_commit_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_schedule_scenario_switch_rebuild",
+        lambda webspace_id, **_kwargs: scheduled.append(webspace_id),
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.switch_webspace_scenario(
+            webspace_id,
+            "prompt_engineer_scenario",
+            wait_for_rebuild=False,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["selector_commit_mode"] == "materialization_transaction"
+    assert result["timings_ms"]["defer_switch_pointer"] == 0.0
+    assert "write_switch_pointer" not in result["timings_ms"]
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
+    assert scheduled == [webspace_id]
+
+
 def test_switch_webspace_scenario_compat_env_is_ignored_and_keeps_pointer_only_contract(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_SWITCH_COMPAT_CACHE_WRITES", "1")
 
@@ -2662,6 +2708,8 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     assert runtime._last_rebuild_timings_ms["load_materialized_payload"] >= 0.0
     assert runtime._last_apply_summary["changed_branches"] >= 1
     assert runtime._last_apply_summary["selector_changed"] is True
+    assert runtime._last_apply_summary["selector_reasserted"] is True
+    assert runtime._last_apply_summary["selector_apply_mode"] == "reasserted"
     assert runtime._last_apply_summary["transaction_total"] == 1
     assert "apply_combined_transaction" in runtime._last_apply_phase_timings_ms
 

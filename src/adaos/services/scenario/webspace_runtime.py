@@ -3473,6 +3473,28 @@ def _scenario_switch_payload_only_rebuild_enabled() -> bool:
     return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_PAYLOAD_ONLY_REBUILD")
 
 
+def _scenario_switch_atomic_live_commit_enabled() -> bool:
+    """Return whether selector and projection can be committed together.
+
+    The payload-only rebuild path applies all effective branches to the live
+    room in one transaction.  Publishing the selector before that transaction
+    creates a split document when a client misses the small pointer update but
+    receives the larger materialization update.
+    """
+    if _pointer_first_scenario_switch_enabled():
+        return False
+    if not _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_ATOMIC_LIVE_COMMIT"):
+        return False
+    return bool(
+        _fresh_doc_on_scenario_switch_enabled()
+        and _scenario_switch_payload_only_rebuild_enabled()
+        and _refresh_live_room_after_rebuild_enabled()
+        and not _publish_live_room_for_rebuild("scenario_switch_rebuild")
+        and not _defer_live_room_refresh_for_rebuild("scenario_switch_rebuild")
+        and not _skip_live_room_refresh_for_rebuild("scenario_switch_rebuild")
+    )
+
+
 def _scenario_switch_background_route_yield_s() -> float:
     raw = os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_BACKGROUND_ROUTE_YIELD_S")
     if raw is None and _env_flag_enabled("ADAOS_TESTING"):
@@ -5826,6 +5848,7 @@ class WebspaceScenarioRuntime:
         expected_request_id: str | None = None,
         single_transaction: bool = False,
         materialization_status_per_phase: bool = True,
+        force_selector_write: bool = False,
     ) -> None:
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
         effective_inputs = inputs or WebspaceResolverInputs(
@@ -5860,6 +5883,7 @@ class WebspaceScenarioRuntime:
         stale_fingerprint_paths: List[str] = []
         defaults_failed = False
         selector_changed = False
+        selector_reasserted = False
         selector_apply_mode = "not_attempted"
         phase_summaries: Dict[str, Dict[str, Any]] = {}
         phase_timings_ms: Dict[str, float] = {}
@@ -6097,6 +6121,7 @@ class WebspaceScenarioRuntime:
             nonlocal defaults_failed
             nonlocal transaction_total
             nonlocal selector_changed
+            nonlocal selector_reasserted
             nonlocal selector_apply_mode
             _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
             phase_started = time.perf_counter()
@@ -6113,6 +6138,7 @@ class WebspaceScenarioRuntime:
             def _apply_phase_body(txn: Any) -> None:
                 nonlocal defaults_failed
                 nonlocal selector_changed
+                nonlocal selector_reasserted
                 nonlocal selector_apply_mode
                 phase_fingerprint_updates: Dict[str, str] = {}
                 if apply_defaults:
@@ -6126,12 +6152,18 @@ class WebspaceScenarioRuntime:
                 if name == "structure":
                     selector_target = str(resolved.scenario_id or "").strip()
                     if selector_target:
-                        selector_changed, selector_apply_mode = _set_map_value_if_changed(
-                            ui_map,
-                            txn,
-                            "current_scenario",
-                            selector_target,
-                        )
+                        if force_selector_write:
+                            selector_changed = ui_map.get("current_scenario") != selector_target
+                            ui_map.set(txn, "current_scenario", selector_target)
+                            selector_reasserted = True
+                            selector_apply_mode = "reasserted"
+                        else:
+                            selector_changed, selector_apply_mode = _set_map_value_if_changed(
+                                ui_map,
+                                txn,
+                                "current_scenario",
+                                selector_target,
+                            )
 
                 for path, y_map, key, value, ignore_errors in branch_specs:
                     _apply_branch(
@@ -6277,6 +6309,7 @@ class WebspaceScenarioRuntime:
             "branch_timings_ms": {path: dict(values) for path, values in branch_timings_ms.items()},
             "branch_apply_modes": dict(branch_apply_modes),
             "selector_changed": bool(selector_changed),
+            "selector_reasserted": bool(selector_reasserted),
             "selector_apply_mode": selector_apply_mode,
         }
         if diff_applied_paths:
@@ -6363,6 +6396,7 @@ class WebspaceScenarioRuntime:
             expected_request_id=expected_request_id,
             single_transaction=True,
             materialization_status_per_phase=False,
+            force_selector_write=True,
         )
         _record_timing(timings, "apply", stage_started)
         apply_phase_timings = _copy_timing_map(self._last_apply_phase_timings_ms) or {}
@@ -10273,6 +10307,8 @@ async def switch_webspace_scenario(
         str(request_client or "").strip() or "-",
     )
     switch_mode = _scenario_switch_mode()
+    atomic_selector_commit = _scenario_switch_atomic_live_commit_enabled()
+    selector_commit_mode = "materialization_transaction" if atomic_selector_commit else "eager_pointer"
     loader_space = "workspace"
     try:
         if row:
@@ -10303,6 +10339,7 @@ async def switch_webspace_scenario(
             "set_home": resolved_set_home,
             "background_rebuild": background_rebuild,
             "scenario_switch_mode": switch_mode,
+            "selector_commit_mode": "unchanged",
             "switch_skipped": True,
             "skip_reason": skip_reason,
             "timings_ms": finalized_timings,
@@ -10430,35 +10467,38 @@ async def switch_webspace_scenario(
         }
 
     try:
-        stage_started = time.perf_counter()
-
-        def _mutator(doc: Any, txn: Any) -> None:
-            ui_map = doc.get_map("ui")
-            _set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
-
-        live_applied = mutate_live_room(
-            webspace_id,
-            _mutator,
-            root_names=["ui"],
-            source="webspace_runtime.switch_pointer",
-            owner="core:webspace_runtime",
-            channel="core.webspace_runtime.live_room",
-        )
-        if live_applied:
-            _record_timing(timings_ms, "write_switch_pointer", stage_started)
+        if atomic_selector_commit:
+            timings_ms["defer_switch_pointer"] = 0.0
         else:
             stage_started = time.perf_counter()
-            async with _webspace_runtime_async_write_meta(
+
+            def _mutator(doc: Any, txn: Any) -> None:
+                ui_map = doc.get_map("ui")
+                _set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
+
+            live_applied = mutate_live_room(
+                webspace_id,
+                _mutator,
                 root_names=["ui"],
                 source="webspace_runtime.switch_pointer",
-            ):
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    _record_timing(timings_ms, "open_doc", stage_started)
-                    ui_map = ydoc.get_map("ui")
-                    stage_started = time.perf_counter()
-                    with ydoc.begin_transaction() as txn:
-                        _set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
-                    _record_timing(timings_ms, "write_switch_pointer", stage_started)
+                owner="core:webspace_runtime",
+                channel="core.webspace_runtime.live_room",
+            )
+            if live_applied:
+                _record_timing(timings_ms, "write_switch_pointer", stage_started)
+            else:
+                stage_started = time.perf_counter()
+                async with _webspace_runtime_async_write_meta(
+                    root_names=["ui"],
+                    source="webspace_runtime.switch_pointer",
+                ):
+                    async with async_get_ydoc(webspace_id) as ydoc:
+                        _record_timing(timings_ms, "open_doc", stage_started)
+                        ui_map = ydoc.get_map("ui")
+                        stage_started = time.perf_counter()
+                        with ydoc.begin_transaction() as txn:
+                            _set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
+                        _record_timing(timings_ms, "write_switch_pointer", stage_started)
 
         stage_started = time.perf_counter()
         row = workspace_index.set_workspace_current_scenario_overlay(webspace_id, scenario_id)
@@ -10514,11 +10554,12 @@ async def switch_webspace_scenario(
             note_authoritative_current_scenario,
         )
 
-        note_authoritative_current_scenario(
-            webspace_id,
-            scenario_id,
-            reason="scenario_switch",
-        )
+        if not atomic_selector_commit:
+            note_authoritative_current_scenario(
+                webspace_id,
+                scenario_id,
+                reason="scenario_switch",
+            )
     except Exception:
         _log.debug("failed to publish authoritative current_scenario lease", exc_info=True)
 
@@ -10583,6 +10624,7 @@ async def switch_webspace_scenario(
             "set_home": resolved_set_home,
             "background_rebuild": True,
             "scenario_switch_mode": switch_mode,
+            "selector_commit_mode": selector_commit_mode,
             "timings_ms": finalized_timings,
             "phase_timings_ms": _derive_phase_timings(
                 switch_timings_ms=finalized_timings,
@@ -10639,6 +10681,7 @@ async def switch_webspace_scenario(
         "set_home": resolved_set_home,
         "background_rebuild": False,
         "scenario_switch_mode": switch_mode,
+        "selector_commit_mode": selector_commit_mode,
         "timings_ms": finalized_timings,
         "rebuild_timings_ms": _copy_timing_map(rebuild_result.get("timings_ms")),
         "semantic_rebuild_timings_ms": _copy_timing_map(rebuild_result.get("semantic_rebuild_timings_ms")),

@@ -6514,6 +6514,18 @@ async def _apply_room_materialized_payload(
                 "apply_summary": apply_summary,
                 "phase_timings_ms": phase_timings_ms,
             }
+        payload_ui = payload.get("ui") if isinstance(payload.get("ui"), Mapping) else {}
+        committed_scenario = str(
+            payload_ui.get("current_scenario")
+            or snapshot.get("current_scenario")
+            or ""
+        ).strip()
+        if committed_scenario:
+            note_authoritative_current_scenario(
+                webspace_id,
+                committed_scenario,
+                reason=f"{reason}:materialized_commit",
+            )
         stage_started = time.perf_counter()
         state_vector: bytes | None = None
         full_state_update = b""
