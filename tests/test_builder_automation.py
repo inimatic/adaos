@@ -407,7 +407,7 @@ def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, m
     assert second["completion_notified_task_id"] == "task.1"
 
 
-def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, monkeypatch) -> None:
+def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.materialize_on_completion = True
     calls: list[str] = []
@@ -431,17 +431,12 @@ def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, m
 
         async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
             calls.append("ensure")
-            return {"dev_webspace_id": "desktop-dev"}
-
-    async def fake_reload(webspace_id, **kwargs):  # noqa: ARG001
-        calls.append("reload")
-        return {"ok": True, "webspace_id": webspace_id}
+            return {
+                "dev_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
 
     monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
-    monkeypatch.setattr(
-        "adaos.services.scenario.webspace_runtime.reload_webspace_from_scenario",
-        fake_reload,
-    )
     monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -461,8 +456,9 @@ def test_finalize_prepares_runtime_forces_reload_then_notifies(tmp_path: Path, m
         }
     )
 
-    assert calls == ["checkpoint", "activate:recipes_skill", "ensure", "reload", "notify"]
+    assert calls == ["checkpoint", "activate:recipes_skill", "ensure", "notify"]
     assert saved[-1]["completion_readiness"]["ok"] is True
+    assert saved[-1]["completion_readiness"]["materialization"]["preview_webspace_id"] == "desktop-dev"
     assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
     assert saved[-1]["completion_readiness"]["vcs_checkpoints"][0]["commit"] == "forge-1"
     assert saved[-1]["status"] == "completed"

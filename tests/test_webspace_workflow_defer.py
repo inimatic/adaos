@@ -547,7 +547,6 @@ def test_builder_revision_apply_skips_projection_refresh_by_default(monkeypatch)
 
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _unexpected_refresh)
     monkeypatch.setattr(webspace_runtime_module, "_resolve_projection_refresh_space", lambda _webspace_id: "dev")
-    monkeypatch.setattr(webspace_runtime_module, "_trim_allocator_after_yjs_rebuild", lambda: False)
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
 
     result = asyncio.run(
