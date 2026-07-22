@@ -4447,9 +4447,24 @@ def _derive_phase_timings(
     if switch_total is not None:
         phase["time_to_accept"] = round(switch_total, 3)
 
-    pointer_update = _sum_timing_values(switch_timings_ms, "describe_state_before", "resolve_manifest_policy", "validate_scenario", "write_switch_pointer")
-    if pointer_update is not None:
-        phase["time_to_pointer_update"] = pointer_update
+    eager_selector_commit = bool(
+        isinstance(switch_timings_ms, Mapping)
+        and "write_switch_pointer" in switch_timings_ms
+    )
+    atomic_selector_commit = bool(
+        isinstance(switch_timings_ms, Mapping)
+        and "defer_switch_pointer" in switch_timings_ms
+    )
+    if eager_selector_commit:
+        pointer_update = _sum_timing_values(
+            switch_timings_ms,
+            "describe_state_before",
+            "resolve_manifest_policy",
+            "validate_scenario",
+            "write_switch_pointer",
+        )
+        if pointer_update is not None:
+            phase["time_to_pointer_update"] = pointer_update
 
     rebuild_before_semantic = _sum_timing_values(
         rebuild_timings_ms,
@@ -4503,6 +4518,12 @@ def _derive_phase_timings(
         phase["time_to_full_hydration"] = round(switch_total + rebuild_total, 3)
     elif rebuild_total is not None:
         phase["time_to_full_hydration"] = round(rebuild_total, 3)
+
+    if atomic_selector_commit and "time_to_full_hydration" in phase:
+        atomic_commit_ready = phase["time_to_full_hydration"]
+        phase["time_to_pointer_update"] = atomic_commit_ready
+        phase["time_to_first_structure"] = atomic_commit_ready
+        phase["time_to_interactive_focus"] = atomic_commit_ready
 
     return phase or None
 
