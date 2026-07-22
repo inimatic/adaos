@@ -1,0 +1,42 @@
+[build-system]
+requires = ["maturin>=1.2.3,<2"]
+build-backend = "maturin"
+
+[project]
+name = "y-py"
+dynamic = ["version"]
+description = "Python bindings for the Y-CRDT built from yrs (Rust)"
+license = { file = "LICENSE" }
+authors = [
+    { name = "John Waidhofer", email = "waidhoferj@gmail.com" },
+    { name = "Kevin Jahns", email = "kevin.jahns@protonmail.com" },
+    { name = "Pierre-Olivier Simonard", email = "pierre.olivier.simonard@gmail.com" }
+]
+readme = "README.md"
+keywords = [
+    "crdt",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://github.com/inimatic/adaos"
+Source = "https://github.com/inimatic/adaos/tree/rev2026/vendor/y-py"
+Issues = "https://github.com/inimatic/adaos/issues"
+
+[tool.hatch.envs.test]
+dependencies = ["pytest", "maturin"]
+
+[[tool.hatch.envs.test.matrix]]
+python = ["37", "38", "39", "310", "311", "312"]

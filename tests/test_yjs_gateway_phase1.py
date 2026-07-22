@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import sys
+import threading
 import time
 import types
 from types import SimpleNamespace
@@ -930,8 +931,9 @@ def test_yws_direct_disabled_rejects_before_room_acquire(monkeypatch) -> None:
     ]
 
 
-def test_diagnostic_room_skips_duplicate_backend_persisted_update() -> None:
+def test_diagnostic_room_skips_duplicate_backend_persisted_update(monkeypatch) -> None:
     reset_backend_room_update_markers()
+    monkeypatch.setattr(gateway_module, "_room_effective_branches_ready", lambda _ydoc: True)
     ystore = _FakeWriteYStore()
     room = gateway_module.DiagnosticYRoom(ystore=ystore, log=_fake_log())
     room._webspace_id = "desktop"
@@ -946,8 +948,9 @@ def test_diagnostic_room_skips_duplicate_backend_persisted_update() -> None:
     assert room._diag_backend_persist_skip_bytes == len(b"backend-update")
 
 
-def test_diagnostic_room_persists_unmarked_browser_update() -> None:
+def test_diagnostic_room_persists_unmarked_browser_update(monkeypatch) -> None:
     reset_backend_room_update_markers()
+    monkeypatch.setattr(gateway_module, "_room_effective_branches_ready", lambda _ydoc: True)
     ystore = _FakeWriteYStore()
     room = gateway_module.DiagnosticYRoom(ystore=ystore, log=_fake_log())
     room._webspace_id = "desktop"
@@ -960,6 +963,7 @@ def test_diagnostic_room_persists_unmarked_browser_update() -> None:
 
 def test_diagnostic_room_requests_compaction_after_large_gateway_persist(monkeypatch) -> None:
     reset_backend_room_update_markers()
+    monkeypatch.setattr(gateway_module, "_room_effective_branches_ready", lambda _ydoc: True)
     ystore = _FakeWriteYStore()
     room = gateway_module.DiagnosticYRoom(ystore=ystore, log=_fake_log())
     room._webspace_id = "desktop"
@@ -986,6 +990,7 @@ def test_diagnostic_room_requests_compaction_after_large_gateway_persist(monkeyp
 
 def test_diagnostic_room_throttles_large_gateway_persist_compaction(monkeypatch) -> None:
     reset_backend_room_update_markers()
+    monkeypatch.setattr(gateway_module, "_room_effective_branches_ready", lambda _ydoc: True)
     ystore = _FakeWriteYStore()
     room = gateway_module.DiagnosticYRoom(ystore=ystore, log=_fake_log())
     room._webspace_id = "desktop-throttle"
@@ -1406,6 +1411,9 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     assert room_info["last_bootstrap_yws_attempt_id"] == "yws-room-seed"
     assert room_info["last_bootstrap_state"] == "ready"
     assert room_info["last_bootstrap_step"] == "finalize_rebuild_status"
+    captured.clear()
+    asyncio.run(gateway_module._release_room_refs(webspace_id, room))
+    server.rooms.pop(webspace_id, None)
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
@@ -1473,6 +1481,9 @@ def test_get_room_uses_workspace_current_overlay_before_home(monkeypatch) -> Non
     assert captured[0]["default_scenario_id"] == "prompt_engineer_scenario"
     assert captured[0]["space"] == "workspace"
     assert captured[0]["prefer_default_scenario"] is True
+    captured.clear()
+    asyncio.run(gateway_module._release_room_refs(webspace_id, room))
+    server.rooms.pop(webspace_id, None)
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
@@ -1482,7 +1493,7 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
             self.ydoc = object()
             self.ystore = _FakeYStore()
             self._loop = object()
-            self._thread_id = 123
+            self._thread_id = threading.get_ident()
             self.ready = object()
             self.log = object()
             self.stop_calls = 0
@@ -1537,9 +1548,6 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
     monkeypatch.setattr(gateway_module, "reset_hub_route_runtime", _fake_route_reset)
     monkeypatch.setattr(gateway_module, "evict_ystore_for_webspace", _fake_evict_ystore_for_webspace)
     monkeypatch.setattr(gateway_module, "get_scheduler", lambda: SimpleNamespace(delete=_fake_delete))
-    monkeypatch.setattr(gateway_module.gc, "collect", lambda: 7)
-    monkeypatch.setattr(gateway_module, "_trim_allocator_after_yjs_room_reset", lambda: True)
-
     result = asyncio.run(gateway_module.reset_live_webspace_room("gateway-room-reset", prewarm_after_reset=False))
 
     assert gateway_module.y_server.rooms.get("gateway-room-reset") is None
@@ -1557,10 +1565,72 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
     assert result["route_reset"]["closed_tunnels"] == 1
     assert result["runtime_compaction_requested"] is True
     assert result["room_refs_released"] is True
-    assert result["gc_collected"] == 7
-    assert result["malloc_trimmed"] is True
+    assert result["owner_handoff_mode"] == "direct_owner_thread"
     assert result["prewarm_after_reset"] is False
     assert backup_jobs_deleted == ["ystores.backup.gateway-room-reset"]
+
+
+def test_reset_live_webspace_room_releases_ydoc_on_owner_thread(monkeypatch) -> None:
+    webspace_id = "gateway-room-owner-thread"
+    owner_loop = asyncio.new_event_loop()
+    owner_ready = threading.Event()
+    ydoc_released = threading.Event()
+    owner_state: dict[str, object] = {}
+
+    class _OwnedYDoc:
+        def __del__(self) -> None:
+            owner_state["released_thread_id"] = threading.get_ident()
+            ydoc_released.set()
+
+    class _Room:
+        def __init__(self) -> None:
+            self.ydoc = _OwnedYDoc()
+            self.ystore = None
+            self.clients = []
+            self._loop = owner_loop
+            self._thread_id = threading.get_ident()
+
+        def stop(self) -> None:
+            return None
+
+    def _run_owner_loop() -> None:
+        asyncio.set_event_loop(owner_loop)
+        room = _Room()
+        owner_state["thread_id"] = threading.get_ident()
+        gateway_module.y_server.rooms[webspace_id] = room
+        owner_ready.set()
+        owner_loop.run_forever()
+        owner_loop.close()
+
+    async def _zero(*args, **kwargs) -> int:  # noqa: ANN002, ANN003, ARG001
+        return 0
+
+    async def _delete(_name: str) -> None:
+        return None
+
+    monkeypatch.setattr(gateway_module, "close_webspace_yws_connections", _zero)
+    monkeypatch.setattr(gateway_module, "close_webspace_webrtc_peers", _zero)
+    monkeypatch.setattr(gateway_module, "get_scheduler", lambda: SimpleNamespace(delete=_delete))
+
+    owner_thread = threading.Thread(target=_run_owner_loop, daemon=True)
+    owner_thread.start()
+    assert owner_ready.wait(timeout=2.0)
+    try:
+        result = asyncio.run(
+            gateway_module.reset_live_webspace_room(
+                webspace_id,
+                reset_route_runtime=False,
+                prewarm_after_reset=False,
+            )
+        )
+        assert ydoc_released.wait(timeout=2.0)
+        assert result["room_refs_released"] is True
+        assert result["owner_handoff_mode"] == "threadsafe_owner_loop"
+        assert owner_state["released_thread_id"] == owner_state["thread_id"]
+    finally:
+        gateway_module.y_server.rooms.pop(webspace_id, None)
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        owner_thread.join(timeout=2.0)
 
 
 def test_yws_tracking_cancels_pending_idle_room_reset(monkeypatch) -> None:

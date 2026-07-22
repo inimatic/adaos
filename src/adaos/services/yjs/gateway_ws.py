@@ -8,7 +8,6 @@ import asyncio
 import contextlib
 import contextvars
 from collections import deque
-import gc
 import hashlib
 import inspect
 import json
@@ -442,7 +441,6 @@ _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_
 _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", True)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
-_YJS_ROOM_RESET_FORCE_GC = _env_flag("ADAOS_YJS_ROOM_RESET_FORCE_GC", False)
 _YJS_MATERIALIZED_PAYLOAD_TRUST_APPLY_SUMMARY = _env_flag(
     "ADAOS_YJS_MATERIALIZED_PAYLOAD_TRUST_APPLY_SUMMARY",
     True,
@@ -2709,32 +2707,6 @@ def _cancel_idle_room_reset(webspace_id: str) -> bool:
     if task is not current and not task.done():
         task.cancel()
     return True
-
-
-def _trim_allocator_after_yjs_room_reset() -> bool:
-    if not _env_flag("ADAOS_YJS_ROOM_RESET_MALLOC_TRIM", True):
-        return False
-    try:
-        import ctypes  # pylint: disable=import-outside-toplevel
-
-        libc = ctypes.CDLL("libc.so.6")
-        trim = getattr(libc, "malloc_trim", None)
-        if not callable(trim):
-            return False
-        return bool(trim(0))
-    except Exception:
-        return False
-
-
-def _collect_gc_after_yjs_room_reset() -> tuple[int, str]:
-    if not _env_flag("ADAOS_YJS_ROOM_RESET_FORCE_GC", _YJS_ROOM_RESET_FORCE_GC):
-        return 0, "disabled:ADAOS_YJS_ROOM_RESET_FORCE_GC"
-    try:
-        return int(gc.collect() or 0), ""
-    except BaseException as exc:
-        if _is_control_flow_base_exception(exc):
-            raise
-        return 0, f"error:{type(exc).__name__}:{exc}"[:500]
 
 
 def _active_webrtc_peer_total_for_webspace(webspace_id: str) -> int:
@@ -5251,6 +5223,29 @@ async def reset_live_webspace_room(
     prewarm_after_reset: bool | None = None,
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
+    room_for_owner = y_server.rooms.get(key)
+    if room_for_owner is not None:
+        owner_thread = getattr(room_for_owner, "_thread_id", None)
+        owner_loop = getattr(room_for_owner, "_loop", None)
+        if owner_thread is not None and owner_thread != threading.get_ident():
+            if owner_loop is None or not owner_loop.is_running():
+                raise RuntimeError(
+                    f"cannot reset YRoom {key!r} outside its owner thread: owner loop is not running"
+                )
+            future = asyncio.run_coroutine_threadsafe(
+                reset_live_webspace_room(
+                    key,
+                    close_reason=close_reason,
+                    persist_ystore_snapshot=bool(persist_ystore_snapshot),
+                    reset_route_runtime=bool(reset_route_runtime),
+                    prewarm_after_reset=prewarm_after_reset,
+                ),
+                owner_loop,
+            )
+            result = dict(await asyncio.wrap_future(future))
+            result["owner_handoff_mode"] = "threadsafe_owner_loop"
+            return result
+
     _cancel_idle_room_reset(key)
     if reset_route_runtime:
         route_reset = await reset_hub_route_runtime(
@@ -5302,9 +5297,6 @@ async def reset_live_webspace_room(
     scheduler_job_deleted = False
     runtime_compaction_requested = False
     room_refs_released = False
-    gc_collected = 0
-    gc_skipped = ""
-    malloc_trimmed = False
     room_prewarmed = False
     room_prewarm_error = ""
 
@@ -5356,8 +5348,6 @@ async def reset_live_webspace_room(
                 ystore_snapshot_persisted or eviction.get("backup_skipped")
             )
         room_refs_released = await _release_room_refs(key, room)
-        if room_refs_released:
-            gc_collected, gc_skipped = _collect_gc_after_yjs_room_reset()
     else:
         try:
             eviction = await evict_ystore_for_webspace(
@@ -5385,9 +5375,6 @@ async def reset_live_webspace_room(
         runtime_compaction_requested = bool(
             ystore_snapshot_persisted or eviction.get("backup_skipped")
         )
-        gc_collected, gc_skipped = _collect_gc_after_yjs_room_reset()
-
-    malloc_trimmed = _trim_allocator_after_yjs_room_reset()
 
     should_prewarm_after_reset = (
         str(os.getenv("ADAOS_YJS_PREWARM_ROOM_AFTER_RESET", "1") or "1").strip().lower()
@@ -5411,7 +5398,7 @@ async def reset_live_webspace_room(
 
     _ylog.info(
         "reset live Yjs room webspace=%s reason=%s room_dropped=%s closed_yws=%s closed_webrtc=%s "
-        "ystore_evicted=%s snapshot_persisted=%s gc_collected=%s gc_skipped=%s malloc_trimmed=%s prewarmed=%s",
+        "ystore_evicted=%s snapshot_persisted=%s prewarmed=%s",
         key,
         close_reason,
         bool(room is not None),
@@ -5419,9 +5406,6 @@ async def reset_live_webspace_room(
         closed_webrtc_peers,
         ystore_evicted,
         ystore_snapshot_persisted,
-        gc_collected,
-        gc_skipped,
-        malloc_trimmed,
         room_prewarmed,
     )
 
@@ -5440,12 +5424,10 @@ async def reset_live_webspace_room(
         "scheduler_job_deleted": scheduler_job_deleted,
         "runtime_compaction_requested": runtime_compaction_requested,
         "room_refs_released": room_refs_released,
-        "gc_collected": gc_collected,
-        "gc_skipped": gc_skipped or None,
-        "malloc_trimmed": malloc_trimmed,
         "prewarm_after_reset": should_prewarm_after_reset,
         "room_prewarmed": room_prewarmed,
         "room_prewarm_error": room_prewarm_error,
+        "owner_handoff_mode": "direct_owner_thread",
     }
 
 

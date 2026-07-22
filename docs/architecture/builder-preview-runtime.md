@@ -110,8 +110,11 @@ process. Two modes are supported:
 
 The child initializes read context, creates/reads YDocs, and returns JSON plus
 base64-encoded bytes. It does not mutate the parent live room. The parent
-checks the current request generation, applies the result, and then the child
-exit releases the native `y_py` allocator heap.
+checks the current request generation and applies the result. The process
+boundary keeps CPU-heavy materialization off the API event loop, gives it an
+explicit timeout and RSS budget, and is a future parallel-execution boundary.
+Native YDoc lifetime is handled by the patched Yrs ownership model and does
+not depend on worker exit.
 
 The parent supervises the complete Windows process tree (venv launcher and
 base interpreter), not just the launcher PID. Timeout, cancellation, and RSS

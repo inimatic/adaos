@@ -3378,21 +3378,6 @@ def _trust_previous_materialized_branch_fingerprints_enabled() -> bool:
     return _env_flag_enabled("ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS")
 
 
-def _trim_allocator_after_yjs_rebuild() -> bool:
-    if not _env_flag_default_enabled("ADAOS_WEBSPACE_REBUILD_MALLOC_TRIM"):
-        return False
-    try:
-        import ctypes  # pylint: disable=import-outside-toplevel
-
-        libc = ctypes.CDLL("libc.so.6")
-        trim = getattr(libc, "malloc_trim", None)
-        if not callable(trim):
-            return False
-        return bool(trim(0))
-    except Exception:
-        return False
-
-
 def _pointer_first_scenario_switch_enabled() -> bool:
     return _env_flag_enabled("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH")
 
@@ -3538,21 +3523,6 @@ def _workflow_sync_debounce_s() -> float:
     except Exception:
         value = 0.2
     return max(0.0, min(value, 10.0))
-
-
-def _scenario_switch_subprocess_enabled() -> bool:
-    if _env_flag_enabled("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS") is None:
-        return False
-    return _env_flag_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS")
-
-
-def _scenario_switch_subprocess_timeout_s() -> float:
-    raw = os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS_TIMEOUT_S")
-    try:
-        value = float(str(raw or "").strip())
-    except Exception:
-        value = 180.0
-    return max(30.0, value)
 
 
 def _materialization_worker_enabled() -> bool:
@@ -9115,9 +9085,6 @@ async def rebuild_webspace_from_sources(
             _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None)),
             _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None)),
         )
-        stage_started = time.perf_counter()
-        _trim_allocator_after_yjs_rebuild()
-        _record_timing(timings_ms, "malloc_trim", stage_started)
     except _StaleRebuildRequestError:
         finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
         semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
@@ -9572,237 +9539,6 @@ async def rebuild_webspace_from_sources(
     return result
 
 
-async def _complete_scenario_switch_rebuild_in_subprocess(
-    webspace_id: str,
-    *,
-    scenario_id: str,
-    scenario_resolution: str | None,
-    request_id: str | None = None,
-    switch_mode: str | None = None,
-    switch_timings_ms: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    worker_code = r"""
-import asyncio
-import json
-import os
-import sys
-
-os.environ["ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS"] = "0"
-os.environ.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC", "1")
-os.environ.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC", "0")
-os.environ.setdefault("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
-os.environ.setdefault("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
-
-from adaos.apps.bootstrap import init_ctx
-
-init_ctx()
-
-from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
-from adaos.services.yjs.store import get_ystore_for_webspace
-
-
-async def _main() -> None:
-    result = await rebuild_webspace_from_sources(
-        sys.argv[1],
-        action="scenario_switch_rebuild",
-        scenario_id=sys.argv[2],
-        scenario_resolution=(sys.argv[3] or None),
-        source_of_truth="scenario_switch_worker",
-        reseed_from_scenario=False,
-        request_id=(sys.argv[4] or None),
-        switch_mode=(sys.argv[5] or None),
-    )
-    ystore_persist = {"attempted": False, "reason": "worker_result_not_accepted"}
-    if bool(result.get("accepted")):
-        ystore_persist = {"attempted": True}
-        try:
-            store = get_ystore_for_webspace(sys.argv[1])
-            await store.backup_to_disk(
-                compact_runtime=True,
-                backup_kind="scenario_switch_worker",
-            )
-            snapshot = store.runtime_snapshot()
-            snapshot_size = int(snapshot.get("snapshot_file_size") or 0)
-            persisted = bool(snapshot.get("snapshot_file_exists")) and snapshot_size > 0
-            ystore_persist = {
-                "attempted": True,
-                "ok": persisted,
-                "snapshot_file_exists": bool(snapshot.get("snapshot_file_exists")),
-                "snapshot_file_size": snapshot_size,
-                "persisted_up_to_date": bool(snapshot.get("persisted_up_to_date")),
-                "update_log_entries": int(snapshot.get("update_log_entries") or 0),
-                "last_backup_mode": snapshot.get("last_backup_mode"),
-            }
-            if not persisted:
-                result["ok"] = False
-                result["accepted"] = False
-                result["error"] = "scenario_switch_worker_persist_failed"
-        except Exception as exc:
-            ystore_persist = {
-                "attempted": True,
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            result["ok"] = False
-            result["accepted"] = False
-            result["error"] = "scenario_switch_worker_persist_failed"
-    result["ystore_persist"] = ystore_persist
-    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
-
-
-asyncio.run(_main())
-"""
-    cmd = [
-        sys.executable,
-        "-c",
-        worker_code,
-        str(webspace_id or "").strip(),
-        str(scenario_id or "").strip(),
-        str(scenario_resolution or ""),
-        str(request_id or ""),
-        str(switch_mode or ""),
-    ]
-    env = os.environ.copy()
-    env["ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS"] = "0"
-    env.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC", "1")
-    env.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC", "0")
-    env.setdefault("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
-    env.setdefault("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
-    started = time.perf_counter()
-
-    def _run() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            cmd,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=_scenario_switch_subprocess_timeout_s(),
-            check=False,
-        )
-
-    try:
-        proc = await asyncio.to_thread(_run)
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "ok": False,
-            "accepted": False,
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "scenario_resolution": scenario_resolution,
-            "request_id": request_id,
-            "switch_mode": switch_mode,
-            "error": "scenario_switch_worker_timeout",
-            "worker_elapsed_ms": _elapsed_ms(started),
-            "worker_stdout": str(getattr(exc, "stdout", "") or "")[-2000:],
-            "worker_stderr": str(getattr(exc, "stderr", "") or "")[-2000:],
-        }
-
-    parsed: dict[str, Any] | None = None
-    for line in reversed((proc.stdout or "").splitlines()):
-        text = line.strip()
-        if not text.startswith("{"):
-            continue
-        try:
-            raw = json.loads(text)
-            if isinstance(raw, dict):
-                parsed = raw
-                break
-        except Exception:
-            continue
-    if proc.returncode != 0 or parsed is None:
-        return {
-            "ok": False,
-            "accepted": False,
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "scenario_resolution": scenario_resolution,
-            "request_id": request_id,
-            "switch_mode": switch_mode,
-            "error": "scenario_switch_worker_failed",
-            "worker_returncode": int(proc.returncode),
-            "worker_elapsed_ms": _elapsed_ms(started),
-            "worker_stdout": str(proc.stdout or "")[-2000:],
-            "worker_stderr": str(proc.stderr or "")[-4000:],
-        }
-
-    parsed["scenario_switch_worker"] = True
-    parsed["worker_elapsed_ms"] = _elapsed_ms(started)
-    parsed["switch_timings_ms"] = _copy_timing_map(switch_timings_ms)
-
-    if bool(parsed.get("accepted")):
-        try:
-            from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
-
-            parsed["live_room_refresh"] = await refresh_live_webspace_effective_branches(
-                webspace_id,
-                reason="scenario_switch_worker_persisted_snapshot",
-            )
-        except Exception as exc:
-            parsed["live_room_refresh"] = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "reset_route_runtime": False,
-            }
-            _log.warning(
-                "failed to refresh live YRoom after scenario switch worker webspace=%s scenario=%s",
-                webspace_id,
-                scenario_id,
-                exc_info=True,
-            )
-    else:
-        parsed["live_room_refresh"] = {
-            "ok": False,
-            "skipped": True,
-            "reason": "scenario_switch_worker_not_accepted",
-        }
-
-    try:
-        _trim_allocator_after_yjs_rebuild()
-    except Exception:
-        pass
-    try:
-        _set_webspace_rebuild_status(
-            webspace_id,
-            status="ready" if bool(parsed.get("accepted")) else "failed",
-            pending=False,
-            background=False,
-            request_id=request_id,
-            action="scenario_switch_rebuild",
-            source_of_truth="scenario_switch_worker",
-            scenario_id=scenario_id,
-            scenario_resolution=scenario_resolution,
-            switch_mode=str(switch_mode or "") or None,
-            requested_at=time.time(),
-            started_at=None,
-            finished_at=time.time(),
-            error=None if bool(parsed.get("accepted")) else str(parsed.get("error") or "scenario_switch_worker_failed"),
-            projection_refresh=parsed.get("projection_refresh"),
-            registry_summary=parsed.get("registry_summary"),
-            resolver=parsed.get("resolver"),
-            apply_summary=parsed.get("apply_summary"),
-            timings_ms=parsed.get("timings_ms"),
-            switch_timings_ms=_copy_timing_map(switch_timings_ms),
-            semantic_rebuild_timings_ms=parsed.get("semantic_rebuild_timings_ms"),
-            ydoc_timings_ms=parsed.get("ydoc_timings_ms"),
-            phase_timings_ms=parsed.get("phase_timings_ms"),
-            materialization=_copy_materialization_snapshot(parsed.get("materialization")),
-        )
-    except Exception:
-        _log.debug("failed to publish parent rebuild status for scenario switch worker", exc_info=True)
-    if bool(parsed.get("accepted")):
-        try:
-            parsed["post_ready_listing_sync"] = _schedule_webspace_listing_sync(
-                reason="scenario_switch_worker_ready",
-                webspace_id=webspace_id,
-            )
-        except Exception as exc:
-            parsed["post_ready_listing_sync"] = {
-                "scheduled": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-    return parsed
-
-
 async def _complete_scenario_switch_rebuild(
     webspace_id: str,
     *,
@@ -9812,15 +9548,6 @@ async def _complete_scenario_switch_rebuild(
     switch_mode: str | None = None,
     switch_timings_ms: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if _scenario_switch_subprocess_enabled():
-        return await _complete_scenario_switch_rebuild_in_subprocess(
-            webspace_id,
-            scenario_id=scenario_id,
-            scenario_resolution=scenario_resolution,
-            request_id=request_id,
-            switch_mode=switch_mode,
-            switch_timings_ms=switch_timings_ms,
-        )
     return await rebuild_webspace_from_sources(
         webspace_id,
         action="scenario_switch_rebuild",
@@ -10896,12 +10623,8 @@ async def switch_webspace_scenario(
         "timings_ms": finalized_timings,
         "rebuild_timings_ms": _copy_timing_map(rebuild_result.get("timings_ms")),
         "semantic_rebuild_timings_ms": _copy_timing_map(rebuild_result.get("semantic_rebuild_timings_ms")),
-        "scenario_switch_worker": bool(rebuild_result.get("scenario_switch_worker")),
-        "worker_elapsed_ms": rebuild_result.get("worker_elapsed_ms"),
-        "ystore_persist": rebuild_result.get("ystore_persist"),
         "live_room_publish": rebuild_result.get("live_room_publish"),
         "live_room_refresh": rebuild_result.get("live_room_refresh"),
-        "post_ready_listing_sync": rebuild_result.get("post_ready_listing_sync"),
         "fresh_doc_rebuild": rebuild_result.get("fresh_doc_rebuild"),
         "resolver": dict(rebuild_result.get("resolver") or {})
         if isinstance(rebuild_result.get("resolver"), Mapping)

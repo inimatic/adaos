@@ -15,6 +15,8 @@ jobs:
   sdk-tests:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/adaos-y-py-target
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +29,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+
+      - name: Setup Rust 1.72
+        uses: dtolnay/rust-toolchain@1.72.0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Show Python
         shell: bash
@@ -36,7 +45,7 @@ jobs:
           which python || where python
 
       - name: Install deps
-        run: pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
 
       - name: Run SDK tests (Linux)
         if: runner.os == 'Linux'
@@ -45,7 +54,7 @@ jobs:
           ADAOS_TESTING: 1
           MONOREPO_URL: https://github.com/inimatic/adaoskills.git
         run: |
-          adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+          uv run adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
 
       - name: Run SDK tests (Windows)
         if: runner.os == 'Windows'
@@ -54,4 +63,4 @@ jobs:
           ADAOS_TESTING: 1
           MONOREPO_URL: https://github.com/inimatic/adaoskills.git
         run: |
-          adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+          uv run adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q

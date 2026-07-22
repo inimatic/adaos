@@ -92,22 +92,6 @@ _YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC = max(
     0.0,
     float(os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC") or "0.0"),
 )
-_YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM = str(
-    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM") or "1"
-).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC = str(
-    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC") or "0"
-).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 _YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC = max(
     0.0,
     float(os.getenv("ADAOS_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC") or "120.0"),
@@ -479,31 +463,10 @@ def _projection_compaction_runtime_summary(snapshot: Mapping[str, Any]) -> dict[
         "persisted_up_to_date": bool(snapshot.get("persisted_up_to_date")),
         "compact_total": max(0, _int_or_zero(snapshot.get("compact_total"))),
         "backup_total": max(0, _int_or_zero(snapshot.get("backup_total"))),
-        "backup_gc_total": max(0, _int_or_zero(snapshot.get("backup_gc_total"))),
-        "backup_malloc_trim_total": max(0, _int_or_zero(snapshot.get("backup_malloc_trim_total"))),
         "auto_backup_total": max(0, _int_or_zero(snapshot.get("auto_backup_total"))),
         "auto_backup_large_update_bytes": max(0, _int_or_zero(snapshot.get("auto_backup_large_update_bytes"))),
         "auto_backup_large_update_debounce_sec": snapshot.get("auto_backup_large_update_debounce_sec"),
-        "last_backup_gc_collected": max(0, _int_or_zero(snapshot.get("last_backup_gc_collected"))),
-        "last_backup_malloc_trimmed": bool(snapshot.get("last_backup_malloc_trimmed")),
     }
-
-
-def _trim_allocator_after_projection_compaction() -> bool:
-    if not _YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM:
-        return False
-    if os.name != "posix":
-        return False
-    try:
-        import ctypes  # pylint: disable=import-outside-toplevel
-
-        libc = ctypes.CDLL("libc.so.6")
-        trim = getattr(libc, "malloc_trim", None)
-        if not callable(trim):
-            return False
-        return bool(trim(0))
-    except Exception:
-        return False
 
 
 async def _compact_projection_amplification_store(
@@ -559,18 +522,6 @@ async def _compact_projection_amplification_store(
         after_entries = max(0, _int_or_zero(after.get("update_log_entries")))
         result["compacted"] = bool(after_entries < before_entries or after_replay_bytes < before_replay_bytes)
         result["released_replay_bytes"] = max(0, before_replay_bytes - after_replay_bytes)
-        if _YJS_PROJECTION_AUTOCOMPACT_FORCE_GC:
-            try:
-                import gc  # pylint: disable=import-outside-toplevel
-
-                result["gc_collected"] = int(gc.collect() or 0)
-            except Exception as exc:
-                result["gc_collected"] = 0
-                result["gc_error"] = f"{type(exc).__name__}: {exc}"
-        else:
-            result["gc_collected"] = 0
-            result["gc_skipped"] = "disabled:ADAOS_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC"
-        result["malloc_trimmed"] = _trim_allocator_after_projection_compaction()
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         _log.debug("failed to compact YStore after projection amplification webspace=%s", key, exc_info=True)
@@ -596,11 +547,10 @@ def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, 
         outcome = await _compact_projection_amplification_store(key, mode="background")
         if outcome.get("executed"):
             _log.warning(
-                "YStore compacted after projection amplification webspace=%s compacted=%s released_replay_bytes=%s malloc_trimmed=%s",
+                "YStore compacted after projection amplification webspace=%s compacted=%s released_replay_bytes=%s",
                 key,
                 bool(outcome.get("compacted")),
                 int(outcome.get("released_replay_bytes") or 0),
-                bool(outcome.get("malloc_trimmed")),
             )
 
     try:
@@ -1509,11 +1459,10 @@ class ProjectionService:
                 )
                 if outcome.get("executed"):
                     _log.warning(
-                        "YStore compacted inline after detached projection amplification webspace=%s compacted=%s released_replay_bytes=%s malloc_trimmed=%s",
+                        "YStore compacted inline after detached projection amplification webspace=%s compacted=%s released_replay_bytes=%s",
                         ws_id,
                         bool(outcome.get("compacted")),
                         int(outcome.get("released_replay_bytes") or 0),
-                        bool(outcome.get("malloc_trimmed")),
                     )
         except Exception:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)

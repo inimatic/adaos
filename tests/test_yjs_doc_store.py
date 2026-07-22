@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -386,30 +387,6 @@ async def test_ystore_backup_to_disk_records_encode_panic_without_compacting(mon
         reset_ystore_for_webspace(webspace_id)
 
 
-async def test_ystore_backup_to_disk_releases_allocator_after_compaction(monkeypatch) -> None:
-    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
-    monkeypatch.setenv("ADAOS_YSTORE_BACKUP_FORCE_GC", "1")
-    monkeypatch.setattr(ystore_module.gc, "collect", lambda: 7)
-    monkeypatch.setattr(ystore_module, "_trim_allocator_after_backup_compaction", lambda: True)
-    webspace_id = _webspace_id("backup-release")
-    store = get_ystore_for_webspace(webspace_id)
-    try:
-        for idx in range(3):
-            async with async_get_ydoc(webspace_id) as ydoc:
-                with ydoc.begin_transaction() as txn:
-                    ydoc.get_map("data").set(txn, f"item_{idx}", idx)
-
-        await store.backup_to_disk(compact_runtime=True, backup_kind="manual")
-
-        snapshot = store.runtime_snapshot()
-        assert snapshot["backup_gc_total"] >= 1
-        assert snapshot["last_backup_gc_collected"] == 7
-        assert snapshot["last_backup_malloc_trimmed"] is True
-        assert snapshot["backup_malloc_trim_total"] >= 1
-    finally:
-        reset_ystore_for_webspace(webspace_id)
-
-
 async def test_ystore_backup_to_disk_reuses_runtime_base_snapshot_without_reencode(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
     webspace_id = _webspace_id("backup-fast-path")
@@ -778,17 +755,13 @@ async def test_async_get_ydoc_prefers_live_room_when_requested(monkeypatch) -> N
 
     room_doc = Y.YDoc()
     fake_store = _FakeStore()
-    room = type(
-        "Room",
-        (),
-        {
-            "ydoc": room_doc,
-            "ystore": fake_store,
-            "_task_group": object(),
-            "_thread_id": threading.get_ident(),
-            "_loop": asyncio.get_running_loop(),
-        },
-    )()
+    room = SimpleNamespace(
+        ydoc=room_doc,
+        ystore=fake_store,
+        _task_group=object(),
+        _thread_id=threading.get_ident(),
+        _loop=asyncio.get_running_loop(),
+    )
 
     monkeypatch.setattr(ydoc_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
     monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
@@ -819,17 +792,13 @@ async def test_async_read_ydoc_prefers_live_room_without_store_replay(monkeypatc
     room_doc = Y.YDoc()
     with room_doc.begin_transaction() as txn:
         room_doc.get_map("data").set(txn, "flag", True)
-    room = type(
-        "Room",
-        (),
-        {
-            "ydoc": room_doc,
-            "ystore": object(),
-            "_task_group": object(),
-            "_thread_id": threading.get_ident(),
-            "_loop": asyncio.get_running_loop(),
-        },
-    )()
+    room = SimpleNamespace(
+        ydoc=room_doc,
+        ystore=object(),
+        _task_group=object(),
+        _thread_id=threading.get_ident(),
+        _loop=asyncio.get_running_loop(),
+    )
 
     monkeypatch.setattr(ydoc_module, "get_ystore_for_webspace", lambda _webspace_id: _FakeStore())
     monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
@@ -844,17 +813,13 @@ async def test_mutate_live_room_invalidates_cached_current_scenario(monkeypatch)
     room_doc = Y.YDoc()
     with room_doc.begin_transaction() as txn:
         room_doc.get_map("ui").set(txn, "current_scenario", "old_scenario")
-    room = type(
-        "Room",
-        (),
-        {
-            "ydoc": room_doc,
-            "ystore": object(),
-            "_task_group": object(),
-            "_thread_id": threading.get_ident(),
-            "_loop": asyncio.get_running_loop(),
-        },
-    )()
+    room = SimpleNamespace(
+        ydoc=room_doc,
+        ystore=object(),
+        _task_group=object(),
+        _thread_id=threading.get_ident(),
+        _loop=asyncio.get_running_loop(),
+    )
 
     monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
     ydoc_module.invalidate_live_map_value_cache()
@@ -881,17 +846,13 @@ async def test_mutate_live_room_invalidates_cached_current_scenario(monkeypatch)
 async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypatch) -> None:
     webspace_id = "live-room-command-direct"
     room_doc = Y.YDoc()
-    room = type(
-        "Room",
-        (),
-        {
-            "ydoc": room_doc,
-            "ystore": object(),
-            "_task_group": object(),
-            "_thread_id": threading.get_ident(),
-            "_loop": asyncio.get_running_loop(),
-        },
-    )()
+    room = SimpleNamespace(
+        ydoc=room_doc,
+        ystore=object(),
+        _task_group=object(),
+        _thread_id=threading.get_ident(),
+        _loop=asyncio.get_running_loop(),
+    )
     marked: list[bytes] = []
     monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
     monkeypatch.setattr(
@@ -951,17 +912,13 @@ async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypa
 async def test_submit_live_room_mutation_rejects_stale_room_generation(monkeypatch) -> None:
     webspace_id = "live-room-command-stale-generation"
     room_doc = Y.YDoc()
-    room = type(
-        "Room",
-        (),
-        {
-            "ydoc": room_doc,
-            "ystore": object(),
-            "_task_group": object(),
-            "_thread_id": threading.get_ident(),
-            "_loop": asyncio.get_running_loop(),
-        },
-    )()
+    room = SimpleNamespace(
+        ydoc=room_doc,
+        ystore=object(),
+        _task_group=object(),
+        _thread_id=threading.get_ident(),
+        _loop=asyncio.get_running_loop(),
+    )
     monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
     generation = ydoc_module.live_room_generation(webspace_id)
     assert isinstance(generation, int)

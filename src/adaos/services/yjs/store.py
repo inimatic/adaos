@@ -6,7 +6,6 @@ import time
 import contextlib
 import contextvars
 import asyncio
-import gc
 import inspect
 import subprocess
 import sys
@@ -56,31 +55,12 @@ def _env_flag(name: str, default: bool = False) -> bool:
 _YSTORE_APPLY_YIELD_BYTES = _env_int("ADAOS_YSTORE_APPLY_YIELD_BYTES", 512 * 1024, minimum=0)
 _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum=0.0)
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
-_YSTORE_BACKUP_MALLOC_TRIM = _env_flag("ADAOS_YSTORE_BACKUP_MALLOC_TRIM", True)
-_YSTORE_BACKUP_FORCE_GC = _env_flag("ADAOS_YSTORE_BACKUP_FORCE_GC", False)
 _YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
 _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
 
 
 def _is_fatal_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
-
-
-def _trim_allocator_after_backup_compaction() -> bool:
-    if not _YSTORE_BACKUP_MALLOC_TRIM:
-        return False
-    if os.name != "posix":
-        return False
-    try:
-        import ctypes  # pylint: disable=import-outside-toplevel
-
-        libc = ctypes.CDLL("libc.so.6")
-        trim = getattr(libc, "malloc_trim", None)
-        if not callable(trim):
-            return False
-        return bool(trim(0))
-    except Exception:
-        return False
 
 
 def add_ystore_write_listener(cb: Callable[..., Any]) -> Callable[[], None]:
@@ -456,9 +436,6 @@ class AdaosMemoryYStore(BaseYStore):
         self._backup_fast_path_total = 0
         self._backup_skipped_total = 0
         self._backup_failed_total = 0
-        self._backup_gc_total = 0
-        self._backup_gc_skipped_total = 0
-        self._backup_malloc_trim_total = 0
         self._backup_by_kind: dict[str, int] = {}
         self._backup_written_by_kind: dict[str, int] = {}
         self._backup_skipped_by_kind: dict[str, int] = {}
@@ -482,9 +459,6 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_backup_written_bytes = 0
         self._last_backup_error = ""
         self._last_backup_failed_at = 0.0
-        self._last_backup_gc_collected = 0
-        self._last_backup_gc_skip_reason = ""
-        self._last_backup_malloc_trimmed = False
         self._last_apply_at = 0.0
         self._last_loaded_from_disk_at = 0.0
         self._last_update_bytes = 0
@@ -1258,35 +1232,6 @@ class AdaosMemoryYStore(BaseYStore):
                 # Keep the last auto-backup reason observable even when concurrent
                 # writes made runtime-side collapse unsafe for this round.
                 self._last_auto_backup_reason = self._last_auto_backup_reason
-        if compacted_runtime:
-            gc_collected = 0
-            gc_skip_reason = ""
-            gc_attempted = bool(_env_flag("ADAOS_YSTORE_BACKUP_FORCE_GC", _YSTORE_BACKUP_FORCE_GC))
-            if gc_attempted:
-                try:
-                    gc_collected = int(gc.collect() or 0)
-                except BaseException as exc:
-                    if _is_fatal_base_exception(exc):
-                        raise
-                    gc_collected = 0
-                    gc_skip_reason = f"error:{type(exc).__name__}:{exc}"[:500]
-            else:
-                gc_skip_reason = "disabled:ADAOS_YSTORE_BACKUP_FORCE_GC"
-            try:
-                malloc_trimmed = _trim_allocator_after_backup_compaction()
-            except Exception:
-                malloc_trimmed = False
-            with self._lock:
-                if gc_attempted:
-                    self._backup_gc_total += 1
-                else:
-                    self._backup_gc_skipped_total += 1
-                self._last_backup_gc_collected = int(gc_collected)
-                self._last_backup_gc_skip_reason = gc_skip_reason
-                self._last_backup_malloc_trimmed = bool(malloc_trimmed)
-                if malloc_trimmed:
-                    self._backup_malloc_trim_total += 1
-
     def runtime_snapshot(self, *, now_ts: float | None = None) -> dict[str, Any]:
         now = time.time() if now_ts is None else float(now_ts)
         snapshot_path = ystore_path_for_webspace(self.path)
@@ -1344,9 +1289,6 @@ class AdaosMemoryYStore(BaseYStore):
             "backup_fast_path_total": int(self._backup_fast_path_total),
             "backup_skipped_total": int(self._backup_skipped_total),
             "backup_failed_total": int(self._backup_failed_total),
-            "backup_gc_total": int(self._backup_gc_total),
-            "backup_gc_skipped_total": int(self._backup_gc_skipped_total),
-            "backup_malloc_trim_total": int(self._backup_malloc_trim_total),
             "backup_by_kind": _top_counts(dict(self._backup_by_kind)),
             "backup_written_by_kind": _top_counts(dict(self._backup_written_by_kind)),
             "backup_skipped_by_kind": _top_counts(dict(self._backup_skipped_by_kind)),
@@ -1389,9 +1331,6 @@ class AdaosMemoryYStore(BaseYStore):
             "last_backup_failed_ago_s": round(max(0.0, now - self._last_backup_failed_at), 3)
             if self._last_backup_failed_at
             else None,
-            "last_backup_gc_collected": int(self._last_backup_gc_collected),
-            "last_backup_gc_skip_reason": self._last_backup_gc_skip_reason or None,
-            "last_backup_malloc_trimmed": bool(self._last_backup_malloc_trimmed),
             "last_apply_update_total": int(self._last_apply_update_total),
             "last_apply_bytes": int(self._last_apply_bytes),
             "last_apply_yield_total": int(self._last_apply_yield_total),

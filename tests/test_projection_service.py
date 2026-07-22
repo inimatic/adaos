@@ -210,6 +210,8 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
 
 
 def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None:
+    monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: None)
+
     class _CountingMap(_FakeMap):
         def __init__(self) -> None:
             super().__init__()
@@ -446,7 +448,6 @@ def test_projection_service_compacts_inline_after_detached_write_amplification(m
             "executed": True,
             "compacted": True,
             "released_replay_bytes": 98304,
-            "malloc_trimmed": True,
         }
 
     target = SimpleNamespace(
@@ -525,7 +526,6 @@ def test_projection_service_suppresses_recent_amplified_projection(monkeypatch, 
             "executed": True,
             "compacted": True,
             "released_replay_bytes": 98304,
-            "malloc_trimmed": True,
         }
 
     target = SimpleNamespace(
