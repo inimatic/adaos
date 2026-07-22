@@ -8756,6 +8756,7 @@ async def events_ws(websocket: WebSocket):
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
                     signal_webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
+                    signal_generation_id = str(payload.get("generation_id") or "").strip() or None
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     webspace_id = signal_webspace_id
@@ -8768,7 +8769,10 @@ async def events_ws(websocket: WebSocket):
                                         "ch": "events",
                                         "t": "evt",
                                         "kind": "rtc.ice",
-                                        "payload": {"candidate": candidate},
+                                        "payload": {
+                                            "candidate": candidate,
+                                            "generation_id": signal_generation_id,
+                                        },
                                     }
                                 )
                             )
@@ -8782,6 +8786,8 @@ async def events_ws(websocket: WebSocket):
                         device_id=signal_device_id,
                         webspace_id=signal_webspace_id,
                         send_ice_cb=_send_ice_via_ws,
+                        generation_id=signal_generation_id,
+                        negotiation_mode=payload.get("negotiation_mode"),
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
                 except Exception as e:
@@ -8798,7 +8804,11 @@ async def events_ws(websocket: WebSocket):
                         device_id = signal_device_id
                     if payload.get("webspace_id"):
                         webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id"))
-                    await handle_remote_ice(signal_device_id, payload.get("candidate"))
+                    await handle_remote_ice(
+                        signal_device_id,
+                        payload.get("candidate"),
+                        generation_id=payload.get("generation_id"),
+                    )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
                 except Exception as e:
                     _log.error(f"rtc.ice failed: {e!r}", exc_info=True)

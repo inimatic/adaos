@@ -3579,6 +3579,63 @@ def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressur
     assert snapshot["blockers"] == ["bounded_replay_window_near_limit"]
 
 
+def test_state_sync_keeps_channel_fresh_during_expected_materialization_transition() -> None:
+    snapshot = _state_sync_snapshot(
+        {
+            "available": True,
+            "selected_webspace_id": "desktop",
+            "assessment": {
+                "state": "nominal",
+                "reason": "",
+            },
+            "transport": {
+                "server_ready": True,
+                "active_yws_connections": 1,
+            },
+            "channel_contract": {
+                "recovery_model": "snapshot_plus_diff",
+            },
+            "selected_webspace": {
+                "webspace_id": "desktop",
+                "rebuild": {
+                    "status": "running",
+                    "pending": True,
+                    "scenario_id": "prompt_engineer_scenario",
+                    "materialization": {
+                        "ready": False,
+                        "readiness_state": "pending_structure",
+                        "current_scenario": "prompt_engineer_scenario",
+                        "missing_branches": [
+                            "ui.application",
+                            "data.catalog.apps",
+                        ],
+                    },
+                },
+                "gateway_room": {
+                    "ready": True,
+                    "last_open_at": 1778055332.0,
+                },
+            },
+            "webspaces": {
+                "desktop": {
+                    "replay_window_entries": 2,
+                    "replay_window_limit": 32,
+                },
+            },
+        }
+    )
+
+    assert snapshot["transport_state"] == "attached"
+    assert snapshot["first_sync_state"] == "complete"
+    assert snapshot["semantic_state"] == "ready"
+    assert snapshot["freshness_state"] == "fresh"
+    assert snapshot["materialization"]["transition_expected"] is True
+    assert snapshot["materialization"]["readiness_state"] == "pending_structure"
+    assert snapshot["semantic_health"]["materialization_seed"]["state"] == "staging"
+    assert snapshot["semantic_health"]["materialization_seed"]["stale"] is False
+    assert not any(str(item).startswith("missing_branch:") for item in snapshot["blockers"])
+
+
 def test_state_sync_marks_ready_room_degraded_when_browser_transport_has_no_live_channel() -> None:
     snapshot = _state_sync_snapshot(
         {

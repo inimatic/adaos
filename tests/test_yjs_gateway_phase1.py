@@ -3091,8 +3091,12 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         captured["offer"] = kwargs
         return {"type": "answer", "sdp": "answer-sdp"}
 
-    async def _handle_remote_ice(device_id: str, candidate: object) -> None:
-        captured["ice"] = {"device_id": device_id, "candidate": candidate}
+    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None) -> None:
+        captured["ice"] = {
+            "device_id": device_id,
+            "candidate": candidate,
+            "generation_id": generation_id,
+        }
 
     monkeypatch.setitem(
         sys.modules,
@@ -3119,6 +3123,8 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
                             "sdp": "offer-sdp",
                             "device_id": "dev-signal",
                             "webspace_id": "ops",
+                            "generation_id": "rtc-generation-1",
+                            "negotiation_mode": "fresh_peer",
                         },
                     }
                 ),
@@ -3131,6 +3137,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
                         "payload": {
                             "device_id": "dev-signal",
                             "webspace_id": "ops",
+                            "generation_id": "rtc-generation-1",
                             "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
                         },
                     }
@@ -3155,9 +3162,12 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
     assert websocket.accepted is True
     assert captured["offer"]["device_id"] == "dev-signal"  # type: ignore[index]
     assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
+    assert captured["offer"]["generation_id"] == "rtc-generation-1"  # type: ignore[index]
+    assert captured["offer"]["negotiation_mode"] == "fresh_peer"  # type: ignore[index]
     assert captured["ice"] == {
         "device_id": "dev-signal",
         "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
+        "generation_id": "rtc-generation-1",
     }
     assert websocket.sent[0] == {
         "ch": "events",

@@ -50,6 +50,8 @@ _TERMINAL_CONNECTION_STATES = {"failed", "closed", "disconnected"}
 _LIVE_CHANNEL_STATES = {"connecting", "open"}
 _STUCK_PEER_GRACE_SECONDS = 5.0
 _REPLACE_CLOSE_TIMEOUT_SECONDS = 1.5
+_PENDING_REMOTE_ICE_TTL_SECONDS = 10.0
+_PENDING_REMOTE_ICE_MAX_PER_GENERATION = 32
 
 STUN_CONFIG = RTCConfiguration(
     iceServers=[
@@ -60,6 +62,7 @@ STUN_CONFIG = RTCConfiguration(
 
 # Active peers keyed by device_id.
 _peers: dict[str, HubPeer] = {}
+_pending_remote_ice: dict[tuple[str, str], list[tuple[float, dict[str, Any]]]] = {}
 _EVENT_CHANNEL_SUBSCRIPTIONS_LOCK = threading.RLock()
 _EVENT_CHANNEL_SUBSCRIBERS: dict[int, dict[str, Any]] = {}
 _EVENT_CHANNEL_FORWARDER_INSTALLED = False
@@ -598,10 +601,12 @@ class HubPeer:
         device_id: str,
         webspace_id: str,
         send_ice_cb: Callable[[dict[str, Any]], Awaitable[None]],
+        generation_id: str | None = None,
     ) -> None:
         self.device_id = device_id
         self.webspace_id = webspace_id
         self._send_ice = send_ice_cb
+        self.generation_id = str(generation_id or "").strip() or None
 
         self.pc = RTCPeerConnection(configuration=STUN_CONFIG)
         self._yjs_adapter: DataChannelYjsAdapter | None = None
@@ -619,6 +624,8 @@ class HubPeer:
         self._created_at = time.time()
         self._last_activity_at = self._created_at
         self._last_state_change_at = self._created_at
+        self._remote_ice_candidate_count = 0
+        self._remote_ice_candidate_types: dict[str, int] = {}
 
         # Browser creates the DataChannels – hub receives them here.
         @self.pc.on("datachannel")
@@ -1367,6 +1374,15 @@ class HubPeer:
         candidate.sdpMid = candidate_dict.get("sdpMid")
         candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
         await self.pc.addIceCandidate(candidate)
+        parts = str(sdp_line).split()
+        try:
+            candidate_type = str(parts[parts.index("typ") + 1] or "unknown").strip().lower()
+        except (ValueError, IndexError):
+            candidate_type = "unknown"
+        self._remote_ice_candidate_count += 1
+        self._remote_ice_candidate_types[candidate_type] = (
+            int(self._remote_ice_candidate_types.get(candidate_type) or 0) + 1
+        )
 
     def snapshot_record(self) -> dict[str, Any]:
         connection_state = self._connection_state()
@@ -1401,6 +1417,7 @@ class HubPeer:
         return {
             "device_id": self.device_id,
             "webspace_id": str(getattr(self, "webspace_id", "") or ""),
+            "generation_id": self.generation_id,
             "connection_state": connection_state,
             "events_channel_state": events_state,
             "yjs_channel_state": yjs_state,
@@ -1409,6 +1426,8 @@ class HubPeer:
             "loopback_audio_tracks": loopback_audio_tracks,
             "loopback_video_tracks": loopback_video_tracks,
             "media_track_total": incoming_audio_tracks + incoming_video_tracks,
+            "remote_ice_candidate_count": self._remote_ice_candidate_count,
+            "remote_ice_candidate_types": dict(self._remote_ice_candidate_types),
         }
 
     def _emit_state_event(self, *, reason: str) -> None:
@@ -1490,32 +1509,114 @@ class HubPeer:
 # -- Public API ---------------------------------------------------------------
 
 
+def _clean_generation_id(value: Any) -> str | None:
+    token = str(value or "").strip()
+    return token[:160] or None
+
+
+def _clean_negotiation_mode(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"fresh_peer", "ice_restart", "renegotiate"}:
+        return token
+    return "legacy"
+
+
+def _prune_pending_remote_ice(*, now: float | None = None) -> None:
+    cutoff = (time.time() if now is None else float(now)) - _PENDING_REMOTE_ICE_TTL_SECONDS
+    for key, entries in list(_pending_remote_ice.items()):
+        retained = [(created_at, candidate) for created_at, candidate in entries if created_at >= cutoff]
+        if retained:
+            _pending_remote_ice[key] = retained[-_PENDING_REMOTE_ICE_MAX_PER_GENERATION:]
+        else:
+            _pending_remote_ice.pop(key, None)
+
+
+def _queue_pending_remote_ice(device_id: str, generation_id: str, candidate: dict[str, Any]) -> None:
+    _prune_pending_remote_ice()
+    key = (device_id, generation_id)
+    entries = _pending_remote_ice.setdefault(key, [])
+    entries.append((time.time(), dict(candidate)))
+    if len(entries) > _PENDING_REMOTE_ICE_MAX_PER_GENERATION:
+        del entries[:-_PENDING_REMOTE_ICE_MAX_PER_GENERATION]
+
+
+async def _apply_pending_remote_ice(peer: HubPeer) -> int:
+    generation_id = _clean_generation_id(getattr(peer, "generation_id", None))
+    if not generation_id:
+        return 0
+    _prune_pending_remote_ice()
+    entries = _pending_remote_ice.pop((peer.device_id, generation_id), [])
+    applied = 0
+    for _created_at, candidate in entries:
+        try:
+            await peer.add_ice_candidate(candidate)
+            applied += 1
+        except Exception:
+            _log.debug(
+                "failed applying buffered rtc.ice device=%s generation=%s",
+                peer.device_id,
+                generation_id,
+                exc_info=True,
+            )
+    return applied
+
+
 async def handle_rtc_offer(
     offer_sdp: str,
     offer_type: str,
     device_id: str,
     webspace_id: str,
     send_ice_cb: Callable[[dict[str, Any]], Awaitable[None]],
+    generation_id: str | None = None,
+    negotiation_mode: str | None = None,
 ) -> dict[str, str]:
     """
     Called from ``gateway_ws.py`` when browser sends ``rtc.offer``.
 
     Returns the SDP answer payload ``{"sdp": ..., "type": "answer"}``.
     """
+    incoming_generation = _clean_generation_id(generation_id)
+    mode = _clean_negotiation_mode(negotiation_mode)
     existing = _peers.get(device_id)
     if existing:
         state = existing._connection_state() if hasattr(existing, "_connection_state") else str(getattr(existing.pc, "connectionState", "") or "").strip().lower()
-        reusable = bool(getattr(existing, "is_reusable_for_offer", lambda: state in _REUSABLE_CONNECTION_STATES)())
+        existing_generation = _clean_generation_id(getattr(existing, "generation_id", None))
+        generation_changed = bool(
+            incoming_generation and existing_generation != incoming_generation
+        )
+        explicit_fresh_peer = mode == "fresh_peer"
+        same_generation_renegotiation = bool(
+            incoming_generation
+            and existing_generation == incoming_generation
+            and mode in {"ice_restart", "renegotiate"}
+            and state not in {"failed", "closed"}
+        )
+        reusable = (
+            not generation_changed
+            and not explicit_fresh_peer
+            and (
+                same_generation_renegotiation
+                or bool(getattr(existing, "is_reusable_for_offer", lambda: state in _REUSABLE_CONNECTION_STATES)())
+            )
+        )
         if reusable:
             state_emitted = existing._set_webspace_id(webspace_id, reason="offer.renegotiate")
             existing._send_ice = send_ice_cb
+            if incoming_generation:
+                existing.generation_id = incoming_generation
             if not state_emitted:
                 existing._emit_state_event(reason="offer.renegotiate")
-            return await existing.handle_offer(offer_sdp, offer_type)
+            answer = await existing.handle_offer(offer_sdp, offer_type)
+            await _apply_pending_remote_ice(existing)
+            if incoming_generation:
+                answer["generation_id"] = incoming_generation
+            return answer
         _log.info(
-            "replacing stale peer for device=%s on new offer state=%s",
+            "replacing peer for device=%s on new offer state=%s mode=%s generation_changed=%s",
             device_id,
             state or "unknown",
+            mode,
+            generation_changed,
         )
         try:
             await asyncio.wait_for(existing.close(), timeout=_REPLACE_CLOSE_TIMEOUT_SECONDS)
@@ -1533,17 +1634,43 @@ async def handle_rtc_offer(
                 exc_info=True,
             )
 
-    peer = HubPeer(device_id, webspace_id, send_ice_cb)
+    peer = HubPeer(device_id, webspace_id, send_ice_cb, generation_id=incoming_generation)
     _peers[device_id] = peer
     peer._emit_state_event(reason="offer.accepted")
-    return await peer.handle_offer(offer_sdp, offer_type)
+    answer = await peer.handle_offer(offer_sdp, offer_type)
+    await _apply_pending_remote_ice(peer)
+    if incoming_generation:
+        answer["generation_id"] = incoming_generation
+    return answer
 
 
-async def handle_remote_ice(device_id: str, candidate: dict[str, Any] | None) -> None:
+async def handle_remote_ice(
+    device_id: str,
+    candidate: dict[str, Any] | None,
+    generation_id: str | None = None,
+) -> None:
     """Called from ``gateway_ws.py`` when browser sends ``rtc.ice``."""
+    incoming_generation = _clean_generation_id(generation_id)
     peer = _peers.get(device_id)
     if not peer:
+        if incoming_generation and candidate:
+            _queue_pending_remote_ice(device_id, incoming_generation, candidate)
+            _log.debug(
+                "rtc.ice buffered before offer device=%s generation=%s",
+                device_id,
+                incoming_generation,
+            )
+            return
         _log.debug("rtc.ice for unknown device=%s (ignored)", device_id)
+        return
+    peer_generation = _clean_generation_id(getattr(peer, "generation_id", None))
+    if incoming_generation and peer_generation != incoming_generation:
+        _log.debug(
+            "stale rtc.ice ignored device=%s generation=%s active_generation=%s",
+            device_id,
+            incoming_generation,
+            peer_generation,
+        )
         return
     await peer.add_ice_candidate(candidate or {})
 
@@ -1650,6 +1777,7 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
             {
                 "device_id": device_id,
                 "webspace_id": str(getattr(peer, "webspace_id", "") or ""),
+                "generation_id": _clean_generation_id(getattr(peer, "generation_id", None)),
                 "connection_state": state,
                 "events_channel_state": events_state,
                 "yjs_channel_state": yjs_state,
@@ -1658,8 +1786,15 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
                 "loopback_audio_tracks": peer_loopback_audio,
                 "loopback_video_tracks": peer_loopback_video,
                 "media_track_total": peer_incoming_audio + peer_incoming_video,
+                "remote_ice_candidate_count": int(
+                    getattr(peer, "_remote_ice_candidate_count", 0) or 0
+                ),
+                "remote_ice_candidate_types": dict(
+                    getattr(peer, "_remote_ice_candidate_types", {}) or {}
+                ),
             }
         )
+    _prune_pending_remote_ice(now=now)
     return {
         "peer_total": len(peers),
         "connected_peers": int(connection_states.get("connected") or 0),
@@ -1672,6 +1807,10 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
         "loopback_video_tracks": loopback_video_tracks,
         "connection_states": connection_states,
         "pruned_stale_peers": len(stale_peers),
+        "pending_remote_ice_generations": len(_pending_remote_ice),
+        "pending_remote_ice_candidates": sum(
+            len(entries) for entries in _pending_remote_ice.values()
+        ),
         "peers": peers,
         "updated_at": now,
     }

@@ -2302,6 +2302,11 @@ def test_switch_webspace_scenario_pointer_first_avoids_eager_scenario_content_lo
     )
     monkeypatch.setattr(
         webspace_runtime_module,
+        "_read_effective_materialization_scenario",
+        lambda _webspace_id: (_ for _ in ()).throw(AssertionError("should not probe materialization for a different target scenario")),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
         "_schedule_scenario_switch_rebuild",
         lambda webspace_id, **kwargs: None,
     )
@@ -2318,6 +2323,7 @@ def test_switch_webspace_scenario_pointer_first_avoids_eager_scenario_content_lo
     assert fake_state["ui"]["current_scenario"] == "prompt_engineer_scenario"
     assert "validate_scenario" in result["timings_ms"]
     assert "load_scenario" not in result["timings_ms"]
+    assert "read_materialization_scenario_before" not in result["timings_ms"]
 
 
 def test_switch_webspace_scenario_pointer_first_keeps_dev_home_unchanged_by_default(monkeypatch) -> None:
@@ -2725,6 +2731,7 @@ def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materia
         source_mode="workspace",
         home_scenario="web_desktop",
     )
+    set_workspace_current_scenario_overlay(webspace_id, "web_desktop")
 
     fake_state = _patch_switch_dependencies(
         monkeypatch,

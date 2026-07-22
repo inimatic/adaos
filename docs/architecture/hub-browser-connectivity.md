@@ -95,6 +95,33 @@ The strategy has two acceptance implications:
 - quality readiness requires the selected higher-quality path to be stable, or
   a visible and acceptable fallback reason.
 
+## WebRTC Signaling Contract
+
+WebRTC signaling uses `/ws`, but an ordered WebSocket alone is not sufficient:
+browser ICE gathering can emit a candidate before application code has sent the
+offer that creates the server peer. The protocol therefore observes these
+rules:
+
+- Every fresh browser `RTCPeerConnection` has a random `generation_id`.
+- `rtc.offer` declares both `generation_id` and `negotiation_mode`:
+  `fresh_peer`, `ice_restart`, or `renegotiate`.
+- The browser queues local ICE candidates until the matching `rtc.offer` is
+  acknowledged. It then sends `rtc.ice` in order with the same `generation_id`.
+- The runtime replaces an existing peer for `fresh_peer` or a changed
+  `generation_id`. It may reuse a peer only for `ice_restart` or `renegotiate`
+  of the same generation.
+- Candidates are applied only to the matching generation. A bounded,
+  short-lived server buffer covers candidates that arrive before their offer;
+  stale candidates for a different active generation are discarded.
+- A full-recovery attempt must create a fresh browser peer and close the prior
+  server peer before accepting the new offer. Reapplying fresh offers to one
+  aiortc peer is forbidden because old ICE transports can remain allocated.
+
+Compatibility fields are optional for old clients, but current clients must
+send them. Runtime diagnostics expose the active generation, accepted remote
+candidate count/types, and pending pre-offer candidate count without exposing
+candidate addresses.
+
 ## Readiness Model
 
 The browser must distinguish logical readiness from quality readiness.
@@ -159,6 +186,9 @@ Required for a reliable hub-browser quality bar:
       WebRTC upgrade and explicit demotion.
 - [x] Re-arm WebRTC promotion after disconnect grace, retry backoff, and
       in-memory cooldown without requiring browser reload.
+- [x] Bind offers and ICE candidates to a peer generation, queue browser
+      candidates until offer acknowledgement, and replace server peers on full
+      recovery instead of reusing an old ICE transport.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
 - [ ] Report Yjs first-sync latency and pressure as hub-browser quality gates.
 - [ ] Record browser route/WebRTC/YWS fallback windows in the incident registry.
@@ -181,6 +211,11 @@ pass in diagnostics and post-deploy tests:
 - A/B slot promotion is detected and recovered without a stale green state.
 - WebRTC direct channel timeout produces a visible fallback and does not block
   operation.
+- Direct recovery after a closed peer reaches WebRTC again without a browser
+  reload; each full retry uses a new generation and the runtime owns at most one
+  active ICE socket generation per browser peer.
+- Runtime diagnostics show at least one accepted remote ICE candidate for an
+  attempted direct connection, or report candidate absence as the blocker.
 - Yjs first sync completes within budget or reports an explicit degraded reason.
 - Reliability summary reports logical state, quality state, active transports,
   and recent failure evidence.

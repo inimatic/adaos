@@ -7385,6 +7385,20 @@ def _materialization_scenario_from_environment(environment: Any) -> str | None:
     return _normalize_optional_token(raw_materialization.get("scenario_id"))
 
 
+def _materialization_scenario_from_rebuild_state(rebuild_state: Mapping[str, Any] | None) -> str | None:
+    state = _coerce_dict(rebuild_state)
+    materialization = _coerce_dict(state.get("materialization"))
+    candidates = (
+        materialization.get("current_scenario"),
+        materialization.get("scenario_id"),
+    )
+    for candidate in candidates:
+        token = _normalize_optional_token(candidate)
+        if token:
+            return token
+    return None
+
+
 def _open_readonly_operational_ydoc(webspace_id: str):
     """
     Open a read-only YDoc session for operational/status reads.
@@ -10227,21 +10241,26 @@ async def switch_webspace_scenario(
     stage_started = time.perf_counter()
     rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
     _record_timing(timings_ms, "describe_rebuild_before", stage_started)
-    stage_started = time.perf_counter()
-    materialized_scenario_before = await _read_effective_materialization_scenario(webspace_id)
-    _record_timing(timings_ms, "read_materialization_scenario_before", stage_started)
-    materialization_matches_target = (
-        materialized_scenario_before is None
-        or str(materialized_scenario_before or "").strip() == scenario_id
-    )
-    if materialized_scenario_before and not materialization_matches_target:
-        _log.warning(
-            "desktop.scenario.set forcing rebuild for materialization mismatch webspace=%s current_scenario=%s materialized_scenario=%s target_scenario=%s",
-            webspace_id,
-            state_before.current_scenario,
-            materialized_scenario_before,
-            scenario_id,
+    materialized_scenario_before: str | None = None
+    materialization_matches_target = True
+    if str(state_before.current_scenario or "").strip() == scenario_id:
+        stage_started = time.perf_counter()
+        materialized_scenario_before = _materialization_scenario_from_rebuild_state(rebuild_state_before)
+        if materialized_scenario_before is None:
+            materialized_scenario_before = await _read_effective_materialization_scenario(webspace_id)
+        _record_timing(timings_ms, "read_materialization_scenario_before", stage_started)
+        materialization_matches_target = (
+            materialized_scenario_before is None
+            or str(materialized_scenario_before or "").strip() == scenario_id
         )
+        if materialized_scenario_before and not materialization_matches_target:
+            _log.warning(
+                "desktop.scenario.set forcing rebuild for materialization mismatch webspace=%s current_scenario=%s materialized_scenario=%s target_scenario=%s",
+                webspace_id,
+                state_before.current_scenario,
+                materialized_scenario_before,
+                scenario_id,
+            )
 
     _log.info(
         "desktop.scenario.set webspace=%s scenario=%s requested_set_home=%s resolved_set_home=%s request_source=%s request_id=%s request_client=%s",

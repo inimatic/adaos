@@ -882,6 +882,15 @@ Current status:
 - rebuild execution state is now a first-class observable snapshot (`idle /
   scheduled / running / ready / failed`) so fast-accept background reconcile
   paths can still be diagnosed from control surfaces without tailing logs
+- state-sync health now keeps an expected scenario-switch materialization
+  transition separate from link degradation: `state_sync.materialization`
+  reports `transition_expected`, while healthy attached Yjs channels remain
+  availability-usable during `pending_structure`, `first_paint`,
+  `interactive`, and `hydrating`
+- the scenario-switch command no longer opens a read-only YDoc to probe the
+  previous materialized scenario on ordinary transitions; that probe is
+  reserved for same-current idempotency checks where a stale materialization
+  could otherwise be skipped
 - the main remaining cleanup is no longer "make projection refresh explicit",
   but expanding debug/introspection around projection ordering as deeper
   Phase 4 work

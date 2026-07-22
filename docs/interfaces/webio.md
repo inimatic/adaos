@@ -829,6 +829,24 @@ The important distinction is that `hydrating` is an expected staged state,
 while `degraded` means the runtime could not account for required desktop
 branches and the client should surface a stronger recovery hint.
 
+During a scenario switch, `pending_structure`, `first_paint`,
+`interactive`, and `hydrating` are materialization phases, not transport
+freshness failures. Runtime reliability now exposes this as
+`state_sync.materialization.transition_expected=true` while keeping the Yjs
+transport fields attached/fresh when the room/provider are healthy. The
+browser availability indicator must therefore treat the channel as usable and
+surface the phase as `materialization=transition:<state>` rather than showing
+`Limited (sync_limited)`. State-dependent desktop actions may still block on
+full materialization readiness; that guard belongs to the action/data layer,
+not to link availability.
+
+For hot scenario switches, the backend should also avoid opening a read-only
+YDoc only to compare the previous materialized scenario. That check is needed
+only when the requested scenario already matches the current selector and the
+runtime might otherwise skip a stale materialization. Ordinary transitions
+should update the selector first and let the semantic rebuild publish phase
+progress through the lightweight rebuild/materialization surfaces.
+
 `compatibility_caches` exposes the migration-era legacy cache surface for
 operators:
 
