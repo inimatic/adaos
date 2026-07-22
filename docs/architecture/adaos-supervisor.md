@@ -208,6 +208,7 @@ The same rule must apply to local control discovery:
 - `candidate` runtime surfaces must self-identify through lightweight probes such as `/api/ping` and `/api/admin/update/status`
 - local fallback control resolvers must ignore a runtime that reports `transition_role=candidate` or `admin_mutation_allowed=false`
 - a candidate runtime must reject mutating local update operations (`update.start`, `update.cancel`, `update.rollback`) with an explicit conflict instead of behaving like a second control plane
+- candidate bootstrap must not reconcile or finalize the shared core-update status, persist shared hub configuration, or report slot validation; those writes belong to the active runtime after cutover
 
 Fast cutover does not remove that rule.
 It only defines the moment when supervisor may end passive mode:

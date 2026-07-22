@@ -1077,6 +1077,47 @@ def test_autostart_runner_skips_pending_update_when_requested(monkeypatch, tmp_p
     assert not any(isinstance(item, tuple) and item[0] == "execute" for item in calls)
 
 
+def test_candidate_runtime_does_not_mutate_shared_update_or_hub_state(monkeypatch, tmp_path: Path) -> None:
+    calls: list[object] = []
+    conf = type("Config", (), {"role": "hub", "hub_url": "http://127.0.0.1:8778"})()
+
+    monkeypatch.setattr(
+        autostart_runner,
+        "_parse_args",
+        lambda: type("Args", (), {"host": "127.0.0.1", "port": 8777, "token": None})(),
+    )
+    monkeypatch.setattr(autostart_runner, "init_ctx", lambda: None)
+    monkeypatch.setattr(autostart_runner, "read_plan", lambda: calls.append("read_plan"))
+    monkeypatch.setattr(autostart_runner, "read_status", lambda: calls.append("read_status"))
+    monkeypatch.setattr(autostart_runner, "finalize_runtime_boot_status", lambda: calls.append("finalize"))
+    monkeypatch.setattr(autostart_runner, "write_status", lambda payload: calls.append(("write_status", payload)))
+    monkeypatch.setattr(autostart_runner, "load_config", lambda: conf)
+    monkeypatch.setattr(autostart_runner, "save_config", lambda _conf: calls.append("save_config"))
+    monkeypatch.setattr(autostart_runner, "_resolve_bind", lambda _conf, host, port: (host, port))
+    monkeypatch.setattr(autostart_runner, "_advertise_base", lambda host, port: f"http://{host}:{port}")
+    monkeypatch.setattr(autostart_runner, "_stop_previous_server", lambda host, port: None)
+    monkeypatch.setattr(autostart_runner, "_pidfile_path", lambda host, port: tmp_path / "serve.json")
+    monkeypatch.setattr(
+        autostart_runner,
+        "_write_pidfile",
+        lambda path, **kwargs: path.write_text("{}", encoding="utf-8"),
+    )
+    monkeypatch.setattr(
+        autostart_runner,
+        "_launch_active_slot_if_needed",
+        lambda *args, **kwargs: (_ for _ in ()).throw(SystemExit(0)),
+    )
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+
+    try:
+        autostart_runner.main()
+    except SystemExit:
+        pass
+
+    assert calls == []
+    assert conf.hub_url == "http://127.0.0.1:8778"
+
+
 def test_autostart_runner_preserves_root_promotion_pending_status_on_boot(monkeypatch, tmp_path: Path) -> None:
     writes: list[dict] = []
     finalized_calls: list[bool] = []
