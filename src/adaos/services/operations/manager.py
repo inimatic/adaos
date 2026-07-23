@@ -10,6 +10,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
@@ -35,6 +36,7 @@ _log = logging.getLogger("adaos.operations")
 _MANAGER_LOCK = threading.RLock()
 _MANAGERS: dict[str, "OperationManager"] = {}
 _ACTIVE_STATUSES = {"accepted", "queued", "running", "waiting_input"}
+_PERSISTENCE_SCHEMA = "adaos.operations.state.v1"
 
 
 def _operations_async_write_meta():
@@ -244,16 +246,183 @@ class OperationHandle:
 
 
 class OperationManager:
-    def __init__(self, ctx: AgentContext, *, max_finished: int = 20, max_notifications: int = 40) -> None:
+    def __init__(
+        self,
+        ctx: AgentContext,
+        *,
+        max_finished: int = 20,
+        max_notifications: int = 40,
+        state_path: Path | None = None,
+    ) -> None:
         self.ctx = ctx
         self.max_finished = max(1, int(max_finished))
         self.max_notifications = max(1, int(max_notifications))
         self._lock = threading.RLock()
+        self._persist_lock = threading.RLock()
         self._sequence = 0
         self._operations_by_webspace: dict[str, dict[str, OperationState]] = {}
         self._order_by_webspace: dict[str, list[str]] = {}
         self._notifications_by_webspace: dict[str, list[OperationNotification]] = {}
         self._tasks_by_operation_id: dict[str, asyncio.Task[Any]] = {}
+        self._state_path = state_path.resolve() if state_path is not None else self._resolve_state_path()
+        self._persistence_error: str | None = None
+        self._recovered_interrupted_total = self._load_persisted_state()
+        if self._recovered_interrupted_total:
+            self._persist_state()
+
+    def _resolve_state_path(self) -> Path | None:
+        if _env_flag("ADAOS_OPERATIONS_DISABLE_PERSISTENCE", False):
+            return None
+        explicit = str(os.getenv("ADAOS_OPERATIONS_STATE_PATH", "") or "").strip()
+        if explicit:
+            return Path(explicit).expanduser().resolve()
+        try:
+            state_dir = Path(self.ctx.paths.state_dir())
+        except Exception:
+            try:
+                state_dir = Path(self.ctx.paths.base_dir()) / "state"
+            except Exception:
+                return None
+        if not state_dir.is_absolute():
+            return None
+        return (state_dir / "operations" / "operations.json").resolve()
+
+    @staticmethod
+    def _operation_from_dict(payload: Any) -> OperationState | None:
+        if not isinstance(payload, dict):
+            return None
+        fields = OperationState.__dataclass_fields__
+        values = {key: value for key, value in payload.items() if key in fields}
+        try:
+            item = OperationState(**values)
+        except Exception:
+            return None
+        if not item.operation_id or not item.webspace_id:
+            return None
+        return item
+
+    @staticmethod
+    def _notification_from_dict(payload: Any) -> OperationNotification | None:
+        if not isinstance(payload, dict):
+            return None
+        fields = OperationNotification.__dataclass_fields__
+        values = {key: value for key, value in payload.items() if key in fields}
+        try:
+            return OperationNotification(**values)
+        except Exception:
+            return None
+
+    def _load_persisted_state(self) -> int:
+        path = self._state_path
+        if path is None or not path.is_file():
+            return 0
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._persistence_error = f"{type(exc).__name__}: {exc}"
+            _log.warning("failed to load durable operation state path=%s", path, exc_info=True)
+            return 0
+        if not isinstance(payload, dict) or payload.get("schema") != _PERSISTENCE_SCHEMA:
+            self._persistence_error = "unsupported_or_invalid_state_schema"
+            _log.warning("ignored unsupported durable operation state path=%s", path)
+            return 0
+        recovered = 0
+        now = _now_iso()
+        with self._lock:
+            self._sequence = max(0, int(payload.get("sequence") or 0))
+            for webspace_id, raw_state in dict(payload.get("webspaces") or {}).items():
+                if not isinstance(raw_state, dict):
+                    continue
+                ws = str(webspace_id or "").strip()
+                if not ws:
+                    continue
+                ops: dict[str, OperationState] = {}
+                order: list[str] = []
+                for raw_item in list(raw_state.get("operations") or []):
+                    item = self._operation_from_dict(raw_item)
+                    if item is None:
+                        continue
+                    item.webspace_id = ws
+                    if item.status in _ACTIVE_STATUSES:
+                        item.status = "recoverable"
+                        item.message = "Operation was interrupted by runtime restart and requires explicit retry"
+                        item.updated_at = now
+                        item.finished_at = now
+                        item.can_cancel = False
+                        item.error = {
+                            "type": "RuntimeRestart",
+                            "message": "operation interrupted by runtime restart",
+                            "retryable": True,
+                        }
+                        recovered += 1
+                    ops[item.operation_id] = item
+                    order.append(item.operation_id)
+                notifications = [
+                    item
+                    for item in (self._notification_from_dict(raw) for raw in list(raw_state.get("notifications") or []))
+                    if item is not None
+                ]
+                for item in ops.values():
+                    if item.status != "recoverable":
+                        continue
+                    notification_id = f"notif:{item.operation_id}:recoverable"
+                    if any(existing.id == notification_id for existing in notifications):
+                        continue
+                    notifications.append(
+                        OperationNotification(
+                            id=notification_id,
+                            level="warning",
+                            message=f"{item.target_kind} {item.target_id} requires retry after runtime restart",
+                            operation_id=item.operation_id,
+                            target_kind=item.target_kind,
+                            target_id=item.target_id,
+                            ts=now,
+                        )
+                    )
+                self._operations_by_webspace[ws] = ops
+                self._order_by_webspace[ws] = order
+                self._notifications_by_webspace[ws] = notifications[-self.max_notifications :]
+                self._trim_finished_locked(ws)
+        self._persistence_error = None
+        return recovered
+
+    def _durable_payload(self) -> dict[str, Any]:
+        with self._lock:
+            webspace_ids = sorted(
+                set(self._operations_by_webspace)
+                | set(self._order_by_webspace)
+                | set(self._notifications_by_webspace)
+            )
+            webspaces: dict[str, Any] = {}
+            for ws in webspace_ids:
+                ops = self._operations_by_webspace.get(ws, {})
+                order = self._order_by_webspace.get(ws, [])
+                webspaces[ws] = {
+                    "operations": [ops[operation_id].to_dict() for operation_id in order if operation_id in ops],
+                    "notifications": [item.to_dict() for item in self._notifications_by_webspace.get(ws, [])],
+                }
+            return {
+                "schema": _PERSISTENCE_SCHEMA,
+                "updated_at": _now_iso(),
+                "sequence": self._sequence,
+                "webspaces": webspaces,
+            }
+
+    def _persist_state(self) -> None:
+        path = self._state_path
+        if path is None:
+            return
+        with self._persist_lock:
+            try:
+                payload = self._durable_payload()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                os.replace(temporary, path)
+                self._persistence_error = None
+            except Exception as exc:
+                self._persistence_error = f"{type(exc).__name__}: {exc}"
+                _log.warning("failed to persist operation state path=%s", path, exc_info=True)
 
     def create_operation(
         self,
@@ -397,6 +566,13 @@ class OperationManager:
             "active": active,
             "active_items": active_items,
             "notifications": notifications,
+            "persistence": {
+                "enabled": self._state_path is not None,
+                "state_file": self._state_path.name if self._state_path is not None else None,
+                "healthy": self._state_path is not None and self._persistence_error is None,
+                "last_error": self._persistence_error,
+                "recovered_interrupted_total": self._recovered_interrupted_total,
+            },
         }
 
     def _get_operation(self, operation_id: str) -> OperationState:
@@ -423,6 +599,7 @@ class OperationManager:
         elif item.status == "failed":
             message = str((item.error or {}).get("message") or item.message or f"{item.target_kind} {item.target_id} failed")
             self._record_notification(item, level="error", message=message)
+        self._persist_state()
         self._publish_event(item, event_type=event_type)
         self._project(item.webspace_id)
 
@@ -501,7 +678,14 @@ class OperationManager:
                         runtime_map.set(
                             txn,
                             "operations",
-                            _json_clone({"by_id": snapshot["by_id"], "order": snapshot["order"], "active": snapshot["active"]}),
+                            _json_clone(
+                                {
+                                    "by_id": snapshot["by_id"],
+                                    "order": snapshot["order"],
+                                    "active": snapshot["active"],
+                                    "persistence": snapshot["persistence"],
+                                }
+                            ),
                         )
                         runtime_map.set(txn, "notifications", _json_clone(snapshot["notifications"]))
 
@@ -515,7 +699,14 @@ class OperationManager:
                         runtime_map.set(
                             txn,
                             "operations",
-                            _json_clone({"by_id": snapshot["by_id"], "order": snapshot["order"], "active": snapshot["active"]}),
+                            _json_clone(
+                                {
+                                    "by_id": snapshot["by_id"],
+                                    "order": snapshot["order"],
+                                    "active": snapshot["active"],
+                                    "persistence": snapshot["persistence"],
+                                }
+                            ),
                         )
                         runtime_map.set(txn, "notifications", _json_clone(snapshot["notifications"]))
         else:

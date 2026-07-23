@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
 from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 if "y_py" not in sys.modules:
@@ -174,6 +176,79 @@ def test_operation_manager_records_notifications_on_completion(monkeypatch) -> N
 
     runtime_map = docs["default"].get_map("runtime")
     assert isinstance(runtime_map.get("notifications"), list)
+
+
+def test_operation_manager_persists_terminal_history_across_restart(monkeypatch, tmp_path: Path) -> None:
+    docs: dict[str, _FakeYDoc] = {}
+
+    @contextmanager
+    def _get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
+    monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
+    state_path = tmp_path / "operations.json"
+    manager = OperationManager(_make_ctx(), state_path=state_path)
+    operation = manager.create_operation(
+        kind="skill.install",
+        target_kind="skill",
+        target_id="durable_skill",
+        webspace_id="desktop",
+    )
+    manager.update_operation(
+        operation.operation_id,
+        status="succeeded",
+        progress=100,
+        result={"version": "1.2.3"},
+        finished=True,
+    )
+
+    restored = OperationManager(_make_ctx(), state_path=state_path)
+    snapshot = restored.snapshot(webspace_id="desktop")
+
+    assert snapshot["by_id"][operation.operation_id]["status"] == "succeeded"
+    assert snapshot["by_id"][operation.operation_id]["result"] == {"version": "1.2.3"}
+    assert snapshot["notifications"][-1]["operation_id"] == operation.operation_id
+    assert snapshot["persistence"]["healthy"] is True
+
+
+def test_operation_manager_marks_interrupted_work_recoverable_after_restart(monkeypatch, tmp_path: Path) -> None:
+    docs: dict[str, _FakeYDoc] = {}
+
+    @contextmanager
+    def _get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
+    monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
+    state_path = tmp_path / "operations.json"
+    manager = OperationManager(_make_ctx(), state_path=state_path)
+    operation = manager.create_operation(
+        kind="scenario.update",
+        target_kind="scenario",
+        target_id="desktop",
+        webspace_id="desktop",
+    )
+    manager.update_operation(
+        operation.operation_id,
+        status="running",
+        progress=40,
+        current_step="runtime.prepare",
+    )
+
+    restored = OperationManager(_make_ctx(), state_path=state_path)
+    snapshot = restored.snapshot(webspace_id="desktop")
+    recovered = snapshot["by_id"][operation.operation_id]
+
+    assert recovered["status"] == "recoverable"
+    assert recovered["error"]["type"] == "RuntimeRestart"
+    assert recovered["error"]["retryable"] is True
+    assert operation.operation_id not in snapshot["active"]
+    assert snapshot["persistence"]["recovered_interrupted_total"] == 1
+    assert snapshot["notifications"][-1]["level"] == "warning"
+
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["webspaces"]["desktop"]["operations"][0]["status"] == "recoverable"
 
 
 def test_submit_skill_install_operation_prepares_and_activates_runtime(monkeypatch) -> None:
