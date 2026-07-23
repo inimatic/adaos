@@ -126,6 +126,7 @@ The supported transitions are:
 | --- | --- | --- | --- |
 | Prototype | hand off/start Automation | Automation | current Prototype head becomes frozen input |
 | Automation working | Automation completes | Automation completed | replace the single retained Automation snapshot |
+| Automation completed/failed | submit another Automation turn | Automation working | reopen the same Automation process with a new iteration and task id |
 | Automation completed | publish | Automation completed | create or replace the current Publication snapshot |
 | Automation completed | return to Prototype | Prototype | built-in LLM derives a new safe Prototype revision |
 

@@ -275,6 +275,10 @@ class LocalSkillFactoryWorker:
                 shutil.rmtree(workspace)
             workspace.mkdir(parents=True)
             self._materialize_sources(assignment, workspace)
+            # Generated caches from an earlier DEV run are not source.  Drop
+            # them before the git baseline so their later cleanup cannot look
+            # like a forbidden edit to an immutable companion skill.
+            self._cleanup_generated_files(workspace)
             _write_json(input_dir / "assignment.json", dict(assignment))
             packet = self._build_packet(assignment, workspace, input_dir)
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
@@ -582,6 +586,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
     def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
         errors: list[str] = []
         checks: list[dict[str, Any]] = []
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -681,13 +688,134 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         for path in required:
             if not path.exists():
                 errors.append(f"required file missing: {path.relative_to(workspace)}")
-        self._run_generated_tests(workspace, checks, errors)
+        if workflow_transition == "return_to_prototype" and target.get("type") == "scenario":
+            self._validate_safe_prototype(workspace, target_id, checks, errors)
+        self._run_generated_tests(
+            workspace,
+            checks,
+            errors,
+            skip_frozen_skills=workflow_transition == "return_to_prototype",
+        )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
 
-    def _run_generated_tests(self, workspace: Path, checks: list[dict[str, Any]], errors: list[str]) -> None:
+    @staticmethod
+    def _validate_safe_prototype(
+        workspace: Path,
+        scenario_id: str,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        scenario_root = workspace / "scenarios" / scenario_id
+        manifest_path = scenario_root / "scenario.yaml"
+        webui_path = scenario_root / "webui.json"
+        try:
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            manifest = {}
+        if not isinstance(manifest, Mapping):
+            manifest = {}
+
+        bindings: list[str] = []
+        depends = manifest.get("depends")
+        if isinstance(depends, str):
+            depends = [depends]
+        if isinstance(depends, (list, tuple)) and any(str(item).strip() for item in depends):
+            bindings.append("scenario.yaml depends")
+        for section_name in ("runtime", "skills"):
+            section = manifest.get(section_name)
+            if not isinstance(section, Mapping):
+                continue
+            skills = section.get("skills") if section_name == "runtime" else section
+            if not isinstance(skills, Mapping):
+                continue
+            required = skills.get("required")
+            if isinstance(required, str):
+                required = [required]
+            if isinstance(required, (list, tuple)) and any(str(item).strip() for item in required):
+                bindings.append(f"scenario.yaml {section_name}.skills.required")
+
+        try:
+            webui = _read_json(webui_path)
+        except Exception:
+            webui = {}
+        binding_kinds = {
+            "api",
+            "device",
+            "http",
+            "remote",
+            "service",
+            "skill",
+            "stream",
+            "tool",
+            "websocket",
+        }
+        binding_actions = {
+            "callapi",
+            "callskill",
+            "invokedevice",
+            "invokeservice",
+            "invoketool",
+            "requesthttp",
+        }
+        external_prefixes = ("http://", "https://", "ws://", "wss://", "file://", "device://")
+
+        def visit(value: Any, path: str) -> None:
+            if isinstance(value, Mapping):
+                kind = str(value.get("kind") or "").strip().lower()
+                action_type = str(value.get("type") or "").replace("_", "").strip().lower()
+                if kind in binding_kinds:
+                    bindings.append(f"{path}.kind={kind}")
+                if action_type in binding_actions or action_type == "fileupload":
+                    bindings.append(f"{path}.type={value.get('type')}")
+                for key, item in value.items():
+                    visit(item, f"{path}.{key}")
+                return
+            if isinstance(value, list):
+                for index, item in enumerate(value):
+                    visit(item, f"{path}[{index}]")
+                return
+            if isinstance(value, str) and value.strip().lower().startswith(external_prefixes):
+                bindings.append(path)
+
+        visit(webui, "webui.json")
+        if bindings:
+            unique = list(dict.fromkeys(bindings))
+            errors.append(
+                "return_to_prototype left functional or external bindings in the safe Prototype: "
+                + ", ".join(unique[:20])
+            )
+        else:
+            checks.append(
+                {
+                    "kind": "safe_prototype",
+                    "path": scenario_root.relative_to(workspace).as_posix(),
+                    "ok": True,
+                }
+            )
+
+    def _run_generated_tests(
+        self,
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        skip_frozen_skills: bool = False,
+    ) -> None:
         for tests_dir in sorted(path for path in workspace.glob("skills/*/tests") if path.is_dir()):
             test_files = list(tests_dir.glob("test_*.py"))
             if not test_files:
+                continue
+            relative = tests_dir.relative_to(workspace).as_posix()
+            if skip_frozen_skills:
+                checks.append(
+                    {
+                        "kind": "pytest",
+                        "path": relative,
+                        "ok": True,
+                        "status": "skipped",
+                        "reason": "companion skill is immutable input during return_to_prototype",
+                    }
+                )
                 continue
             environment = SubprocessCodexExecutor._bounded_environment()
             environment["PYTHONPATH"] = str(self.repo_root / "src")
@@ -697,7 +825,6 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 timeout=180.0,
                 env=environment,
             )
-            relative = tests_dir.relative_to(workspace).as_posix()
             checks.append(
                 {
                     "kind": "pytest",
