@@ -82,6 +82,8 @@ def rebuild_workspace_registry(workspace_root: Path) -> dict[str, Any]:
             for child in sorted(kind_root.iterdir(), key=lambda item: item.name.lower()):
                 if not child.is_dir() or child.name.startswith("."):
                     continue
+                if _is_sparse_placeholder_dir(child):
+                    continue
                 entry = build_registry_entry(kind, child)
                 if entry is not None:
                     entries.append(entry)
@@ -447,6 +449,16 @@ def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, di
             ",".join(unsupported),
         )
     return path, data
+
+
+def _is_sparse_placeholder_dir(directory: Path) -> bool:
+    try:
+        entries = list(directory.iterdir())
+    except Exception:
+        return False
+    if not entries:
+        return False
+    return all(entry.is_file() and entry.name == ".gitignore" for entry in entries)
 
 
 def _clean_text(value: Any) -> str | None:

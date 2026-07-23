@@ -159,6 +159,24 @@ def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_p
     assert "unsupported_present=scenario.json" in caplog.text
 
 
+def test_rebuild_workspace_registry_skips_sparse_placeholder_dirs(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "sparse_skill"
+    scenario_dir = workspace / "scenarios" / "sparse_scene"
+    skill_dir.mkdir(parents=True)
+    scenario_dir.mkdir(parents=True)
+    (skill_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+    (scenario_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["skills"] == []
+    assert payload["scenarios"] == []
+    assert "required declaration is missing" not in caplog.text
+
+
 def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_path: Path, caplog, monkeypatch):
     monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
     caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
