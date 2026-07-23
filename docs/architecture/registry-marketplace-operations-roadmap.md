@@ -84,7 +84,8 @@ Current MVP priority:
 - shared remote `adaos-registry` catalog semantics are still not fully
   normalized across every skill/scenario push path
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
-- cancellation and operator retry policy are not yet a complete contract
+- complete client affordances for the core-owned cancellation and retry API are
+  not yet wired into every operations UI
 
 ## Current Implementation Update: 2026-05-27
 
@@ -107,10 +108,19 @@ terminal history, and reclassifies interrupted active work as `recoverable`
 with `retryable=true` and an operator notification. It never auto-retries an
 unknown side effect after restart.
 
+The same slice now exposes authenticated `GET /api/operations`, operation
+detail, `POST /api/operations/{operation_id}/cancel`, and
+`POST /api/operations/{operation_id}/retry`. Cancellation is deliberately
+limited to isolated installer subprocesses, because cancelling an await on
+`asyncio.to_thread` does not stop its side effect. Retry is limited to known
+idempotent install/update kinds. Each retry records `retry_of` and `attempt`;
+repeating retry against the same source operation returns the existing child
+instead of launching duplicate work.
+
 That means Phase 3 and the operation-projection part of Phase 4 are no longer
-pure target-state work. The remaining gaps are governed cancellation and
-idempotent retry, complete UI affordances, marketplace catalog binding, and
-registry-sync normalization.
+pure target-state work. The remaining gaps are stand restart evidence,
+complete UI affordances, marketplace catalog binding, and registry-sync
+normalization.
 
 ## Target Architecture
 
@@ -281,7 +291,10 @@ Minimum operation fields:
     "skill.install",
     "skill:infrastate_skill"
   ],
-  "can_cancel": false
+  "can_cancel": false,
+  "can_retry": false,
+  "retry_of": null,
+  "attempt": 1
 }
 ```
 
@@ -450,7 +463,8 @@ Convert install/update flows from blocking request/response into accepted async 
 - [x] `operation_id` response contract
 - [x] operation projection into Yjs
 - [x] durable recovery for accepted/running operations after runtime restart
-- [ ] `[must]` cancellation/retry policy
+- [x] `[must]` governed subprocess cancellation and idempotent retry policy
+- [ ] `[must]` canary restart/cancel/retry evidence
 
 ## Phase 4: UI Binding and Notifications
 

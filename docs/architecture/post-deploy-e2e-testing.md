@@ -122,6 +122,28 @@ The first runner does not have to wait for a dedicated machine. A local or CI
 runner can validate the contract first. The dedicated Browser Client Machine is
 the hardening step that makes repeated post-deploy checks reproducible.
 
+### Operation Recovery Canary
+
+Operation recovery is a mutating check and therefore belongs to the `canary`
+profile, never the initial `observe` profile. Its deterministic sequence is:
+
+1. submit a known isolated canary install and retain its `operation_id`;
+2. verify `GET /api/operations/{operation_id}` exposes `can_cancel=true`;
+3. cancel it and verify the child process exits and the durable state becomes
+   `cancelled` with `can_retry=true`;
+4. submit another bounded canary operation, restart the API while it is active,
+   and verify the restored state is `recoverable` rather than silently retried;
+5. call `/retry` twice for the recovered id and assert both responses identify
+   the same child operation with `retry_of=<source>` and `attempt=2`;
+6. wait for a terminal child state and verify the Yjs operation projection and
+   notification agree with the canonical API record.
+
+Once the operations UI exposes the same actions, Playwright should repeat the
+cancel/retry part through the headless browser and compare the visible state to
+the API. The API sequence remains the primary algorithmic oracle; browser
+automation proves binding and rendering rather than redefining lifecycle
+semantics.
+
 ## Safety Profiles
 
 Post-deploy E2E targets a live deployed subnet, so the runner must make its
@@ -365,6 +387,8 @@ The postprocessor should identify patterns such as:
   - Classify failures as API, Yjs, stream, fallback, browser, Root route, or
     inconclusive.
   - Map each failure to the shared failure taxonomy.
+  - In the `canary` profile, prove operation cancel, managed-restart recovery,
+    idempotent retry, Yjs projection, and notification convergence.
   - Exit: a failed run reports the broken runtime boundary instead of only a
     browser timeout.
 

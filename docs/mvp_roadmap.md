@@ -187,7 +187,9 @@ Checklist:
   diagnosis without mandatory full `infrastate/snapshot` reads.
 - [x] Persist accepted/running operations enough to recover as
   completed/failed/recoverable after API restart.
-- [ ] Define cancellation, retry, and operator recovery policy for operations.
+- [x] Define cancellation, retry, and operator recovery policy for operations:
+  cancellation is limited to isolated subprocess work, and retry is limited to
+  known idempotent install/update kinds with one child attempt per source id.
 - [x] Mirror operation notifications through the new notification/projection
   path while keeping legacy toasts only as compatibility.
 - [ ] Add acceptance evidence that a noisy or quarantined `infrastate_skill`
