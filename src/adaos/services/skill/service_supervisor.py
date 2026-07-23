@@ -538,10 +538,12 @@ class ServiceSkillSupervisor:
                 else:
                     state = (str(skill_dir), 0, 0, 0.0)
 
+                manifest_was_discovered = workspace_skill_dir.name in self._manifest_state
                 prev_state = self._manifest_state.get(workspace_skill_dir.name)
                 prev_spec = self._specs.get(workspace_skill_dir.name)
-                if not force and prev_spec is not None and prev_state == state:
-                    next_specs[workspace_skill_dir.name] = prev_spec
+                if not force and manifest_was_discovered and prev_state == state:
+                    if prev_spec is not None:
+                        next_specs[workspace_skill_dir.name] = prev_spec
                     next_state[workspace_skill_dir.name] = state
                     continue
 
