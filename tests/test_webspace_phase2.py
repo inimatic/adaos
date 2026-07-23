@@ -4535,6 +4535,30 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
 
 
+def test_legacy_automation_preview_falls_back_to_current_dev_descriptor(monkeypatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    current = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Legacy automation"}}}},
+    }
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: current,
+    )
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "legacy-recipes",
+        stage="automation",
+        revision="current",
+        label=None,
+    )
+
+    assert source_space == "dev"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Legacy automation"
+
+
 def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> None:
     webspace_id = "phase2-builder-superseded-dev"
     ensure_workspace(webspace_id)

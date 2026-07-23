@@ -10603,8 +10603,11 @@ def _builder_preview_content_override(
         )
         try:
             snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Builder Automation snapshot is unavailable: {scenario_id}") from exc
+        except (OSError, json.JSONDecodeError):
+            # Legacy completed Automation projects predate retained snapshots.
+            # Their current DEV descriptor is the only recoverable source;
+            # every completion under the v1 workflow creates a real snapshot.
+            snapshot_payload = None
         content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
     if not isinstance(content, Mapping):
         content = scenarios_loader.read_content(scenario_id, space=source_space)
