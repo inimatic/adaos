@@ -538,15 +538,18 @@ Primary source:
 - [ ] `[deferred]` `phase9.compat_cleanup`: remove legacy monolith paths once replacements are stable
 - [ ] `[deferred]` `phase9.test_matrix`: add the broad cross-skill test matrix for multi-webspace, multi-consumer, node-aware Yjs, platform emitters, and access metadata
 
-## Pilot Priority
+## Pilot Selection
 
-The intended pilot order is:
+There is no fixed `browsers_skill -> infrastate_skill -> infrascope_skill`
+rollout order. Platform surfaces in `web_desktop` remain the common baseline;
+after that, select the next pilot from current active demand, measured runtime
+pressure, declaration/diagnostic readiness, and the first failing stand
+invariant. The remaining candidate set is:
 
-1. platform surfaces in `web_desktop`
-2. `browsers_skill`
-3. `infrastate` overlays
-4. `Infrascope`
-5. one dev-oriented scenario and later bursty interactive surfaces
+- `browsers_skill` for compact browser-session projection and churn;
+- `infrastate_skill` for core-owned operator truth overlays;
+- `infrascope_skill` for demand-bound inventory and details;
+- one dev-oriented scenario and later a bursty interactive surface.
 
 Counter-priority:
 

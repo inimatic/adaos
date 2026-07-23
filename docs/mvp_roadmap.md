@@ -185,10 +185,10 @@ Checklist:
   budget when normal skill communication is guarded.
 - [ ] Make thin reliability/status summaries sufficient for first operator
   diagnosis without mandatory full `infrastate/snapshot` reads.
-- [ ] Persist accepted/running operations enough to recover as
+- [x] Persist accepted/running operations enough to recover as
   completed/failed/recoverable after API restart.
 - [ ] Define cancellation, retry, and operator recovery policy for operations.
-- [ ] Mirror operation notifications through the new notification/projection
+- [x] Mirror operation notifications through the new notification/projection
   path while keeping legacy toasts only as compatibility.
 - [ ] Add acceptance evidence that a noisy or quarantined `infrastate_skill`
   cannot hide active slot, update, Yjs, or member-status truth.
@@ -215,6 +215,10 @@ MVP outcome:
   monolithic snapshots or local executors.
 
 Checklist:
+
+The three named skill migrations are candidates, not a fixed rollout order.
+Select the next pilot from current browser demand, runtime pressure, diagnostic
+coverage, and stand failures; keep detailed work in each owning roadmap.
 
 - [ ] Add a shared activation runtime that tracks loaded/active state per skill
   and relevant webspace.
@@ -271,6 +275,10 @@ Checklist:
   hydration, ready, and degraded states.
 - [ ] Add browser E2E checks for login/attach, webspace switch, reload/reset,
   PWA profile mismatch, runtime debug export, and Yjs red/green interpretation.
+
+The first login/attach, runtime-debug, connected-Yjs, and materialization smoke
+is implemented in `e2e/stand/browser`. Switch, reload/reset, PWA mismatch, and
+managed-restart scenarios remain open.
 
 Related docs:
 

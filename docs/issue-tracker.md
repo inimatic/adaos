@@ -25,29 +25,26 @@ The local Wave 0-1 gate is closed. The active sequence is:
 
 1. prove the M1 projection path on the target stand;
 2. build the M2 operator truth and durable operation plane;
-3. land the shared M3 activation runtime and migrate the three heavy operator
-   skills;
+3. land the shared M3 activation runtime and migrate the remaining heavy
+   operator skills in an evidence-driven order selected from current demand,
+   pressure, and stand failures;
 4. finish browser/webspace acceptance and the release-candidate soak.
 
 ## Must
 
 | ID | State | Work and next proof | Owner |
 | --- | --- | --- | --- |
-| `TEST-001` / `MRI-003` | open | Make projection tests hermetic, stop collection-order replacement of the real `nats` package, and obtain a conclusive repository-wide test result. | [MVP Release Evidence](architecture/mvp-release-evidence.md) |
+| `TEST-001` / `MRI-003` | in progress | Collection now anchors the real NATS/Yjs packages and is order-independent. Drive the conclusive clean run (`1144` tests, `47` current failures, `0` collection errors on 2026-07-23) to zero without reverting newer scenario, routing, Builder, or NLU contracts. | [MVP Release Evidence](architecture/mvp-release-evidence.md) |
 | `M2-TRUTH` / `STATUS-007` | in progress | Populate compact runtime/update/slot/route/Yjs/member/guard cards, keep control traffic inside its own budget, and replace repeated full-summary polling with versioned push/delta consumption. | [MVP M2](mvp_roadmap.md#milestone-m2-operator-truth-plane), [Operational Event Model](architecture/operational-event-model-roadmap.md) |
-| `M2-OPERATIONS` | open | Persist accepted/running operations across restart and define cancellation, retry, recovery, and notification behavior. | [MVP M2](mvp_roadmap.md#milestone-m2-operator-truth-plane), [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
+| `M2-OPERATIONS` | in progress | Durable operation history and restart-to-`recoverable` recovery are implemented. Define governed cancellation and idempotent retry entry points, then prove recovery and notifications through API restart on stand. | [MVP M2](mvp_roadmap.md#milestone-m2-operator-truth-plane), [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `M3-ACTIVATION` / `LRLT-005` | open | Add one activation runtime for loaded/active state, startup allowance, background refresh, and client presence; prove inactive lazy/on-demand skills remain cheap. | [MVP M3](mvp_roadmap.md#milestone-m3-activation-service-and-skill-migration-wave) |
-| `STATUS-004` | queued | Move `infrastate_skill` from broad snapshots to compact status/control cards plus bounded stream/detail receivers. | [MVP M3](mvp_roadmap.md#milestone-m3-activation-service-and-skill-migration-wave), [Infrastate Data Route Plan](architecture/infrastate-data-route-plan.md) |
-| `STATUS-005` | queued | Split `infrascope_skill` overview, inventory, and object details by active demand with lifecycle and byte-size diagnostics. | [MVP M3](mvp_roadmap.md#milestone-m3-activation-service-and-skill-migration-wave), [Infrascope Roadmap](architecture/infrascope-roadmap.md) |
-| `STATUS-005B` | queued | Migrate `browsers_skill` as the compact projection/stream reference and prove two-browser session churn stays bounded. | [MVP M3](mvp_roadmap.md#milestone-m3-activation-service-and-skill-migration-wave), [Projection Subscription Roadmap](architecture/projection-subscription-roadmap.md) |
 | `M4-BROWSER` / `BSPH-001` / `MRI-001` | in progress | Keep source kinds explicit, render structure before deferred hydration, make reload/resync recovery declarative, and pass first-paint plus managed-restart browser E2E. | [MVP M4](mvp_roadmap.md#milestone-m4-webspace-and-browser-runtime-stabilization), [Webspace Evolution](architecture/webspace-evolution-roadmap.md) |
-| `RCMS-003` | open | Restrict source-copy `runtime_update` to dev/debug paths and keep production skill updates atomic through prepare, activate, validate, and rollback. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md), [MVP M8](mvp_roadmap.md#milestone-m8-root-governance-and-builder-tooling) |
 | `RCMS-006` | open | Persist hub/root catalog snapshots on members and prove no-git member drift, reconnect refresh, and archive materialization. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md), [MVP M6](mvp_roadmap.md#milestone-m6-endpoint-and-device-reachability-matrix) |
 | `RCMS-007` | open | Make inventory, lifecycle, scenario health, operation detail, and log access core-owned contracts shared by UI, API, and MCP. | [MVP M2](mvp_roadmap.md#milestone-m2-operator-truth-plane), [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `M6-IDENTITY` / `DIAU-001` / `DIAU-003` / `NER-002` | in progress | Prove canonical hub/browser/member identity, deterministic display names, and immediate or explicitly governed detach/logout behavior across local and routed topologies. | [MVP M6](mvp_roadmap.md#milestone-m6-endpoint-and-device-reachability-matrix), [Device Access Roadmap](architecture/device-access-roadmap.md) |
 | `BUILDER-FORGE` | open | Make Root scenario-draft publication return durable Forge commit acknowledgement instead of `504` plus stale metadata. | [Builder Roadmap](architecture/builder-roadmap.md#phase-4-validation-and-preview), [Builder SDK Boundary](architecture/builder-sdk-boundary.md) |
 | `M7-NEURAL-INSTALL` / `SFH-006` | open | On a clean workspace, install the Neural NLU provider without tracked runtime models and pass provider diagnostics plus dependency-profile checks. | [MVP M7](mvp_roadmap.md#milestone-m7-model-and-nlu-provider-baseline), [NLU Roadmap](concepts/nlu-roadmap.md) |
-| `MVP-STAND-001` | ready for stand | On the target stand, prove browser demand, event delivery, Yjs readback, status visibility, version convergence, and the platform-emitter path without skill-local fallback. | [MVP M9](mvp_roadmap.md#milestone-m9-mvp-release-candidate-acceptance), [MVP Release Evidence](architecture/mvp-release-evidence.md) |
+| `MVP-STAND-001` | in progress | The executable observe/browser evidence runner is implemented. Provision its permanent browser access and secrets, then run it on the target stand to prove demand, event delivery, Yjs readback, status visibility, version convergence, and the platform-emitter path without skill-local fallback. | [MVP M9](mvp_roadmap.md#milestone-m9-mvp-release-candidate-acceptance), [Post-Deploy E2E](architecture/post-deploy-e2e-testing.md) |
 | `MVP-SOAK-001` / `HMG-005` / `STATUS-008` | queued | Run the bounded two-browser/root-routed soak with process-tree memory, pressure, operation, reconnect, quarantine, and residual-risk evidence. | [MVP M9](mvp_roadmap.md#milestone-m9-mvp-release-candidate-acceptance), [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
 
 ## Should
@@ -88,6 +85,7 @@ The local Wave 0-1 gate is closed. The active sequence is:
 
 | ID | Resume condition | Owner |
 | --- | --- | --- |
+| `RCMS-003` | Resume when routine development no longer depends on source-copy `runtime_update` for fast iteration and the slot/package update path is fast enough to enforce a production-only atomic boundary without slowing current work. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `DIRECT-YJS-DENY-BY-DEFAULT` | Resume after M1 warnings and M3 migrations provide a measured exception inventory. | [Semantic State Plane](architecture/semantic-state-plane.md) |
 | `CROSS-SKILL-PROJECTION-CLEANUP` | Resume after the three M3 pilot skills pass stand acceptance. | [Projection Subscription Roadmap](architecture/projection-subscription-roadmap.md) |
 | `SIDECAR-YJS-AUTHORITY` | Resume after current transport handoff and MVP SyncChannel recovery are accepted. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |

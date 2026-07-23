@@ -47,6 +47,9 @@ Current MVP priority:
   classification, and member catalog snapshot sync
 - `[deferred]` expand marketplace UX beyond the install/update surfaces needed
   to prove the MVP lifecycle
+- `[deferred]` restrict source-copy `runtime_update` to dev/debug-only use;
+  current development still depends on this fast path, so enforcement resumes
+  only when slot/package iteration can replace it without slowing routine work
 
 ## What Already Exists
 
@@ -81,7 +84,6 @@ Current MVP priority:
 - shared remote `adaos-registry` catalog semantics are still not fully
   normalized across every skill/scenario push path
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
-- operation state is not yet durable across runtime restart
 - cancellation and operator retry policy are not yet a complete contract
 
 ## Current Implementation Update: 2026-05-27
@@ -99,10 +101,16 @@ The operations part of this roadmap now has a first implementation slice:
 - skill install can run through an isolated subprocess path; scenario
   install/update runs through bounded lifecycle phases and webspace rebuild.
 
+The 2026-07-23 durability slice additionally stores bounded operation history
+under runtime state, atomically rewrites it on every transition, restores
+terminal history, and reclassifies interrupted active work as `recoverable`
+with `retryable=true` and an operator notification. It never auto-retries an
+unknown side effect after restart.
+
 That means Phase 3 and the operation-projection part of Phase 4 are no longer
-pure target-state work. The remaining gaps are durability, cancellation,
-complete UI affordances, marketplace catalog binding, and registry-sync
-normalization.
+pure target-state work. The remaining gaps are governed cancellation and
+idempotent retry, complete UI affordances, marketplace catalog binding, and
+registry-sync normalization.
 
 ## Target Architecture
 
@@ -441,7 +449,7 @@ Convert install/update flows from blocking request/response into accepted async 
 - [x] async install command handlers
 - [x] `operation_id` response contract
 - [x] operation projection into Yjs
-- [ ] `[must]` durable recovery for accepted/running operations after runtime restart
+- [x] durable recovery for accepted/running operations after runtime restart
 - [ ] `[must]` cancellation/retry policy
 
 ## Phase 4: UI Binding and Notifications

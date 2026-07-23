@@ -66,6 +66,33 @@ The result should be one of:
 - `inconclusive`: the runner could not verify the target due to runner,
   network, credentials, or missing-diagnostics problems
 
+## Current Executable Slice
+
+The first implementation now lives in:
+
+- `src/adaos/e2e/stand.py`: target config validation, Root/Hub probes,
+  invariant classification, redaction, and evidence manifest;
+- `e2e/stand/target.example.json`: secret-free target contract;
+- `e2e/stand/browser`: pinned Playwright headless Chromium smoke;
+- `e2e/stand/README.md`: local and runner-machine commands.
+
+The observe runner currently records Root/Hub ping, node status, browser-device
+authorization, thin reliability, compact status cards, Yjs runtime, and live
+materialization. It exits `0` for `passed`, `1` for `failed`, and `2` for
+`inconclusive`. The browser slice records redacted console, response/failure,
+and WebSocket lifecycle NDJSON, a screenshot, and the public client runtime
+debug state; it requires connected Yjs and ready materialization.
+
+Playwright trace capture is intentionally off in v1 because a raw trace can
+retain cookies, storage state, and authorization headers. Add traces only
+after a sanitizer or a dedicated non-secret browser credential makes the
+artifact compliant with the redaction rules below.
+
+M0-M3 now have an executable implementation and local unit coverage. Their
+roadmap boxes remain open until a target-stand bundle proves each stated exit
+condition. M4 still requires a permanent access link for the configured E2E
+browser device.
+
 ## Browser Client Machine
 
 The Browser Client Machine is a stable external observer of the deployed

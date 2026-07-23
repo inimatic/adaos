@@ -51,6 +51,28 @@ code, and captured-output path. `checks.json` maps human-readable invariants to
 those commands and artifacts. A failure before browser or runtime startup must
 still leave a manifest and enough evidence to classify the boundary.
 
+## Automated Stand Runner
+
+The executable observe profile writes this evidence before making deep
+assertions:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path src).Path
+$env:ADAOS_E2E_TOKEN = '<secret from the runner store>'
+.\.venv\Scripts\python.exe -m adaos.e2e.stand --config .secrets/stand-e2e.json
+```
+
+After the permanent E2E browser identity and external Playwright storage state
+are provisioned, add `--browser` to require client load, runtime debug export,
+connected Yjs, ready materialization, and a clean fatal console/page-error
+window. The runner uses `passed`, `failed`, and `inconclusive` as distinct CI
+outcomes and stores bundles under `artifacts/e2e-runs/` by default.
+
+The repository-wide Python gate is conclusive only when collection completes
+and a JUnit result is retained. The 2026-07-23 baseline collected `1144` tests
+with `47` failures, `0` collection errors, and `1` skip; it is evidence of a
+working gate, not a passing release.
+
 ## Required MVP Sections
 
 Choose `skipped` only with a reason in the manifest.
