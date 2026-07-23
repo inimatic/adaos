@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import pytest
+
 from adaos.services.nats_config import (
     normalize_nats_ws_url,
     nats_url_uses_websocket,
     order_nats_ws_candidates,
     public_nats_ws_candidates,
 )
+
+
+@pytest.fixture(autouse=True)
+def _generic_public_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+    monkeypatch.delenv("ROOT_BASE_URL", raising=False)
 
 
 def test_normalize_nats_ws_url_adds_default_path() -> None:

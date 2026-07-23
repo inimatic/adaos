@@ -3,31 +3,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-if "y_py" not in sys.modules:
-    sys.modules["y_py"] = types.SimpleNamespace(
-        YDoc=type("YDoc", (), {}),
-        encode_state_vector=lambda *args, **kwargs: b"",
-        encode_state_as_update=lambda *args, **kwargs: b"",
-        apply_update=lambda *args, **kwargs: None,
-    )
-if "ypy_websocket.ystore" not in sys.modules:
-    ystore_module = types.ModuleType("ypy_websocket.ystore")
-    ystore_module.BaseYStore = type("BaseYStore", (), {})
-    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
-    sys.modules["ypy_websocket.ystore"] = ystore_module
-if "ypy_websocket" not in sys.modules:
-    pkg = types.ModuleType("ypy_websocket")
-    pkg.ystore = sys.modules["ypy_websocket.ystore"]
-    sys.modules["ypy_websocket"] = pkg
-
 from adaos.services import bootstrap as bootstrap_mod
 from adaos.services.system_model import service as system_model_service
+
+
+@pytest.fixture(autouse=True)
+def _generic_public_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+    monkeypatch.delenv("ROOT_BASE_URL", raising=False)
 
 
 def test_nats_url_needs_public_ws_refresh_for_legacy_public_tcp_url() -> None:
