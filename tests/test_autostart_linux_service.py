@@ -55,7 +55,35 @@ def test_linux_system_service_sets_memory_limits(tmp_path: Path) -> None:
     assert "MemoryMax=3000M" in text
     assert "MemorySwapMax=1024M" in text
     assert "OOMPolicy=stop" in text
+    assert "KillMode=process" in text
     assert "WantedBy=multi-user.target" in text
+
+
+def test_linux_handoff_unit_migration_adds_process_kill_mode(monkeypatch, tmp_path: Path) -> None:
+    service_path = tmp_path / "adaos.service"
+    service_path.write_text(
+        "[Unit]\nDescription=AdaOS\n[Service]\nType=simple\nExecStart=/tmp/adaos-autostart.sh\n",
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(autostart, "_is_linux", lambda: True)
+    monkeypatch.setattr(autostart, "_linux_is_root", lambda: True)
+    monkeypatch.setattr(autostart, "_linux_has_systemd_pid1", lambda: True)
+    monkeypatch.setattr(autostart, "_linux_service_path_system", lambda: service_path)
+    monkeypatch.setattr(autostart, "_run", lambda command: calls.append(command) or _Result())
+
+    result = autostart.ensure_linux_process_handoff_unit()
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert "KillMode=process" in service_path.read_text(encoding="utf-8")
+    assert calls == [["systemctl", "daemon-reload"]]
 
 
 def test_default_spec_exports_shared_dotenv(monkeypatch, tmp_path: Path) -> None:

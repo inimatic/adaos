@@ -1857,13 +1857,56 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             "reconnect": None,
         }
 
+    handoff_unit: dict[str, Any] | None = None
+    try:
+        from adaos.services.autostart import ensure_linux_process_handoff_unit
+
+        handoff_unit = ensure_linux_process_handoff_unit()
+    except Exception as exc:
+        handoff_unit = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+    if (
+        sys.platform.startswith("linux")
+        and _truthy_value(os.getenv("ADAOS_AUTOSTART_MANAGED"))
+        and not bool((handoff_unit or {}).get("ok"))
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "error": "supervisor_handoff_unit_unavailable",
+                "handoff_unit": handoff_unit,
+            },
+        )
     os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = "active"
     reconnect_result: dict[str, Any] | None = None
     if bool(body.reconnect_hub_root):
         try:
-            reconnect_result = await request_hub_root_reconnect()
+            node_role = str(getattr(get_ctx().config, "role", "hub") or "hub").strip().lower()
+        except Exception:
+            node_role = "hub"
+        hub_root_authority_required = node_role == "hub"
+        try:
+            reconnect_result = await request_hub_root_reconnect(
+                wait_for_authority=hub_root_authority_required
+            )
         except Exception as exc:
             reconnect_result = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+        authority = (
+            reconnect_result.get("authority")
+            if isinstance(reconnect_result, dict) and isinstance(reconnect_result.get("authority"), dict)
+            else {}
+        )
+        if not bool((reconnect_result or {}).get("ok")) or (
+            hub_root_authority_required and authority.get("ready") is not True
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "ok": False,
+                    "error": "hub_root_authority_not_ready",
+                    "reconnect": reconnect_result,
+                },
+            )
     service_start = _schedule_promoted_runtime_service_start(body.reason)
     return {
         "ok": True,
@@ -1873,6 +1916,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         "runtime": _runtime_identity_public_payload(),
         "reconnect": reconnect_result,
         "service_start": service_start,
+        "supervisor_handoff_unit": handoff_unit,
     }
 
 

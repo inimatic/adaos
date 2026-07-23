@@ -1523,6 +1523,7 @@ def _linux_write_service_file(
         "",
         "[Service]",
         "Type=simple",
+        "KillMode=process",
         f"ExecStart={wrapper}",
         "Restart=always",
         "RestartSec=3",
@@ -1542,6 +1543,64 @@ def _linux_write_service_file(
         service_path,
         "\n".join(unit_lines),
     )
+
+
+def ensure_linux_process_handoff_unit() -> dict[str, object]:
+    """Keep runtime children alive while the supervisor binary restarts itself."""
+    if not _is_linux():
+        return {"ok": True, "changed": False, "skipped": True, "reason": "linux_required"}
+    candidates: list[tuple[str, Path]] = []
+    if _linux_is_root() and _linux_has_systemd_pid1():
+        candidates.append(("system", _linux_service_path_system()))
+    candidates.append(("user", _linux_service_path_user()))
+    selected = next(((scope, path) for scope, path in candidates if path.exists()), None)
+    if selected is None:
+        return {"ok": True, "changed": False, "skipped": True, "reason": "service_unit_not_found"}
+    scope, path = selected
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if "Description=AdaOS" not in text or "adaos-autostart" not in text:
+        return {
+            "ok": False,
+            "changed": False,
+            "reason": "service_unit_not_owned",
+            "path": str(path),
+            "scope": scope,
+        }
+    lines = text.splitlines()
+    changed = False
+    kill_mode_index = next((index for index, line in enumerate(lines) if line.strip().startswith("KillMode=")), None)
+    if kill_mode_index is not None:
+        if lines[kill_mode_index].strip() != "KillMode=process":
+            lines[kill_mode_index] = "KillMode=process"
+            changed = True
+    else:
+        service_index = next((index for index, line in enumerate(lines) if line.strip() == "[Service]"), None)
+        if service_index is None:
+            return {
+                "ok": False,
+                "changed": False,
+                "reason": "service_section_missing",
+                "path": str(path),
+                "scope": scope,
+            }
+        lines.insert(service_index + 1, "KillMode=process")
+        changed = True
+    if changed:
+        _write_text(path, "\n".join(lines) + "\n")
+        command = _linux_systemctl_cmd(scope, "daemon-reload")
+        reloaded = _run(command)
+        if reloaded.returncode != 0:
+            raise RuntimeError(
+                f"failed to reload systemd after AdaOS handoff unit update: "
+                f"{str(reloaded.stderr or reloaded.stdout or '').strip()}"
+            )
+    return {
+        "ok": True,
+        "changed": changed,
+        "path": str(path),
+        "scope": scope,
+        "kill_mode": "process",
+    }
 
 
 def _linux_user_exists(username: str) -> bool:

@@ -153,7 +153,8 @@ Warm-switch is desirable, but not always safe on constrained hardware.
 Supervisor should therefore make an explicit admission decision before using a dual-runtime transition:
 
 - if candidate slot uses a different reserved port and memory headroom is sufficient, transition mode is `warm_switch`
-- if memory headroom is not sufficient, transition mode is `stop_and_switch`
+- if memory headroom is not sufficient, the transition is deferred while the
+  active runtime remains authoritative
 - this decision must be visible to operator and browser-facing status surfaces before shutdown starts
 
 Admission should be driven by a simple local resource gate such as:
@@ -163,7 +164,10 @@ Admission should be driven by a simple local resource gate such as:
 - estimated candidate runtime footprint
 - configured reserve that must remain free after candidate start
 
-The important rule is that low-memory devices must fail safe into stop-and-switch instead of trying to start two full runtimes and getting stuck mid-transition.
+The important rule is that low-memory devices must keep serving from the old
+runtime. Stop-and-switch is available only through the explicit
+`ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK=1` compatibility override; it is not a
+zero-downtime A/B fallback.
 
 ## Runtime instance identity
 
@@ -214,9 +218,13 @@ Fast cutover does not remove that rule.
 It only defines the moment when supervisor may end passive mode:
 
 - supervisor explicitly authorizes the already-running candidate to promote itself through `POST /api/admin/runtime/promote-active`
-- the candidate flips to `transition_role=active`, reconnects root-facing transport under that new authority, and only then becomes eligible to own live hub traffic
+- the candidate flips to `transition_role=active`, reconnects root-facing transport,
+  installs and flushes the scoped `route.v2.to_hub.<hub_id>.*` subscription,
+  and only then reports that it owns live hub traffic
 - supervisor adopts that promoted process as the managed active runtime instead of launching a second fresh process when warm-switch succeeds
-- if promotion or adoption fails, supervisor tears the candidate down and falls back to the existing stop-and-switch launch path
+- if promotion or adoption fails, supervisor tears the candidate down, keeps
+  the old active listener, and defers the transition; cold fallback requires
+  the explicit compatibility override
 
 ## Authority boundary
 
@@ -382,9 +390,11 @@ Target flow:
 3. supervisor materializes the candidate source/artifact
 4. supervisor prepares the inactive slot from that candidate while the active runtime is still serving traffic
 5. supervisor starts countdown only after the target slot is materially ready
-6. supervisor requests graceful runtime shutdown
-7. supervisor commits deferred installed-skill runtime migration against the target core interpreter after the old runtime is down
-8. supervisor activates the target slot and either promotes the prewarmed candidate runtime to active authority or launches production runtime from that slot
+6. supervisor verifies candidate listener and runtime API readiness, promotes
+   it to active authority, and only then activates the target slot
+7. supervisor adopts the promoted process and starts draining the retired
+   runtime asynchronously; shutdown hooks cannot hold the cutover open
+8. supervisor commits deferred installed-skill runtime migration against the target core interpreter
 9. supervisor validates required runtime checks against that target-slot runtime
 10. on slot-validation success, supervisor commits the transition result
 11. if bootstrap-managed files changed, supervisor records `root_promotion_required` and promotes root from the same validated candidate
@@ -402,6 +412,12 @@ Important invariants:
 - root/bootstrap promotion never happens before the candidate already passed slot validation
 - root promotion must preserve any already-queued subsequent transition metadata so a self-update handoff does not lose the next requested transition
 - prepared slot contents must not inherit another slot's git remotes or become the authority for future updates
+- an absent candidate process is never interpreted as the active process;
+  process termination always receives an explicit process handle
+- a reconnect request is not an authority barrier by itself; warm promotion
+  requires the post-subscription authority signal (bounded by
+  `HUB_ROOT_RECONNECT_AUTHORITY_TIMEOUT_S`, default 8 seconds) on hub nodes;
+  member nodes do not claim a hub-root route subject
 
 ## Bootstrap/root promotion
 
@@ -420,6 +436,12 @@ Rules:
   an explicit supervisor attempt state while waiting for restart, and on
   autostart-managed Linux deployments requests the service restart
   automatically so the new supervisor/bootstrap code becomes active
+- managed Linux units use `KillMode=process`. During a supervisor-requested
+  root restart, the supervisor deliberately preserves the already-ready active
+  runtime and realtime sidecar. The replacement supervisor adopts both
+  listeners by PID before deciding to spawn anything, so the control-plane
+  binary can change without tearing down the data plane. Explicit service stop
+  still performs the normal graceful child shutdown.
 - root promotion checks effective root parity, not only the candidate manifest:
   if the current bootstrap/operator-control path list changes between
   rollouts, stale root files such as `adaos node` diagnostics are detected and
@@ -591,10 +613,17 @@ That prewarm now feeds a real fast-cutover path:
 
 - candidate readiness is surfaced through supervisor runtime/public status
 - candidate remains passive on root-routed traffic subjects until supervisor explicitly commits cutover
-- once the old runtime is down and the prepared slot is activated, supervisor may promote/adopt the already-running candidate instead of starting a fresh runtime process
-- if candidate promotion, root reconnect, or supervisor adoption fails, supervisor falls back to the existing stop-and-switch launch path from the same prepared slot
+- supervisor promotes and adopts the ready candidate before asking the old
+  active runtime to stop
+- the old runtime drains in a tracked background task after authority moved;
+  shutdown HTTP is offloaded from the supervisor event loop, so slow shutdown
+  hooks do not delay transition completion or operator control
+- if candidate promotion, root reconnect, or supervisor adoption fails,
+  supervisor keeps the old listener and reschedules the transition
 
-This keeps warm-switch opportunistic and reversible: the node gets a genuine low-downtime cutover path when the candidate is ready, but constrained or unhealthy cases still converge through the proven fallback path.
+This makes warm-switch a strict availability boundary. Constrained or
+unhealthy cases remain on the proven old runtime until a candidate can pass the
+barrier, unless an operator explicitly accepts a cold cutover.
 
 Recommended per-skill diagnostic fields:
 

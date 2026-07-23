@@ -1743,7 +1743,7 @@ def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch,
 
 def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "0")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1818,9 +1818,9 @@ def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path
     assert cleanup_calls == [("supervisor.candidate.defer_not_ready", "B")]
 
 
-def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_by_default(monkeypatch, tmp_path) -> None:
+def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_if_explicitly_enabled(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "1")
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1880,7 +1880,7 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_by_defaul
 
 def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fails(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "0")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1946,11 +1946,11 @@ def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fa
     assert cleanup_calls == [("supervisor.candidate.cutover_deferred", "B")]
 
 
-def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_by_default(
+def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_if_explicitly_enabled(
     monkeypatch, tmp_path
 ) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "1")
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -2050,6 +2050,10 @@ def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_pat
             return {
                 "ok": True,
                 "accepted": True,
+                "reconnect": {
+                    "ok": True,
+                    "authority": {"required": True, "ready": True},
+                },
                 "runtime": {
                     "transition_role": "active",
                     "runtime_instance_id": "rt-b-c-12345678",
@@ -2074,6 +2078,8 @@ def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_pat
     assert payload["accepted"] is True
     assert captured["url"] == "http://127.0.0.1:8778/api/admin/runtime/promote-active"
     assert captured["kwargs"]["json"]["reason"] == "test.cutover"
+    assert captured["kwargs"]["json"]["reconnect_hub_root"] is True
+    assert captured["kwargs"]["timeout"] == 20.0
     assert manager._proc is not None
     assert manager._candidate_proc is None
     assert manager._managed_runtime_instance_id == "rt-b-c-12345678"
@@ -5786,6 +5792,70 @@ def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears
     assert captured["terminate"]["reason"] == "test.candidate.stop"
     assert payload["candidate_slot"] is None
     assert payload["candidate_last_stop_reason"] == "test.candidate.stop"
+
+
+def test_absent_candidate_never_falls_back_to_active_runtime(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[object] = []
+
+    class _ActiveProc:
+        pid = 8181
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _terminate(**kwargs):
+        calls.append(kwargs)
+
+    manager._proc = _ActiveProc()
+    manager._candidate_proc = None
+    monkeypatch.setattr(manager, "_terminate_proc_locked", _terminate)
+
+    asyncio.run(
+        manager._terminate_candidate_proc_locked(
+            graceful=True,
+            reason="supervisor.shutdown.candidate",
+        )
+    )
+
+    assert calls == []
+    assert manager._proc is not None
+
+
+def test_supervisor_self_restart_preserves_ready_children(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    stopped: list[str] = []
+
+    class _Proc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _stop(*, reason: str):
+        stopped.append(reason)
+
+    async def _stop_sidecar(*, reason: str):
+        stopped.append(reason)
+        return {"ok": True}
+
+    manager._proc = _Proc(9191)
+    manager._sidecar_proc = _Proc(9292)
+    manager._service_restart_pending = True
+    monkeypatch.setattr(manager, "stop", _stop)
+    monkeypatch.setattr(manager, "stop_sidecar", _stop_sidecar)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(manager.close())
+
+    assert stopped == []
+    assert manager._proc is not None
+    assert manager._sidecar_proc is not None
 
 
 def test_runtime_state_payload_surfaces_candidate_runtime_state(monkeypatch, tmp_path) -> None:

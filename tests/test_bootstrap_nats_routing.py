@@ -228,6 +228,41 @@ async def test_hub_root_reconnect_rearms_running_bridge_without_active_connectio
         await asyncio.gather(*service._boot_tasks, old_task, return_exceptions=True)
 
 
+@pytest.mark.asyncio
+async def test_hub_root_reconnect_waits_for_active_route_authority() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        await asyncio.sleep(0)
+        service._mark_hub_root_authority_ready()
+        await stop.wait()
+
+    old_task = asyncio.create_task(asyncio.sleep(0), name=service._hub_root_bridge_task_name)
+    await old_task
+    service._hub_root_bridge_factory = bridge
+    service._boot_tasks.append(old_task)
+
+    try:
+        result = await service.request_hub_root_reconnect(wait_for_authority=True)
+
+        assert result["ok"] is True
+        assert result["authority"]["required"] is True
+        assert result["authority"]["ready"] is True
+        assert result["authority"]["ready_at"] is not None
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
+
+
 def test_sidecar_error_tail_is_byte_bounded_for_large_diag_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     diag_path = tmp_path / "realtime_sidecar.jsonl"
     large_prefix = "x" * (1024 * 1024)

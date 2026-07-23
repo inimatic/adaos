@@ -1363,6 +1363,14 @@ class BootstrapService:
         self._hub_root_route_reset: Any = None
         self._hub_root_bridge_task_name = "adaos-nats-io-bridge"
         self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
+        self._hub_root_authority_waiters: set[asyncio.Event] = set()
+        self._hub_root_authority_ready_at: float | None = None
+
+    def _mark_hub_root_authority_ready(self) -> None:
+        """Release cutover waiters only after the active Root route subscription is flushed."""
+        self._hub_root_authority_ready_at = time.time()
+        for waiter in tuple(self._hub_root_authority_waiters):
+            waiter.set()
 
     def _find_live_boot_task(self, task_name: str) -> asyncio.Task | None:
         live_tasks: list[asyncio.Task] = []
@@ -1515,6 +1523,7 @@ class BootstrapService:
         *,
         transport: str | None = None,
         url_override: str | None = None,
+        wait_for_authority: bool = False,
     ) -> dict[str, Any]:
         """
         Force hub-root transport reconnect.
@@ -1526,6 +1535,24 @@ class BootstrapService:
         override = str(url_override or "").strip() or None
         close_diag: dict[str, Any] = {"attempted": False, "timeout": False, "forced_ws_close": False}
         bridge_diag: dict[str, Any] = {"attempted": False, "started": False}
+        authority_waiter = asyncio.Event() if wait_for_authority else None
+        authority_diag: dict[str, Any] = {
+            "required": bool(wait_for_authority),
+            "ready": None if not wait_for_authority else False,
+        }
+        if authority_waiter is not None:
+            self._hub_root_authority_waiters.add(authority_waiter)
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                current_task.add_done_callback(
+                    lambda _task, waiter=authority_waiter: self._hub_root_authority_waiters.discard(waiter)
+                )
+
+        def _finish(payload: dict[str, Any]) -> dict[str, Any]:
+            if authority_waiter is not None:
+                self._hub_root_authority_waiters.discard(authority_waiter)
+            payload["authority"] = dict(authority_diag)
+            return payload
 
         def _safe_strategy() -> dict[str, Any]:
             try:
@@ -1654,22 +1681,49 @@ class BootstrapService:
                     "state": "failed",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            return {
-                "ok": True,
+            if authority_waiter is not None:
+                try:
+                    authority_timeout_s = float(
+                        os.getenv("HUB_ROOT_RECONNECT_AUTHORITY_TIMEOUT_S", "8.0") or "8.0"
+                    )
+                except Exception:
+                    authority_timeout_s = 8.0
+                authority_timeout_s = max(0.25, min(authority_timeout_s, 30.0))
+                authority_started_at = time.monotonic()
+                try:
+                    await asyncio.wait_for(authority_waiter.wait(), timeout=authority_timeout_s)
+                    authority_diag.update(
+                        {
+                            "ready": True,
+                            "wait_sec": round(max(0.0, time.monotonic() - authority_started_at), 3),
+                            "ready_at": self._hub_root_authority_ready_at,
+                        }
+                    )
+                except asyncio.TimeoutError:
+                    authority_diag.update(
+                        {
+                            "ready": False,
+                            "wait_sec": round(max(0.0, time.monotonic() - authority_started_at), 3),
+                            "timeout_sec": authority_timeout_s,
+                            "error": "hub_root_authority_timeout",
+                        }
+                    )
+            return _finish({
+                "ok": not bool(wait_for_authority) or bool(authority_diag.get("ready")),
                 "requested": {"transport": tr, "url_override": override},
                 "strategy": _safe_strategy(),
                 "close": close_diag,
                 "bridge": bridge_diag,
-            }
+            })
         except Exception as exc:
-            return {
+            return _finish({
                 "ok": False,
                 "requested": {"transport": tr, "url_override": override},
                 "strategy": _safe_strategy(),
                 "close": close_diag,
                 "bridge": bridge_diag,
                 "error": f"{type(exc).__name__}: {exc}",
-            }
+            })
 
     def _member_hub_transition_snapshot(self) -> dict[str, Any]:
         try:
@@ -9471,6 +9525,8 @@ class BootstrapService:
                             route_sub_v2 = await _sub(f"route.v2.to_hub.{hub_id}.*", cb=_route_cb)
                         except Exception:
                             route_sub_v2 = None
+                        if route_sub_v2 is None:
+                            raise RuntimeError("hub route v2 subscription was not installed")
                         if hub_nats_verbose or not hub_nats_quiet:
                             if route_sub is not None:
                                 print("[hub-io] NATS subscribe route.to_hub.* (hub route proxy, legacy v1)")
@@ -9497,6 +9553,7 @@ class BootstrapService:
                             )
                         except Exception:
                             pass
+                        self._mark_hub_root_authority_ready()
                         try:
                             _update_route_protocol_runtime()
                         except Exception:
@@ -10687,8 +10744,17 @@ def is_ready() -> bool:
     return _svc().is_ready()
 
 
-async def request_hub_root_reconnect(*, transport: str | None = None, url_override: str | None = None) -> dict[str, Any]:
-    return await _svc().request_hub_root_reconnect(transport=transport, url_override=url_override)
+async def request_hub_root_reconnect(
+    *,
+    transport: str | None = None,
+    url_override: str | None = None,
+    wait_for_authority: bool = False,
+) -> dict[str, Any]:
+    return await _svc().request_hub_root_reconnect(
+        transport=transport,
+        url_override=url_override,
+        wait_for_authority=bool(wait_for_authority),
+    )
 
 
 async def request_member_hub_reconnect(*, force: bool = False) -> dict[str, Any]:
