@@ -32,5 +32,6 @@ example2
 example3
 /examples/
 .ssh
+.secrets/
 .codex-diagnostics
 .gitignore

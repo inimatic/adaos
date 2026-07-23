@@ -1,0 +1,13 @@
+{
+  "name": "adaos-stand-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "install:browser": "playwright install chromium",
+    "smoke": "playwright test --config=playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}
