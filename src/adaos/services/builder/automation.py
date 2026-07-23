@@ -757,13 +757,18 @@ class BuilderAutomationService:
                 if session:
                     session = self.refresh_session(session)
                     if session.get("status") == "failed":
+                        pending_transition = str(session.get("pending_workflow_transition") or "").strip()
                         session.pop("pending_workflow_transition", None)
                         self._save_session(session)
                         try:
                             self._workflow().transition(
                                 str(session.get("object_type") or ""),
                                 str(session.get("object_id") or ""),
-                                "automation_failed",
+                                (
+                                    "return_to_prototype_failed"
+                                    if pending_transition == "return_to_prototype"
+                                    else "automation_failed"
+                                ),
                                 actor="builder.automation",
                                 metadata={
                                     "task_id": session.get("current_task_id"),
@@ -984,7 +989,11 @@ class BuilderAutomationService:
                 self._workflow().transition(
                     object_type,
                     object_id,
-                    "automation_failed",
+                    (
+                        "return_to_prototype_failed"
+                        if pending_transition == "return_to_prototype"
+                        else "automation_failed"
+                    ),
                     actor="builder.automation",
                     metadata={
                         "task_id": current.get("current_task_id"),

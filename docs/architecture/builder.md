@@ -138,6 +138,9 @@ tool, service, credential, device, external-network, and production-data
 bindings are removed from the new Prototype and replaced with bounded local
 state or mock data. A later handoff receives both that Prototype as the current
 requirement and the retained Automation as its previous implementation.
+If adaptation fails, Builder records the adaptation diagnostic and restores
+the retained Automation to `completed`; the failed side process never
+invalidates the last working implementation or Publication snapshot.
 
 Only one Automation snapshot is retained under Builder runtime state; a new
 completed Automation replaces it. It is not copied into the published

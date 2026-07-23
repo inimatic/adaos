@@ -162,6 +162,34 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
     assert returned["prototype"]["derived_from_automation_task"] == "task.2"
 
 
+def test_failed_prototype_adaptation_restores_completed_automation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.1", "snapshot_path": "retained/automation"},
+    )
+    service.transition("scenario", "recipes", "request_return_to_prototype", metadata={"task_id": "task.2"})
+
+    recovered = service.transition(
+        "scenario",
+        "recipes",
+        "return_to_prototype_failed",
+        metadata={"task_id": "task.2", "error": "unsafe binding remained"},
+    )["workflow"]
+
+    assert recovered["active_phase"] == "automation"
+    assert recovered["automation"]["status"] == "completed"
+    assert recovered["automation"]["adaptation_error"] == "unsafe binding remained"
+    assert recovered["pending_transition"] is None
+    assert recovered["capabilities"]["can_publish"] is True
+    assert recovered["capabilities"]["can_return_to_prototype"] is True
+
+
 def test_archived_project_cannot_transition(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

@@ -386,17 +386,39 @@ class BuilderWorkflowService:
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("return to prototype requires completed automation")
             automation["status"] = "adapting"
+            automation.pop("adaptation_error", None)
+            automation.pop("adaptation_failed_at", None)
             workflow["pending_transition"] = {
                 "action": "return_to_prototype",
                 "requested_at": changed_at,
                 "task_id": metadata.get("task_id"),
             }
             return
+        if action == "return_to_prototype_failed":
+            self._require_active(workflow, "automation", action)
+            status = str(automation.get("status") or "")
+            recoverable_failed_state = bool(status == "failed" and automation.get("snapshot_path"))
+            if status != "adapting" and not recoverable_failed_state:
+                raise BuilderWorkflowError(
+                    "failed Prototype adaptation recovery requires adapting Automation or a retained snapshot"
+                )
+            automation.update(
+                {
+                    "status": "completed",
+                    "error": None,
+                    "adaptation_error": metadata.get("error"),
+                    "adaptation_failed_at": changed_at,
+                }
+            )
+            workflow["pending_transition"] = None
+            return
         if action == "return_to_prototype":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") not in {"adapting", "completed"}:
                 raise BuilderWorkflowError("return to prototype requires completed adaptation")
             automation.update({"status": "frozen", "frozen_at": changed_at})
+            automation.pop("adaptation_error", None)
+            automation.pop("adaptation_failed_at", None)
             workflow["active_phase"] = "prototype"
             prototype.update(
                 {
