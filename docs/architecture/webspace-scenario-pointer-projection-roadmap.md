@@ -148,7 +148,10 @@ ownership model, see:
   (`source.static`, `source.subnet`, `source.devices`, `source.lookups`) and
   registry phases. NLU lookup baseline buckets are cached by workspace manifest
   stamps and a short TTL, while the requested `webspace_id` remains uncached per
-  call.
+  call. Individual JSON/YAML lookup sources are stamp-cached with process-local
+  single-flight parsing, so one changed runtime directory does not turn a
+  background registry refresh into repeated full-manifest parsing that can
+  starve the scenario-switch control loop.
 
 ## Implementation Anchors
 

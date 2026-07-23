@@ -1992,7 +1992,10 @@ Important lacunae found during Phase 6 implementation:
   ledger messages. The projection does not persist the former
   `events_by_candidate` expansion because it duplicated complete event rows and
   had no runtime consumer; candidate grouping is derived from canonical events
-  and candidates when needed.
+  and candidates when needed. The Teacher store runtime applies this projection
+  migration on `sys.ready` as well as `scenarios.synced`, so a durable snapshot
+  cannot retain the legacy expansion indefinitely when no scenario package is
+  synchronized after restart.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a

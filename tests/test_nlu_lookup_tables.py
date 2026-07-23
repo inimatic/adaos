@@ -1,8 +1,40 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+
+def test_lookup_source_yaml_cache_is_stamp_aware_and_single_flight(tmp_path: Path, monkeypatch) -> None:
+    import adaos.services.nlu_lookup_tables as lookups
+
+    path = tmp_path / "skill.yaml"
+    path.write_text("name: first\n", encoding="utf-8")
+    lookups._SOURCE_DOCUMENT_CACHE.clear()
+    calls = 0
+    original_safe_load = lookups.yaml.safe_load
+
+    def _slow_safe_load(value):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.01)
+        return original_safe_load(value)
+
+    monkeypatch.setattr(lookups.yaml, "safe_load", _slow_safe_load)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _index: lookups._read_yaml(path), range(8)))
+
+    assert results == [{"name": "first"}] * 8
+    assert calls == 1
+
+    path.write_text("name: second\n", encoding="utf-8")
+
+    assert lookups._read_yaml(path) == {"name": "second"}
+    assert calls == 2
 
 
 def test_desktop_lookup_tables_collect_workspace_ids() -> None:

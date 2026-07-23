@@ -411,3 +411,37 @@ async def test_teacher_store_runtime_persists_primary_teacher_events(monkeypatch
     await teacher_store_runtime._on_teacher_skipped({"webspace_id": "ws-teacher-store"})  # type: ignore[attr-defined]
 
     assert scheduled == ["ws-teacher-store", "ws-teacher-store"]
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_removes_legacy_event_projection_on_ready(monkeypatch):
+    from adaos.services.nlu import teacher_store_runtime
+
+    writes: list[dict] = []
+    saves: list[dict] = []
+
+    async def _read(_webspace_id: str) -> dict:
+        return {
+            "events": [],
+            "events_by_candidate": {"candidate-1": [{"id": "event-1"}]},
+            "threads_by_request": {},
+        }
+
+    async def _write(_webspace_id: str, teacher: dict) -> None:
+        writes.append(teacher)
+
+    monkeypatch.setattr(teacher_store_runtime, "load_teacher_state", lambda **_kwargs: {})
+    monkeypatch.setattr(teacher_store_runtime, "_read_teacher_from_ydoc", _read)
+    monkeypatch.setattr(teacher_store_runtime, "_write_teacher_to_ydoc", _write)
+    monkeypatch.setattr(
+        teacher_store_runtime,
+        "save_teacher_state",
+        lambda **kwargs: saves.append(kwargs["teacher"]),
+    )
+
+    await teacher_store_runtime._on_sys_ready({"webspace_id": "ws-teacher-store"})  # type: ignore[attr-defined]
+
+    assert len(writes) == 1
+    assert len(saves) == 1
+    assert "events_by_candidate" not in writes[0]
+    assert "events_by_candidate" not in saves[0]

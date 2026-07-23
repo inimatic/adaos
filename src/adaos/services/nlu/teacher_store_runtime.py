@@ -153,23 +153,36 @@ def _schedule_persist(webspace_id: str) -> None:
     _pending[webspace_id] = asyncio.create_task(_job())
 
 
-@subscribe("scenarios.synced")
-async def _on_scenarios_synced(evt: Any) -> None:
+async def _rehydrate_teacher_projection(evt: Any) -> None:
     payload = _payload(evt)
     webspace_id = _resolve_webspace_id(payload)
 
-    saved = load_teacher_state(webspace_id=webspace_id)
-    if not saved:
-        return
-
     try:
+        saved = load_teacher_state(webspace_id=webspace_id) or {}
         current = await _read_teacher_from_ydoc(webspace_id)
+        if not saved and "events_by_candidate" not in current:
+            return
         merged = _merge_teacher(current=current, saved=saved)
         await _write_teacher_to_ydoc(webspace_id, merged)
         save_teacher_state(webspace_id=webspace_id, teacher=merged)
-        _log.info("rehydrated nlu_teacher from store webspace=%s", webspace_id)
+        _log.info(
+            "rehydrated nlu_teacher projection webspace=%s saved=%s removed_legacy_events=%s",
+            webspace_id,
+            bool(saved),
+            "events_by_candidate" in current,
+        )
     except Exception:
         _log.debug("rehydrate failed webspace=%s", webspace_id, exc_info=True)
+
+
+@subscribe("sys.ready")
+async def _on_sys_ready(evt: Any) -> None:
+    await _rehydrate_teacher_projection(evt)
+
+
+@subscribe("scenarios.synced")
+async def _on_scenarios_synced(evt: Any) -> None:
+    await _rehydrate_teacher_projection(evt)
 
 
 # Persist on all meaningful teacher mutations.

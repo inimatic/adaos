@@ -30,6 +30,9 @@ DEFAULT_DESKTOP_APP_IDS = ("nlu_teacher_app",)
 
 _BASELINE_BUCKET_CACHE_LOCK = threading.RLock()
 _BASELINE_BUCKET_CACHE: dict[str, tuple[float, tuple[Any, ...], dict[str, dict[str, dict[str, Any]]]]] = {}
+_SOURCE_DOCUMENT_CACHE_LOCK = threading.RLock()
+_SOURCE_DOCUMENT_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], Any]] = {}
+_SOURCE_DOCUMENT_CACHE_MAX = 4096
 
 
 def _baseline_bucket_cache_ttl_s() -> float:
@@ -87,20 +90,36 @@ def _unique_paths(paths: Iterable[Path | None]) -> list[Path]:
     return out
 
 
+def _read_cached_source_document(path: Path, *, source_type: str) -> Any:
+    cache_key = (source_type, str(path.resolve()))
+    stamp = _path_stamp(path)
+    with _SOURCE_DOCUMENT_CACHE_LOCK:
+        cached = _SOURCE_DOCUMENT_CACHE.get(cache_key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+
+        try:
+            text = path.read_text(encoding="utf-8")
+            if source_type == "json":
+                document = json.loads(text)
+            else:
+                document = yaml.safe_load(text) or {}
+        except Exception:
+            _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
+            document = None
+
+        _SOURCE_DOCUMENT_CACHE[cache_key] = (stamp, document)
+        while len(_SOURCE_DOCUMENT_CACHE) > _SOURCE_DOCUMENT_CACHE_MAX:
+            _SOURCE_DOCUMENT_CACHE.pop(next(iter(_SOURCE_DOCUMENT_CACHE)))
+        return document
+
+
 def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
-        return None
+    return _read_cached_source_document(path, source_type="json")
 
 
 def _read_yaml(path: Path) -> Any:
-    try:
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
-        return None
+    return _read_cached_source_document(path, source_type="yaml")
 
 
 def _path_stamp(path: Path) -> tuple[str, int, int] | tuple[str, str]:

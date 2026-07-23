@@ -128,7 +128,11 @@ building a payload that could not be applied.
 `collect_desktop_lookup_tables` caches baseline skill/scenario lookup buckets
 by manifest file stamps for a short TTL. The requested `webspace_id` is added
 after the cache read, so repeated desktop/dev preview refreshes do not rescan
-all manifests while still preserving workspace-local lookup identity.
+all manifests while still preserving workspace-local lookup identity. Parsed
+JSON/YAML source documents are also cached by their own file stamps and loaded
+under a process-local single-flight lock. Directory churn can invalidate the
+aggregate bucket without making concurrent named-entity refreshes parse every
+unchanged skill manifest again under the GIL.
 
 ## Stream Receivers
 
