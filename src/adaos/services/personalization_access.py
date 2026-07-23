@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from contextlib import contextmanager
 from pathlib import Path
@@ -180,7 +181,19 @@ class PersonalizationAccessStore:
             json.dumps(self._data, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
-        temporary_path.replace(self.path)
+        deadline = time.time() + 1.0
+        try:
+            while True:
+                try:
+                    temporary_path.replace(self.path)
+                    return
+                except PermissionError:
+                    if time.time() >= deadline:
+                        raise
+                    time.sleep(0.01)
+        finally:
+            with contextlib.suppress(OSError):
+                temporary_path.unlink()
 
     @contextmanager
     def batch(self) -> Iterator[None]:
