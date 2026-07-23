@@ -531,6 +531,20 @@ async def test_voice_confirmation_yes_applies_candidate():
         + "\n",
         encoding="utf-8",
     )
+    (scenario_root / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                f"id: {scenario_id}",
+                "version: 0.0.1",
+                "nlu:",
+                "  intents:",
+                "    demo.open_panel:",
+                "      actions: []",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     candidate = {
         "id": "cand.confirm.yes",
         "ts": 10.0,

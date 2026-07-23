@@ -8,6 +8,14 @@ import pytest
 import yaml
 
 
+def _write_scenario_declaration(scenario_root: Path) -> None:
+    payload = json.loads((scenario_root / "scenario.json").read_text(encoding="utf-8"))
+    (scenario_root / "scenario.yaml").write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
 def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
     from adaos.services.nlu import llm_teacher_runtime as llm
     from adaos.services.root_mcp import service as root_mcp_service
@@ -1707,6 +1715,7 @@ async def test_llm_teacher_rejects_regex_when_strategy_prefers_rasa_example(monk
         + "\n",
         encoding="utf-8",
     )
+    _write_scenario_declaration(scenario_root)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
@@ -1878,7 +1887,7 @@ async def test_llm_teacher_enriches_training_example_skill_action_candidate(monk
 
     webspace_id = "ws-test-llm-training-example-skill-action"
     request_id = "req.training.skill-action"
-    request_text = "Напишем заметку"
+    request_text = "Добавь запись о встрече"
     intent_name = "notebook.create_note"
 
     async with async_get_ydoc(webspace_id) as ydoc:
@@ -1897,7 +1906,7 @@ async def test_llm_teacher_enriches_training_example_skill_action_candidate(monk
                                     "decision": "create_skill_candidate",
                                     "intent": intent_name,
                                     "target": {"type": "skill", "id": "notebook_skill"},
-                                    "examples": [request_text, "Создать заметку"],
+                                    "examples": [request_text, "Создать запись встречи"],
                                     "training_strategy": "rasa_example",
                                     "confidence": 0.8,
                                     "notes": "Create a notebook note.",
@@ -2610,6 +2619,7 @@ async def test_llm_teacher_closed_loop_regex_candidate_can_be_applied_and_replay
         + "\n",
         encoding="utf-8",
     )
+    _write_scenario_declaration(scenario_root)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         ui_map = ydoc.get_map("ui")
@@ -2877,6 +2887,7 @@ async def test_llm_teacher_trains_interface_action_regex_and_rolls_back(monkeypa
         + "\n",
         encoding="utf-8",
     )
+    _write_scenario_declaration(scenario_root)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         ui_map = ydoc.get_map("ui")
