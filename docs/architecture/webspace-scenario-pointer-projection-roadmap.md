@@ -1105,6 +1105,10 @@ Changes validated in this slice:
   `ADAOS_WEBSPACE_SCENARIO_SWITCH_BACKGROUND_ROUTE_YIELD_S` (default runtime
   value: `0.02`). This lets the API response leave the route before the
   background rebuild monopolizes the event loop.
+- Voice-chat snapshot recovery and history paging now cross the blocking
+  conversation-ledger boundary in worker threads. Browser subscription bursts
+  can overlap a scenario rebuild without serializing SQLite work on the event
+  loop.
 - Live materialized payload apply now uses one Yjs transaction for the payload
   path while regular rebuild keeps the older two-phase behavior.
 - Successful materialized payload apply can use a synthetic ready snapshot via
