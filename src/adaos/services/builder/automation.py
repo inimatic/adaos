@@ -411,6 +411,15 @@ class BuilderAutomationService:
                     reason="Automation result is being adapted into a safe prototype",
                     metadata={"task_id": session.get("current_task_id")},
                 )
+            else:
+                self._workflow().transition(
+                    str(session.get("object_type") or ""),
+                    str(session.get("object_id") or ""),
+                    "automation_iteration_started",
+                    actor="builder.automation",
+                    reason="a new Automation iteration was queued",
+                    metadata={"task_id": session.get("current_task_id")},
+                )
         self._launch_worker(session["session_id"])
         return {
             "ok": True,

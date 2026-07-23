@@ -332,6 +332,30 @@ class BuilderWorkflowService:
             )
             workflow["pending_transition"] = None
             return
+        if action == "automation_iteration_started":
+            self._require_active(workflow, "automation", action)
+            status = str(automation.get("status") or "")
+            next_task_id = str(metadata.get("task_id") or "").strip()
+            previous_task_id = str(automation.get("head_task_id") or "").strip()
+            reconciles_stale_working_state = bool(
+                status == "working" and next_task_id and next_task_id != previous_task_id
+            )
+            if status not in {"completed", "failed"} and not reconciles_stale_working_state:
+                raise BuilderWorkflowError(
+                    "a new Automation iteration requires a completed or failed Automation result"
+                )
+            automation["iteration"] = int(automation.get("iteration") or 0) + 1
+            automation.update(
+                {
+                    "status": "working",
+                    "head_task_id": metadata.get("task_id") or automation.get("head_task_id"),
+                    "started_at": changed_at,
+                    "completed_at": None,
+                    "error": None,
+                }
+            )
+            workflow["pending_transition"] = None
+            return
         if action == "automation_completed":
             self._require_active(workflow, "automation", action)
             automation.update(

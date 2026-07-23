@@ -107,6 +107,32 @@ def test_invalid_cross_phase_transition_is_rejected(
         service.transition("scenario", "recipes", "publish", metadata={"version": "0.1.1"})
 
 
+def test_new_automation_iteration_reopens_a_terminal_result(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_failed",
+        metadata={"task_id": "task.1", "error": "schema mismatch"},
+    )
+
+    resumed = service.transition(
+        "scenario",
+        "recipes",
+        "automation_iteration_started",
+        metadata={"task_id": "task.2"},
+    )["workflow"]
+
+    assert resumed["active_phase"] == "automation"
+    assert resumed["automation"]["status"] == "working"
+    assert resumed["automation"]["iteration"] == 2
+    assert resumed["automation"]["head_task_id"] == "task.2"
+    assert resumed["automation"]["error"] is None
+
+
 def test_return_to_prototype_uses_a_new_immutable_revision(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

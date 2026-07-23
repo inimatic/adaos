@@ -145,6 +145,10 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert status["session"]["iteration"] == 1
     assert status["session"]["turns"][0]["text"] == "Add filtering by cooking time."
     assert len(status["session"]["task_history"]) == 2
+    workflow = service._workflow().describe("scenario", "recipes")
+    assert workflow["automation"]["iteration"] == 2
+    assert workflow["automation"]["status"] == "working"
+    assert workflow["history"][-1]["action"] == "automation_iteration_started"
 
 
 def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monkeypatch) -> None:
