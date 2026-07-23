@@ -6,6 +6,10 @@ from pathlib import Path
 import nats
 import nats.errors
 import nats.protocol.parser
+import y_py
+import ypy_websocket
+import ypy_websocket.ystore
+import ypy_websocket.websocket
 
 
 def _is_sys_modules(node: ast.AST) -> bool:
@@ -21,6 +25,14 @@ def test_nats_is_loaded_from_the_installed_package() -> None:
     assert hasattr(nats, "__path__")
     assert nats.errors.Error
     assert nats.protocol.parser.Parser
+
+
+def test_yjs_dependencies_are_loaded_from_installed_packages() -> None:
+    assert hasattr(y_py, "__path__")
+    assert y_py.YDoc
+    assert hasattr(ypy_websocket, "__path__")
+    assert ypy_websocket.ystore.BaseYStore
+    assert ypy_websocket.websocket.Websocket
 
 
 def test_tests_do_not_replace_the_nats_package_in_sys_modules() -> None:
