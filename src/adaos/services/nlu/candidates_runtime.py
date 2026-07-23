@@ -14,7 +14,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.teacher_artifacts import accepted_artifact_metadata
-from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_events_by_candidate
+from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_teacher_derived_views
 from adaos.services.nlu.teacher_validation import validate_candidate_apply_async
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 from adaos.services.yjs.doc import async_get_ydoc
@@ -326,7 +326,7 @@ async def _emit_apply_rejected(
                     next_candidates.append(d)
                 if changed:
                     teacher["candidates"] = next_candidates
-                    rebuild_events_by_candidate(teacher)
+                    rebuild_teacher_derived_views(teacher)
                     with ydoc.begin_transaction() as txn:
                         data_map.set(txn, "nlu_teacher", teacher)
                     next_teacher = dict(teacher)

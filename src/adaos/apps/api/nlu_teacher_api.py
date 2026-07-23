@@ -24,7 +24,7 @@ from adaos.services.nlu.teacher_read_model import (
     preview_interface_action,
     preview_template_patch,
 )
-from adaos.services.nlu.teacher_events import rebuild_events_by_candidate
+from adaos.services.nlu.teacher_events import rebuild_teacher_derived_views
 from adaos.services.nlu.teacher_store import save_teacher_state
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
@@ -127,7 +127,7 @@ def _prune_teacher_requests(
         removed[key] = len(raw) - len(kept)
         next_teacher[key] = kept
 
-    rebuild_events_by_candidate(next_teacher)
+    rebuild_teacher_derived_views(next_teacher)
     return next_teacher, removed
 
 

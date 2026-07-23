@@ -1989,7 +1989,10 @@ Important lacunae found during Phase 6 implementation:
   the canonical teacher conversation ledger, and
   `write_teacher_projection_from_ledger()` can rebuild `data.nlu_teacher`
   threads, workbench signals, items, candidates, revisions, and LLM logs from
-  ledger messages.
+  ledger messages. The projection does not persist the former
+  `events_by_candidate` expansion because it duplicated complete event rows and
+  had no runtime consumer; candidate grouping is derived from canonical events
+  and candidates when needed.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a

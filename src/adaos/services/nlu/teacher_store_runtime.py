@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from typing import Any, Mapping, Optional
 
 from adaos.sdk.core.decorators import subscribe
-from adaos.services.nlu.teacher_events import rebuild_events_by_candidate
+from adaos.services.nlu.teacher_events import rebuild_teacher_derived_views
 from adaos.services.nlu.teacher_store import load_teacher_state, save_teacher_state
 from adaos.services.nlu.ycoerce import coerce_dict, is_mapping_like, iter_mappings
 from adaos.services.yjs.doc import async_get_ydoc
@@ -111,7 +111,7 @@ def _merge_teacher(*, current: dict[str, Any], saved: dict[str, Any]) -> dict[st
     merged["plan"] = _merge_list_by_id(current=current.get("plan"), saved=saved.get("plan"), max_items=200)
     merged["llm_logs"] = _merge_list_by_id(current=current.get("llm_logs"), saved=saved.get("llm_logs"), max_items=300)
 
-    rebuild_events_by_candidate(merged)
+    rebuild_teacher_derived_views(merged)
     return merged
 
 
