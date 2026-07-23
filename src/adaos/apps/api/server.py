@@ -160,7 +160,7 @@ import logging
 import platform, time
 import signal
 import sys
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 def _maybe_set_windows_selector_loop() -> None:
@@ -439,6 +439,10 @@ async def _emit_shutdown_event(event_type: str, payload: dict[str, Any], *, drai
 async def _request_process_shutdown(delay_sec: float = _DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC) -> None:
     await asyncio.sleep(max(0.0, float(delay_sec)))
     signal.raise_signal(signal.SIGINT)
+
+
+def _shutdown_emits_subnet_lifecycle(app: FastAPI) -> bool:
+    return str(getattr(app.state, "shutdown_lifecycle_scope", "subnet") or "subnet") != "runtime_retire"
 
 
 async def _run_core_update_shutdown(app: FastAPI, *, reason: str, drain_timeout_sec: float, signal_delay_sec: float) -> None:
@@ -759,6 +763,7 @@ async def lifespan(app: FastAPI):
         app.state.shutdown_requested = False
         app.state.shutdown_reason = "signal"
         app.state.shutdown_drain_timeout = _DEFAULT_SHUTDOWN_DRAIN_SEC
+        app.state.shutdown_lifecycle_scope = "subnet"
         app.state.shutdown_stopping_emitted = False
         reset_runtime_lifecycle()
         app.state.core_update_task = None
@@ -1133,7 +1138,10 @@ async def lifespan(app: FastAPI):
             app.state.runtime_event_loop_lag_task = None
         try:
             conf = get_ctx().config
-            if not getattr(app.state, "shutdown_stopping_emitted", False):
+            if (
+                _shutdown_emits_subnet_lifecycle(app)
+                and not getattr(app.state, "shutdown_stopping_emitted", False)
+            ):
                 await _emit_shutdown_event(
                     "subnet.stopping",
                     {
@@ -1153,7 +1161,11 @@ async def lifespan(app: FastAPI):
             pass
         # On graceful shutdown, notify Telegram and UI if enabled
         try:
-            if tg_enabled and str(getattr(app.state, "shutdown_reason", "signal") or "signal") != "cli.restart":
+            if (
+                _shutdown_emits_subnet_lifecycle(app)
+                and tg_enabled
+                and str(getattr(app.state, "shutdown_reason", "signal") or "signal") != "cli.restart"
+            ):
                 conf = get_ctx().config
                 ctx = _get_ctx()
                 api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
@@ -1199,15 +1211,16 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         try:
-            conf = get_ctx().config
-            await _emit_shutdown_event(
-                "subnet.stopped",
-                {
-                    "subnet_id": conf.subnet_id,
-                    "reason": getattr(app.state, "shutdown_reason", "signal"),
-                },
-                drain_timeout=float(getattr(app.state, "shutdown_drain_timeout", _DEFAULT_SHUTDOWN_DRAIN_SEC)),
-            )
+            if _shutdown_emits_subnet_lifecycle(app):
+                conf = get_ctx().config
+                await _emit_shutdown_event(
+                    "subnet.stopped",
+                    {
+                        "subnet_id": conf.subnet_id,
+                        "reason": getattr(app.state, "shutdown_reason", "signal"),
+                    },
+                    drain_timeout=float(getattr(app.state, "shutdown_drain_timeout", _DEFAULT_SHUTDOWN_DRAIN_SEC)),
+                )
         except Exception:
             pass
         try:
@@ -1316,6 +1329,7 @@ class ShutdownRequest(BaseModel):
     reason: str = Field(default="cli.stop", min_length=1, max_length=128)
     drain_timeout_sec: float = Field(default=_DEFAULT_SHUTDOWN_DRAIN_SEC, ge=0.0, le=30.0)
     signal_delay_sec: float = Field(default=_DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC, ge=0.0, le=5.0)
+    lifecycle_scope: Literal["subnet", "runtime_retire"] = "subnet"
 
 
 class ShutdownResponse(BaseModel):
@@ -1476,6 +1490,7 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
     app.state.shutdown_requested = True
     app.state.shutdown_reason = body.reason
     app.state.shutdown_drain_timeout = float(body.drain_timeout_sec)
+    app.state.shutdown_lifecycle_scope = body.lifecycle_scope
     profile_mode = str(os.getenv("ADAOS_SUPERVISOR_PROFILE_MODE") or "normal").strip().lower()
     shutdown_debug_payload: dict[str, Any] = {
         "entered_at": time.time(),
@@ -1518,15 +1533,21 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
                 "runtime memory profile finalize during admin shutdown did not complete result=%s",
                 finish_result,
             )
-    stopping_payload = {
-        "subnet_id": conf.subnet_id,
-        "reason": body.reason,
-    }
-    await _emit_shutdown_event(
-        "subnet.stopping",
-        stopping_payload,
-        drain_timeout=body.drain_timeout_sec,
-    )
+    if _shutdown_emits_subnet_lifecycle(app):
+        stopping_payload = {
+            "subnet_id": conf.subnet_id,
+            "reason": body.reason,
+        }
+        await _emit_shutdown_event(
+            "subnet.stopping",
+            stopping_payload,
+            drain_timeout=body.drain_timeout_sec,
+        )
+    else:
+        _runtime_log.info(
+            "runtime-scoped shutdown skips subnet lifecycle events reason=%s",
+            body.reason,
+        )
     app.state.shutdown_stopping_emitted = True
     background.add_task(_request_process_shutdown, body.signal_delay_sec)
     return ShutdownResponse(

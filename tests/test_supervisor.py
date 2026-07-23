@@ -5930,6 +5930,37 @@ def test_restart_runtime_records_last_stop_and_start_reason(monkeypatch, tmp_pat
     assert payload["restart_count"] == 1
 
 
+def test_retired_runtime_stop_uses_runtime_lifecycle_scope(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    captured: list[dict[str, object]] = []
+
+    async def _terminate(**kwargs) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(manager, "_terminate_proc_locked", _terminate)
+
+    async def _run() -> None:
+        task = manager._schedule_retired_runtime_stop(
+            proc="old-runtime",
+            base_url="http://127.0.0.1:8777",
+            reason="supervisor.fast_cutover.old_active_stop",
+        )
+        await task
+
+    asyncio.run(_run())
+
+    assert captured == [
+        {
+            "proc": "old-runtime",
+            "base_url": "http://127.0.0.1:8777",
+            "graceful": True,
+            "reason": "supervisor.fast_cutover.old_active_stop",
+            "lifecycle_scope": "runtime_retire",
+        }
+    ]
+
+
 def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")

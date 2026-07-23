@@ -7527,6 +7527,7 @@ class SupervisorManager:
         base_url: str | None = None,
         graceful: bool,
         reason: str,
+        lifecycle_scope: str = "subnet",
     ) -> None:
         if proc is None:
             return
@@ -7566,6 +7567,7 @@ class SupervisorManager:
                         "reason": reason,
                         "drain_timeout_sec": float(drain_timeout_sec),
                         "signal_delay_sec": float(signal_delay_sec),
+                        "lifecycle_scope": str(lifecycle_scope or "subnet"),
                     },
                     timeout=_runtime_shutdown_request_timeout(
                         drain_timeout_sec=drain_timeout_sec,
@@ -7699,6 +7701,7 @@ class SupervisorManager:
                     base_url=base_url,
                     graceful=True,
                     reason=reason,
+                    lifecycle_scope="runtime_retire",
                 )
             except Exception:
                 _LOG.warning(

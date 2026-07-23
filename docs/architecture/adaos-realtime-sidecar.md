@@ -38,6 +38,11 @@ does not consume the overlap slot during prewarm; it opens transport only after
 supervisor calls `promote-active`, and the old session closes naturally during
 drain after new route authority is confirmed.
 
+Retiring the old runtime is explicitly runtime-scoped. It closes the old
+listener and process-local resources without publishing node-wide
+`subnet.stopping/subnet.stopped`; the replacement runtime and sidecar continue
+to represent the same online subnet throughout the transition.
+
 ## Status Labels
 
 Checklist items use the same four-level MoSCoW-style priority vocabulary as

@@ -5,7 +5,7 @@ import sys
 import types
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
@@ -73,6 +73,51 @@ def test_background_boot_explicit_env_overrides_managed_mode(monkeypatch) -> Non
 
     monkeypatch.setenv("ADAOS_RUNTIME_BACKGROUND_BOOT", "yes")
     assert api_server._background_boot_enabled() is True
+
+
+def test_runtime_retire_shutdown_skips_subnet_lifecycle(monkeypatch) -> None:
+    emitted: list[str] = []
+
+    async def _emit(event_type: str, _payload: dict, *, drain_timeout: float) -> bool:
+        emitted.append(event_type)
+        return True
+
+    monkeypatch.setattr(api_server, "request_drain", lambda **_kwargs: None)
+    monkeypatch.setattr(api_server, "_emit_shutdown_event", _emit)
+    monkeypatch.setattr(api_server, "_write_runtime_profile_shutdown_debug", lambda _payload: None)
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(subnet_id="sn_test")),
+    )
+    monkeypatch.setattr(api_server.app.state, "shutdown_requested", False, raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_reason", "signal", raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_drain_timeout", 5.0, raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_lifecycle_scope", "subnet", raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_stopping_emitted", False, raising=False)
+    background = BackgroundTasks()
+
+    response = asyncio.run(
+        api_server.admin_shutdown(
+            api_server.ShutdownRequest(
+                reason="supervisor.fast_cutover.old_active_stop",
+                drain_timeout_sec=5.0,
+                signal_delay_sec=0.25,
+                lifecycle_scope="runtime_retire",
+            ),
+            background,
+        )
+    )
+
+    assert response.accepted is True
+    assert emitted == []
+    assert api_server.app.state.shutdown_lifecycle_scope == "runtime_retire"
+    assert api_server.app.state.shutdown_stopping_emitted is True
+    assert len(background.tasks) == 1
+
+
+def test_shutdown_request_defaults_to_subnet_lifecycle() -> None:
+    assert api_server.ShutdownRequest().lifecycle_scope == "subnet"
 
 
 def test_node_status_exposes_runtime_environment(monkeypatch) -> None:

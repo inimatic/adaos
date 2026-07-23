@@ -401,12 +401,15 @@ Target flow:
    it to active authority, and only then activates the target slot
 7. supervisor adopts the promoted process and starts draining the retired
    runtime asynchronously; shutdown hooks cannot hold the cutover open
-8. supervisor commits deferred installed-skill runtime migration against the target core interpreter
-9. supervisor validates required runtime checks against that target-slot runtime
-10. on slot-validation success, supervisor commits the transition result
-11. if bootstrap-managed files changed, supervisor records `root_promotion_required` and promotes root from the same validated candidate
-12. on autostart-managed deployments, supervisor requests autostart-service restart so the root-based supervisor/bootstrap code actually switches over
-13. on failure or deadline expiry, supervisor rolls back the slot and records failure
+8. retired runtime shutdown uses `lifecycle_scope=runtime_retire`: it closes
+   process-local resources but does not publish `subnet.stopping` or
+   `subnet.stopped` for a subnet that remains online
+9. supervisor commits deferred installed-skill runtime migration against the target core interpreter
+10. supervisor validates required runtime checks against that target-slot runtime
+11. on slot-validation success, supervisor commits the transition result
+12. if bootstrap-managed files changed, supervisor records `root_promotion_required` and promotes root from the same validated candidate
+13. on autostart-managed deployments, supervisor requests autostart-service restart so the root-based supervisor/bootstrap code actually switches over
+14. on failure or deadline expiry, supervisor rolls back the slot and records failure
 
 Important invariants:
 
@@ -421,6 +424,8 @@ Important invariants:
 - prepared slot contents must not inherit another slot's git remotes or become the authority for future updates
 - an absent candidate process is never interpreted as the active process;
   process termination always receives an explicit process handle
+- retiring one runtime instance is not a subnet shutdown; subnet lifecycle
+  events remain reserved for operations that actually stop the node
 - a reconnect request is not an authority barrier by itself; warm promotion
   requires the post-subscription authority signal (bounded by
   `HUB_ROOT_RECONNECT_AUTHORITY_TIMEOUT_S`, default 8 seconds) on hub nodes;
