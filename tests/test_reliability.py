@@ -8,10 +8,6 @@ import threading
 from types import SimpleNamespace
 import types
 
-try:
-    import nats  # noqa: F401
-except Exception:
-    sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules and importlib.util.find_spec("ypy_websocket") is None:

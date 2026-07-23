@@ -6,8 +6,6 @@ import sys
 import types
 from types import SimpleNamespace
 
-if "nats" not in sys.modules:
-    sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     try:
         importlib.import_module("y_py")

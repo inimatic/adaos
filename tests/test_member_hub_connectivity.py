@@ -10,8 +10,6 @@ from typer.testing import CliRunner
 
 from adaos.services.runtime_lifecycle import request_drain, reset_runtime_lifecycle
 
-if "nats" not in sys.modules:
-    sys.modules["nats"] = types.SimpleNamespace()
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),

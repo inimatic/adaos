@@ -29,7 +29,6 @@ class _FakeAsyncDoc:
 
 
 def _make_client(monkeypatch, state: dict[str, dict[str, object]]) -> TestClient:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,

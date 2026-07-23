@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.modules.setdefault("nats", SimpleNamespace())
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),

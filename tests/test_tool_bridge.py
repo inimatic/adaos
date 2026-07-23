@@ -9,8 +9,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException, Response
 
-if "nats" not in sys.modules:
-    sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules:

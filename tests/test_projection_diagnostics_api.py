@@ -16,7 +16,6 @@ from adaos.services.status import StatusRegistry
 
 
 def _make_client() -> TestClient:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
