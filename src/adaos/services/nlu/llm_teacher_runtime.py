@@ -19,7 +19,12 @@ import yaml
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
-from adaos.services.nlu.teacher_events import append_event, make_event, teacher_projection_limits
+from adaos.services.nlu.teacher_events import (
+    append_event,
+    append_llm_log_to_ledger,
+    make_event,
+    teacher_projection_limits,
+)
 from adaos.services.nlu.teacher_governance import (
     append_deferred_enrichment,
     apply_candidate_governance,
@@ -3613,16 +3618,20 @@ async def _append_llm_log(webspace_id: str, entry: dict[str, Any]) -> None:
             )
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
+    try:
+        await asyncio.to_thread(append_llm_log_to_ledger, webspace_id, entry)
+    except Exception:
+        _log.warning("failed to mirror NLU Teacher LLM log to ledger webspace=%s", webspace_id, exc_info=True)
 
 
 async def _patch_llm_log(webspace_id: str, *, log_id: str, patch: dict[str, Any]) -> None:
+    updated_log: dict[str, Any] | None = None
     async with _nlu_llm_write_meta():
         async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             logs = list(iter_mappings(teacher.get("llm_logs")))
             next_logs: list[dict[str, Any]] = []
-            updated_log: dict[str, Any] | None = None
             for item in logs:
                 if item.get("id") == log_id:
                     updated = dict(item)
@@ -3652,6 +3661,11 @@ async def _patch_llm_log(webspace_id: str, *, log_id: str, patch: dict[str, Any]
                 )
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
+    if updated_log is not None:
+        try:
+            await asyncio.to_thread(append_llm_log_to_ledger, webspace_id, updated_log)
+        except Exception:
+            _log.warning("failed to mirror updated NLU Teacher LLM log to ledger webspace=%s", webspace_id, exc_info=True)
 
 
 async def _update_revision_by_request_id(

@@ -1173,6 +1173,13 @@ store. Its `projection_window` object reports the active event, LLM-log,
 thread, and detail-size limits. Consumers must not assume that an absent older
 row was deleted from the Teacher history.
 
+For upgraded nodes, `projection_window.ledger_backfill.completed=true` means
+that all Teacher events and LLM-log rows still present in the pre-compaction
+disk/YJS state were idempotently ensured in the ledger before the projection
+was shortened. If the ledger is unavailable, this marker is not written and
+the unbounded source state is retained. Independent LLM-log versions are
+ledger records, so they remain available after their YJS window rolls over.
+
 Use the authenticated ledger endpoint for older or request-specific data:
 
 ```text

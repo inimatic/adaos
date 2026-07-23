@@ -92,13 +92,17 @@ promotes them to `[should]`.
    - if the reason is provider/stage unavailable (`rasa_timeout`,
      `rasa_disabled`, `no_active_nlu_stages`, etc.), it records
      `nlp.teacher.skipped` instead and does not call Root/OpenAI
-6. Teacher runtimes store state for UI inspection (YJS, per webspace):
+6. Teacher runtimes store a bounded operational state for UI inspection (YJS, per webspace):
    - `data.nlu_teacher.events[]` (includes `llm.request` / `llm.response`)
    - `data.nlu_teacher.candidates[]` (regex rules / voice capability bindings / skill candidates / scenario candidates)
    - `data.nlu_teacher.revisions[]` (proposed dataset revisions)
    - `data.nlu_teacher.llm_logs[]` (request/response logs; debugging)
-7. Teacher state is also persisted on disk so it survives YJS reload/reset:
+7. The bounded recovery projection is also persisted on disk:
    - `.adaos/state/skills/nlu_teacher/<webspace_id>.json`
+8. Complete event and versioned LLM-log history is stored in the node-local
+   Teacher conversation ledger and read through the cursor-paged history API.
+   Legacy projections are backfilled idempotently before their first
+   compaction.
 
 Each LLM turn records audit fingerprints, not raw secrets:
 

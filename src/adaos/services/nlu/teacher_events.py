@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -15,6 +17,7 @@ _MAX_LLM_LOGS = int(os.getenv("ADAOS_NLU_TEACHER_LLM_LOGS_MAX", "48") or "48")
 _MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "32") or "32")
 _MAX_CANDIDATE_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATE_THREADS_MAX", "48") or "48")
 _MAX_THREAD_DETAILS_CHARS = int(os.getenv("ADAOS_NLU_TEACHER_THREAD_DETAILS_MAX_CHARS", "12000") or "12000")
+_LEDGER_BACKFILL_SCHEMA = "adaos.nlu_teacher.ledger_backfill.v1"
 
 
 def _nlu_teacher_events_write_meta():
@@ -70,7 +73,7 @@ def bound_teacher_projection(teacher: dict[str, Any]) -> dict[str, Any]:
         teacher[key] = bounded
         truncated[key] = bool(truncated.get(key)) or dropped
 
-    teacher["projection_window"] = {
+    projection_window = {
         "schema": "adaos.nlu_teacher.projection_window.v1",
         "source_of_truth": "conversation_ledger",
         "history_mode": "on_demand",
@@ -82,7 +85,127 @@ def bound_teacher_projection(teacher: dict[str, Any]) -> dict[str, Any]:
         },
         "truncated": truncated,
     }
+    ledger_backfill = coerce_dict(previous.get("ledger_backfill"))
+    if ledger_backfill:
+        projection_window["ledger_backfill"] = ledger_backfill
+    teacher["projection_window"] = projection_window
     return teacher
+
+
+def teacher_ledger_backfill_completed(teacher: Mapping[str, Any]) -> bool:
+    marker = coerce_dict(coerce_dict(teacher.get("projection_window")).get("ledger_backfill"))
+    return marker.get("schema") == _LEDGER_BACKFILL_SCHEMA and marker.get("completed") is True
+
+
+def _ledger_record_idempotency_key(record_kind: str, item: Mapping[str, Any]) -> str:
+    item_id = str(item.get("id") or item.get("log_id") or "").strip()
+    canonical = json.dumps(dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if record_kind == "llm_log":
+        item_id = f"{item_id or 'anonymous'}:{content_hash}"
+    elif not item_id:
+        item_id = content_hash
+    return f"nlu-teacher-ledger-v1:{record_kind}:{item_id}"
+
+
+def _ledger_event_candidate_id(event: Mapping[str, Any]) -> str | None:
+    raw = coerce_dict(event.get("raw"))
+    value = raw.get("id") if str(event.get("kind") or "").startswith("candidate.") else event.get("candidate_id")
+    return str(value).strip() if isinstance(value, str) and value.strip() else None
+
+
+def append_llm_log_to_ledger(
+    webspace_id: str,
+    log: Mapping[str, Any],
+    *,
+    migration: str | None = None,
+) -> dict[str, Any] | None:
+    from adaos.services import conversation_links
+
+    log_dict = dict(log)
+    request_id = log_dict.get("request_id") if isinstance(log_dict.get("request_id"), str) else None
+    meta = {"migration": migration} if migration else {}
+    return conversation_links.append_teacher_event_message(
+        webspace_id=webspace_id,
+        text=f"NLU Teacher LLM log{f' {request_id}' if request_id else ''}",
+        request_id=request_id,
+        candidate_id=log_dict.get("candidate_id") if isinstance(log_dict.get("candidate_id"), str) else None,
+        kind="llm_log",
+        payload={"llm_log": log_dict},
+        meta=meta,
+        idempotency_key=_ledger_record_idempotency_key("llm_log", log_dict),
+    )
+
+
+def backfill_teacher_history_to_ledger(webspace_id: str, teacher: Mapping[str, Any]) -> dict[str, Any]:
+    """Ensure legacy durable Teacher rows exist in the canonical ledger."""
+    from adaos.services import conversation_links, conversation_store
+
+    previous = coerce_dict(coerce_dict(teacher.get("projection_window")).get("ledger_backfill"))
+    was_completed = previous.get("schema") == _LEDGER_BACKFILL_SCHEMA and previous.get("completed") is True
+
+    started = time.perf_counter()
+    events = sorted(_as_list_of_dicts(teacher.get("events")), key=_row_ts)
+    llm_logs = sorted(_as_list_of_dicts(teacher.get("llm_logs")), key=_row_ts)
+    conversation_id = conversation_links.teacher_conversation_id(webspace_id)
+    existing_event_ids: set[str] = set()
+    existing_llm_log_ids: set[str] = set()
+    existing_messages = conversation_store.list_messages(conversation_id, limit=5000, ascending=False)
+    for message in existing_messages:
+        embedded_event = coerce_dict(message.get("event"))
+        event_id = str(embedded_event.get("id") or "").strip()
+        if event_id:
+            existing_event_ids.add(event_id)
+        embedded_log = coerce_dict(message.get("llm_log"))
+        log_id = str(embedded_log.get("id") or embedded_log.get("log_id") or "").strip()
+        if log_id:
+            existing_llm_log_ids.add(log_id)
+
+    already_present = 0
+    ensured = 0
+    for event in events:
+        event_id = str(event.get("id") or "").strip()
+        if event_id and event_id in existing_event_ids:
+            already_present += 1
+            ensured += 1
+            continue
+        stored = conversation_links.append_teacher_event_message(
+            webspace_id=webspace_id,
+            text=str(event.get("request_text") or event.get("title") or event.get("kind") or "NLU Teacher event"),
+            request_id=event.get("request_id") if isinstance(event.get("request_id"), str) else None,
+            candidate_id=_ledger_event_candidate_id(event),
+            kind=f"event.{event.get('kind') or 'teacher'}",
+            payload={"event": event},
+            meta={"migration": _LEDGER_BACKFILL_SCHEMA, **coerce_dict(event.get("_meta"))},
+            idempotency_key=_ledger_record_idempotency_key("event", event),
+        )
+        if stored is None:
+            raise RuntimeError(f"Teacher ledger event backfill failed for webspace={webspace_id}")
+        ensured += 1
+
+    for log in llm_logs:
+        log_id = str(log.get("id") or log.get("log_id") or "").strip()
+        if log_id and log_id in existing_llm_log_ids:
+            already_present += 1
+            ensured += 1
+            continue
+        stored = append_llm_log_to_ledger(webspace_id, log, migration=_LEDGER_BACKFILL_SCHEMA)
+        if stored is None:
+            raise RuntimeError(f"Teacher ledger LLM log backfill failed for webspace={webspace_id}")
+        ensured += 1
+
+    if was_completed:
+        return previous
+    return {
+        "schema": _LEDGER_BACKFILL_SCHEMA,
+        "completed": True,
+        "completed_at": time.time(),
+        "events_total": len(events),
+        "llm_logs_total": len(llm_logs),
+        "records_ensured": ensured,
+        "already_present": already_present,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+    }
 
 
 def teacher_projection_needs_compaction(teacher: Mapping[str, Any]) -> bool:
@@ -353,6 +476,21 @@ def _event_from_ledger_message(message: Mapping[str, Any]) -> dict[str, Any] | N
     }
 
 
+def _llm_log_from_ledger_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
+    payload = coerce_dict(message)
+    embedded = coerce_dict(payload.get("llm_log"))
+    if not embedded:
+        return None
+    log = dict(embedded)
+    log.setdefault("id", log.get("log_id") or f"llm.ledger.{payload.get('id') or payload.get('message_id')}")
+    log.setdefault("ts", payload.get("ts") or time.time())
+    log.setdefault("request_id", payload.get("request_id"))
+    meta = coerce_dict(log.get("_meta"))
+    meta.setdefault("ledger_message_id", payload.get("id") or payload.get("message_id"))
+    log["_meta"] = meta
+    return log
+
+
 def _accumulate_event_projection(teacher: dict[str, Any], event: Mapping[str, Any]) -> None:
     kind = str(event.get("kind") or "").strip()
     raw = coerce_dict(event.get("raw"))
@@ -396,6 +534,9 @@ def rebuild_teacher_projection_from_ledger(webspace_id: str, *, limit: int = 100
         if event:
             _append_unique(teacher["events"], event, fallback_key=str(message.get("id") or ""))
             _accumulate_event_projection(teacher, event)
+        llm_log = _llm_log_from_ledger_message(message)
+        if llm_log:
+            _append_unique(teacher["llm_logs"], llm_log, fallback_key=str(message.get("id") or ""))
 
     for key in ("items", "events", "candidates", "revisions", "llm_logs"):
         teacher[key] = sorted(
@@ -901,6 +1042,9 @@ def read_teacher_history_page(
         if event:
             _append_unique(teacher["events"], event, fallback_key=str(message.get("id") or ""))
             _accumulate_event_projection(teacher, event)
+        llm_log = _llm_log_from_ledger_message(message)
+        if llm_log:
+            _append_unique(teacher["llm_logs"], llm_log, fallback_key=str(message.get("id") or ""))
 
     def _request_matches(item: Mapping[str, Any]) -> bool:
         return not clean_request_id or str(item.get("request_id") or "").strip() == clean_request_id
@@ -1014,6 +1158,7 @@ async def append_event(webspace_id: str, event: Mapping[str, Any]) -> None:
             kind=f"event.{event_dict.get('kind') or 'teacher'}",
             payload={"event": event_dict},
             meta=coerce_dict(event_dict.get("_meta")),
+            idempotency_key=_ledger_record_idempotency_key("event", event_dict),
         )
     except Exception:
         pass

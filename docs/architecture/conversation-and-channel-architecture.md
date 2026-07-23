@@ -2010,6 +2010,16 @@ Important lacunae found during Phase 6 implementation:
   filters. Filtered trace and dialog-context reads use the same ledger path and
   fall back to the bounded projection only when no ledger rows exist. Scenario
   materialization and ordinary Yjs synchronization never read full history.
+- [x] `[must]` Migrate legacy Teacher snapshots before enforcing projection
+  limits. On the first runtime rehydrate, the unbounded union of disk and YJS
+  `events`/`llm_logs` is written to the conversation ledger with stable
+  idempotency keys. Only a successful backfill permits compaction; a ledger
+  failure leaves the source projection untouched for retry. Completion is
+  recorded under `projection_window.ledger_backfill`, and later startup
+  reconciliation checks the retained window without rewriting an identical
+  YDoc. Live LLM-log create/update versions are now mirrored directly to the
+  ledger as well. Rows already discarded by an older bounded release cannot be
+  reconstructed by this migration.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a

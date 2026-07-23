@@ -321,6 +321,7 @@ def append_teacher_event_message(
     kind: str = "teacher_event",
     payload: Mapping[str, Any] | None = None,
     meta: Mapping[str, Any] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any] | None:
     ref = ensure_teacher_conversation(
         webspace_id,
@@ -352,4 +353,5 @@ def append_teacher_event_message(
         },
         meta={"conversation_ref": ref, **dict(meta or {})},
         route_id="nlu_teacher",
+        idempotency_key=idempotency_key,
     )

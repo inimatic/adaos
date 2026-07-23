@@ -8,7 +8,9 @@ from typing import Any, Mapping, Optional
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.nlu.teacher_events import (
+    backfill_teacher_history_to_ledger,
     rebuild_teacher_derived_views,
+    teacher_ledger_backfill_completed,
     teacher_projection_limits,
     teacher_projection_needs_compaction,
 )
@@ -32,6 +34,7 @@ def _nlu_teacher_store_write_meta():
     )
 
 _pending: dict[str, asyncio.Task] = {}
+_rehydrate_lock = asyncio.Lock()
 
 
 def _payload(evt: Any) -> dict[str, Any]:
@@ -128,6 +131,25 @@ def _merge_teacher(*, current: dict[str, Any], saved: dict[str, Any]) -> dict[st
     return merged
 
 
+def _merge_teacher_history(*, current: dict[str, Any], saved: dict[str, Any]) -> dict[str, Any]:
+    """Merge legacy history without applying projection limits before ledger migration."""
+    merged: dict[str, Any] = dict(saved)
+    merged.update(current)
+    merged["events"] = _merge_list_by_id(current=current.get("events"), saved=saved.get("events"))
+    merged["llm_logs"] = _merge_list_by_id(current=current.get("llm_logs"), saved=saved.get("llm_logs"))
+
+    saved_window = coerce_dict(saved.get("projection_window"))
+    current_window = coerce_dict(current.get("projection_window"))
+    window = {**saved_window, **current_window}
+    saved_marker = coerce_dict(saved_window.get("ledger_backfill"))
+    current_marker = coerce_dict(current_window.get("ledger_backfill"))
+    if saved_marker.get("completed") is True and current_marker.get("completed") is not True:
+        window["ledger_backfill"] = saved_marker
+    if window:
+        merged["projection_window"] = window
+    return merged
+
+
 async def _read_teacher_from_ydoc(webspace_id: str) -> dict[str, Any]:
     async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
         data_map = ydoc.get_map("data")
@@ -166,34 +188,78 @@ def _schedule_persist(webspace_id: str) -> None:
     _pending[webspace_id] = asyncio.create_task(_job())
 
 
-async def _rehydrate_teacher_projection(evt: Any) -> None:
+async def _rehydrate_teacher_projection(evt: Any, *, reconcile_ledger: bool = False) -> None:
     payload = _payload(evt)
     webspace_id = _resolve_webspace_id(payload)
 
-    try:
-        saved = load_teacher_state(webspace_id=webspace_id) or {}
-        current = await _read_teacher_from_ydoc(webspace_id)
-        needs_compaction = teacher_projection_needs_compaction(current)
-        if not saved and not needs_compaction:
-            return
-        merged = _merge_teacher(current=current, saved=saved)
-        await _write_teacher_to_ydoc(webspace_id, merged)
-        save_teacher_state(webspace_id=webspace_id, teacher=merged)
-        _log.info(
-            "rehydrated bounded nlu_teacher projection webspace=%s saved=%s compacted=%s removed_legacy_events=%s limits=%s",
-            webspace_id,
-            bool(saved),
-            needs_compaction,
-            "events_by_candidate" in current,
-            teacher_projection_limits(),
-        )
-    except Exception:
-        _log.debug("rehydrate failed webspace=%s", webspace_id, exc_info=True)
+    async with _rehydrate_lock:
+        try:
+            saved = load_teacher_state(webspace_id=webspace_id) or {}
+            current = await _read_teacher_from_ydoc(webspace_id)
+            history = _merge_teacher_history(current=current, saved=saved)
+            needs_backfill = bool(history.get("events") or history.get("llm_logs")) and not teacher_ledger_backfill_completed(
+                history
+            )
+            needs_ledger_reconcile = bool(history.get("events") or history.get("llm_logs")) and (
+                needs_backfill or reconcile_ledger
+            )
+            needs_compaction = teacher_projection_needs_compaction(current) or teacher_projection_needs_compaction(
+                history
+            )
+            if not saved and not needs_compaction and not needs_ledger_reconcile:
+                return
+
+            if needs_ledger_reconcile:
+                try:
+                    marker = await asyncio.to_thread(backfill_teacher_history_to_ledger, webspace_id, history)
+                except Exception:
+                    _log.warning(
+                        "Teacher ledger backfill failed; preserving unbounded projection webspace=%s events=%s llm_logs=%s",
+                        webspace_id,
+                        len(history.get("events") or []),
+                        len(history.get("llm_logs") or []),
+                        exc_info=True,
+                    )
+                    return
+                window = coerce_dict(history.get("projection_window"))
+                window["ledger_backfill"] = marker
+                history["projection_window"] = window
+                if needs_backfill:
+                    _log.info(
+                        "backfilled Teacher history before projection compaction webspace=%s events=%s llm_logs=%s "
+                        "records_ensured=%s already_present=%s elapsed_ms=%s",
+                        webspace_id,
+                        marker.get("events_total"),
+                        marker.get("llm_logs_total"),
+                        marker.get("records_ensured"),
+                        marker.get("already_present"),
+                        marker.get("elapsed_ms"),
+                    )
+
+            merged = _merge_teacher(current=history, saved={})
+            changed = merged != current
+            if changed:
+                await _write_teacher_to_ydoc(webspace_id, merged)
+            if merged != saved:
+                save_teacher_state(webspace_id=webspace_id, teacher=merged)
+            _log.info(
+                "rehydrated bounded nlu_teacher projection webspace=%s saved=%s changed=%s compacted=%s "
+                "backfilled=%s removed_legacy_events=%s limits=%s",
+                webspace_id,
+                bool(saved),
+                changed,
+                needs_compaction,
+                needs_backfill,
+                "events_by_candidate" in current,
+                teacher_projection_limits(),
+            )
+        except Exception:
+            _log.debug("rehydrate failed webspace=%s", webspace_id, exc_info=True)
 
 
 @subscribe("sys.ready")
 async def _on_sys_ready(evt: Any) -> None:
-    await _rehydrate_teacher_projection(evt)
+    await _rehydrate_teacher_projection(evt, reconcile_ledger=True)
 
 
 @subscribe("scenarios.synced")
