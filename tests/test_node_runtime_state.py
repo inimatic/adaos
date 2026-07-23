@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
 from adaos.services import node_runtime_state as mod
+
+
+def test_pid_liveness_probe_keeps_current_process_alive() -> None:
+    assert mod._pid_is_alive(os.getpid()) is True
 
 
 def test_save_node_runtime_state_preserves_fields_across_concurrent_writers(monkeypatch, tmp_path: Path) -> None:
@@ -57,3 +62,12 @@ def test_runtime_state_lock_clears_stale_pid_file(monkeypatch, tmp_path: Path) -
 
     assert payload["role"] == "member"
     assert not lock_path.exists()
+
+
+def test_runtime_state_lock_keeps_fresh_file_while_owner_writes_pid(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(mod, "current_state_dir", lambda: tmp_path)
+    lock_path = tmp_path / "node_runtime.lock"
+    lock_path.write_text("", encoding="utf-8")
+
+    assert mod._clear_stale_runtime_state_lock(lock_path) is False
+    assert lock_path.exists()

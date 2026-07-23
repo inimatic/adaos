@@ -11,6 +11,7 @@ from adaos.services.runtime_paths import current_state_dir
 
 
 _UNSET = object()
+_INVALID_LOCK_GRACE_SEC = 1.0
 
 
 def _state_path() -> Path:
@@ -64,6 +65,35 @@ def _read_lock_pid(lock_path: Path) -> int | None:
 
 
 def _pid_is_alive(pid: int) -> bool:
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel32.OpenProcess
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            get_exit_code = kernel32.GetExitCodeProcess
+            get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            get_exit_code.restype = wintypes.BOOL
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
+
+            handle = open_process(0x1000, False, int(pid))
+            if not handle:
+                # Access denied still proves that the process exists.
+                return ctypes.get_last_error() == 5
+            try:
+                exit_code = wintypes.DWORD()
+                if not get_exit_code(handle, ctypes.byref(exit_code)):
+                    return True
+                return int(exit_code.value) == 259
+            finally:
+                close_handle(handle)
+        except Exception:
+            return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -77,8 +107,19 @@ def _pid_is_alive(pid: int) -> bool:
 
 def _clear_stale_runtime_state_lock(lock_path: Path) -> bool:
     pid = _read_lock_pid(lock_path)
-    if pid is not None and _pid_is_alive(pid):
-        return False
+    if pid is not None:
+        if _pid_is_alive(pid):
+            return False
+    else:
+        # os.open(O_EXCL) creates the file before the owner can write its PID.
+        # Treat a fresh empty file as an in-progress acquisition, not stale.
+        try:
+            if time.time() - lock_path.stat().st_mtime < _INVALID_LOCK_GRACE_SEC:
+                return False
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
     with contextlib.suppress(FileNotFoundError):
         lock_path.unlink()
         return True
