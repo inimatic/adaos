@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from adaos.services.runtime_paths import current_state_dir
 
 _UNSET = object()
 _INVALID_LOCK_GRACE_SEC = 1.0
+_RUNTIME_STATE_THREAD_LOCK = threading.RLock()
 
 
 def _state_path() -> Path:
@@ -128,31 +130,53 @@ def _clear_stale_runtime_state_lock(lock_path: Path) -> bool:
 
 @contextlib.contextmanager
 def _runtime_state_lock(*, timeout_sec: float = 5.0):
-    lock_path = _lock_path()
-    deadline = time.time() + max(0.1, float(timeout_sec))
-    while True:
+    with _RUNTIME_STATE_THREAD_LOCK:
+        lock_path = _lock_path()
+        deadline = time.time() + max(0.1, float(timeout_sec))
+        while True:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                break
+            except FileExistsError:
+                if _clear_stale_runtime_state_lock(lock_path):
+                    continue
+                if time.time() >= deadline:
+                    raise TimeoutError(f"timed out acquiring runtime state lock: {lock_path}")
+                time.sleep(0.05)
         try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            if _clear_stale_runtime_state_lock(lock_path):
-                continue
-            if time.time() >= deadline:
-                raise TimeoutError(f"timed out acquiring runtime state lock: {lock_path}")
-            time.sleep(0.05)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(str(os.getpid()))
-        yield
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            lock_path.unlink()
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(str(os.getpid()))
+            yield
+        finally:
+            release_deadline = time.time() + 1.0
+            while True:
+                try:
+                    lock_path.unlink()
+                    break
+                except FileNotFoundError:
+                    break
+                except PermissionError:
+                    if time.time() >= release_deadline:
+                        raise
+                    time.sleep(0.01)
 
 
 def _write_text_atomically(path: Path, text: str) -> None:
     tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
     tmp_path.write_text(text, encoding="utf-8")
-    tmp_path.replace(path)
+    deadline = time.time() + 1.0
+    try:
+        while True:
+            try:
+                tmp_path.replace(path)
+                return
+            except PermissionError:
+                if time.time() >= deadline:
+                    raise
+                time.sleep(0.01)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
 
 
 def save_node_runtime_state(
