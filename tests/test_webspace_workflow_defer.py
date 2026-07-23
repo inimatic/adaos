@@ -126,7 +126,11 @@ def test_scenario_switch_rebuild_skips_workflow_sync_by_default(monkeypatch) -> 
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.store",
-        types.SimpleNamespace(reset_ystore_for_webspace=lambda _webspace_id: None),
+        types.SimpleNamespace(
+            reset_ystore_for_webspace=lambda _webspace_id: (_ for _ in ()).throw(
+                AssertionError("ordinary scenario switch must preserve YStore")
+            )
+        ),
     )
     webspace_runtime_module._WORKFLOW_SYNC_TASKS.clear()
     webspace_runtime_module._WORKFLOW_SYNC_PENDING.clear()
@@ -261,6 +265,7 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
             {
                 "scenario_id": "prompt_engineer_scenario",
                 "materialization_identity": result["materialization_identity"],
+                "isolate_process": False,
             },
         )
     ]
@@ -268,10 +273,10 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
     assert refresh_calls
     assert refresh_calls[-1][1]["materialized_payload"]["scenario_id"] == "prompt_engineer_scenario"
     assert refresh_calls[-1][1]["persist_repair"] is True
-    assert refresh_calls[-1][1]["force_full_state_update"] is True
+    assert refresh_calls[-1][1]["force_full_state_update"] is False
     assert result["apply_summary"]["changed_branches"] == 8
     assert result["apply_summary"]["diff_applied_branches"] == 8
-    assert result["force_full_state_update"] is True
+    assert result["force_full_state_update"] is False
 
 
 def test_scenario_switch_rebuild_can_skip_live_room_refresh_for_read_model(monkeypatch) -> None:

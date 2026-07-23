@@ -1919,7 +1919,7 @@ def test_describe_webspace_operational_state_prefers_manifest_overlay(monkeypatc
     assert result.effective_home_scenario == "web_desktop"
 
 
-def test_switch_webspace_scenario_uses_live_room_pointer_fast_path(monkeypatch) -> None:
+def test_switch_webspace_scenario_defers_pointer_to_atomic_materialization(monkeypatch) -> None:
     row = SimpleNamespace(
         effective_kind="workspace",
         effective_source_mode="workspace",
@@ -1984,13 +1984,14 @@ def test_switch_webspace_scenario_uses_live_room_pointer_fast_path(monkeypatch) 
     assert result["accepted"] is True
     assert result["background_rebuild"] is True
     assert result["scenario_switch_mode"] == "pointer_only"
-    assert live_mutations == ["default"]
+    assert live_mutations == []
     assert len(scheduled) == 1
     assert scheduled[0]["scenario_id"] == "infrascope"
     assert scheduled[0]["scenario_resolution"] == "explicit"
     assert scheduled[0]["switch_mode"] == "pointer_only"
     assert isinstance(scheduled[0]["switch_timings_ms"], dict)
-    assert "write_switch_pointer" in result["timings_ms"]
+    assert "defer_switch_pointer" in result["timings_ms"]
+    assert "write_switch_pointer" not in result["timings_ms"]
     assert "open_doc" not in result["timings_ms"]
 
 
@@ -3904,6 +3905,11 @@ def test_webspace_runtime_apply_rewrites_stale_branch_when_registry_fingerprint_
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(ctx=SimpleNamespace())
     monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_trust_previous_materialized_branch_fingerprints_enabled",
+        lambda: False,
+    )
     monkeypatch.setattr(
         webspace_runtime_module,
         "describe_webspace_rebuild_state",

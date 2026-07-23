@@ -65,6 +65,47 @@ Runtime knobs:
 `restore` still resets the live room synchronously. `reload` and `reset` still
 refresh synchronously.
 
+Ordinary scenario switching now preserves the existing YStore base and writes
+the effective-branch diff. Clearing YStore while preserving the live room had
+forced every switch to encode and synchronously persist a full document before
+broadcast. Full-state replacement is now reserved for hard reset/restore.
+
+If the target YRoom is cold while a materialized payload is already available,
+room bootstrap loads the durable YStore with `seed_if_missing=false` and applies
+that payload before exposing the room. It must not project the scenario or emit
+`scenarios.synced`: doing so previously launched a duplicate semantic rebuild
+inside the original switch. A browser opening a room without an authoritative
+payload retains the normal seed-and-materialize bootstrap path. The payload
+handoff finishes by persisting `runtime.bootstrap=ready` as a small YStore diff,
+so reconnect diagnostics cannot remain stuck at the earlier loading marker.
+
+### Materialization Source Ownership
+
+The API runtime builds one stamp-validated skill UI declaration catalog during
+startup. Payload-only scenario switches reuse that process-owned catalog and
+run resolver CPU work in a worker thread; they do not start a second AdaOS
+runtime. Isolated fresh-document workers receive the declarations plus their
+fingerprint in the request.
+
+Resolver caching has two levels: a scenario/source/skills/access-policy core
+and a per-webspace overlay. Installed state, pinned widgets, ordering/visibility,
+and live state are never shared. Scenario topbar/page schema stay core-owned.
+This permits two related DEV previews to reuse
+the generated scenario core without encoding topology in their ids.
+
+Resolved-cache admission estimates retained memory from compact JSON with a
+conservative Python-container multiplier. The previous exact recursive object
+walk synchronously traversed roughly 90,000 objects twice on a cold switch and
+could cost more than the scenario merge itself.
+
+### Builder Control Admission
+
+DEBUG workspace autosync is limited to executable mutating tools. Read-only
+Builder calls (`read_*`, `get_*`, `list_*`) and UI navigation do not acquire the
+workspace runtime update lock. Builder context/preview projection writes are
+coalesced by source webspace and published in background, so event handlers do
+not hold the event bus while a YDoc projection is persisted.
+
 ### Skill Activation Admission
 
 SDK subscription wrappers now load the skill activation policy and evaluate it

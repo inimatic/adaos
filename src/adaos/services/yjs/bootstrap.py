@@ -382,6 +382,7 @@ async def ensure_webspace_seeded_from_scenario(
     emit_event: bool = True,
     ydoc: Y.YDoc | None = None,
     prefer_default_scenario: bool = False,
+    seed_if_missing: bool = True,
 ) -> dict[str, Any]:
     """
     If the YDoc has no ui.application yet, try to seed it from a scenario
@@ -395,6 +396,7 @@ async def ensure_webspace_seeded_from_scenario(
         "space": str(space or "").strip() or "workspace",
         "used_provided_ydoc": bool(ydoc is not None),
         "prefer_default_scenario": bool(prefer_default_scenario),
+        "seed_if_missing": bool(seed_if_missing),
         "mode": "unknown",
         "persisted_via": None,
         "apply_updates_ms": 0.0,
@@ -541,6 +543,16 @@ async def ensure_webspace_seeded_from_scenario(
             list(data_map.keys()),
         )
         return _finish("already_seeded_runtime_refreshed" if runtime_environment_changed else "already_seeded")
+
+    if not seed_if_missing:
+        result["materialization_required"] = True
+        if runtime_environment_changed or bootstrap_marker_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
+        return _finish("loaded_for_materialized_payload")
 
     if not apply_updates_failed and _has_projected_scenario_seed(ui_map, data_map, requested_scenario_id):
         bootstrap_marker_changed = write_runtime_bootstrap_state(

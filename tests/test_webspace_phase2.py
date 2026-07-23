@@ -4159,7 +4159,15 @@ def test_phase5_resolver_prefers_scenario_page_schema_and_topbar_over_overlay() 
             },
             scenario_catalog={"apps": [], "widgets": []},
             scenario_registry={},
-            overlay_snapshot={"installed": {"apps": [], "widgets": []}},
+            overlay_snapshot={
+                "installed": {"apps": [], "widgets": []},
+                "topbar": [{"id": "stale-home", "label": "Stale"}],
+                "pageSchema": {
+                    "id": "stale-desktop",
+                    "layout": {"type": "single", "areas": []},
+                    "widgets": [],
+                },
+            },
             live_state={"desktop": {}, "routing": {}},
             skill_decls=[],
             desktop_scenarios=[],
@@ -4718,6 +4726,66 @@ def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() ->
     assert second_debug["legacy_fallback"] is False
     assert set(second_debug["cache_keys"].keys()) >= {"scenario", "skills", "overlay"}
     assert [item["id"] for item in second.catalog["apps"]] == ["cached-app"]
+
+
+def test_resolver_reuses_scenario_core_across_webspaces_without_overlay_leakage() -> None:
+    webspace_runtime_module._RESOLVED_WEBSPACE_CACHE.clear()
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    common = {
+        "scenario_id": "shared-generated-scenario",
+        "source_mode": "dev",
+        "scenario_application": {"desktop": {"pageSchema": {"id": "shared-page"}}},
+        "scenario_catalog": {"apps": [{"id": "shared-app"}], "widgets": []},
+        "scenario_registry": {"modals": [], "widgets": []},
+        "live_state": {},
+        "skill_decls": [],
+        "skill_decls_fingerprint": "skills-v1",
+        "desktop_scenarios": [],
+        "scenario_source": "loader:dev:shared-v1",
+    }
+
+    first = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="preview-a",
+            overlay_snapshot={"installed": {"apps": ["only-a"], "widgets": []}},
+            **common,
+        )
+    )
+    second = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="preview-b",
+            overlay_snapshot={"installed": {"apps": ["only-b"], "widgets": []}},
+            **common,
+        )
+    )
+    second_debug = dict(runtime._last_resolver_debug or {})
+    runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="preview-c",
+            overlay_snapshot={"installed": {"apps": ["only-c"], "widgets": []}},
+            metadata={
+                "materialization": {
+                    "identity": {
+                        "user_id": "operator",
+                        "roles_hash": "admin-role-hash",
+                        "policy_fingerprint": "policy-v2",
+                    }
+                }
+            },
+            **common,
+        )
+    )
+    third_debug = dict(runtime._last_resolver_debug or {})
+
+    assert second_debug["cache_hit"] is False
+    assert second_debug["core_cache_hit"] is True
+    assert third_debug["core_cache_hit"] is False
+    assert first.webspace_id == "preview-a"
+    assert second.webspace_id == "preview-b"
+    assert first.installed["apps"] == ["only-a"]
+    assert second.installed["apps"] == ["only-b"]
+    second.application["desktop"]["pageSchema"]["id"] = "mutated"
+    assert first.application["desktop"]["pageSchema"]["id"] == "shared-page"
 
 
 def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches() -> None:

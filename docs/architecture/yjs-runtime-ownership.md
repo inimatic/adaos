@@ -89,10 +89,10 @@ PyO3 and therefore becomes another native memory leak.
 | --- | --- | --- |
 | YStore replay compaction | keep | bound replay entries/bytes and persist a recoverable base snapshot |
 | idle room eviction | keep | end unused transport/session ownership and release room resources |
-| materialization worker | keep | protect event-loop latency and enforce timeout/RSS/result budgets |
+| fresh-doc materialization worker | keep | isolate full snapshot creation and enforce timeout/RSS/result budgets |
 | realtime/YWS sidecar boundary | keep as target architecture | preserve browser channels across A/B core updates |
 | snapshot preflight subprocess | keep | reject corrupt native updates before they enter the runtime |
-| scenario-switch subprocess | remove | duplicate process boundary with no independent responsibility |
+| scenario-switch subprocess | removed | payload-only resolution runs in the long-lived runtime; CPU work is threaded and YDoc ownership stays explicit |
 | `gc.collect` after Yjs operations | remove | Python GC cannot collect a native Rust `Rc` cycle |
 | `malloc_trim` after Yjs operations | remove | changes allocator RSS presentation, not object ownership |
 

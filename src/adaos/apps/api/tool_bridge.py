@@ -693,6 +693,10 @@ def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
         return False
     if _is_readonly_snapshot_tool(tool_name):
         return False
+    full_name = str(tool_name or "").strip()
+    public_tool = full_name.split(":", 1)[-1]
+    if _looks_readonly_tool(public_tool) or _looks_ui_navigation_tool(full_name, public_tool):
+        return False
     return True
 
 

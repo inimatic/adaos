@@ -838,6 +838,14 @@ updated on the active room first, then persisted stale-safely in the
 background. This reduces hot-path store reopen cost and improves time to first
 visible switch reaction for attached clients.
 
+Browser `desktop.scenario.set` and `desktop.webspace.go_home` commands default
+to `wait_for_rebuild=false`. Their acknowledgement means that the pointer and
+reconcile request were accepted; readiness remains observable through the
+materialization state. Callers may request `wait_for_rebuild=true` explicitly
+for recovery or diagnostics. Ordinary switches preserve the current YStore
+base and append the live-room branch diff, so acknowledgement is not coupled
+to a full snapshot disk write.
+
 If the requested local control endpoint becomes stale during supervisor
 prewarm/candidate activity, the benchmark CLI can now consult supervisor
 public status and retry against the currently active local runtime URL before

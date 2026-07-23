@@ -124,6 +124,10 @@ _YWS_GUARD_DIAG: dict[str, Any] = {
 }
 _YWS_ATTEMPT_SEQ = 0
 _CURRENT_YWS_ATTEMPT_ID = contextvars.ContextVar("adaos_yws_attempt_id", default="")
+_ROOM_BOOTSTRAP_MATERIALIZATION = contextvars.ContextVar(
+    "adaos_room_bootstrap_materialization",
+    default=None,
+)
 _YWS_ATTEMPT_DIAG: dict[str, Any] = {
     "last_attempt_id": "",
     "last_attempt_at": 0.0,
@@ -5730,26 +5734,90 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         except Exception:
                             _ylog.warning("failed to register YStore backup job for webspace=%s", webspace_id, exc_info=True)
                         created_room = True
+                        bootstrap_materialization = _ROOM_BOOTSTRAP_MATERIALIZATION.get()
+                        if not (
+                            isinstance(bootstrap_materialization, Mapping)
+                            and str(bootstrap_materialization.get("webspace_id") or "").strip() == webspace_id
+                            and isinstance(bootstrap_materialization.get("payload"), Mapping)
+                        ):
+                            bootstrap_materialization = None
+                        seed_kwargs: dict[str, Any] = {
+                            "webspace_id": webspace_id,
+                            "default_scenario_id": target_scenario_id,
+                            "space": space,
+                            "ydoc": room.ydoc,
+                            "prefer_default_scenario": prefer_manifest_home,
+                        }
+                        if bootstrap_materialization is not None:
+                            # The scenario switch already produced the authoritative
+                            # branches. Loading persisted state is still required, but
+                            # projecting the scenario and emitting scenarios.synced
+                            # here would start a second semantic rebuild.
+                            seed_kwargs.update({"emit_event": False, "seed_if_missing": False})
                         seed_result = await _await_bootstrap_step(
                             "seed_from_scenario",
-                            ensure_webspace_seeded_from_scenario(
-                                ystore,
-                                webspace_id=webspace_id,
-                                default_scenario_id=target_scenario_id,
-                                space=space,
-                                ydoc=room.ydoc,
-                                prefer_default_scenario=prefer_manifest_home,
-                            ),
+                            ensure_webspace_seeded_from_scenario(ystore, **seed_kwargs),
                         )
-                        await _await_bootstrap_step(
-                            "effective_materialized",
-                            _ensure_room_effective_materialized(
-                                webspace_id,
-                                ystore,
-                                room,
-                                seed_result=seed_result,
-                            ),
-                        )
+                        if bootstrap_materialization is not None:
+                            materialized_update, materialized_result = await _await_bootstrap_step(
+                                "apply_materialized_payload",
+                                _apply_room_materialized_payload(
+                                    webspace_id,
+                                    ystore,
+                                    room,
+                                    bootstrap_materialization["payload"],
+                                    reason=str(bootstrap_materialization.get("reason") or "room_bootstrap"),
+                                    persist_repair=bool(bootstrap_materialization.get("persist_repair", True)),
+                                    force_full_state_update=bool(
+                                        bootstrap_materialization.get("force_full_state_update", False)
+                                    ),
+                                    materialization_identity=bootstrap_materialization.get(
+                                        "materialization_identity"
+                                    ),
+                                ),
+                            )
+                            if not bool((materialized_result or {}).get("ready")):
+                                raise RuntimeError("room bootstrap materialized payload was not ready")
+                            bootstrap_ready = await _await_bootstrap_step(
+                                "finalize_materialized_bootstrap",
+                                _finalize_materialized_room_bootstrap(
+                                    webspace_id,
+                                    ystore,
+                                    room,
+                                    scenario_id=str(
+                                        bootstrap_materialization["payload"].get("scenario_id")
+                                        or target_scenario_id
+                                    ),
+                                    space=space,
+                                ),
+                            )
+                            seed_result = dict(seed_result or {})
+                            seed_result.update(
+                                {
+                                    "mode": "materialized_payload",
+                                    "room_effective_materialized": True,
+                                    "room_effective_materialized_persisted": bool(materialized_update),
+                                    "room_effective_materialized_bytes": len(materialized_update or b""),
+                                    "room_bootstrap_marker_persisted": bool(
+                                        (bootstrap_ready or {}).get("persisted")
+                                    ),
+                                }
+                            )
+                            room._bootstrap_materialization_handoff = {
+                                "request": bootstrap_materialization,
+                                "update": bytes(materialized_update or b""),
+                                "result": dict(materialized_result or {}),
+                            }
+                        else:
+                            await _await_bootstrap_step(
+                                "effective_materialized",
+                                _ensure_room_effective_materialized(
+                                    webspace_id,
+                                    ystore,
+                                    room,
+                                    seed_result=seed_result,
+                                ),
+                            )
                         await _await_bootstrap_step(
                             "finalize_rebuild_status",
                             _finalize_room_bootstrap_rebuild_status(
@@ -6687,7 +6755,20 @@ async def refresh_live_webspace_effective_branches(
     stage_started = time.perf_counter()
     room = y_server.rooms.get(key)
     phase_timings_ms["room_lookup"] = _elapsed_ms_since(stage_started)
+    bootstrap_materialization: dict[str, Any] | None = None
     if room is None:
+        if isinstance(materialized_payload, Mapping) and materialized_payload:
+            bootstrap_materialization = {
+                "webspace_id": key,
+                "payload": materialized_payload,
+                "reason": reason,
+                "persist_repair": bool(persist_repair),
+                "force_full_state_update": bool(force_full_state_update),
+                "materialization_identity": materialization_identity,
+            }
+            bootstrap_token = _ROOM_BOOTSTRAP_MATERIALIZATION.set(bootstrap_materialization)
+        else:
+            bootstrap_token = None
         try:
             stage_started = time.perf_counter()
             room = await y_server.get_room(key)
@@ -6715,6 +6796,9 @@ async def refresh_live_webspace_effective_branches(
                 "reset_route_runtime": False,
                 "phase_timings_ms": phase_timings_ms,
             }
+        finally:
+            if bootstrap_token is not None:
+                _ROOM_BOOTSTRAP_MATERIALIZATION.reset(bootstrap_token)
     else:
         phase_timings_ms["room_create"] = 0.0
 
@@ -6724,29 +6808,43 @@ async def refresh_live_webspace_effective_branches(
     update: bytes = b""
     broadcast_diagnostics: dict[str, Any] = {}
     if isinstance(materialized_payload, Mapping) and materialized_payload:
-        stage_started = time.perf_counter()
-        try:
-            update, handoff, direct_result = await _apply_room_materialized_payload_on_owner_loop(
-                key,
-                getattr(room, "ystore", None),
-                room,
-                materialized_payload,
-                reason=reason,
-                persist_repair=bool(persist_repair),
-                force_full_state_update=bool(force_full_state_update),
-                materialization_identity=materialization_identity,
-            )
-        except BaseException as exc:
-            if _is_control_flow_base_exception(exc):
-                raise
-            update = b""
-            direct_result = {
-                "ok": False,
-                "ready": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "phase_timings_ms": {"total": _elapsed_ms_since(stage_started)},
-            }
-        phase_timings_ms["materialized_owner_apply"] = _elapsed_ms_since(stage_started)
+        bootstrap_handoff = getattr(room, "_bootstrap_materialization_handoff", None)
+        if (
+            isinstance(bootstrap_handoff, Mapping)
+            and bootstrap_handoff.get("request") is bootstrap_materialization
+        ):
+            update = bytes(bootstrap_handoff.get("update") or b"")
+            direct_result = dict(bootstrap_handoff.get("result") or {})
+            handoff = "room_bootstrap"
+            phase_timings_ms["materialized_owner_apply"] = 0.0
+            try:
+                delattr(room, "_bootstrap_materialization_handoff")
+            except Exception:
+                pass
+        else:
+            stage_started = time.perf_counter()
+            try:
+                update, handoff, direct_result = await _apply_room_materialized_payload_on_owner_loop(
+                    key,
+                    getattr(room, "ystore", None),
+                    room,
+                    materialized_payload,
+                    reason=reason,
+                    persist_repair=bool(persist_repair),
+                    force_full_state_update=bool(force_full_state_update),
+                    materialization_identity=materialization_identity,
+                )
+            except BaseException as exc:
+                if _is_control_flow_base_exception(exc):
+                    raise
+                update = b""
+                direct_result = {
+                    "ok": False,
+                    "ready": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "phase_timings_ms": {"total": _elapsed_ms_since(stage_started)},
+                }
+            phase_timings_ms["materialized_owner_apply"] = _elapsed_ms_since(stage_started)
         direct_update_size = len(update or b"")
         if bool((direct_result or {}).get("ready")):
             marker_key = _live_refresh_update_key(key, update)
@@ -7137,6 +7235,66 @@ async def _ensure_room_effective_materialized(
             exc_info=True,
         )
         return False
+
+
+async def _finalize_materialized_room_bootstrap(
+    webspace_id: str,
+    ystore: Any,
+    room: Any,
+    *,
+    scenario_id: str,
+    space: str,
+) -> dict[str, Any]:
+    """Persist the ready marker after a payload-owned cold room bootstrap."""
+
+    ydoc = getattr(room, "ydoc", None)
+    if ydoc is None:
+        return {"ready": False, "persisted": False, "error": "missing_ydoc"}
+    try:
+        import y_py as Y  # pylint: disable=import-outside-toplevel
+
+        before = Y.encode_state_vector(ydoc)
+        changed = write_runtime_bootstrap_state(
+            ydoc,
+            webspace_id=webspace_id,
+            scenario_id=str(scenario_id or "").strip() or "web_desktop",
+            state="ready",
+            stage="room_bootstrap_ready",
+            ready=True,
+            mode="materialized_payload",
+            extra={
+                "space": str(space or "").strip() or None,
+                "room_effective_materialized": True,
+            },
+        )
+        update = Y.encode_state_as_update(ydoc, before) if changed else b""
+        persisted = False
+        if update and ystore is not None:
+            async with ystore_write_metadata(
+                root_names=["runtime"],
+                source="yjs.gateway_ws.room_bootstrap.materialized_ready",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.bootstrap",
+                governed=True,
+            ):
+                persisted = bool(await ystore.write_update(update, update_kind="diff", notify=False))
+        return {
+            "ready": True,
+            "changed": bool(changed),
+            "persisted": bool(persisted),
+            "update_bytes": len(update or b""),
+        }
+    except Exception as exc:
+        _ylog.warning(
+            "failed to finalize materialized room bootstrap webspace=%s",
+            webspace_id,
+            exc_info=True,
+        )
+        return {
+            "ready": False,
+            "persisted": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 async def _finalize_room_bootstrap_rebuild_status(
@@ -8547,7 +8705,7 @@ async def process_events_command(
                 wait_for_rebuild = (
                     bool(payload.get("wait_for_rebuild"))
                     if "wait_for_rebuild" in payload
-                    else True
+                    else False
                 )
                 result = await switch_webspace_scenario(
                     target_webspace,

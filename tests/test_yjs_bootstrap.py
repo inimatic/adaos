@@ -126,6 +126,36 @@ def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
     assert store.encode_calls == 0
 
 
+def test_bootstrap_load_only_does_not_project_or_emit(monkeypatch) -> None:
+    store = _FakeStore()
+    emitted: list[object] = []
+
+    def _unexpected_manager():
+        raise AssertionError("load-only bootstrap must not resolve a scenario")
+
+    monkeypatch.setattr(bootstrap_module, "_scenario_manager", _unexpected_manager)
+    monkeypatch.setattr(bootstrap_module, "emit", lambda *args, **kwargs: emitted.append((args, kwargs)))
+
+    result = asyncio.run(
+        bootstrap_module.ensure_webspace_seeded_from_scenario(
+            store,
+            webspace_id="desktop-dev",
+            default_scenario_id="todo_list",
+            space="dev",
+            ydoc=Y.YDoc(),
+            prefer_default_scenario=True,
+            emit_event=False,
+            seed_if_missing=False,
+        )
+    )
+
+    assert result["mode"] == "loaded_for_materialized_payload"
+    assert result["materialization_required"] is True
+    assert result["seed_if_missing"] is False
+    assert store.apply_updates_calls == 1
+    assert emitted == []
+
+
 def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
     class _PanicAfterPartialApplyStore(_FakeStore):
         def __init__(self) -> None:

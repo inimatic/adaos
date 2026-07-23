@@ -1417,6 +1417,127 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
+def test_get_room_bootstraps_from_materialized_payload_without_semantic_rebuild(monkeypatch) -> None:
+    webspace_id = "gateway-room-materialized"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Materialized DEV Space",
+        kind="dev",
+        source_mode="dev",
+        home_scenario="web_desktop",
+    )
+    fake_store = _FakeYStore()
+    seed_calls: list[dict[str, object]] = []
+    apply_calls: list[dict[str, object]] = []
+    ready_calls: list[dict[str, object]] = []
+
+    async def _fake_seed(ystore, **kwargs):  # noqa: ANN001
+        seed_calls.append({"ystore": ystore, **kwargs})
+        return {"scenario_id": kwargs["default_scenario_id"], "mode": "loaded_for_materialized_payload"}
+
+    async def _fake_apply(webspace_id_arg, ystore, room, payload, **kwargs):  # noqa: ANN001
+        apply_calls.append(
+            {
+                "webspace_id": webspace_id_arg,
+                "ystore": ystore,
+                "room": room,
+                "payload": payload,
+                **kwargs,
+            }
+        )
+        return b"materialized-diff", {"ok": True, "ready": True, "snapshot": {"ready": True}}
+
+    async def _unexpected_effective_materialize(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("materialized room bootstrap must not run the semantic materializer")
+
+    async def _fake_finalize_ready(webspace_id_arg, ystore, room, **kwargs):  # noqa: ANN001
+        ready_calls.append(
+            {
+                "webspace_id": webspace_id_arg,
+                "ystore": ystore,
+                "room": room,
+                **kwargs,
+            }
+        )
+        return {"ready": True, "persisted": True, "update_bytes": 12}
+
+    class _Scheduler:
+        async def ensure_every(self, **kwargs) -> None:  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
+    monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+    monkeypatch.setattr(gateway_module, "_apply_room_materialized_payload", _fake_apply)
+    monkeypatch.setattr(gateway_module, "_ensure_room_effective_materialized", _unexpected_effective_materialize)
+    monkeypatch.setattr(gateway_module, "_finalize_materialized_room_bootstrap", _fake_finalize_ready)
+    monkeypatch.setattr(gateway_module, "get_scheduler", lambda: _Scheduler())
+    monkeypatch.setattr(gateway_module, "attach_room_observers", lambda _webspace_id, _ydoc: None)
+
+    payload = {"scenario_id": "todo_list", "ui": {"current_scenario": "todo_list"}}
+    request = {
+        "webspace_id": webspace_id,
+        "payload": payload,
+        "reason": "test.materialized_bootstrap",
+        "persist_repair": True,
+        "force_full_state_update": False,
+        "materialization_identity": {"key_hash": "test-key"},
+    }
+    server = gateway_module.WorkspaceWebsocketServer(auto_clean_rooms=False)
+    monkeypatch.setattr(server, "start_room", lambda _room: asyncio.sleep(0))
+    token = gateway_module._ROOM_BOOTSTRAP_MATERIALIZATION.set(request)
+    try:
+        room = asyncio.run(server.get_room(webspace_id))
+    finally:
+        gateway_module._ROOM_BOOTSTRAP_MATERIALIZATION.reset(token)
+
+    assert seed_calls[0]["emit_event"] is False
+    assert seed_calls[0]["seed_if_missing"] is False
+    assert apply_calls[0]["payload"] is payload
+    assert apply_calls[0]["reason"] == "test.materialized_bootstrap"
+    assert ready_calls[0]["scenario_id"] == "todo_list"
+    assert ready_calls[0]["space"] == "dev"
+    assert room._bootstrap_materialization_handoff["request"] is request
+    assert room._bootstrap_materialization_handoff["update"] == b"materialized-diff"
+
+    asyncio.run(gateway_module._release_room_refs(webspace_id, room))
+    server.rooms.pop(webspace_id, None)
+    gateway_module._YROOM_LIFECYCLE.clear()
+
+
+def test_finalize_materialized_room_bootstrap_persists_ready_marker() -> None:
+    class _Store:
+        def __init__(self) -> None:
+            self.updates: list[bytes] = []
+
+        async def write_update(self, update: bytes, **_kwargs) -> bool:
+            self.updates.append(bytes(update))
+            return True
+
+    store = _Store()
+    room = SimpleNamespace(ydoc=y_py.YDoc())
+
+    result = asyncio.run(
+        gateway_module._finalize_materialized_room_bootstrap(
+            "materialized-ready-dev",
+            store,
+            room,
+            scenario_id="todo_list",
+            space="dev",
+        )
+    )
+
+    marker = dict(room.ydoc.get_map("runtime").get("bootstrap") or {})
+    assert result["ready"] is True
+    assert result["persisted"] is True
+    assert result["update_bytes"] > 0
+    assert len(store.updates) == 1
+    assert marker["scenario_id"] == "todo_list"
+    assert marker["state"] == "ready"
+    assert marker["stage"] == "room_bootstrap_ready"
+    assert marker["mode"] == "materialized_payload"
+
+
 def test_get_room_uses_workspace_current_overlay_before_home(monkeypatch) -> None:
     webspace_id = "gateway-room-current-overlay"
     ensure_workspace(webspace_id)

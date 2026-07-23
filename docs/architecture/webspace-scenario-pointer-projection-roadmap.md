@@ -132,6 +132,15 @@ ownership model, see:
   backup, a delayed backup is scheduled instead of waiting for another write.
   This prevents cold `scenario_projection_sync` from paying a multi-second
   replay cost on the next room open.
+- Cold-switch ownership checkpoint as of 2026-07-23:
+  payload-only scenario switching no longer starts a one-shot AdaOS runtime.
+  Skill declaration discovery is process-owned and startup-prewarmed, resolver
+  CPU work runs outside the event loop, and a scenario/source/skills/access
+  core can be reused across webspaces before applying a separately cloned
+  overlay. Ordinary switches preserve YStore and persist a branch diff instead
+  of clearing the store and synchronously rewriting a full snapshot. Browser
+  commands accept pointer changes in background unless an explicit recovery or
+  diagnostic caller requests `wait_for_rebuild=true`.
 - Startup projection checkpoint as of 2026-07-22:
   named-entity projection defers expensive registry snapshot construction while
   the target live room is not ready, keeping the dirty source set pending until

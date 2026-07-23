@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from collections import OrderedDict
@@ -1924,11 +1924,11 @@ def _normalize_webui_modal_def(node: Any) -> Dict[str, Any]:
 
 
 def _clone_json_like(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
     try:
         return json.loads(json.dumps(value))
     except Exception:
-        if value is None:
-            return None
         if isinstance(value, dict):
             return {str(k): _clone_json_like(v) for k, v in value.items()}
         if isinstance(value, list):
@@ -2471,6 +2471,30 @@ def _resolver_input_fingerprint(inputs: WebspaceResolverInputs, *, cache_keys: M
     return _fingerprint_json_like(snapshot)
 
 
+def _resolver_core_fingerprint(inputs: WebspaceResolverInputs) -> str:
+    cache_keys = _resolver_cache_keys(inputs)
+    materialization = _coerce_dict(_coerce_dict(inputs.metadata or {}).get("materialization") or {})
+    identity = _coerce_dict(materialization.get("identity") or {})
+    access_scope = {
+        "user_id": str(identity.get("user_id") or "guest"),
+        "roles_hash": str(identity.get("roles_hash") or ""),
+        "policy_fingerprint": str(identity.get("policy_fingerprint") or ""),
+        "revision": str(identity.get("revision") or ""),
+    }
+    return _fingerprint_json_like(
+        {
+            "scenario_id": inputs.scenario_id,
+            "source_mode": inputs.source_mode,
+            "scenario_source": inputs.scenario_source,
+            "legacy_scenario_fallback": inputs.legacy_scenario_fallback,
+            "scenario": cache_keys.get("scenario"),
+            "skills": cache_keys.get("skills"),
+            "desktop_scenarios": cache_keys.get("desktop_scenarios"),
+            "access_scope": access_scope,
+        }
+    )
+
+
 def _debug_page_signature_from_application(application: Mapping[str, Any] | None) -> dict[str, Any]:
     app = _coerce_dict(application or {})
     desktop = _coerce_dict(app.get("desktop") or {})
@@ -2616,6 +2640,28 @@ def _approximate_cache_size_bytes(value: Any, seen: set[int] | None = None) -> i
     return size
 
 
+def _resolved_cache_size_bytes(payload: Mapping[str, Any]) -> int:
+    """Estimate retained Python memory without recursively walking the UI tree.
+
+    Resolved payloads are JSON-like. CPython container overhead for the current
+    catalogs is about 4.4x their compact JSON representation, so a factor of
+    five keeps the byte limit conservative while leaving the traversal to the
+    C JSON encoder.
+    """
+
+    try:
+        encoded_size = len(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        return encoded_size * 5
+    except (TypeError, ValueError, OverflowError):
+        return _approximate_cache_size_bytes(payload)
+
+
 def _cache_byte_limit(name: str, default_mb: int) -> int:
     try:
         value = int(str(os.getenv(name) or default_mb).strip())
@@ -2629,7 +2675,7 @@ def _remember_resolved_outputs(fingerprint: str, resolved: WebspaceResolverOutpu
     if not token:
         return
     payload = _resolved_outputs_to_cache_payload(resolved)
-    payload_size = _approximate_cache_size_bytes(payload)
+    payload_size = _resolved_cache_size_bytes(payload)
     max_bytes = _cache_byte_limit("ADAOS_WEBSPACE_RESOLVED_CACHE_MAX_MB", 32)
     if payload_size > max_bytes:
         return
@@ -3255,6 +3301,68 @@ def _refresh_pinned_widgets_from_catalog_entries(
     return refreshed
 
 
+def _apply_webspace_overlay_to_resolved(
+    core: WebspaceResolverOutputs,
+    inputs: WebspaceResolverInputs,
+) -> WebspaceResolverOutputs:
+    """Clone scenario-invariant output and apply only webspace-owned state."""
+
+    overlay = _coerce_dict(inputs.overlay_snapshot or {})
+    installed = _merge_installed_with_auto(
+        _coerce_dict(overlay.get("installed") or {}),
+        auto_apps=set(_dedupe_str_list(core.installed.get("apps"))),
+        auto_widgets=set(_dedupe_str_list(core.installed.get("widgets"))),
+    )
+
+    application = _coerce_dict(_clone_json_like(core.application))
+    application_desktop = _coerce_dict(application.get("desktop") or {})
+    core_pinned = _normalize_overlay_widget_entries(application_desktop.get("pinnedWidgets"))
+    pinned_source = (
+        _normalize_overlay_widget_entries(overlay.get("pinnedWidgets"))
+        if "pinnedWidgets" in overlay
+        else core_pinned
+    )
+    application_desktop["pinnedWidgets"] = _refresh_pinned_widgets_from_catalog_entries(
+        pinned_source,
+        core.catalog.get("widgets"),
+    )
+    for key, normalizer in (
+        ("iconOrder", _dedupe_str_list),
+        ("widgetOrder", _dedupe_str_list),
+        ("hiddenSections", _dedupe_str_list),
+    ):
+        if key in overlay:
+            raw = overlay.get(key)
+            application_desktop[key] = normalizer(raw or [])
+    application["desktop"] = application_desktop
+
+    desktop = _coerce_dict(_clone_json_like(core.desktop))
+    desktop["installed"] = _clone_json_like(installed)
+    for key in (
+        "topbar",
+        "pageSchema",
+        "pinnedWidgets",
+        "iconOrder",
+        "widgetOrder",
+        "hiddenSections",
+    ):
+        desktop[key] = _clone_json_like(application_desktop.get(key))
+
+    return WebspaceResolverOutputs(
+        webspace_id=inputs.webspace_id,
+        scenario_id=core.scenario_id,
+        source_mode=core.source_mode,
+        application=application,
+        catalog=_coerce_dict(_clone_json_like(core.catalog)),
+        registry=_coerce_dict(_clone_json_like(core.registry)),
+        installed=installed,
+        desktop=desktop,
+        webio=_coerce_dict(_clone_json_like(core.webio)),
+        routing=_coerce_dict(_clone_json_like(core.routing)),
+        skill_decls=[dict(item) for item in core.skill_decls if isinstance(item, Mapping)],
+    )
+
+
 def _built_in_scenario_content(scenario_id: str) -> Dict[str, Any]:
     if str(scenario_id or "").strip() != "web_desktop":
         return {}
@@ -3790,6 +3898,8 @@ async def _run_materialization_worker(
     request_id: str | None = None,
     scenario_id: str | None = None,
     materialization_identity: Mapping[str, Any] | None = None,
+    skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
+    skill_decls_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     request = {
         "schema": "adaos.webspace.materialization_worker_request.v1",
@@ -3802,6 +3912,12 @@ async def _run_materialization_worker(
             if isinstance(materialization_identity, Mapping)
             else None
         ),
+        "skill_decls_snapshot": (
+            [dict(item) for item in skill_decls_snapshot if isinstance(item, Mapping)]
+            if skill_decls_snapshot is not None
+            else None
+        ),
+        "skill_decls_fingerprint": str(skill_decls_fingerprint or "").strip() or None,
     }
 
     started = time.perf_counter()
@@ -5455,6 +5571,8 @@ class WebspaceScenarioRuntime:
         *,
         materialization_identity: Mapping[str, Any] | None = None,
         scenario_id_override: str | None = None,
+        skill_decls_override: Iterable[Mapping[str, Any]] | None = None,
+        skill_decls_fingerprint_override: str | None = None,
     ) -> WebspaceResolverInputs:
         collect_timings: Dict[str, float] = {}
         self._last_collect_inputs_timings_ms = None
@@ -5561,12 +5679,19 @@ class WebspaceScenarioRuntime:
         _record_timing(collect_timings, "collect_inputs_live_state", stage_started)
 
         stage_started = time.perf_counter()
-        try:
-            self._last_skill_decls_fingerprint = ""
-        except Exception:
-            pass
-        skill_decls = self._collect_skill_decls(mode=mode)
-        skill_decls_fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
+        if skill_decls_override is None:
+            try:
+                self._last_skill_decls_fingerprint = ""
+            except Exception:
+                pass
+            skill_decls = self._collect_skill_decls(mode=mode)
+            skill_decls_fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
+        else:
+            skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
+            skill_decls_fingerprint = str(skill_decls_fingerprint_override or "").strip()
+            if not skill_decls_fingerprint:
+                skill_decls_fingerprint = _fingerprint_json_like(skill_decls)
+            self._last_skill_decls_fingerprint = skill_decls_fingerprint
         _record_timing(collect_timings, "collect_inputs_skill_decls", stage_started)
 
         stage_started = time.perf_counter()
@@ -5619,6 +5744,41 @@ class WebspaceScenarioRuntime:
             resolver_debug["resolved_page"] = _debug_page_signature_from_application(cached.application)
             self._last_resolver_debug = resolver_debug
             return cached
+
+        # Scenario and active-skill resolution is invariant across webspaces.
+        # Keep webspace customization as a small overlay so two DEV previews of
+        # the same generated scenario do not repeat the expensive merge.
+        shared_core_eligible = not any(
+            bool(value) for value in _coerce_dict(inputs.live_state or {}).values()
+        )
+        if shared_core_eligible:
+            core_inputs = replace(
+                inputs,
+                webspace_id="__shared_materialization_core__",
+                metadata={},
+                overlay_snapshot={},
+                live_state={},
+            )
+            core_fingerprint = _resolver_core_fingerprint(inputs)
+            core = _get_cached_resolved_outputs(core_fingerprint)
+            core_cache_hit = core is not None
+            if core is None:
+                core = self._resolve_webspace_uncached(core_inputs)
+                _remember_resolved_outputs(core_fingerprint, core)
+            resolved = _apply_webspace_overlay_to_resolved(core, inputs)
+            resolver_debug["core_cache_hit"] = core_cache_hit
+            resolver_debug["core_fingerprint"] = core_fingerprint
+        else:
+            resolved = self._resolve_webspace_uncached(inputs)
+            resolver_debug["core_cache_hit"] = False
+            resolver_debug["core_cache_bypass"] = "live_state"
+
+        _remember_resolved_outputs(resolver_fingerprint, resolved)
+        resolver_debug["resolved_page"] = _debug_page_signature_from_application(resolved.application)
+        self._last_resolver_debug = resolver_debug
+        return resolved
+
+    def _resolve_webspace_uncached(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
 
         scenario_id = str(inputs.scenario_id or "").strip() or "web_desktop"
         source_mode = str(inputs.source_mode or "").strip() or "mixed"
@@ -6058,9 +6218,6 @@ class WebspaceScenarioRuntime:
             routing=routing_dict,
             skill_decls=skill_decls,
         )
-        _remember_resolved_outputs(resolver_fingerprint, resolved)
-        resolver_debug["resolved_page"] = _debug_page_signature_from_application(resolved.application)
-        self._last_resolver_debug = resolver_debug
         return resolved
 
     def _apply_resolved_state_in_doc(
@@ -6681,6 +6838,8 @@ class WebspaceScenarioRuntime:
         *,
         expected_request_id: str | None = None,
         materialization_identity: Mapping[str, Any] | None = None,
+        skill_decls_override: Iterable[Mapping[str, Any]] | None = None,
+        skill_decls_fingerprint_override: str | None = None,
     ) -> WebUIRegistryEntry:
         rebuild_started = time.perf_counter()
         timings: Dict[str, float] = {}
@@ -6695,6 +6854,8 @@ class WebspaceScenarioRuntime:
             ydoc,
             webspace_id,
             materialization_identity=materialization_identity,
+            skill_decls_override=skill_decls_override,
+            skill_decls_fingerprint_override=skill_decls_fingerprint_override,
         )
         _record_timing(timings, "collect_inputs", stage_started)
         collect_phase_timings = _copy_timing_map(self._last_collect_inputs_timings_ms) or {}
@@ -6749,6 +6910,9 @@ class WebspaceScenarioRuntime:
         request_id: str | None = None,
         scenario_id: str | None = None,
         materialization_identity: Mapping[str, Any] | None = None,
+        isolate_process: bool | None = None,
+        skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
+        skill_decls_fingerprint: str | None = None,
     ) -> WebUIRegistryEntry:
         """Resolve a materialized payload without mutating an intermediate YDoc."""
         materialize_started = time.perf_counter()
@@ -6764,7 +6928,8 @@ class WebspaceScenarioRuntime:
         self._last_rebuild_state_vector = None
         self._last_worker_diagnostics = None
 
-        if _materialization_worker_enabled():
+        use_process_worker = _materialization_worker_enabled() and isolate_process is not False
+        if use_process_worker:
             stage_started = time.perf_counter()
             worker_result = _get_cached_materialized_worker_result(
                 materialization_identity,
@@ -6775,12 +6940,27 @@ class WebspaceScenarioRuntime:
                 _record_timing(ydoc_timings, "materialization_cache_lookup", stage_started)
                 ydoc_timings["materialization_cache_hit"] = 0.0
             else:
+                prepared_skill_decls = skill_decls_snapshot
+                prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
+                if prepared_skill_decls is None:
+                    source_mode = await asyncio.to_thread(_resolve_projection_refresh_space, webspace_id)
+                    prepare_started = time.perf_counter()
+                    prepared_skill_decls = await asyncio.to_thread(
+                        self._collect_skill_decls,
+                        source_mode,
+                    )
+                    prepared_skill_fingerprint = str(
+                        getattr(self, "_last_skill_decls_fingerprint", "") or ""
+                    ).strip()
+                    _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                 worker_result = await _run_materialization_worker(
                     webspace_id,
                     mode="payload_only",
                     request_id=request_id,
                     scenario_id=scenario_id,
                     materialization_identity=materialization_identity,
+                    skill_decls_snapshot=prepared_skill_decls,
+                    skill_decls_fingerprint=prepared_skill_fingerprint,
                 )
                 _record_timing(ydoc_timings, "payload_worker", stage_started)
                 ydoc_timings["materialization_cache_miss"] = 0.0
@@ -6851,7 +7031,24 @@ class WebspaceScenarioRuntime:
                 )
             return resolved.to_registry_entry()
 
+        prepared_skill_decls = skill_decls_snapshot
+        prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
+        if prepared_skill_decls is None:
+            source_mode = await asyncio.to_thread(_resolve_projection_refresh_space, webspace_id)
+            stage_started = time.perf_counter()
+            prepared_skill_decls = await asyncio.to_thread(
+                self._collect_skill_decls,
+                source_mode,
+            )
+            prepared_skill_fingerprint = str(
+                getattr(self, "_last_skill_decls_fingerprint", "") or ""
+            ).strip()
+            _record_timing(timings, "prepare_skill_decls", stage_started)
+
+        operational_doc_started = time.perf_counter()
+        operational_doc_close_started = operational_doc_started
         async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
+            _record_timing(timings, "open_operational_doc", operational_doc_started)
             _raise_if_rebuild_request_superseded(webspace_id, request_id)
             stage_started = time.perf_counter()
             inputs = self._collect_resolver_inputs_in_doc(
@@ -6859,14 +7056,18 @@ class WebspaceScenarioRuntime:
                 webspace_id,
                 materialization_identity=materialization_identity,
                 scenario_id_override=scenario_id,
+                skill_decls_override=prepared_skill_decls,
+                skill_decls_fingerprint_override=prepared_skill_fingerprint,
             )
             _record_timing(timings, "collect_inputs", stage_started)
             collect_phase_timings = _copy_timing_map(self._last_collect_inputs_timings_ms) or {}
             timings.update(collect_phase_timings)
 
             stage_started = time.perf_counter()
-            resolved = self.resolve_webspace(inputs)
+            resolved = await asyncio.to_thread(self.resolve_webspace, inputs)
             _record_timing(timings, "resolve", stage_started)
+            operational_doc_close_started = time.perf_counter()
+        _record_timing(timings, "close_operational_doc", operational_doc_close_started)
 
         _raise_if_rebuild_request_superseded(webspace_id, request_id)
         stage_started = time.perf_counter()
@@ -6946,6 +7147,8 @@ class WebspaceScenarioRuntime:
         request_id: str | None = None,
         initial_scenario_id: str | None = None,
         materialization_identity: Mapping[str, Any] | None = None,
+        skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
+        skill_decls_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         """Build a fresh materialization snapshot in the calling thread.
 
@@ -6972,6 +7175,8 @@ class WebspaceScenarioRuntime:
                 webspace_id,
                 expected_request_id=request_id,
                 materialization_identity=materialization_identity,
+                skill_decls_override=skill_decls_snapshot,
+                skill_decls_fingerprint_override=skill_decls_fingerprint,
             )
             _record_timing(ydoc_timings, "in_doc_rebuild", stage_started)
             stage_started = time.perf_counter()
@@ -7040,12 +7245,27 @@ class WebspaceScenarioRuntime:
                         ydoc_timings["materialization_cache_hit"] = 0.0
                     else:
                         if _materialization_worker_enabled():
+                            source_mode = await asyncio.to_thread(
+                                _resolve_projection_refresh_space,
+                                webspace_id,
+                            )
+                            prepare_started = time.perf_counter()
+                            prepared_skill_decls = await asyncio.to_thread(
+                                self._collect_skill_decls,
+                                source_mode,
+                            )
+                            prepared_skill_fingerprint = str(
+                                getattr(self, "_last_skill_decls_fingerprint", "") or ""
+                            ).strip()
+                            _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                             worker_result = await _run_materialization_worker(
                                 webspace_id,
                                 mode="fresh_doc",
                                 request_id=request_id,
                                 scenario_id=initial_scenario_id,
                                 materialization_identity=materialization_identity,
+                                skill_decls_snapshot=prepared_skill_decls,
+                                skill_decls_fingerprint=prepared_skill_fingerprint,
                             )
                         else:
                             worker_result = await asyncio.to_thread(
@@ -9181,29 +9401,19 @@ async def rebuild_webspace_from_sources(
 
         fresh_doc_rebuild = True
         stage_started = time.perf_counter()
-        try:
-            from adaos.services.yjs.store import reset_ystore_for_webspace  # pylint: disable=import-outside-toplevel
-
-            reset_room_result = {
-                "ok": True,
-                "skipped": "live_transport_preserved",
-                "close_reason": "scenario_switch_fresh_doc",
-                "reset_route_runtime": False,
-                "closed_connections": 0,
-                "closed_webrtc_peers": 0,
-            }
-            try:
-                reset_ystore_for_webspace(webspace_id)
-                ystore_reset = True
-            except Exception:
-                pass
-        except Exception:
-            _log.warning(
-                "failed to reset runtime state for fresh scenario switch webspace=%s scenario=%s",
-                webspace_id,
-                target_scenario,
-                exc_info=True,
-            )
+        # The live room remains authoritative during an ordinary switch. Its
+        # branch diff is a valid continuation of the existing YStore snapshot;
+        # clearing the store here forced a synchronous full-state rewrite on
+        # every switch and made the UI wait on disk durability.
+        reset_room_result = {
+            "ok": True,
+            "skipped": "live_transport_and_ystore_preserved",
+            "close_reason": "scenario_switch_diff_commit",
+            "reset_route_runtime": False,
+            "closed_connections": 0,
+            "closed_webrtc_peers": 0,
+            "ystore_reset": False,
+        }
         _record_timing(timings_ms, "fresh_doc_reset_runtime_state", stage_started)
 
         if _scenario_switch_inline_listing_sync_enabled():
@@ -9387,6 +9597,9 @@ async def rebuild_webspace_from_sources(
             payload_rebuild_kwargs: dict[str, Any] = {
                 "scenario_id": target_scenario,
                 "materialization_identity": effective_materialization_identity,
+                # A scenario switch resolves plain effective branches. Keep it
+                # off the event loop, but do not pay for a second runtime.
+                "isolate_process": False,
             }
             if str(request_id or "").strip():
                 payload_rebuild_kwargs["request_id"] = request_id
@@ -10981,7 +11194,7 @@ async def switch_webspace_scenario(
     }
 
 
-async def go_home_webspace(webspace_id: str, *, wait_for_rebuild: bool = True) -> dict[str, Any]:
+async def go_home_webspace(webspace_id: str, *, wait_for_rebuild: bool = False) -> dict[str, Any]:
     webspace_id = str(webspace_id or "").strip()
     if not webspace_id:
         raise ValueError("webspace_id is required")
@@ -11324,6 +11537,35 @@ async def _on_webspace_go_home(evt: Dict[str, Any]) -> None:
     await go_home_webspace(webspace_id, wait_for_rebuild=wait_for_rebuild)
 
 
+async def prewarm_webspace_materialization_sources() -> dict[str, Any]:
+    """Build the process-owned skill declaration catalog before first use."""
+
+    started = time.perf_counter()
+
+    def _warm() -> dict[str, Any]:
+        runtime = WebspaceScenarioRuntime()
+        modes: dict[str, Any] = {}
+        for mode in ("workspace", "dev"):
+            mode_started = time.perf_counter()
+            decls = runtime._collect_skill_decls(mode=mode)
+            modes[mode] = {
+                "declarations": len(decls),
+                "fingerprint": str(getattr(runtime, "_last_skill_decls_fingerprint", "") or ""),
+                "elapsed_ms": _elapsed_ms(mode_started),
+            }
+            _skill_sources_fingerprint_for_materialization(mode)
+        return modes
+
+    modes = await asyncio.to_thread(_warm)
+    result = {
+        "ok": True,
+        "modes": modes,
+        "elapsed_ms": _elapsed_ms(started),
+    }
+    _log.info("prewarmed webspace materialization sources result=%s", result)
+    return result
+
+
 @subscribe("desktop.webspace.set_home")
 async def _on_webspace_set_home(evt: Dict[str, Any]) -> None:
     payload = _payload(evt)
@@ -11427,6 +11669,7 @@ __all__ = [
     "describe_webspace_rebuild_state",
     "get_webspace_rebuild_materialized_payload",
     "invalidate_webspace_materialization_cache",
+    "prewarm_webspace_materialization_sources",
     "set_current_webspace_home",
     "rebuild_webspace_from_sources",
     "canonical_materialization_identity",

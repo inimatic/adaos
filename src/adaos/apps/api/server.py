@@ -778,6 +778,17 @@ async def lifespan(app: FastAPI):
     except Exception:
         logging.getLogger("adaos.api.server").debug("failed to prewarm Builder project catalog", exc_info=True)
 
+    try:
+        from adaos.services.scenario.webspace_runtime import prewarm_webspace_materialization_sources
+
+        with _StartupTimer("prewarm_webspace_materialization_sources"):
+            await prewarm_webspace_materialization_sources()
+    except Exception:
+        logging.getLogger("adaos.api.server").debug(
+            "failed to prewarm webspace materialization sources",
+            exc_info=True,
+        )
+
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
     # Periodic liveness staler (hub only)

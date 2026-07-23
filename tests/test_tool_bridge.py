@@ -940,7 +940,7 @@ def test_call_tool_skips_workspace_autosync_for_readonly_snapshots(monkeypatch, 
     assert calls == ["run_sync", "run:infrastate_skill:get_snapshot"]
 
 
-def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) -> None:
+def test_call_tool_skips_workspace_autosync_for_readonly_tools(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
 
@@ -1008,14 +1008,12 @@ def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) 
     assert result["ok"] is True
     assert calls == [
         "run_sync:start",
-        "runtime_status",
-        "update:prompt_engineer_skill:workspace",
         "run:prompt_engineer_skill:prompt_list_project_objects",
         "run_sync:end",
     ]
 
 
-def test_call_tool_throttles_workspace_autosync_for_repeated_skill_calls(monkeypatch, tmp_path) -> None:
+def test_call_tool_keeps_repeated_readonly_calls_outside_workspace_autosync(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
 
@@ -1073,7 +1071,8 @@ def test_call_tool_throttles_workspace_autosync_for_repeated_skill_calls(monkeyp
 
     assert first["ok"] is True
     assert second["ok"] is True
-    assert calls.count("update:prompt_engineer_skill:workspace") == 1
+    assert calls.count("update:prompt_engineer_skill:workspace") == 0
+    assert calls.count("runtime_status") == 0
     assert calls.count("run:prompt_engineer_skill:prompt_list_project_files") == 2
 
 

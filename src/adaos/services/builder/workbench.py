@@ -30,6 +30,8 @@ BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
 BUILDER_OWNER = f"skill:{BUILDER_SKILL_ID}"
 _log = logging.getLogger("adaos.builder.workbench")
+_PROJECTION_TASKS: dict[str, asyncio.Task[Any]] = {}
+_PROJECTION_PENDING: dict[str, dict[str, Any]] = {}
 
 
 def safe_source_webspace_id(value: Any) -> str:
@@ -453,7 +455,7 @@ class BuilderWorkbenchService:
         binding["dev_webspace"] = info_payload
         binding["runtime"] = runtime_payload
         binding["preview_runtime"] = self.reconciler.describe(source_id)
-        await self.publish_projection(source_id, preview_state=preview_state)
+        _schedule_projection_publish(self, source_id, preview_state=preview_state)
         return binding
 
     def get_workspace_binding(self, source_webspace_id: str | None = None) -> dict[str, Any]:
@@ -946,6 +948,56 @@ def _payload_from_event(evt: Any) -> dict[str, Any]:
     return {}
 
 
+def _schedule_projection_publish(
+    service: BuilderWorkbenchService,
+    source_webspace_id: str,
+    *,
+    preview_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_id = service.resolve_source_webspace_id(source_webspace_id)
+    _PROJECTION_PENDING[source_id] = {
+        "preview_state": dict(preview_state or {}),
+    }
+    current = _PROJECTION_TASKS.get(source_id)
+    if current is not None and not current.done():
+        return {"scheduled": True, "coalesced": True, "source_webspace_id": source_id}
+
+    async def _runner() -> None:
+        try:
+            while True:
+                request = _PROJECTION_PENDING.pop(source_id, None)
+                if request is None:
+                    break
+                try:
+                    await service.publish_projection(
+                        source_id,
+                        preview_state=request.get("preview_state"),
+                    )
+                except Exception:
+                    _log.warning(
+                        "failed to publish deferred Builder projection source_webspace=%s",
+                        source_id,
+                        exc_info=True,
+                    )
+                if source_id not in _PROJECTION_PENDING:
+                    break
+        finally:
+            if _PROJECTION_TASKS.get(source_id) is asyncio.current_task():
+                _PROJECTION_TASKS.pop(source_id, None)
+
+    task = asyncio.create_task(
+        _runner(),
+        name=f"builder-projection:{source_id}"[:120],
+    )
+    _PROJECTION_TASKS[source_id] = task
+    return {
+        "scheduled": True,
+        "coalesced": False,
+        "source_webspace_id": source_id,
+        "task": task.get_name(),
+    }
+
+
 @subscribe(BUILDER_CONTEXT_SELECTED)
 async def _on_builder_context_selected(evt: Any) -> None:
     payload = _payload_from_event(evt)
@@ -963,7 +1015,7 @@ async def _on_builder_context_selected(evt: Any) -> None:
         description=str(payload.get("description") or "").strip() or None,
         persist_projection=False,
     )
-    await service.publish_projection(source_webspace_id)
+    _schedule_projection_publish(service, source_webspace_id)
 
 
 @subscribe("builder.workbench.ensure_requested")
@@ -1028,4 +1080,4 @@ async def _on_builder_preview_observed(evt: Any) -> None:
         or str(current.get("status") or "").strip() != "ready"
     ):
         return
-    await service.publish_projection(source_webspace_id)
+    _schedule_projection_publish(service, source_webspace_id)
