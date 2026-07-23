@@ -7,23 +7,6 @@ import types
 
 import pytest
 
-if "y_py" not in sys.modules:
-    sys.modules["y_py"] = types.SimpleNamespace(
-        YDoc=type("YDoc", (), {}),
-        encode_state_vector=lambda *args, **kwargs: b"",
-        encode_state_as_update=lambda *args, **kwargs: b"",
-        apply_update=lambda *args, **kwargs: None,
-    )
-if "ypy_websocket.ystore" not in sys.modules:
-    ystore_module = types.ModuleType("ypy_websocket.ystore")
-    ystore_module.BaseYStore = type("BaseYStore", (), {})
-    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
-    sys.modules["ypy_websocket.ystore"] = ystore_module
-if "ypy_websocket" not in sys.modules:
-    pkg = types.ModuleType("ypy_websocket")
-    pkg.ystore = sys.modules["ypy_websocket.ystore"]
-    sys.modules["ypy_websocket"] = pkg
-
 from adaos.apps.cli import active_control
 from adaos.services.subnet.link_client import MemberLinkClient
 
@@ -41,6 +24,12 @@ class _FakeResponse:
         if self._payload is None:
             raise ValueError("no json payload")
         return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 def test_probe_control_api_returns_runtime_ping_payload(monkeypatch) -> None:
@@ -203,6 +192,12 @@ def test_member_link_resolve_local_control_base_skips_candidate_ping(monkeypatch
     class _FakeSession:
         trust_env = False
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
         def get(self, url: str, headers=None, timeout=None):
             if url.endswith("/api/supervisor/public/update-status"):
                 return _FakeResponse(503)
@@ -253,6 +248,12 @@ def test_member_link_post_local_admin_resolves_token_for_selected_base(monkeypat
 
     class _FakeSession:
         trust_env = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
 
         def post(self, url: str, headers=None, json=None, timeout=None):
             assert url == "http://127.0.0.1:8779/api/admin/update/start"
@@ -574,30 +575,19 @@ async def test_member_link_ping_loop_exits_when_ping_send_times_out(monkeypatch)
     assert waited == [2.5]
 
 
-@pytest.mark.asyncio
-async def test_member_link_queue_node_snapshot_prefers_async_snapshot_builder(monkeypatch) -> None:
+def test_member_link_queue_node_snapshot_sends_compact_capacity_status(monkeypatch) -> None:
     client = MemberLinkClient()
-    client._loop = asyncio.get_running_loop()
-
-    async def _fake_snapshot_async() -> dict[str, object]:
-        await asyncio.sleep(0)
-        return {"mode": "async"}
-
-    monkeypatch.setattr(client, "_local_node_snapshot_async", _fake_snapshot_async)
     monkeypatch.setattr(
         client,
-        "_local_node_snapshot",
-        lambda: (_ for _ in ()).throw(AssertionError("sync snapshot should not run while the event loop is active")),
+        "_local_node_status",
+        lambda *, include_capacity=False: {"mode": "status", "include_capacity": include_capacity},
     )
 
     client._queue_node_snapshot()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    msg = client._out_q.get_nowait()
 
-    msg = await asyncio.wait_for(client._out_q.get(), timeout=1.0)
-
-    assert msg["t"] == "node.snapshot"
-    assert msg["snapshot"] == {"mode": "async"}
+    assert msg["t"] == "node.status"
+    assert msg["status"] == {"mode": "status", "include_capacity": True}
 
 
 def test_member_link_queues_snapshot_after_desktop_yjs_write(monkeypatch) -> None:
@@ -605,11 +595,11 @@ def test_member_link_queues_snapshot_after_desktop_yjs_write(monkeypatch) -> Non
     queued: list[str] = []
     monkeypatch.setenv("ADAOS_SUBNET_FULL_SNAPSHOT_ON_YJS_WRITE", "1")
 
-    monkeypatch.setattr(client, "_queue_node_snapshot", lambda: queued.append("snapshot"))
+    monkeypatch.setattr(client, "_queue_node_catalog_snapshot", lambda: queued.append("catalog"))
 
     client._queue_node_snapshot_from_yjs_write(webspace_id="desktop", meta={"source": "webspace_runtime"})
 
-    assert queued == ["snapshot"]
+    assert queued == ["catalog"]
 
 
 def test_member_link_throttles_snapshot_after_yjs_write(monkeypatch) -> None:
@@ -618,7 +608,7 @@ def test_member_link_throttles_snapshot_after_yjs_write(monkeypatch) -> None:
     now = {"value": 100.0}
     monkeypatch.setenv("ADAOS_SUBNET_FULL_SNAPSHOT_ON_YJS_WRITE", "1")
 
-    monkeypatch.setattr(client, "_queue_node_snapshot", lambda: queued.append("snapshot"))
+    monkeypatch.setattr(client, "_queue_node_catalog_snapshot", lambda: queued.append("catalog"))
     monkeypatch.setattr("adaos.services.subnet.link_client.time.time", lambda: now["value"])
 
     client._queue_node_snapshot_from_yjs_write(webspace_id="desktop", meta={"source": "webspace_runtime"})
@@ -627,4 +617,4 @@ def test_member_link_throttles_snapshot_after_yjs_write(monkeypatch) -> None:
     client._queue_node_snapshot_from_yjs_write(webspace_id="desktop", meta={"source": "webspace_runtime"})
     client._queue_node_snapshot_from_yjs_write(webspace_id="project-ws", meta={"source": "webspace_runtime"})
 
-    assert queued == ["snapshot"]
+    assert queued == ["catalog"]

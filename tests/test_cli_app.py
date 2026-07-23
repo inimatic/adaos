@@ -208,6 +208,7 @@ def test_slot_shell_required_diagnostic_for_unslotted_state_changing_command(mon
     )
 
     monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("ENV_TYPE", "prod")
     monkeypatch.delenv("ADAOS_ALLOW_UNSLOTTED_CLI", raising=False)
     monkeypatch.delenv("ADAOS_DISABLE_SLOT_CONTEXT_WARNING", raising=False)
     monkeypatch.delenv("ADAOS_CLI_SLOT_BOUND", raising=False)
@@ -245,6 +246,7 @@ def test_slot_shell_required_diagnostic_skips_read_only_and_dev_commands(monkeyp
     )
 
     monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("ENV_TYPE", "prod")
     monkeypatch.delenv("ADAOS_CLI_SLOT_BOUND", raising=False)
     monkeypatch.setattr(cli_app.sys, "executable", str(tmp_path / "repo-venv" / "python"))
 
@@ -318,10 +320,12 @@ def test_apply_active_slot_manifest_environment_when_python_already_slot_bound(m
     start_dir.mkdir()
     monkeypatch.chdir(start_dir)
     monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
-    monkeypatch.delenv("ADAOS_ACTIVE_CORE_SLOT", raising=False)
-    monkeypatch.delenv("ADAOS_ACTIVE_CORE_SLOT_DIR", raising=False)
-    monkeypatch.delenv("ADAOS_SLOT_REPO_ROOT", raising=False)
-    monkeypatch.delenv("ADAOS_CLI_SLOT_BOUND", raising=False)
+    # Register keys before the helper mutates os.environ directly so teardown
+    # cannot leak a deleted temporary slot to later tests.
+    monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "")
+    monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT_DIR", "")
+    monkeypatch.setenv("ADAOS_SLOT_REPO_ROOT", "")
+    monkeypatch.setenv("ADAOS_CLI_SLOT_BOUND", "")
     monkeypatch.setattr(cli_app.sys, "executable", str(python_bin))
 
     assert cli_app._apply_active_slot_manifest_environment_if_current() is True
