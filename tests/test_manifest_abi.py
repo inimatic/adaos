@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
 
@@ -453,8 +454,8 @@ def test_builder_draft_schema_accepts_default_template_metadata() -> None:
 def test_scenario_schema_accepts_default_builder_template_manifest() -> None:
     schema = _load_schema("scenario.schema.json")
     root = Path(__file__).resolve().parents[1] / "src" / "adaos"
-    payload = json.loads(
-        (root / "scenario_templates" / "scenario_default" / "scenario.json").read_text(encoding="utf-8")
+    payload = yaml.safe_load(
+        (root / "scenario_templates" / "scenario_default" / "scenario.yaml").read_text(encoding="utf-8")
     )
 
     Draft7Validator(schema).validate(payload)

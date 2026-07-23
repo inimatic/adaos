@@ -15,8 +15,8 @@ from adaos.services.runtime_paths import current_state_dir
 
 
 _MANIFEST_NAMES = {
-    "scenario": ("scenario.yaml", "scenario.yml", "scenario.json"),
-    "skill": ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json"),
+    "scenario": ("scenario.yaml",),
+    "skill": ("skill.yaml",),
 }
 _CATALOG_MANIFEST_FIELDS = {"id", "name", "title", "description", "version", "depends"}
 _CATALOG_MANIFEST_BOUNDARIES = {

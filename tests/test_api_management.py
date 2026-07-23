@@ -331,7 +331,7 @@ def test_scenario_api_matches_service_surface() -> None:
 def test_scenario_list_includes_dev_artifacts_only_for_dev_webspace(monkeypatch, tmp_path) -> None:
     dev_root = tmp_path / "dev" / "scenarios"
     (dev_root / "dev_recipe").mkdir(parents=True)
-    (dev_root / "dev_recipe" / "scenario.json").write_text('{"id":"dev_recipe"}', encoding="utf-8")
+    (dev_root / "dev_recipe" / "scenario.yaml").write_text("id: dev_recipe\n", encoding="utf-8")
     ctx = SimpleNamespace(paths=SimpleNamespace(dev_scenarios_dir=lambda: dev_root))
     mgr = _FakeScenarioManager()
 

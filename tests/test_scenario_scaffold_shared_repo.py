@@ -12,7 +12,7 @@ def test_scenario_scaffold_reuses_shared_workspace_git_root(tmp_path: Path, monk
     template = tmp_path / "template"
     (workspace / ".git").mkdir(parents=True)
     template.mkdir()
-    (template / "scenario.json").write_text('{"id":"template","version":"0.1.0"}', encoding="utf-8")
+    (template / "scenario.yaml").write_text("id: template\nversion: '0.1.0'\n", encoding="utf-8")
     calls: list[tuple[str, str, str | None]] = []
 
     class _Git:
@@ -52,6 +52,6 @@ def test_scenario_scaffold_reuses_shared_workspace_git_root(tmp_path: Path, monk
     target = scaffold.create("smoke", template=str(template), register=True, push=False)
 
     assert target == scenarios / "smoke"
-    assert (target / "scenario.json").exists()
+    assert (target / "scenario.yaml").exists()
     assert not (scenarios / "scenarios").exists()
     assert calls == [("sparse_add", str(workspace.resolve()), "scenarios/smoke")]

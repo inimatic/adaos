@@ -57,8 +57,8 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
     )
     scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
     scenario_root.mkdir(parents=True, exist_ok=True)
-    (scenario_root / "scenario.json").write_text(
-        json.dumps(
+    (scenario_root / "scenario.yaml").write_text(
+        yaml.safe_dump(
             {
                 "id": scenario_id,
                 "version": "0.0.1",
@@ -80,10 +80,9 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
                     ],
                 },
             },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
+            allow_unicode=True,
+            sort_keys=False,
+        ),
         encoding="utf-8",
     )
 

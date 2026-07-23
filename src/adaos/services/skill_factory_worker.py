@@ -485,7 +485,7 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 1. Inspect all existing files under the target paths before editing.
 2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
 3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
-4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: either keep `ui.application` in `scenario.json`, or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
+4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
 6. Run relevant bounded checks. Fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {', '.join(allowed)}.
@@ -580,8 +580,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 from jsonschema import Draft202012Validator
 
                 validator = Draft202012Validator(_read_json(scenario_schema_path))
-                for path in sorted(workspace.glob("scenarios/*/scenario.json")):
-                    payload = _read_json(path)
+                for path in sorted(workspace.glob("scenarios/*/scenario.yaml")):
+                    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                    if not isinstance(payload, Mapping):
+                        payload = {}
                     validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
                     if validation_errors:
                         errors.extend(
@@ -625,7 +627,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         skill_id = self._companion_skill_id(assignment) if target.get("type") == "scenario" else target_id
         required = [workspace / "skills" / skill_id / "skill.yaml", workspace / "skills" / skill_id / "handlers" / "main.py"]
         if target.get("type") == "scenario":
-            required.append(workspace / "scenarios" / target_id / "scenario.json")
+            required.append(workspace / "scenarios" / target_id / "scenario.yaml")
         for path in required:
             if not path.exists():
                 errors.append(f"required file missing: {path.relative_to(workspace)}")

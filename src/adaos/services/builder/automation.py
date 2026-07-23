@@ -251,20 +251,14 @@ class BuilderAutomationService:
 
         scenario_root = self.dev_scenarios_root / project_id
         manifest: Mapping[str, Any] = {}
-        for name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-            path = scenario_root / name
-            if not path.is_file():
-                continue
+        path = scenario_root / "scenario.yaml"
+        if path.is_file():
             try:
-                if path.suffix.lower() == ".json":
-                    value = json.loads(path.read_text(encoding="utf-8-sig"))
-                else:
-                    value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+                value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
             except (OSError, ValueError, yaml.YAMLError):
-                continue
+                value = {}
             if isinstance(value, Mapping):
                 manifest = value
-                break
 
         candidates: list[str] = []
 

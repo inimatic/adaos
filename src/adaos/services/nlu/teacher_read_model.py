@@ -151,13 +151,12 @@ def _read_skill_manifest(skill_id: str, *, ctx: AgentContext | None = None) -> t
         return None, None
     ctx = ctx or get_ctx()
     for root in _skill_roots(ctx):
-        for name in ("skill.yaml", "skill.yml"):
-            path = root / token / name
-            if not path.exists():
-                continue
-            payload = _read_yaml(path)
-            if payload is not None:
-                return payload, path
+        path = root / token / "skill.yaml"
+        if not path.exists():
+            continue
+        payload = _read_yaml(path)
+        if payload is not None:
+            return payload, path
     return None, None
 
 
@@ -168,13 +167,12 @@ def _read_scenario_manifest(scenario_id: str, *, ctx: AgentContext | None = None
     ctx = ctx or get_ctx()
     for root in _scenario_roots(ctx):
         base = root / token
-        for name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-            path = base / name
-            if not path.exists():
-                continue
-            payload = _read_json(path) if name.endswith(".json") else _read_yaml(path)
-            if payload is not None:
-                return payload, path
+        path = base / "scenario.yaml"
+        if not path.exists():
+            continue
+        payload = _read_yaml(path)
+        if payload is not None:
+            return payload, path
     return None, None
 
 

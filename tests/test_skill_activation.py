@@ -124,7 +124,7 @@ def test_load_skill_stream_receiver_patterns_reads_webui_and_data_routes(tmp_pat
                 "- route: stream",
                 "  receiver: demo.details.*",
                 "- route: yjs",
-                "  receiver: demo.yjs_ignored",
+                "  projection_slot: demo.summary",
                 "",
             ]
         ),
@@ -135,7 +135,106 @@ def test_load_skill_stream_receiver_patterns_reads_webui_and_data_routes(tmp_pat
         "demo.notes",
         "demo.metrics",
         "demo.details.*",
+        "demo.summary",
     )
+
+
+def test_subscription_event_admission_allows_webio_control_subscription_changed(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from adaos.domain.workspace_manifest import SkillActivationPolicy, SkillActivationWhen
+    import adaos.services.skill.activation as activation_module
+
+    policy = SkillActivationPolicy(
+        mode="lazy",
+        background_refresh=False,
+        when=SkillActivationWhen(
+            scenarios_active=("web_desktop",),
+            client_presence=True,
+            webspace_scope="active",
+        ),
+    )
+    evt = SimpleNamespace(
+        type="webio.yjs.subscription.changed",
+        payload={
+            "webspace_id": "desktop",
+            "slot": "infrastate.summary",
+            "subscription_id": "sub-1",
+        },
+    )
+
+    monkeypatch.setattr(activation_module, "_current_scenario_for_webspace", lambda _webspace_id: "web_desktop")
+
+    admitted = subscription_event_admission(policy, evt, "webio.yjs.subscription.changed")
+    assert admitted["allowed"] is True
+    assert admitted["snapshot_request"] is False
+    assert admitted["ui_control_request"] is True
+
+
+def test_subscription_event_admission_allows_ui_control_when_scenario_is_not_loaded(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from adaos.domain.workspace_manifest import SkillActivationPolicy, SkillActivationWhen
+    import adaos.services.skill.activation as activation_module
+
+    policy = SkillActivationPolicy(
+        mode="lazy",
+        background_refresh=False,
+        when=SkillActivationWhen(
+            scenarios_active=("web_desktop",),
+            client_presence=True,
+            webspace_scope="active",
+        ),
+    )
+    evt = SimpleNamespace(
+        type="webio.yjs.snapshot.requested",
+        payload={
+            "webspace_id": "desktop",
+            "slot": "infrastate.summary",
+        },
+    )
+
+    monkeypatch.setattr(activation_module, "_current_scenario_for_webspace", lambda _webspace_id: None)
+
+    admitted = subscription_event_admission(policy, evt, "webio.yjs.snapshot.requested")
+    assert admitted["allowed"] is True
+    assert admitted["snapshot_request"] is True
+    assert admitted["ui_control_request"] is True
+    assert admitted["scenario_assumed_from_ui_control"] is True
+
+
+def test_subscription_event_admission_allows_action_control_when_scenario_is_not_loaded(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from adaos.domain.workspace_manifest import SkillActivationPolicy, SkillActivationWhen
+    import adaos.services.skill.activation as activation_module
+
+    policy = SkillActivationPolicy(
+        mode="lazy",
+        background_refresh=False,
+        when=SkillActivationWhen(
+            scenarios_active=("web_desktop",),
+            client_presence=True,
+            webspace_scope="active",
+        ),
+    )
+    evt = SimpleNamespace(
+        type="infrastate.action",
+        payload={
+            "id": "scenario_hard_pull",
+            "name": "web_desktop",
+            "request_id": "req-1",
+            "webspace_id": "desktop",
+        },
+    )
+
+    monkeypatch.setattr(activation_module, "_current_scenario_for_webspace", lambda _webspace_id: None)
+
+    admitted = subscription_event_admission(policy, evt, "infrastate.action")
+    assert admitted["allowed"] is True
+    assert admitted["snapshot_request"] is False
+    assert admitted["ui_control_request"] is True
+    assert admitted["scenario_assumed_from_ui_control"] is True
 
 
 def test_stream_receiver_event_admission_rejects_foreign_receiver() -> None:

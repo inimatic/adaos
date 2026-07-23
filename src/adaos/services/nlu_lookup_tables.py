@@ -381,14 +381,11 @@ def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], 
             continue
         for skill_dir in sorted(child for child in skills_dir.iterdir() if child.is_dir() and not child.name.startswith(".")):
             _add_skill_entry(buckets, skill_dir.name, {}, source=f"skill.{skill_dir.name}.dir")
-            for manifest_name in ("skill.yaml", "skill.yml"):
-                manifest_path = skill_dir / manifest_name
-                if not manifest_path.exists():
-                    continue
+            manifest_path = skill_dir / "skill.yaml"
+            if manifest_path.exists():
                 doc = _read_yaml(manifest_path)
                 if isinstance(doc, Mapping):
-                    _add_skill_entry(buckets, skill_dir.name, doc, source=f"skill.{skill_dir.name}.{manifest_name}")
-                break
+                    _add_skill_entry(buckets, skill_dir.name, doc, source=f"skill.{skill_dir.name}.skill.yaml")
         for path in sorted(skills_dir.glob("*/webui.json")):
             doc = _read_json(path)
             if isinstance(doc, Mapping):
@@ -405,21 +402,17 @@ def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], 
         if not scenarios_dir.exists():
             continue
         for scenario_root in sorted(child for child in scenarios_dir.iterdir() if child.is_dir()):
-            for file_name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-                path = scenario_root / file_name
-                if path.exists() and path.suffix == ".json":
-                    doc = _read_json(path)
-                    if isinstance(doc, Mapping):
-                        _collect_from_manifest(
-                            buckets,
-                            doc,
-                            source=f"scenario.{scenario_root.name}",
-                            scenario_id=scenario_root.name,
-                        )
-                    break
-                if path.exists():
-                    _add(buckets, "scenario_id", scenario_root.name, source=f"scenario.{scenario_root.name}")
-                    break
+            path = scenario_root / "scenario.yaml"
+            if path.exists():
+                doc = _read_yaml(path)
+                if isinstance(doc, Mapping):
+                    _collect_from_manifest(
+                        buckets,
+                        doc,
+                        source=f"scenario.{scenario_root.name}",
+                        scenario_id=scenario_root.name,
+                    )
+                _add(buckets, "scenario_id", scenario_root.name, source=f"scenario.{scenario_root.name}")
 
 
 def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
@@ -444,7 +437,6 @@ def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
         for skill_dir in skill_dirs:
             parts.append(("skill", skill_dir.name, _path_stamp(skill_dir)))
             parts.append(("skill_yaml", _path_stamp(skill_dir / "skill.yaml")))
-            parts.append(("skill_yml", _path_stamp(skill_dir / "skill.yml")))
             parts.append(("webui", _path_stamp(skill_dir / "webui.json")))
 
     scenario_roots = _unique_paths(
@@ -463,8 +455,7 @@ def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
             scenario_dirs = []
         for scenario_root in scenario_dirs:
             parts.append(("scenario", scenario_root.name, _path_stamp(scenario_root)))
-            for file_name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-                parts.append(("scenario_file", scenario_root.name, file_name, _path_stamp(scenario_root / file_name)))
+            parts.append(("scenario_yaml", scenario_root.name, _path_stamp(scenario_root / "scenario.yaml")))
     return tuple(parts)
 
 

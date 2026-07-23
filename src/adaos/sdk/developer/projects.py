@@ -108,11 +108,7 @@ def _root(kind: str, project_id: str, *, required: bool = True) -> Path:
 
 
 def _manifest_path(kind: ProjectKind, root: Path) -> Path | None:
-    names = (
-        ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
-        if kind == "skill"
-        else ("scenario.yaml", "scenario.yml", "scenario.json")
-    )
+    names = ("skill.yaml",) if kind == "skill" else ("scenario.yaml",)
     return next((root / name for name in names if (root / name).is_file()), None)
 
 
@@ -232,11 +228,7 @@ def update_metadata(
         raise DeveloperProjectError("title must not be empty")
     manifests = [
         root / name
-        for name in (
-            ("scenario.yaml", "scenario.yml", "scenario.json")
-            if normalized_kind == "scenario"
-            else ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
-        )
+        for name in (("scenario.yaml",) if normalized_kind == "scenario" else ("skill.yaml",))
         if (root / name).is_file()
     ]
     if not manifests:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -11,8 +12,9 @@ from jsonschema import Draft7Validator
 from adaos.sdk.scenarios.runtime import ActionRegistry, ScenarioModel, ScenarioRuntime, default_registry
 
 
-_SCENARIO_MANIFESTS = ("scenario.json", "scenario.yaml", "scenario.yml")
-_SKILL_MANIFESTS = ("skill.yaml", "skill.yml")
+_SCENARIO_MANIFESTS = ("scenario.yaml",)
+_SKILL_MANIFESTS = ("skill.yaml",)
+_log = logging.getLogger("adaos.scenario.validation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,11 +47,18 @@ def _load_mapping(path: Path) -> dict[str, Any]:
 def _manifest_path(path: Path | str) -> Path:
     candidate = Path(path).expanduser().resolve()
     if candidate.is_file():
+        if candidate.name != "scenario.yaml":
+            _log.error(
+                "scenario rejected: unsupported declaration file path=%s required=scenario.yaml",
+                str(candidate),
+            )
+            raise FileNotFoundError(f"scenario declaration must be scenario.yaml, got {candidate.name}")
         return candidate
     for name in _SCENARIO_MANIFESTS:
         manifest = candidate / name
         if manifest.is_file():
             return manifest
+    _log.error("scenario rejected: required declaration is missing path=%s required=scenario.yaml", str(candidate))
     raise FileNotFoundError(f"scenario manifest not found at {candidate}")
 
 

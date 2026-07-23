@@ -13,7 +13,7 @@
     "template_id": "scenario_default",
     "draft_root": ".",
     "files": [
-      { "path": "scenario.json", "role": "manifest", "required": true }
+      { "path": "scenario.yaml", "role": "manifest", "required": true }
     ]
   },
   "metadata": {

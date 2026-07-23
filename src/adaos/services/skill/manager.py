@@ -60,7 +60,7 @@ import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.skill.manager")
-_SKILL_MANIFEST_NAMES = ("skill.yaml", "manifest.yaml", "adaos.skill.yaml")
+_SKILL_MANIFEST_NAMES = ("skill.yaml",)
 
 
 def _resolve_sync_tool_result(result: Any) -> Any:
@@ -1647,10 +1647,15 @@ class SkillManager:
         try:
             wait_for_materialized(skill_dir, files=_SKILL_MANIFEST_NAMES, attempts=5, delay=0.1)
         except FileNotFoundError:
+            _log.error(
+                "skill rejected: required declaration is missing path=%s required=skill.yaml",
+                str(skill_dir),
+            )
             if not skill_dir.exists():
                 raise FileNotFoundError(
                     f"skill '{name}' is not materialized in workspace sparse checkout"
                 ) from None
+            raise FileNotFoundError(f"skill '{name}' has no skill.yaml declaration") from None
 
     def _bump_skill_manifest_for_push(self, skill_dir: Path) -> str | None:
         skill_yaml = skill_dir / "skill.yaml"
@@ -3080,15 +3085,15 @@ class SkillManager:
         )
 
     def _load_manifest(self, skill_dir: Path) -> Dict[str, Any]:
-        candidates = ["resolved.manifest.json", "skill.yaml", "manifest.yaml", "manifest.json", "skill.json"]
-        for name in candidates:
-            path = skill_dir / name
-            if not path.exists():
-                continue
-            if path.suffix in {".yaml", ".yml"}:
-                return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            return json.loads(path.read_text(encoding="utf-8"))
-        raise FileNotFoundError("skill manifest not found")
+        path = skill_dir / "skill.yaml"
+        if not path.exists():
+            _log.error("skill rejected: required declaration is missing path=%s required=skill.yaml", str(skill_dir))
+            raise FileNotFoundError("skill.yaml declaration not found")
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            _log.error("skill rejected: required declaration must contain an object manifest=%s", str(path))
+            raise ValueError("skill.yaml declaration must contain an object")
+        return payload
 
     def _load_runtime_data_projections(
         self,
@@ -4612,10 +4617,7 @@ class SkillManager:
         if not skill_dir.exists():
             raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
 
-        try:
-            manifest = self._load_manifest(skill_dir)
-        except FileNotFoundError:
-            manifest = {}
+        manifest = self._load_manifest(skill_dir)
         self._ensure_core_compatible(manifest, skill_name=name, stage="prepare")
         version = version_override or str(manifest.get("version") or "dev")
 
@@ -4744,13 +4746,7 @@ class SkillManager:
 
         target_version = str(version or "").strip()
         if not target_version:
-            # A source activation follows the DEV manifest by default. The
-            # active marker is only a fallback for legacy sources without a
-            # manifest version.
-            try:
-                manifest = self._load_manifest(skill_dir)
-            except FileNotFoundError:
-                manifest = {}
+            manifest = self._load_manifest(skill_dir)
             target_version = str(manifest.get("version") or "").strip()
         if not target_version:
             target_version = str(env.resolve_active_version() or "dev").strip() or "dev"

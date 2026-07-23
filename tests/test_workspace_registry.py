@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
@@ -40,17 +43,22 @@ def test_rebuild_workspace_registry_reads_skill_and_scenario_manifests(tmp_path:
         ),
         encoding="utf-8",
     )
-    (scenario_dir / "scenario.json").write_text(
-        json.dumps(
-            {
-                "id": "greet_on_boot",
-                "name": "Greeting",
-                "version": "0.4.0",
-                "trigger": "manual",
-                "io": {"input": ["text"], "output": ["text", "voice"]},
-            }
-        )
-        + "\n",
+    (scenario_dir / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: greet_on_boot",
+                "name: Greeting",
+                "version: '0.4.0'",
+                "trigger: manual",
+                "io:",
+                "  input:",
+                "    - text",
+                "  output:",
+                "    - text",
+                "    - voice",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -99,6 +107,57 @@ def test_rebuild_workspace_registry_prefers_scenario_yaml_title_and_i18n(tmp_pat
     assert entry["version"] == "0.3.2"
 
 
+def test_rebuild_workspace_registry_ignores_scenario_json_declaration_content(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.WARNING, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "web_desktop"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: web_desktop",
+                "version: '0.3.10'",
+                "updated_at: '2026-07-05T04:58:01+00:00'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (scenario_dir / "scenario.json").write_text(
+        json.dumps({"id": "web_desktop", "version": "0.0.1", "ui": {"application": {}}}) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = rebuild_workspace_registry(workspace)
+
+    entry = payload["scenarios"][0]
+    assert entry["name"] == "web_desktop"
+    assert entry["id"] == "web_desktop"
+    assert entry["manifest"] == "scenarios/web_desktop/scenario.yaml"
+    assert entry["version"] == "0.3.10"
+    assert entry["updated_at"] == "2026-07-05T04:58:01+00:00"
+    assert "unsupported declaration files" in caplog.text
+
+
+def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "legacy_scene"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.json").write_text(
+        json.dumps({"id": "legacy_scene", "version": "9.9.9"}) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["scenarios"] == []
+    assert "required declaration is missing" in caplog.text
+    assert "unsupported_present=scenario.json" in caplog.text
+
+
 def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Path):
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "weather_skill"
@@ -145,7 +204,9 @@ def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Pa
     assert items[1]["version"] == "2.0.0"
 
 
-def test_upsert_workspace_registry_entry_falls_back_to_existing_metadata_when_manifest_missing(tmp_path: Path):
+def test_upsert_workspace_registry_entry_rejects_missing_required_declaration(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "browsers_skill"
     skill_dir.mkdir(parents=True)
@@ -183,12 +244,10 @@ def test_upsert_workspace_registry_entry_falls_back_to_existing_metadata_when_ma
         encoding="utf-8",
     )
 
-    entry = upsert_workspace_registry_entry(workspace, "skills", skill_dir)
+    with pytest.raises(FileNotFoundError):
+        upsert_workspace_registry_entry(workspace, "skills", skill_dir)
 
-    assert entry["name"] == "browsers_skill"
-    assert entry["id"] == "browsers_skill"
-    assert entry["entry"] == "handlers/main.py"
-    assert entry["path"] == "skills/browsers_skill"
+    assert "required declaration is missing" in caplog.text
 
 
 def test_registry_entry_includes_tags_and_publisher(tmp_path: Path):
@@ -333,6 +392,10 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert result["scenarios"] == ["greet_on_boot"]
     assert result["skills_removed"] == ["ghost_skill"]
     assert result["scenarios_removed"] == ["ghost_scene"]
+
+    registry_payload = json.loads(workspace_registry_path(workspace).read_text(encoding="utf-8"))
+    assert [item["id"] for item in registry_payload["skills"]] == ["weather_skill"]
+    assert [item["manifest"] for item in registry_payload["scenarios"]] == ["scenarios/greet_on_boot/scenario.yaml"]
 
     skill_rows = {row.name: row for row in skill_registry.list()}
     scenario_rows = {row.name: row for row in scenario_registry.list()}

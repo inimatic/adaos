@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -16,6 +17,15 @@ from adaos.domain.workspace_manifest import (
 REGISTRY_FILE_NAME = "registry.json"
 REGISTRY_FORMAT_VERSION = 1
 RegistryKind = Literal["skills", "scenarios"]
+_LOG = logging.getLogger("adaos.workspace_registry")
+_REQUIRED_MANIFEST_BY_KIND: dict[RegistryKind, str] = {
+    "skills": "skill.yaml",
+    "scenarios": "scenario.yaml",
+}
+_UNSUPPORTED_MANIFESTS_BY_KIND: dict[RegistryKind, tuple[str, ...]] = {
+    "skills": ("skill.yml", "manifest.yaml", "manifest.yml", "skill.json", "manifest.json", "adaos.skill.yaml"),
+    "scenarios": ("scenario.yml", "scenario.json"),
+}
 
 
 def registry_pattern_set(patterns: Iterable[str]) -> list[str]:
@@ -70,7 +80,7 @@ def rebuild_workspace_registry(workspace_root: Path) -> dict[str, Any]:
         kind_root = root / kind
         if kind_root.exists():
             for child in sorted(kind_root.iterdir(), key=lambda item: item.name.lower()):
-                if not child.is_dir():
+                if not child.is_dir() or child.name.startswith("."):
                     continue
                 entry = build_registry_entry(kind, child)
                 if entry is not None:
@@ -90,8 +100,6 @@ def upsert_workspace_registry_entry(
 ) -> dict[str, Any]:
     payload = load_workspace_registry(workspace_root, fallback_to_scan=True)
     entry = build_registry_entry(kind, artifact_dir)
-    if entry is None:
-        entry = _find_existing_registry_entry(payload, kind, Path(artifact_dir).name)
     if entry is None:
         raise FileNotFoundError(f"cannot build registry entry for {kind[:-1]} at {artifact_dir}")
     if version:
@@ -370,22 +378,53 @@ def _find_existing_registry_entry(
 
 
 def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, dict[str, Any]]:
-    candidates = ("skill.yaml",) if kind == "skills" else ("scenario.json", "scenario.yaml", "scenario.yml")
-    for candidate in candidates:
-        path = directory / candidate
-        if not path.exists():
-            continue
-        try:
-            if path.suffix.lower() == ".json":
-                data = json.loads(path.read_text(encoding="utf-8"))
-            else:
-                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            data = {}
-        if isinstance(data, dict):
-            return path, data
-        return path, {}
-    return None, {}
+    required = _REQUIRED_MANIFEST_BY_KIND[kind]
+    path = directory / required
+    if not path.exists():
+        unsupported = [
+            name
+            for name in _UNSUPPORTED_MANIFESTS_BY_KIND[kind]
+            if (directory / name).exists()
+        ]
+        _LOG.error(
+            "workspace artifact rejected: required declaration is missing kind=%s path=%s required=%s unsupported_present=%s",
+            kind[:-1],
+            str(directory),
+            required,
+            ",".join(unsupported) or "-",
+        )
+        return None, {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        _LOG.error(
+            "workspace artifact rejected: failed to read required declaration kind=%s manifest=%s",
+            kind[:-1],
+            str(path),
+            exc_info=True,
+        )
+        return None, {}
+    if not isinstance(data, dict):
+        _LOG.error(
+            "workspace artifact rejected: required declaration must contain an object kind=%s manifest=%s",
+            kind[:-1],
+            str(path),
+        )
+        return None, {}
+    unsupported = [
+        name
+        for name in _UNSUPPORTED_MANIFESTS_BY_KIND[kind]
+        if (directory / name).exists()
+    ]
+    if unsupported:
+        _LOG.warning(
+            "workspace artifact contains unsupported declaration files; ignoring them kind=%s path=%s required=%s unsupported_present=%s",
+            kind[:-1],
+            str(directory),
+            required,
+            ",".join(unsupported),
+        )
+    return path, data
 
 
 def _clean_text(value: Any) -> str | None:

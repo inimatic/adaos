@@ -2326,7 +2326,7 @@ class RootDeveloperService:
     def _manifest_candidates(self, kind: Literal["skills", "scenarios"]) -> list[str]:
         if kind == "skills":
             return ["skill.yaml"]
-        return ["scenario.json", "scenario.yaml", "scenario.yml"]
+        return ["scenario.yaml"]
 
     def _artifact_manifest_info(
         self,

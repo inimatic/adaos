@@ -89,7 +89,7 @@ def test_read_file_reports_truncation(dev_roots) -> None:
     assert result["editable"] is False
 
 
-def test_update_metadata_preserves_scenario_json_ui(dev_roots) -> None:
+def test_update_metadata_updates_only_scenario_yaml_and_preserves_scenario_json_content(dev_roots) -> None:
     _skills, scenarios = dev_roots
     root = scenarios / "builder"
     root.mkdir()
@@ -111,20 +111,21 @@ def test_update_metadata_preserves_scenario_json_ui(dev_roots) -> None:
         project_type="desktop",
     )
 
-    json_manifest = projects._read_manifest(root / "scenario.json")
+    json_content = projects._read_manifest(root / "scenario.json")
     yaml_manifest = projects._read_manifest(root / "scenario.yaml")
     assert result["title"] == "Builder Workbench"
-    assert result["updated_manifests"] == ["scenario.yaml", "scenario.json"]
+    assert result["updated_manifests"] == ["scenario.yaml"]
     assert yaml_manifest["description"] == "SDK-backed"
-    assert json_manifest["ui"]["application"]["desktop"]["pageSchema"]["id"] == "builder"
+    assert json_content["description"] == "before"
+    assert json_content["ui"]["application"]["desktop"]["pageSchema"]["id"] == "builder"
 
 
 def test_update_metadata_rejects_project_type_change(dev_roots) -> None:
     _skills, scenarios = dev_roots
     root = scenarios / "builder"
     root.mkdir()
-    (root / "scenario.json").write_text(
-        '{"id":"builder","type":"desktop","version":"0.1.0"}\n',
+    (root / "scenario.yaml").write_text(
+        "id: builder\ntype: desktop\nversion: 0.1.0\n",
         encoding="utf-8",
     )
 

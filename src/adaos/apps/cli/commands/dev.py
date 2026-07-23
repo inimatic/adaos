@@ -1223,10 +1223,9 @@ def _resolve_dev_scenario_file(name: str, base: Path) -> Path | None:
     for root in search_roots:
         if not root.exists():
             continue
-        for filename in ("scenario.json", "scenario.yaml", "scenario.yml"):
-            candidate = root / filename
-            if candidate.exists():
-                return candidate
+        candidate = root / "scenario.yaml"
+        if candidate.exists():
+            return candidate
     return None
 
 
@@ -1234,10 +1233,9 @@ def _load_dev_scenario_model(path: Path) -> ScenarioModel:
     path = Path(path).expanduser().resolve()
     if path.is_dir():
         return load_scenario(path)
-    if path.suffix.lower() == ".json":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    else:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if path.name != "scenario.yaml":
+        raise FileNotFoundError(f"scenario declaration must be scenario.yaml, got {path.name}")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"{path.name} must contain a scenario object")
     fallback_id = path.parent.name if path.parent.name else path.stem

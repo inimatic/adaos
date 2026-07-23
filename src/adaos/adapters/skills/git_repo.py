@@ -29,7 +29,7 @@ try:
 except Exception:  # pragma: no cover
     remove_tree = None  # fallback на shutil.rmtree
 
-_MANIFEST_NAMES = ("skill.yaml", "manifest.yaml", "adaos.skill.yaml")
+_MANIFEST_NAMES = ("skill.yaml",)
 _CATALOG_FILE = "skills.yaml"
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger(__name__)
@@ -69,8 +69,8 @@ def _read_manifest(skill_dir: Path) -> SkillMeta:
             ver = str(data.get("version") or "0.0.0")
             return SkillMeta(id=SkillId(sid), name=name, version=ver, path=str(skill_dir.resolve()))
     # дефолты, если манифеста нет
-    sid = skill_dir.name
-    return SkillMeta(id=SkillId(sid), name=sid, version="0.0.0", path=str(skill_dir.resolve()))
+    _log.error("skill rejected: required declaration is missing path=%s required=skill.yaml", str(skill_dir))
+    raise FileNotFoundError(f"skill '{skill_dir.name}' has no skill.yaml declaration")
 
 
 @dataclass
@@ -179,7 +179,10 @@ class GitSkillRepository(SkillRepository):
             for child in sorted(root.iterdir()):
                 if not child.is_dir() or child.name.startswith("."):
                     continue
-                meta = _read_manifest(child)
+                try:
+                    meta = _read_manifest(child)
+                except FileNotFoundError:
+                    continue
                 result.append(meta)
         return result
 
@@ -188,7 +191,10 @@ class GitSkillRepository(SkillRepository):
         for root in self._candidate_roots():
             direct = root / skill_id
             if direct.exists():
-                m = _read_manifest(direct)
+                try:
+                    m = _read_manifest(direct)
+                except FileNotFoundError:
+                    return None
                 if m and m.id.value == skill_id:
                     return m
         for m in self.list():

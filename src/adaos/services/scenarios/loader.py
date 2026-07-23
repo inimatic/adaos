@@ -269,11 +269,11 @@ def scenario_exists(scenario_id: str, *, space: str = "workspace") -> bool:
     """
     Cheap existence probe used by pointer-first scenario switching.
 
-    This avoids loading/parsing full ``scenario.json`` when the caller only
+    This avoids loading/parsing full scenario content when the caller only
     needs to confirm that a scenario is present in the requested source space.
     """
     for root in _candidate_roots(scenario_id, space):
-        if (root / "scenario.json").exists() or (root / "scenario.yaml").exists():
+        if (root / "scenario.yaml").exists():
             return True
     return False
 

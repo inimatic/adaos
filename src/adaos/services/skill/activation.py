@@ -18,6 +18,7 @@ _STREAM_RECEIVER_CONTROL_TOPICS = {
     "webio.yjs.snapshot.requested",
     "webio.yjs.subscription.changed",
 }
+_UI_CONTROL_TOPIC_SUFFIXES = (".action",)
 
 
 def load_skill_activation_policy(
@@ -110,14 +111,16 @@ def _receiver_patterns_from_skill_yaml(path: Path) -> list[str]:
         for item in data_routes:
             if not isinstance(item, dict):
                 continue
-            if _clean_receiver(item.get("route")) != "stream":
-                continue
-            _append_receiver_pattern(patterns, item.get("receiver"))
+            route = _clean_receiver(item.get("route"))
+            if route == "stream":
+                _append_receiver_pattern(patterns, item.get("receiver"))
+            elif route == "yjs":
+                _append_receiver_pattern(patterns, item.get("projection_slot") or item.get("slot"))
     return patterns
 
 
 def load_skill_stream_receiver_patterns(skills_root: Path, skill_name: str) -> tuple[str, ...]:
-    """Return stream receiver patterns declared by a skill's webui/manifest files."""
+    """Return webio control targets declared by a skill's webui/manifest files."""
 
     patterns: list[str] = []
     for skill_root in _candidate_skill_roots(Path(skills_root), skill_name):
@@ -210,6 +213,13 @@ def stream_receiver_event_admission(
         "receiver": receiver,
         "receiver_patterns": list(patterns[:12]),
     }
+
+
+def _is_ui_control_event_type(event_type: str) -> bool:
+    token = str(event_type or "").strip()
+    if token in _STREAM_RECEIVER_CONTROL_TOPICS:
+        return True
+    return any(token.endswith(suffix) for suffix in _UI_CONTROL_TOPIC_SUFFIXES)
 
 
 def subscription_strategy_for_policy(policy: SkillActivationPolicy | None) -> InactiveSubscriptionStrategy:
@@ -318,6 +328,7 @@ def subscription_event_admission(
         "webio.stream.snapshot.requested",
         "webio.yjs.snapshot.requested",
     }
+    ui_control_request = _is_ui_control_event_type(event_type)
     startup = event_type in {"sys.ready", "runtime.ready", "adaos.runtime.ready"}
     if startup and policy.startup_allowed is False:
         return {
@@ -326,7 +337,7 @@ def subscription_event_admission(
             "reason": "startup_not_allowed",
             "mode": policy.mode,
         }
-    if policy.background_refresh is False and not snapshot_request:
+    if policy.background_refresh is False and not ui_control_request:
         return {
             "allowed": False,
             "governed": True,
@@ -357,18 +368,22 @@ def subscription_event_admission(
     scenario_id = str(_event_payload(evt).get("scenario_id") or "").strip() or None
     if scenario_id is None:
         scenario_id = _current_scenario_for_webspace(webspace_id)
+    scenario_assumed_from_ui_control = False
     if when.scenarios_active and scenario_id not in when.scenarios_active:
-        return {
-            "allowed": False,
-            "governed": True,
-            "reason": "scenario_not_active",
-            "mode": policy.mode,
-            "webspace_id": webspace_id,
-            "active_scenario": scenario_id,
-            "required_scenarios": list(when.scenarios_active),
-        }
+        if scenario_id is None and ui_control_request:
+            scenario_assumed_from_ui_control = True
+        else:
+            return {
+                "allowed": False,
+                "governed": True,
+                "reason": "scenario_not_active",
+                "mode": policy.mode,
+                "webspace_id": webspace_id,
+                "active_scenario": scenario_id,
+                "required_scenarios": list(when.scenarios_active),
+            }
 
-    client_present = _event_client_present(evt, snapshot_request=snapshot_request)
+    client_present = _event_client_present(evt, snapshot_request=ui_control_request)
     if when.client_presence is True and not client_present:
         return {
             "allowed": False,
@@ -387,6 +402,8 @@ def subscription_event_admission(
         "webspace_id": webspace_id,
         "active_scenario": scenario_id,
         "snapshot_request": bool(snapshot_request),
+        "ui_control_request": bool(ui_control_request),
+        "scenario_assumed_from_ui_control": bool(scenario_assumed_from_ui_control),
     }
 
 

@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
@@ -14,14 +15,15 @@ from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactor
 def _scenario(root: Path, scenario_id: str) -> Path:
     target = root / scenario_id
     target.mkdir(parents=True)
-    (target / "scenario.json").write_text(
-        json.dumps(
+    (target / "scenario.yaml").write_text(
+        yaml.safe_dump(
             {
                 "id": scenario_id,
                 "version": "0.1.0",
                 "depends": [],
                 "description": "Recipe book interface prototype",
-            }
+            },
+            sort_keys=False,
         ),
         encoding="utf-8",
     )
@@ -75,10 +77,10 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
         assert "Recipes must be searchable" in prompt
         skill_handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
         skill_handler.write_text(skill_handler.read_text(encoding="utf-8") + "\n# realized by test\n", encoding="utf-8")
-        scenario_path = workspace / "scenarios" / "recipe_book" / "scenario.json"
-        scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+        scenario_path = workspace / "scenarios" / "recipe_book" / "scenario.yaml"
+        scenario = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
         scenario["depends"] = ["recipe_book_skill"]
-        scenario_path.write_text(json.dumps(scenario, indent=2), encoding="utf-8")
+        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
         return CodexRunResult(returncode=0, events='{"type":"done"}\n', final_message="Implemented recipe skill.")
 
     worker = LocalSkillFactoryWorker(
@@ -95,7 +97,7 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     assert result["assignment"]["realize_request"]["artifacts"]["implementation_brief"].startswith("Recipes")
     assert (dev_skills / "recipe_book_skill" / "skill.yaml").exists()
     assert "realized by test" in (dev_skills / "recipe_book_skill" / "handlers" / "main.py").read_text(encoding="utf-8")
-    scenario = json.loads((dev_scenarios / "recipe_book" / "scenario.json").read_text(encoding="utf-8"))
+    scenario = yaml.safe_load((dev_scenarios / "recipe_book" / "scenario.yaml").read_text(encoding="utf-8"))
     assert scenario["depends"] == ["recipe_book_skill"]
     task = next(
         item

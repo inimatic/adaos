@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator
+import yaml
 
 from adaos.services.builder.automation import BuilderAutomationService
 from adaos.services.builder.workspace import BuilderWorkspaceService
@@ -20,8 +21,9 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
     scenario = dev_scenarios / "recipes"
     scenario.mkdir(parents=True)
     dev_skills.mkdir(parents=True)
-    (scenario / "scenario.json").write_text(
-        json.dumps({"id": "recipes", "version": "0.1.0", "depends": []}), encoding="utf-8"
+    (scenario / "scenario.yaml").write_text(
+        yaml.safe_dump({"id": "recipes", "version": "0.1.0", "depends": []}, sort_keys=False),
+        encoding="utf-8",
     )
     (scenario / "webui.json").write_text(json.dumps({"schema": "adaos.webui.v1"}), encoding="utf-8")
 
@@ -104,15 +106,16 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
 
 def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    scenario = service.dev_scenarios_root / "recipes" / "scenario.json"
+    scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"
     scenario.write_text(
-        json.dumps(
+        yaml.safe_dump(
             {
                 "id": "recipes",
                 "version": "0.1.0",
                 "depends": ["recipes_control_skill"],
                 "runtime": {"skills": {"required": ["recipes_control_skill"]}},
-            }
+            },
+            sort_keys=False,
         ),
         encoding="utf-8",
     )

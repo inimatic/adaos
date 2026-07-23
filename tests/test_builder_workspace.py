@@ -185,9 +185,9 @@ def test_preview_reports_scenario_dependency_bootstrap(tmp_path: Path) -> None:
         source_idea="Run a scenario that uses a dependency.",
     )
     artifact_root = Path(result["artifact_root"])
-    manifest = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    manifest = yaml.safe_load((artifact_root / "scenario.yaml").read_text(encoding="utf-8"))
     manifest["depends"] = ["good_skill", "missing_skill"]
-    (artifact_root / "scenario.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifact_root / "scenario.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
     preview = service.preview(draft_id=result["draft"]["draft_id"])["preview"]
 
@@ -316,7 +316,7 @@ def test_builder_artifacts_live_under_existing_devspace(tmp_path: Path) -> None:
     draft_dir = Path(result["draft_dir"]).resolve()
     artifact_root = Path(result["artifact_root"]).resolve()
     dev_scenarios_root = (tmp_path / "dev" / "test-subnet" / "scenarios").resolve()
-    manifest = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    manifest = yaml.safe_load((artifact_root / "scenario.yaml").read_text(encoding="utf-8"))
     assert artifact_root.relative_to(dev_scenarios_root)
     assert manifest["name"] == "devspace_scene"
     assert draft_dir.relative_to((tmp_path / "state" / "builder" / "drafts").resolve())
@@ -483,11 +483,11 @@ def test_builder_cli_lists_approval_profiles(tmp_path: Path, monkeypatch) -> Non
     }
 
 
-def test_builder_cli_validate_scenario_uses_dev_json_loader(tmp_path: Path, monkeypatch) -> None:
+def test_builder_cli_validate_scenario_uses_dev_yaml_loader(tmp_path: Path, monkeypatch) -> None:
     scenario_dir = tmp_path / "dev" / "sn_test" / "scenarios" / "builder_scene"
     scenario_dir.mkdir(parents=True)
-    (scenario_dir / "scenario.json").write_text(
-        json.dumps({"id": "builder_scene", "version": "0.1.0", "steps": []}),
+    (scenario_dir / "scenario.yaml").write_text(
+        yaml.safe_dump({"id": "builder_scene", "version": "0.1.0", "steps": []}, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -511,8 +511,8 @@ def test_builder_cli_validate_scenario_uses_dev_json_loader(tmp_path: Path, monk
 def test_builder_cli_validate_scenario_prefers_dev_service_path(tmp_path: Path, monkeypatch) -> None:
     scenario_dir = tmp_path / "owner-dev" / "scenarios" / "builder_scene"
     scenario_dir.mkdir(parents=True)
-    (scenario_dir / "scenario.json").write_text(
-        json.dumps({"id": "builder_scene", "version": "0.1.0", "steps": []}),
+    (scenario_dir / "scenario.yaml").write_text(
+        yaml.safe_dump({"id": "builder_scene", "version": "0.1.0", "steps": []}, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -546,8 +546,8 @@ def test_builder_cli_validate_scenario_prefers_dev_service_path(tmp_path: Path, 
 def test_root_dev_scenario_manifest_update_sets_id_to_artifact_name(tmp_path: Path) -> None:
     target = tmp_path / "scenarios" / "builder_scene"
     target.mkdir(parents=True)
-    (target / "scenario.json").write_text(
-        json.dumps({"id": "template-id", "name": "Template", "version": "0.1.0", "steps": []}),
+    (target / "scenario.yaml").write_text(
+        yaml.safe_dump({"id": "template-id", "name": "Template", "version": "0.1.0", "steps": []}, sort_keys=False),
         encoding="utf-8",
     )
     service = object.__new__(RootDeveloperService)
@@ -561,12 +561,12 @@ def test_root_dev_scenario_manifest_update_sets_id_to_artifact_name(tmp_path: Pa
         set_prototype=True,
     )
 
-    payload = json.loads((target / "scenario.json").read_text(encoding="utf-8"))
+    payload = yaml.safe_load((target / "scenario.yaml").read_text(encoding="utf-8"))
     assert payload["id"] == "builder_scene"
     assert payload["name"] == "builder_scene"
 
 
-def test_root_dev_scenario_manifest_update_keeps_yaml_and_json_versions_aligned(tmp_path: Path) -> None:
+def test_root_dev_scenario_manifest_update_only_updates_scenario_yaml(tmp_path: Path) -> None:
     target = tmp_path / "scenarios" / "builder_scene"
     target.mkdir(parents=True)
     (target / "scenario.yaml").write_text(
@@ -589,14 +589,14 @@ def test_root_dev_scenario_manifest_update_keeps_yaml_and_json_versions_aligned(
     )
 
     yaml_payload = yaml.safe_load((target / "scenario.yaml").read_text(encoding="utf-8"))
+    assert metadata["version"] == "0.3.0"
+    assert yaml_payload["version"] == metadata["version"]
+    assert yaml_payload["updated_at"] == metadata["updated_at"]
     json_payload = json.loads((target / "scenario.json").read_text(encoding="utf-8"))
-    assert metadata["version"] == "0.2.0"
-    assert yaml_payload["version"] == json_payload["version"] == metadata["version"]
-    assert yaml_payload["updated_at"] == json_payload["updated_at"]
-    assert json_payload["ui"] == {"application": {}}
+    assert json_payload == {"id": "builder_scene", "name": "builder_scene", "version": "0.1.0", "ui": {"application": {}}}
 
 
-def test_dev_scenario_loader_accepts_builder_json_manifest(tmp_path: Path) -> None:
+def test_dev_scenario_loader_rejects_builder_json_manifest(tmp_path: Path) -> None:
     scenario_dir = tmp_path / "dev" / "sn_test" / "scenarios" / "json_scene"
     scenario_dir.mkdir(parents=True)
     (scenario_dir / "scenario.json").write_text(
@@ -604,9 +604,12 @@ def test_dev_scenario_loader_accepts_builder_json_manifest(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    model = dev_cli._load_dev_scenario_model(scenario_dir / "scenario.json")
-
-    assert model.id == "json_scene"
+    try:
+        dev_cli._load_dev_scenario_model(scenario_dir / "scenario.json")
+    except FileNotFoundError as exc:
+        assert "scenario.yaml" in str(exc)
+    else:
+        raise AssertionError("scenario.json must not be accepted as a declaration")
 
 
 def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:
