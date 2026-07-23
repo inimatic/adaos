@@ -426,7 +426,9 @@ def test_scenario_list_includes_dev_artifacts_only_for_dev_webspace(monkeypatch,
     assert all(item["id"] != "dev_recipe" for item in workspace_result["items"])
 
 
-def test_scenario_api_blocks_failed_dependencies_before_projection() -> None:
+def test_scenario_api_blocks_failed_dependencies_before_projection(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.delenv("ADAOS_ENV_TYPE", raising=False)
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
     rebuilds: list[tuple[str, str, str, str | None]] = []
