@@ -16,6 +16,45 @@ if "ypy_websocket" not in sys.modules:
 from adaos.services.scenario import projection_service as projection_service_module
 
 
+def test_projection_service_records_missing_rule_for_skill_publish(monkeypatch) -> None:
+    projection_service_module.reset_projection_rule_miss_diagnostics()
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="demo_skill"),
+    )
+    registry = SimpleNamespace(resolve_rule=lambda _scope, _slot: None, resolve=lambda _scope, _slot: [])
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    asyncio.run(
+        service.apply(
+            "subnet",
+            "demo.snapshot",
+            {"ok": True},
+            webspace_id="desktop",
+        )
+    )
+
+    snapshot = projection_service_module.projection_rule_miss_snapshot(webspace_id="desktop")
+    assert snapshot["attempt_total"] == 1
+    assert snapshot["items"][0]["owner"] == "skill:demo_skill"
+    assert snapshot["items"][0]["scope"] == "subnet"
+    assert snapshot["items"][0]["slot"] == "demo.snapshot"
+    assert snapshot["items"][0]["last_payload_bytes"] > 0
+    projection_service_module.reset_projection_rule_miss_diagnostics()
+
+
+def test_projection_service_does_not_report_core_rule_miss(monkeypatch) -> None:
+    projection_service_module.reset_projection_rule_miss_diagnostics()
+    monkeypatch.setattr(projection_service_module, "get_current_skill", lambda: None)
+    registry = SimpleNamespace(resolve_rule=lambda _scope, _slot: None, resolve=lambda _scope, _slot: [])
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    asyncio.run(service.apply("subnet", "core.snapshot", {"ok": True}))
+
+    assert projection_service_module.projection_rule_miss_snapshot()["attempt_total"] == 0
+
+
 def test_projection_service_apply_sync_waits_for_async_apply(monkeypatch) -> None:
     calls: list[tuple[str, str, object, str | None, str | None]] = []
 

@@ -209,6 +209,9 @@ def projection_operator_diagnostics(
     yjs_cache_envelope = None
     if isinstance(yjs_cache, Mapping) and isinstance(yjs_cache.get("envelope"), Mapping):
         yjs_cache_envelope = dict(yjs_cache.get("envelope") or {})
+    from adaos.services.scenario.projection_service import projection_rule_miss_snapshot
+
+    rule_misses = projection_rule_miss_snapshot(webspace_id=webspace_id)
     return {
         "ok": True,
         "webspace_id": str(webspace_id or "").strip() or None,
@@ -226,6 +229,8 @@ def projection_operator_diagnostics(
         "missing_yjs_cache_projection_total": (
             len(active) - yjs_cache_projection_total if yjs_cache_checked else 0
         ),
+        "missing_projection_rule_attempt_total": int(rule_misses.get("attempt_total") or 0),
+        "projection_rule_misses": rule_misses,
         "stale_projection_total": stale_projection_total,
         "active_projections": active,
         "demand": demand,

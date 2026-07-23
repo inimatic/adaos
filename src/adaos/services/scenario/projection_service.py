@@ -98,6 +98,13 @@ _YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC = max(
 )
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
+_PROJECTION_RULE_MISS_LOCK = threading.Lock()
+_PROJECTION_RULE_MISS_STATS: dict[str, dict[str, Any]] = {}
+_PROJECTION_RULE_MISS_MAX_ENTRIES = _int_env("ADAOS_PROJECTION_RULE_MISS_MAX_ENTRIES", 256, 16)
+_PROJECTION_RULE_MISS_LOG_INTERVAL_SEC = max(
+    0.0,
+    float(os.getenv("ADAOS_PROJECTION_RULE_MISS_LOG_INTERVAL_SEC") or "60.0"),
+)
 
 
 def _projection_write_owner() -> str:
@@ -106,6 +113,100 @@ def _projection_write_owner() -> str:
     if name:
         return f"skill:{name}"
     return "core"
+
+
+def _record_projection_rule_miss(
+    *,
+    owner: str,
+    scope: str,
+    slot: str,
+    webspace_id: str | None,
+    value: Any,
+) -> None:
+    if not owner.startswith("skill:"):
+        return
+    token_scope = str(scope or "").strip()
+    token_slot = str(slot or "").strip()
+    token_webspace = str(webspace_id or "").strip()
+    key = "\x1f".join((owner, token_scope, token_slot, token_webspace))
+    now = time.time()
+    should_log = False
+    with _PROJECTION_RULE_MISS_LOCK:
+        row = _PROJECTION_RULE_MISS_STATS.get(key)
+        if row is None:
+            if len(_PROJECTION_RULE_MISS_STATS) >= _PROJECTION_RULE_MISS_MAX_ENTRIES:
+                oldest = min(
+                    _PROJECTION_RULE_MISS_STATS,
+                    key=lambda item: float(_PROJECTION_RULE_MISS_STATS[item].get("last_at") or 0.0),
+                )
+                _PROJECTION_RULE_MISS_STATS.pop(oldest, None)
+            row = {
+                "owner": owner,
+                "skill": owner.removeprefix("skill:"),
+                "scope": token_scope,
+                "slot": token_slot,
+                "webspace_id": token_webspace or None,
+                "attempt_total": 0,
+                "first_at": now,
+                "last_at": now,
+                "last_payload_bytes": 0,
+                "_last_log_at": 0.0,
+            }
+            _PROJECTION_RULE_MISS_STATS[key] = row
+        row["attempt_total"] = int(row.get("attempt_total") or 0) + 1
+        row["last_at"] = now
+        row["last_payload_bytes"] = _json_payload_bytes(value)
+        last_log_at = float(row.get("_last_log_at") or 0.0)
+        should_log = last_log_at <= 0.0 or now - last_log_at >= _PROJECTION_RULE_MISS_LOG_INTERVAL_SEC
+        if should_log:
+            row["_last_log_at"] = now
+    if should_log:
+        _log.warning(
+            "skill projection publish completed without a matching rule owner=%s scope=%s slot=%s webspace_id=%s",
+            owner,
+            token_scope,
+            token_slot,
+            token_webspace or "-",
+        )
+
+
+def projection_rule_miss_snapshot(
+    *,
+    webspace_id: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    token_webspace = str(webspace_id or "").strip()
+    token_owner = str(owner or "").strip()
+    max_items = max(1, min(int(limit or 20), 100))
+    with _PROJECTION_RULE_MISS_LOCK:
+        rows = [
+            {key: value for key, value in row.items() if not key.startswith("_")}
+            for row in _PROJECTION_RULE_MISS_STATS.values()
+        ]
+    if token_webspace:
+        rows = [
+            row
+            for row in rows
+            if not str(row.get("webspace_id") or "")
+            or str(row.get("webspace_id") or "") == token_webspace
+        ]
+    if token_owner:
+        rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
+    rows.sort(key=lambda row: float(row.get("last_at") or 0.0), reverse=True)
+    return {
+        "schema": "adaos.projection_rule_miss.v1",
+        "webspace_id": token_webspace or None,
+        "owner": token_owner or None,
+        "total": len(rows),
+        "attempt_total": sum(int(row.get("attempt_total") or 0) for row in rows),
+        "items": rows[:max_items],
+    }
+
+
+def reset_projection_rule_miss_diagnostics() -> None:
+    with _PROJECTION_RULE_MISS_LOCK:
+        _PROJECTION_RULE_MISS_STATS.clear()
 
 
 def _local_node_id() -> str:
@@ -1234,6 +1335,13 @@ class ProjectionService:
         rule = resolve_rule(scope, slot) if callable(resolve_rule) else None
         targets = list(getattr(rule, "targets", []) or []) if rule is not None else self.registry.resolve(scope, slot)
         if not targets:
+            _record_projection_rule_miss(
+                owner=_projection_write_owner(),
+                scope=scope,
+                slot=slot,
+                webspace_id=webspace_id,
+                value=value,
+            )
             _log.debug("no projections configured for scope=%s slot=%s", scope, slot)
             return
         for t in targets:
@@ -1487,4 +1595,10 @@ class ProjectionService:
             _log.debug("kv projection ignored for scope=%s slot=%s (no handler)", scope, slot)
 
 
-__all__ = ["ProjectionService", "primary_doc_governance_snapshot", "yjs_projection_guard_snapshot"]
+__all__ = [
+    "ProjectionService",
+    "primary_doc_governance_snapshot",
+    "projection_rule_miss_snapshot",
+    "reset_projection_rule_miss_diagnostics",
+    "yjs_projection_guard_snapshot",
+]
