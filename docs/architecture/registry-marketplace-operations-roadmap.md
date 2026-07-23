@@ -36,6 +36,18 @@ What is missing is one coherent contract that connects them.
 
 ## Current Implementation Slice
 
+Current MVP priority:
+
+- `[must]` preserve runtime declarations during packaging and load them before
+  activation side effects
+- `[must]` make accepted/running operations durable and recoverable
+- `[must]` expose core-owned inventory, lifecycle, scenario-health, and
+  operation-detail contracts to UI, API, and MCP
+- `[should]` finish git-mode policy, catalog/source/runtime drift
+  classification, and member catalog snapshot sync
+- `[deferred]` expand marketplace UX beyond the install/update surfaces needed
+  to prove the MVP lifecycle
+
 ## What Already Exists
 
 ### Registry and publish path
@@ -376,7 +388,7 @@ Define stable contracts before wiring UI and background workers.
 
 ### Deliverables
 
-- [ ] shared catalog entry model for registry sync
+- [ ] `[must]` shared catalog entry model for registry sync
 - [x] shared operation state model
 - [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
 - [x] explicit rule that Yjs is projection-only
@@ -395,8 +407,8 @@ Make `skill push` and `scenario push` update `adaos-registry/registry.json`.
 
 ### Deliverables
 
-- [ ] shared upsert helper reused by both artifact kinds across local and remote registry sync
-- [ ] tests for create/update behavior
+- [ ] `[should]` shared upsert helper reused by both artifact kinds across local and remote registry sync
+- [ ] `[should]` tests for create/update behavior
 - [x] deterministic local workspace registry output ordering
 
 ### Current anchors
@@ -412,10 +424,10 @@ Expose a marketplace catalog in `InfrastateSkill`.
 
 ### Deliverables
 
-- [ ] `Marketplace` action next to `Update skills & scenarios`
-- [ ] catalog adapter service
-- [ ] modal view with skills/scenarios sections
-- [ ] filtering against installed artifacts
+- [ ] `[deferred]` `Marketplace` action next to `Update skills & scenarios`
+- [ ] `[deferred]` catalog adapter service
+- [ ] `[deferred]` modal view with skills/scenarios sections
+- [ ] `[deferred]` filtering against installed artifacts
 
 ## Phase 3: Async Install Operations
 
@@ -429,8 +441,8 @@ Convert install/update flows from blocking request/response into accepted async 
 - [x] async install command handlers
 - [x] `operation_id` response contract
 - [x] operation projection into Yjs
-- [ ] durable recovery for accepted/running operations after runtime restart
-- [ ] cancellation/retry policy
+- [ ] `[must]` durable recovery for accepted/running operations after runtime restart
+- [ ] `[must]` cancellation/retry policy
 
 ## Phase 4: UI Binding and Notifications
 
@@ -440,11 +452,11 @@ Make the client react to projected operations instead of waiting on request comp
 
 ### Deliverables
 
-- [ ] disable install button for same target while active
+- [ ] `[should]` disable install button for same target while active
 - [x] show progress and current step through projected operation state
 - [x] show active operations list in infra UI
 - [x] show success/error notifications on completion
-- [ ] remove transitional per-skill active-operation mirrors after status-card
+- [ ] `[deferred]` remove transitional per-skill active-operation mirrors after status-card
   and operation projection consumers are fully migrated
 
 ## Suggested File and Module Changes

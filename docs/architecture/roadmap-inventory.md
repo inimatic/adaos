@@ -20,7 +20,7 @@ When documents disagree, use the narrowest authoritative source in this table.
 | Domain architecture documents | Contracts, invariants, ownership boundaries, and target design for one domain | Active task priority |
 | Domain roadmaps | Technical sequence, acceptance criteria, and maturity within one domain | Cross-domain product priority |
 | This inventory | Discovery and ownership mapping | Status, priority, or completion claims |
-| [Issue Tracker](../issue-tracker.md) | Active execution records, incidents, evidence links, and concrete follow-up | Target architecture or roadmap policy |
+| [Issue Tracker](../issue-tracker.md) | Open execution records, current priority/state, evidence links, and concrete follow-up | Target architecture, roadmap policy, completed task archives, or verbose incident journals |
 | [Historical Roadmap](../roadmap.md) | Historical context from autumn 2025 | Any current planning or completion claim |
 
 ## Conflict Resolution
@@ -157,6 +157,9 @@ accept it without creating conflicting authority.
   sequencing.
 - Dated audit findings and implementation snapshots should be recovered from
   Git history when needed, not copied back into this authority map.
+- Completed Issue Tracker blocks and verbose stand/incident journals should be
+  recovered from Git history or release-evidence artifacts instead of remaining
+  in the active tracker.
 - Concept and Russian-language documents remain explanatory unless this page
   explicitly names them as an architecture or sequencing owner.
 
@@ -166,6 +169,8 @@ accept it without creating conflicting authority.
   single document may own both.
 - Add new roadmap tasks to the owning domain roadmap; add active work and
   evidence to the Issue Tracker.
+- Remove completed Issue Tracker rows after the owning roadmap accepts their
+  evidence; do not retain checked task blocks as an archive.
 - Cross-domain roadmaps reference stable domain sections or task IDs instead of
   copying their checklists.
 - Every completion claim links to the evidence required by its owning roadmap.

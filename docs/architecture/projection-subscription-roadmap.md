@@ -187,7 +187,7 @@ Current status:
 - [x] `abi.projection_record_shape`: define the canonical projection record shape: `status`, `data`, `meta`, `error`
 - [x] `abi.projection_keys_fixed`: define deterministic `projection_key` rules for page, widget, modal, panel, platform-emitted, and node-scoped projections
 - [x] `abi.client_subscription_shape`: define the browser-written client subscription record shape
-- [ ] `abi.node_aware_yjs_envelope`: define the node-scoped top-level Yjs envelope so shared subnet state can preserve multiple node emitters
+- [ ] `[should]` `abi.node_aware_yjs_envelope`: finish the broader node-scoped top-level Yjs envelope so shared subnet state can preserve multiple node emitters
 - [x] `abi.pinned_consumer_semantics`: define `pinned` consumer semantics
 
 Next active projection task:
@@ -210,7 +210,7 @@ Next active projection task:
 - [x] `client.surface_lifecycle_to_subscriptions`: ensure modal open/close, widget mount/unmount, and visibility changes update the client subscription record
 - [x] `client.multi_projection_support`: add support for multiple active projections in one webspace
 - [x] `client.node_multiplicity_ready`: prepare the browser to consume node multiplicity from shared Yjs instead of assuming one anonymous node view
-- [ ] `client.soft_session_sanitation`: keep stale-client cleanup as a soft client/session sanitation mechanism, not as projection activity logic
+- [ ] `[should]` `client.soft_session_sanitation`: keep stale-client cleanup as a soft client/session sanitation mechanism, not as projection activity logic
 
 Current status:
 
@@ -269,7 +269,7 @@ Current status:
 - [x] `yjs.adapter_projection_records`: update the client-side Yjs adapter to read projection records instead of one giant scenario snapshot
 - [x] `yjs.cache_by_projection_key`: cache projection payloads by `projection_key`
 - [x] `yjs.reuse_cached_views`: reuse cached payloads when switching back to recently materialized views
-- [ ] `yjs.reduce_broad_observers`: avoid broad `observeDeep(data)` patterns where a stable nested projection path is available
+- [ ] `[should]` `yjs.reduce_broad_observers`: avoid broad `observeDeep(data)` patterns where a stable nested projection path is available
 - [x] `yjs.legacy_compat_rules`: document the compatibility rules for legacy plain-JSON projection branches during migration
 - [x] `yjs.named_entity_registry_reference`: use keyed `registry.namedEntitiesV2` as an implemented read-only reference for projection fingerprinting, revision convergence, and privacy limits
 - [x] `yjs.named_entity_live_reconciler`: keep desired/applied registry revisions in a level-triggered reconciler and retry on live-room readiness without detached YStore replay
@@ -301,15 +301,15 @@ Current status:
 ### 7. Early Pilot Sequence
 
 - [x] `pilot.status_cards_first`: implement status cards as the first small platform-emitter projection family
-- [ ] `pilot.status_cards_operator_population`: populate the status-card family
+- [ ] `[must]` `pilot.status_cards_operator_population`: populate the status-card family
   enough that a managed runtime restart/memory-profile incident is visible from
   the thin operator plane without falling back to full diagnostics
-- [ ] `pilot.platform_surfaces_first`: prepare `web_desktop` and the shared platform surfaces first: notifications, diagnostics, workspace manager, and related modals
+- [ ] `[must]` `pilot.platform_surfaces_first`: prepare `web_desktop` and the shared platform surfaces first: notifications, diagnostics, workspace manager, and related modals
 - [x] `pilot.platform_emitter_validated`: validate platform-as-emitter semantics before migrating one heavy skill
-- [ ] `pilot.infrascope_after_prereqs`: migrate `Infrascope` only after the core/runtime and client projection contracts are in place
-- [ ] `pilot.infrastate_aligned`: align `infrastate`-style shared operational overlays with the same contract
-- [ ] `pilot.dev_scenario_followup`: choose one dev-oriented scenario such as `prompt_engineer_scenario` as the first non-operator follow-up
-- [ ] `pilot.simple_skills_deferred`: postpone low-churn simple skills until the core contract and adapter behavior are stable
+- [ ] `[must]` `pilot.infrascope_after_prereqs`: migrate `Infrascope` now that the local core/runtime and client projection gate is closed
+- [ ] `[must]` `pilot.infrastate_aligned`: align `infrastate`-style shared operational overlays with the same contract
+- [ ] `[deferred]` `pilot.dev_scenario_followup`: choose one dev-oriented scenario such as `prompt_engineer_scenario` after the operator pilots
+- [ ] `[deferred]` `pilot.simple_skills_deferred`: postpone low-churn simple skills until the core contract and adapter behavior are stable
 
 Harvest branch checkpoint:
 
@@ -326,27 +326,27 @@ Harvest branch checkpoint:
 
 ### 8. Infrascope Migration Slice
 
-- [ ] `infrascope.split_projection_families`: split `overview`, `inventory`, `inspector`, `topology`, and modal/widget payloads into separate projections
-- [ ] `infrascope.stop_full_inspector_snapshot`: stop pre-materializing all inspectors into one Yjs snapshot
-- [ ] `infrascope.demanded_only_per_webspace`: publish only the projections actively demanded by each webspace
-- [ ] `infrascope.shared_payload_access_metadata`: verify that owner and guest use the same payload but can still receive different display/action treatment through access metadata
-- [ ] `infrascope.platform_errors_separate`: publish platform-originated warnings and materialization errors as separate operator-facing projections instead of hiding them inside one skill snapshot
+- [ ] `[must]` `infrascope.split_projection_families`: split `overview`, `inventory`, `inspector`, `topology`, and modal/widget payloads into separate projections
+- [ ] `[must]` `infrascope.stop_full_inspector_snapshot`: stop pre-materializing all inspectors into one Yjs snapshot
+- [ ] `[must]` `infrascope.demanded_only_per_webspace`: publish only the projections actively demanded by each webspace
+- [ ] `[could]` `infrascope.shared_payload_access_metadata`: verify that owner and guest use the same payload but can still receive different display/action treatment through access metadata
+- [ ] `[should]` `infrascope.platform_errors_separate`: publish platform-originated warnings and materialization errors as separate operator-facing projections instead of hiding them inside one skill snapshot
 
 ### 9. Cross-Skill Rollout
 
-- [ ] `rollout.monolith_inventory`: identify other browser-facing skills that currently publish monolithic Yjs JSON subtrees
-- [ ] `rollout.migrate_to_shared_contract`: migrate them onto the shared projection/subscription contract
-- [ ] `rollout.shared_helpers`: provide a common helper layer so each skill does not reimplement subscription parsing and dispatch logic
-- [ ] `rollout.manifest_rules`: document how scenario manifests and skill manifests declare projection roots without inventing incompatible shapes
+- [ ] `[deferred]` `rollout.monolith_inventory`: identify other browser-facing skills that currently publish monolithic Yjs JSON subtrees
+- [ ] `[deferred]` `rollout.migrate_to_shared_contract`: migrate them onto the shared projection/subscription contract
+- [ ] `[deferred]` `rollout.shared_helpers`: remove remaining per-skill helpers after the three M3 pilots use the shared runtime
+- [ ] `[deferred]` `rollout.manifest_rules`: extend manifest guidance beyond the M1/M3 pilot scope without inventing incompatible shapes
 
 ### 10. Cleanup and Hardening
 
-- [ ] `cleanup.remove_monolith_paths`: remove monolithic snapshot paths where the new projection contract fully replaces them
-- [ ] `cleanup.remove_inline_debounce`: remove event-specific inline debounce logic that the dispatcher now supersedes
-- [ ] `cleanup.operator_projection_diagnostics`: add operator diagnostics for active projections per webspace
-- [ ] `cleanup.test_multi_webspace_and_consumers`: add tests for multi-webspace demand routing and multiple simultaneous consumers
-- [ ] `cleanup.test_access_metadata_and_dev`: add tests for guest-visible access metadata and `dev` audience handling
-- [ ] `cleanup.test_platform_emitters`: add tests for platform-emitted diagnostics and error projections
+- [ ] `[deferred]` `cleanup.remove_monolith_paths`: remove monolithic snapshot paths where the new projection contract fully replaces them
+- [ ] `[deferred]` `cleanup.remove_inline_debounce`: remove event-specific inline debounce logic that the dispatcher now supersedes
+- [ ] `[should]` `cleanup.operator_projection_diagnostics`: add operator diagnostics for active projections per webspace
+- [ ] `[should]` `cleanup.test_multi_webspace_and_consumers`: add tests for multi-webspace demand routing and multiple simultaneous consumers
+- [ ] `[could]` `cleanup.test_access_metadata_and_dev`: add tests for guest-visible access metadata and `dev` audience handling
+- [ ] `[should]` `cleanup.test_platform_emitters`: add tests for platform-emitted diagnostics and error projections
 - [ ] `[could] cleanup.named_entity_legacy_projection`: remove the
   `registry.named_entities` browser fallback and backend compatibility flag
   after the mixed-version deployment window closes

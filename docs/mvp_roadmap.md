@@ -2,7 +2,7 @@
 
 Status: active planning document.
 
-Snapshot date: 2026-07-21.
+Snapshot date: 2026-07-23.
 
 This roadmap summarizes the remaining work to reach the current AdaOS MVP
 definition. It does not replace the detailed architecture roadmaps. Its role is

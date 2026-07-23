@@ -73,7 +73,10 @@ that is not needed to prove the invariant. Record the redaction version in the
 manifest and retain failed/inconclusive bundles longer than successful local
 runs.
 
-## Wave 0–1 Local Acceptance Profile
+## Closed Wave 0–1 Local Acceptance Profile
+
+The local Wave 0–1 gate closed on 2026-07-23. Keep this command set as its
+regression profile; it does not replace the separate target-stand gate.
 
 For the MVP planning/evidence and projection-runtime slice, the minimum local
 commands are:
