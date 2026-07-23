@@ -640,6 +640,14 @@ termination; when no process handle is available, cleanup is deferred. This
 keeps a late-starting runtime from executing through a deleted virtual
 environment and source tree.
 
+Managed systemd shutdown also uses a handoff-first contract. `KillMode=process`
+lets a replacement supervisor adopt the existing runtime and sidecar even when
+the restart was requested outside the supervisor API. A detached bounded
+reaper checks that a new supervisor listener appears; it terminates the
+preserved child PIDs only when the service remains stopped. Thus an ordinary
+service restart does not invoke runtime shutdown hooks, while a real service
+stop cannot leave orphan runtime processes indefinitely.
+
 This makes warm-switch a strict availability boundary. Constrained or
 unhealthy cases remain on the proven old runtime until a candidate can pass the
 barrier, unless an operator explicitly accepts a cold cutover.

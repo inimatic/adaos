@@ -5893,10 +5893,54 @@ def test_supervisor_self_restart_preserves_ready_children(monkeypatch, tmp_path)
     monkeypatch.setattr(manager, "stop", _stop)
     monkeypatch.setattr(manager, "stop_sidecar", _stop_sidecar)
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(manager, "_schedule_managed_handoff_reaper", lambda: {"ok": True, "scheduled": True})
 
     asyncio.run(manager.close())
 
     assert stopped == []
+    assert manager._proc is not None
+    assert manager._sidecar_proc is not None
+
+
+def test_managed_systemd_restart_preserves_children_without_internal_restart_flag(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    stopped: list[str] = []
+    reaper_calls: list[bool] = []
+
+    class _Proc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _stop(*, reason: str):
+        stopped.append(reason)
+
+    async def _stop_sidecar(*, reason: str):
+        stopped.append(reason)
+        return {"ok": True}
+
+    manager._proc = _Proc(9391)
+    manager._sidecar_proc = _Proc(9392)
+    manager._service_restart_pending = False
+    monkeypatch.setattr(manager, "stop", _stop)
+    monkeypatch.setattr(manager, "stop_sidecar", _stop_sidecar)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(
+        manager,
+        "_schedule_managed_handoff_reaper",
+        lambda: reaper_calls.append(True) or {"ok": True, "scheduled": True},
+    )
+
+    asyncio.run(manager.close())
+
+    assert stopped == []
+    assert reaper_calls == [True]
     assert manager._proc is not None
     assert manager._sidecar_proc is not None
 

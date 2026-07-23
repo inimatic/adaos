@@ -4158,6 +4158,86 @@ class SupervisorManager:
             "wrapper_refresh": wrapper_refresh,
         }
 
+    def _schedule_managed_handoff_reaper(self) -> dict[str, Any]:
+        pids = sorted(
+            {
+                int(pid)
+                for pid in (
+                    getattr(self._proc, "pid", None),
+                    getattr(self._sidecar_proc, "pid", None),
+                )
+                if isinstance(pid, int) and pid > 0
+            }
+        )
+        if not pids:
+            return {"ok": True, "scheduled": False, "reason": "no_managed_children"}
+        service_name = str(os.getenv("ADAOS_AUTOSTART_SERVICE") or "adaos.service").strip() or "adaos.service"
+        supervisor_port = _supervisor_port()
+        code = "\n".join(
+            [
+                "import os, signal, socket, subprocess, time",
+                f"pids = {pids!r}",
+                f"service_name = {service_name!r}",
+                f"supervisor_port = {supervisor_port!r}",
+                "time.sleep(4.0)",
+                "inactive_total = 0",
+                "for _ in range(24):",
+                "    active = subprocess.run(['systemctl', 'is-active', '--quiet', service_name], check=False).returncode == 0",
+                "    if active:",
+                "        inactive_total = 0",
+                "        try:",
+                "            with socket.create_connection(('127.0.0.1', supervisor_port), timeout=0.5):",
+                "                raise SystemExit(0)",
+                "        except OSError:",
+                "            pass",
+                "    else:",
+                "        inactive_total += 1",
+                "        if inactive_total >= 3:",
+                "            break",
+                "    time.sleep(1.0)",
+                "for pid in pids:",
+                "    try:",
+                "        os.kill(pid, signal.SIGTERM)",
+                "    except ProcessLookupError:",
+                "        pass",
+                "time.sleep(3.0)",
+                "for pid in pids:",
+                "    try:",
+                "        os.kill(pid, 0)",
+                "    except ProcessLookupError:",
+                "        continue",
+                "    try:",
+                "        os.kill(pid, signal.SIGKILL)",
+                "    except ProcessLookupError:",
+                "        pass",
+            ]
+        )
+        try:
+            reaper = subprocess.Popen(
+                [sys.executable, "-c", code],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "scheduled": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "pids": pids,
+            }
+        return {
+            "ok": True,
+            "scheduled": True,
+            "reaper_pid": int(reaper.pid),
+            "pids": pids,
+            "service": service_name,
+            "supervisor_port": supervisor_port,
+        }
+
     def _refresh_autostart_wrapper(self, *, reason: str) -> dict[str, Any]:
         try:
             from adaos.services.autostart import default_spec as _default_autostart_spec
@@ -8245,11 +8325,14 @@ class SupervisorManager:
             self._monitor_task.cancel()
             with contextlib.suppress(BaseException):
                 await self._monitor_task
-        if self._service_restart_pending:
+        preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
+        if preserve_managed_children:
+            reaper = self._schedule_managed_handoff_reaper()
             _LOG.info(
-                "supervisor restart handoff preserving ready runtime pid=%s and sidecar pid=%s",
+                "supervisor restart handoff preserving runtime pid=%s and sidecar pid=%s reaper=%s",
                 getattr(self._proc, "pid", None),
                 getattr(self._sidecar_proc, "pid", None),
+                reaper,
             )
             self._persist_runtime_state()
             return
