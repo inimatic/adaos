@@ -138,6 +138,70 @@ def _read_sidecar_tail_lines(path: Path, *, lines: int) -> list[str]:
     )
 
 
+def _nats_credentials_refresh_evidence(
+    err: Exception,
+    *,
+    server: str | None,
+    sidecar_diag_file: Path | None = None,
+) -> str | None:
+    try:
+        message = str(err or "").strip().lower()
+    except Exception:
+        message = ""
+    explicit_auth_markers = (
+        "authentication failure",
+        "authentication timeout",
+        "authorization violation",
+        "invalid credentials",
+        "invalid user credentials",
+    )
+    if any(marker in message for marker in explicit_auth_markers):
+        return "explicit_auth_error"
+    if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in message:
+        return "explicit_auth_error"
+
+    is_eof = type(err).__name__ == "UnexpectedEOF" or "unexpected eof" in message
+    if not is_eof or str(server or "").strip() != realtime_sidecar_local_url():
+        return None
+
+    diag_path = Path(sidecar_diag_file) if sidecar_diag_file is not None else realtime_sidecar_diag_path()
+    try:
+        max_age_s = float(os.getenv("HUB_NATS_AUTH_DIAG_MAX_AGE_S", "60") or "60")
+    except Exception:
+        max_age_s = 60.0
+    max_age_s = max(1.0, min(max_age_s, 300.0))
+    now = time.time()
+    for line in reversed(_read_sidecar_tail_lines(diag_path, lines=8)):
+        try:
+            record = _json.loads(line)
+            recorded_at = float(record.get("ts"))
+            last_error = str(record.get("last_error") or "").strip().lower()
+        except (AttributeError, TypeError, ValueError, _json.JSONDecodeError):
+            continue
+        age_s = now - recorded_at
+        if age_s < -5.0 or age_s > max_age_s:
+            continue
+        if any(marker in last_error for marker in explicit_auth_markers):
+            return "sidecar_auth_failure_after_eof"
+    return None
+
+
+def _should_refresh_nats_credentials(
+    err: Exception,
+    *,
+    server: str | None,
+    sidecar_diag_file: Path | None = None,
+) -> bool:
+    return (
+        _nats_credentials_refresh_evidence(
+            err,
+            server=server,
+            sidecar_diag_file=sidecar_diag_file,
+        )
+        is not None
+    )
+
+
 def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
     try:
         from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed, is_rasa_nlu_enabled
@@ -3123,29 +3187,6 @@ class BootstrapService:
                         except Exception:
                             return type(err).__name__
 
-                    def _looks_like_auth_failure(err: Exception) -> bool:
-                        """
-                        Heuristic: when root-side NATS WS proxy closes after CONNECT because of invalid credentials,
-                        nats-py can surface confusing exceptions (historically observed in this project).
-                        Treat these as auth-ish failures and trigger credential refresh.
-                        """
-                        try:
-                            msg = str(err) or ""
-                            low = msg.lower()
-                            if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in low:
-                                return True
-                            if "authentication timeout" in low:
-                                return True
-                            if "authorization violation" in low:
-                                return True
-                            if "auth" in low:
-                                return True
-                            if type(err).__name__ == "UnexpectedEOF" or "unexpected eof" in low:
-                                return True
-                        except Exception:
-                            return False
-                        return False
-
                     while True:
                         try:
                             cfg_now = getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)
@@ -4488,13 +4529,18 @@ class BootstrapService:
                                     except Exception:
                                         pass
 
-                                    # Best-effort token refresh on auth-ish failures.
+                                    # Refresh credentials only when the transport has auth evidence.
                                     try:
-                                        if _looks_like_auth_failure(e):
+                                        refresh_evidence = _nats_credentials_refresh_evidence(
+                                            e,
+                                            server=locals().get("connect_server", None),
+                                        )
+                                        if refresh_evidence:
                                             if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
                                                 try:
                                                     print(
-                                                        f"[hub-io] NATS auth failure suspected; refreshing credentials (err={type(e).__name__}: {e})"
+                                                        "[hub-io] NATS auth failure confirmed; refreshing credentials "
+                                                        f"(evidence={refresh_evidence} err={type(e).__name__}: {e})"
                                                     )
                                                 except Exception:
                                                     pass
