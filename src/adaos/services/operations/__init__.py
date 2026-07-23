@@ -3,6 +3,7 @@ from .manager import (
     OperationNotification,
     OperationState,
     get_operation_manager,
+    retry_operation,
     submit_install_operation,
     submit_update_operation,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "OperationNotification",
     "OperationState",
     "get_operation_manager",
+    "retry_operation",
     "submit_install_operation",
     "submit_update_operation",
 ]

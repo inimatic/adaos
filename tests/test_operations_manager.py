@@ -2,27 +2,10 @@ from __future__ import annotations
 
 import json
 import sys
-import types
+import asyncio
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-
-if "y_py" not in sys.modules:
-    sys.modules["y_py"] = types.SimpleNamespace(
-        YDoc=type("YDoc", (), {}),
-        encode_state_vector=lambda *args, **kwargs: b"",
-        encode_state_as_update=lambda *args, **kwargs: b"",
-        apply_update=lambda *args, **kwargs: None,
-    )
-if "ypy_websocket.ystore" not in sys.modules:
-    ystore_module = types.ModuleType("ypy_websocket.ystore")
-    ystore_module.BaseYStore = type("BaseYStore", (), {})
-    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
-    sys.modules["ypy_websocket.ystore"] = ystore_module
-if "ypy_websocket" not in sys.modules:
-    pkg = types.ModuleType("ypy_websocket")
-    pkg.ystore = sys.modules["ypy_websocket.ystore"]
-    sys.modules["ypy_websocket"] = pkg
 
 from adaos.services.operations.manager import OperationManager
 import adaos.services.operations.manager as operations_manager
@@ -610,3 +593,134 @@ def test_submit_install_operation_uses_isolated_subprocess_when_enabled(monkeypa
     assert spawned[0]["argv"][:4] == [sys.executable, "-m", "adaos", "scenario"]
     assert spawned[0]["argv"][4:] == ["install", "demo_scene"]
     assert spawned[0]["env"]["ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC"] == "1"
+
+
+def test_operation_manager_cancels_only_governed_subprocess_work(monkeypatch) -> None:
+    docs: dict[str, _FakeYDoc] = {}
+    process_state = {"started": False, "terminated": False}
+    process_started = asyncio.Event()
+
+    @contextmanager
+    def _get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    @asynccontextmanager
+    async def _async_get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    class _BlockingProc:
+        returncode = None
+
+        async def communicate(self):
+            process_state["started"] = True
+            process_started.set()
+            await asyncio.Event().wait()
+
+        def terminate(self):
+            process_state["terminated"] = True
+            self.returncode = -15
+
+        def kill(self):
+            process_state["terminated"] = True
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def _fake_create_subprocess_exec(*argv, **kwargs):
+        return _BlockingProc()
+
+    monkeypatch.setenv("ADAOS_TESTING", "0")
+    monkeypatch.setenv("ADAOS_OPERATIONS_INSTALL_SUBPROCESS", "1")
+    monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
+    monkeypatch.setattr(operations_manager, "async_get_ydoc", _async_get_ydoc)
+    monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
+    monkeypatch.setattr(operations_manager.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(operations_manager, "_MANAGERS", {})
+
+    async def _exercise() -> None:
+        ctx = _make_ctx()
+        accepted = operations_manager.submit_install_operation(
+            target_kind="scenario",
+            target_id="cancel_scene",
+            webspace_id="default",
+            ctx=ctx,
+        )
+        manager = operations_manager.get_operation_manager(ctx)
+        await asyncio.wait_for(process_started.wait(), timeout=1.0)
+        assert process_state["started"] is True
+        assert manager.operation(accepted["operation_id"])["can_cancel"] is True
+
+        cancelling = manager.cancel_operation(accepted["operation_id"])
+        assert cancelling["status"] == "cancelling"
+        for _ in range(20):
+            if manager.operation(accepted["operation_id"])["status"] == "cancelled":
+                break
+            await asyncio.sleep(0)
+
+        cancelled = manager.operation(accepted["operation_id"])
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["can_cancel"] is False
+        assert cancelled["can_retry"] is True
+        assert process_state["terminated"] is True
+
+    asyncio.run(_exercise())
+
+
+def test_retry_operation_is_idempotent_per_source_attempt(monkeypatch) -> None:
+    docs: dict[str, _FakeYDoc] = {}
+    spawned: list[list[str]] = []
+
+    @contextmanager
+    def _get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    @asynccontextmanager
+    async def _async_get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"installed", b"")
+
+        async def wait(self):
+            return self.returncode
+
+    async def _fake_create_subprocess_exec(*argv, **kwargs):
+        spawned.append(list(argv))
+        return _FakeProc()
+
+    monkeypatch.setenv("ADAOS_TESTING", "0")
+    monkeypatch.setenv("ADAOS_OPERATIONS_INSTALL_SUBPROCESS", "1")
+    monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
+    monkeypatch.setattr(operations_manager, "async_get_ydoc", _async_get_ydoc)
+    monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
+    monkeypatch.setattr(operations_manager.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(operations_manager, "_MANAGERS", {})
+
+    ctx = _make_ctx()
+    manager = operations_manager.get_operation_manager(ctx)
+    source = manager.create_operation(
+        kind="scenario.install",
+        target_kind="scenario",
+        target_id="retry_scene",
+        webspace_id="default",
+    )
+    manager.update_operation(
+        source.operation_id,
+        status="failed",
+        error={"type": "NetworkError", "message": "temporary failure", "retryable": True},
+        finished=True,
+    )
+
+    first = operations_manager.retry_operation(source.operation_id, ctx=ctx)
+    second = operations_manager.retry_operation(source.operation_id, ctx=ctx)
+
+    assert first["operation_id"] == second["operation_id"]
+    assert first["retry_of"] == source.operation_id
+    assert first["attempt"] == 2
+    assert first["status"] == "succeeded"
+    assert len(spawned) == 1
+    assert manager.operation(source.operation_id)["can_retry"] is False
