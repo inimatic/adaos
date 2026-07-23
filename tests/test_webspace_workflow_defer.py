@@ -73,7 +73,7 @@ def test_payload_only_materialize_updates_ready_materialization_from_resolved(mo
     )
     try:
         entry = asyncio.run(
-            runtime.materialize_webspace_payload_async(
+            runtime.resolve_materialized_payload_async(
                 webspace_id,
                 request_id=request_id,
                 scenario_id="prompt_engineer_scenario",
@@ -228,7 +228,7 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh_projection)
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "materialize_webspace_payload_async",
+        "resolve_materialized_payload_async",
         _fake_materialize,
     )
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _unexpected_rebuild)
@@ -335,7 +335,7 @@ def test_scenario_switch_rebuild_can_skip_live_room_refresh_for_read_model(monke
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh_projection)
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "materialize_webspace_payload_async",
+        "resolve_materialized_payload_async",
         _fake_materialize,
     )
     monkeypatch.setitem(

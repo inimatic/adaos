@@ -1919,7 +1919,7 @@ def _patch_switch_dependencies(monkeypatch, *, state: dict[str, _FakeMap] | None
         },
     )
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "materialize_webspace_payload_async", _fake_materialize)
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "resolve_materialized_payload_async", _fake_materialize)
     monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
     monkeypatch.setattr(webspace_runtime_module, "_refresh_live_room_after_rebuild_enabled", lambda: False)
@@ -2691,7 +2691,7 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
-    entry = runtime.apply_materialized_payload_in_doc(
+    entry = runtime.apply_materialized_payload_to_doc(
         ydoc,
         "desktop-dev",
         payload,
@@ -2713,6 +2713,50 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     assert runtime._last_apply_summary["selector_apply_mode"] == "reasserted"
     assert runtime._last_apply_summary["transaction_total"] == 1
     assert "apply_combined_transaction" in runtime._last_apply_phase_timings_ms
+
+
+def test_materialized_payload_keeps_only_declarations_needed_for_ydoc_defaults() -> None:
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop-dev",
+        scenario_id="web_desktop",
+        source_mode="dev",
+        application={"desktop": {"pageSchema": {"id": "desktop"}}},
+        catalog={"apps": [], "widgets": []},
+        registry={},
+        installed={"apps": [], "widgets": []},
+        desktop={},
+        webio={},
+        routing={},
+        skill_decls=[
+            {
+                "skill": "weather_skill",
+                "node_id": "node-1",
+                "ui_owner": "node",
+                "apps": [{"id": "large-app", "schema": {"unused": ["x"] * 100}}],
+                "widgets": [{"id": "large-widget"}],
+                "handlers": {"unused": "module.handler"},
+                "ydoc_defaults": {"data/weather/current": {"city": "Moscow"}},
+            },
+            {
+                "skill": "catalog_only_skill",
+                "apps": [{"id": "catalog-only"}],
+            },
+        ],
+    )
+
+    payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
+
+    assert payload["skill_decls"] == [
+        {
+            "skill": "weather_skill",
+            "node_id": "node-1",
+            "ui_owner": "node",
+            "ydoc_defaults": {"data/weather/current": {"city": "Moscow"}},
+        }
+    ]
+    assert "apps" not in payload["skill_decls"][0]
+    assert "widgets" not in payload["skill_decls"][0]
+    assert "handlers" not in payload["skill_decls"][0]
 
 
 def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> None:
@@ -5425,7 +5469,7 @@ def test_phase3_reload_reuses_live_runtime_without_reset(monkeypatch) -> None:
     }
     fake_ctx = SimpleNamespace(bus=SimpleNamespace(publish=lambda _event: None))
     project_calls: list[tuple[str, str, bool]] = []
-    seed_calls: list[tuple[str, str, bool]] = []
+    seed_calls: list[tuple[str, str]] = []
     reset_calls: list[tuple[str, str]] = []
     rebuilds: list[str] = []
     listing_syncs: list[str] = []
@@ -5444,9 +5488,8 @@ def test_phase3_reload_reuses_live_runtime_without_reset(monkeypatch) -> None:
         scenario_id: str,
         *,
         dev: bool | None = None,  # noqa: ARG001
-        emit_event: bool = True,
     ) -> None:
-        seed_calls.append((webspace_id, scenario_id, emit_event))
+        seed_calls.append((webspace_id, scenario_id))
 
     async def _fake_refresh(
         ctx,  # noqa: ARG001
@@ -5530,7 +5573,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     }
     fake_ctx = SimpleNamespace(bus=SimpleNamespace(publish=lambda _event: None))
     project_calls: list[tuple[str, str, bool]] = []
-    seed_calls: list[tuple[str, str, bool]] = []
+    seed_calls: list[tuple[str, str]] = []
     reset_calls: list[tuple[str, str, bool | None]] = []
     emitted: list[tuple[str, dict[str, object], str]] = []
 
@@ -5548,9 +5591,8 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
         scenario_id: str,
         *,
         dev: bool | None = None,  # noqa: ARG001
-        emit_event: bool = True,
     ) -> None:
-        seed_calls.append((webspace_id, scenario_id, emit_event))
+        seed_calls.append((webspace_id, scenario_id))
 
     async def _fake_refresh(
         ctx,  # noqa: ARG001
@@ -5622,7 +5664,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     )
 
     assert project_calls == []
-    assert seed_calls == [("phase3-hard-reset", "prompt_engineer_scenario", False)]
+    assert seed_calls == [("phase3-hard-reset", "prompt_engineer_scenario")]
     assert reset_calls == [("room", "webspace_reset", False), ("ystore", "reset", None)]
     assert emitted == [
         (

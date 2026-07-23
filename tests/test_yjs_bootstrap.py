@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import y_py as Y
 
@@ -76,21 +75,6 @@ class _FakeStore:
         self.encoded_state = self._capture_state(ydoc)
 
 
-def _assert_single_rebuild_nudge(
-    emitted: list[tuple[str, dict[str, object], str]],
-    *,
-    scenario_id: str,
-    webspace_id: str | None = None,
-) -> None:
-    assert len(emitted) == 1
-    event_type, payload, source = emitted[0]
-    assert event_type == "scenarios.synced"
-    assert source == "yjs.bootstrap"
-    assert payload["scenario_id"] == scenario_id
-    assert payload["webspace_id"] == (webspace_id or default_webspace_id())
-    assert payload["bootstrap_nudge"] is True
-
-
 def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
     class _CancelledStore(_FakeStore):
         async def apply_updates(self, ydoc: Y.YDoc) -> None:  # noqa: ARG002
@@ -126,15 +110,13 @@ def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
     assert store.encode_calls == 0
 
 
-def test_bootstrap_load_only_does_not_project_or_emit(monkeypatch) -> None:
+def test_bootstrap_load_only_does_not_project(monkeypatch) -> None:
     store = _FakeStore()
-    emitted: list[object] = []
 
     def _unexpected_manager():
         raise AssertionError("load-only bootstrap must not resolve a scenario")
 
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", _unexpected_manager)
-    monkeypatch.setattr(bootstrap_module, "emit", lambda *args, **kwargs: emitted.append((args, kwargs)))
 
     result = asyncio.run(
         bootstrap_module.ensure_webspace_seeded_from_scenario(
@@ -144,7 +126,6 @@ def test_bootstrap_load_only_does_not_project_or_emit(monkeypatch) -> None:
             space="dev",
             ydoc=Y.YDoc(),
             prefer_default_scenario=True,
-            emit_event=False,
             seed_if_missing=False,
         )
     )
@@ -153,7 +134,6 @@ def test_bootstrap_load_only_does_not_project_or_emit(monkeypatch) -> None:
     assert result["materialization_required"] is True
     assert result["seed_if_missing"] is False
     assert store.apply_updates_calls == 1
-    assert emitted == []
 
 
 def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
@@ -192,8 +172,6 @@ def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypat
     store = _PanicAfterPartialApplyStore()
     provided_doc = Y.YDoc()
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _ProjectingManager())
-    monkeypatch.setattr(bootstrap_module, "get_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(bootstrap_module, "emit", lambda *args, **kwargs: None)
 
     result = asyncio.run(
         bootstrap_module.ensure_webspace_seeded_from_scenario(
@@ -221,18 +199,10 @@ def test_bootstrap_seed_fallback_projects_compat_seed_without_effective_writes(m
         async def sync_to_yjs_async(self, *args, **kwargs) -> None:  # noqa: ARG002
             raise FileNotFoundError("missing scenario payload")
 
-    emitted: list[tuple[str, dict[str, object], str]] = []
     store = _FakeStore()
 
-    bootstrap_module._BOOTSTRAP_REBUILD_NUDGE_LAST.clear()
     monkeypatch.setattr(bootstrap_module, "_local_node_id", lambda: "node-1")
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _FailingManager())
-    monkeypatch.setattr(bootstrap_module, "get_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(
-        bootstrap_module,
-        "emit",
-        lambda bus, type_, payload, source: emitted.append((type_, dict(payload), source)),  # noqa: ARG005
-    )
 
     asyncio.run(
         bootstrap_module.ensure_webspace_seeded_from_scenario(
@@ -264,10 +234,9 @@ def test_bootstrap_seed_fallback_projects_compat_seed_without_effective_writes(m
     assert ui_scenarios["node-1"]["web_desktop"]["application"]["desktop"]["pageSchema"]["id"] == "desktop"
     assert data_scenarios["node-1"]["web_desktop"]["catalog"]["apps"] == []
     assert registry_scenarios["node-1"]["web_desktop"] == {"widgets": [], "modals": []}
-    _assert_single_rebuild_nudge(emitted, scenario_id="web_desktop")
 
 
-def test_bootstrap_reuses_projected_seed_and_only_nudges_rebuild(monkeypatch) -> None:
+def test_bootstrap_reuses_projected_seed_without_scheduling_rebuild(monkeypatch) -> None:
     monkeypatch.setattr(bootstrap_module, "_local_node_id", lambda: "node-1")
 
     def _apply_state(ydoc: Y.YDoc) -> None:
@@ -306,17 +275,9 @@ def test_bootstrap_reuses_projected_seed_and_only_nudges_rebuild(monkeypatch) ->
         async def sync_to_yjs_async(self, *args, **kwargs) -> None:  # noqa: ARG002
             raise AssertionError("should not project scenario again when projected seed already exists")
 
-    emitted: list[tuple[str, dict[str, object], str]] = []
     store = _FakeStore(apply_state=_apply_state)
 
-    bootstrap_module._BOOTSTRAP_REBUILD_NUDGE_LAST.clear()
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _UnexpectedManager())
-    monkeypatch.setattr(bootstrap_module, "get_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(
-        bootstrap_module,
-        "emit",
-        lambda bus, type_, payload, source: emitted.append((type_, dict(payload), source)),  # noqa: ARG005
-    )
 
     asyncio.run(
         bootstrap_module.ensure_webspace_seeded_from_scenario(
@@ -335,7 +296,6 @@ def test_bootstrap_reuses_projected_seed_and_only_nudges_rebuild(monkeypatch) ->
     assert runtime_bootstrap["scenario_id"] == "prompt_engineer_scenario"
     assert runtime_bootstrap["state"] == "materializing"
     assert runtime_bootstrap["stage"] == "projected_seed_reuse"
-    _assert_single_rebuild_nudge(emitted, scenario_id="prompt_engineer_scenario")
 
 
 def test_bootstrap_prefers_current_pointer_when_projecting_missing_effective_ui(monkeypatch) -> None:
@@ -372,7 +332,7 @@ def test_bootstrap_prefers_current_pointer_when_projecting_missing_effective_ui(
     assert store.start_calls == 1
     assert store.apply_updates_calls == 1
     assert store.write_calls == 1
-    assert captured == [("prompt_engineer_scenario", default_webspace_id(), "dev", True)]
+    assert captured == [("prompt_engineer_scenario", default_webspace_id(), "dev", False)]
 
 
 def test_bootstrap_can_prefer_manifest_home_over_stale_current_pointer(monkeypatch) -> None:
@@ -423,7 +383,7 @@ def test_bootstrap_can_prefer_manifest_home_over_stale_current_pointer(monkeypat
     assert result["scenario_id"] == "todo_list_5b9319fa"
     assert result["previous_scenario_id"] == "web_desktop"
     assert result["current_scenario_overridden"] is True
-    assert captured == [("todo_list_5b9319fa", "desktop-dev", "dev", True)]
+    assert captured == [("todo_list_5b9319fa", "desktop-dev", "dev", False)]
 
 
 def test_bootstrap_projects_into_provided_ydoc_in_single_pass(monkeypatch) -> None:
@@ -454,18 +414,10 @@ def test_bootstrap_projects_into_provided_ydoc_in_single_pass(monkeypatch) -> No
                     {"node-1": {scenario_id: {"widgets": [], "modals": ["prompt-modal"]}}},
                 )
 
-    emitted: list[tuple[str, dict[str, object], str]] = []
     store = _FakeStore()
     provided_doc = Y.YDoc()
 
-    bootstrap_module._BOOTSTRAP_REBUILD_NUDGE_LAST.clear()
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _ProjectingManager())
-    monkeypatch.setattr(bootstrap_module, "get_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(
-        bootstrap_module,
-        "emit",
-        lambda bus, type_, payload, source: emitted.append((type_, dict(payload), source)),  # noqa: ARG005
-    )
 
     result = asyncio.run(
         bootstrap_module.ensure_webspace_seeded_from_scenario(
@@ -491,7 +443,6 @@ def test_bootstrap_projects_into_provided_ydoc_in_single_pass(monkeypatch) -> No
     assert runtime_bootstrap["state"] == "materializing"
     assert runtime_bootstrap["stage"] == "scenario_projected"
     assert runtime_bootstrap["ready"] is False
-    _assert_single_rebuild_nudge(emitted, scenario_id="prompt_engineer_scenario")
 
 
 def test_bootstrap_seed_fallback_uses_snapshot_when_incremental_write_fails(monkeypatch) -> None:
@@ -499,18 +450,10 @@ def test_bootstrap_seed_fallback_uses_snapshot_when_incremental_write_fails(monk
         async def sync_to_yjs_async(self, *args, **kwargs) -> None:  # noqa: ARG002
             raise FileNotFoundError("missing scenario payload")
 
-    emitted: list[tuple[str, dict[str, object], str]] = []
     store = _FakeStore(incremental_write_ok=False)
 
-    bootstrap_module._BOOTSTRAP_REBUILD_NUDGE_LAST.clear()
     monkeypatch.setattr(bootstrap_module, "_local_node_id", lambda: "node-1")
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _FailingManager())
-    monkeypatch.setattr(bootstrap_module, "get_ctx", lambda: SimpleNamespace(bus=object()))
-    monkeypatch.setattr(
-        bootstrap_module,
-        "emit",
-        lambda bus, type_, payload, source: emitted.append((type_, dict(payload), source)),  # noqa: ARG005
-    )
 
     asyncio.run(
         bootstrap_module.ensure_webspace_seeded_from_scenario(
@@ -524,7 +467,6 @@ def test_bootstrap_seed_fallback_uses_snapshot_when_incremental_write_fails(monk
     assert store.encode_calls == 2
     assert store.encoded_state is not None
     assert store.encoded_state["current_scenario"] == "web_desktop"
-    _assert_single_rebuild_nudge(emitted, scenario_id="web_desktop")
 
 
 def test_bootstrap_seed_if_empty_uses_configured_default_webspace(monkeypatch) -> None:

@@ -43,7 +43,7 @@ async def _materialize(request: Mapping[str, Any]) -> dict[str, Any]:
     skill_decls_fingerprint = str(request.get("skill_decls_fingerprint") or "").strip() or None
     runtime = WebspaceScenarioRuntime()
     if mode == "payload_only":
-        entry = await runtime.materialize_webspace_payload_async(
+        entry = await runtime.resolve_materialized_payload_async(
             webspace_id,
             request_id=request_id,
             scenario_id=scenario_id,

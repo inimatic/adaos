@@ -1491,7 +1491,7 @@ def test_get_room_bootstraps_from_materialized_payload_without_semantic_rebuild(
     finally:
         gateway_module._ROOM_BOOTSTRAP_MATERIALIZATION.reset(token)
 
-    assert seed_calls[0]["emit_event"] is False
+    assert "emit_event" not in seed_calls[0]
     assert seed_calls[0]["seed_if_missing"] is False
     assert apply_calls[0]["payload"] is payload
     assert apply_calls[0]["reason"] == "test.materialized_bootstrap"
@@ -2181,7 +2181,7 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
 
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "apply_materialized_payload_in_doc",
+        "apply_materialized_payload_to_doc",
         _fake_apply,
     )
 
@@ -2265,22 +2265,30 @@ def test_room_bootstrap_seed_override_beats_stale_authoritative_lease(monkeypatc
 
     seen_current: list[str] = []
 
-    def _fake_rebuild_in_doc(self, target_ydoc, _webspace_id) -> None:
-        ui_map = target_ydoc.get_map("ui")
-        current = str(ui_map.get("current_scenario") or "")
+    async def _fake_resolve(self, target_ydoc, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
+        current = str(scenario_id or target_ydoc.get_map("ui").get("current_scenario") or "")
         seen_current.append(current)
-        with target_ydoc.begin_transaction() as txn:
-            target_ydoc.get_map("runtime").set(
-                txn,
-                "environment",
-                {"materialization": {"scenario_id": current}},
-            )
+        self._last_materialized_payload = {
+            "scenario_id": current,
+            "source_mode": "dev",
+            "application": {
+                "desktop": {"pageSchema": {"id": current}},
+                "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+            },
+            "catalog": {"apps": [], "widgets": []},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+            "registry": {"widgets": {}, "modals": {}},
+            "skill_decls": [],
+        }
         self._last_rebuild_timings_ms = {"total": 1.0}
 
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "_rebuild_in_doc",
-        _fake_rebuild_in_doc,
+        "resolve_materialized_payload_from_doc_async",
+        _fake_resolve,
     )
 
     room = SimpleNamespace(ydoc=ydoc)
@@ -2302,10 +2310,89 @@ def test_room_bootstrap_seed_override_beats_stale_authoritative_lease(monkeypatc
 
     assert result is True
     assert seen_current == ["todo_list_5b9319fa"]
-    assert gateway_module._authoritative_current_scenario("bootstrap-lease-ws") is None
+    assert gateway_module._authoritative_current_scenario("bootstrap-lease-ws") == "todo_list_5b9319fa"
     assert room._diag_effective_branch_snapshot["ready"] is True
     assert store.writes
     gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+
+
+def test_room_bootstrap_reuses_matching_persisted_effective_state(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    ydoc = Y.YDoc()
+    required_branches = [
+        "ui.application",
+        "data.catalog",
+        "data.installed",
+        "data.desktop",
+        "data.webio",
+        "data.routing",
+        "registry.merged",
+    ]
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+        ydoc.get_map("ui").set(
+            txn,
+            "application",
+            {
+                "desktop": {"pageSchema": {"id": "desktop"}},
+                "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+            },
+        )
+        ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "installed", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "desktop", {})
+        ydoc.get_map("data").set(txn, "webio", {})
+        ydoc.get_map("data").set(txn, "routing", {})
+        ydoc.get_map("registry").set(txn, "merged", {})
+        ydoc.get_map("runtime").set(
+            txn,
+            "environment",
+            {
+                "materialization": {
+                    "scenario_id": "web_desktop",
+                    "required_branches": required_branches,
+                }
+            },
+        )
+
+    class _FakeStore:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        async def write_update(self, update: bytes, **_kwargs) -> bool:
+            self.writes.append(bytes(update))
+            return True
+
+    async def _unexpected_resolve(*_args, **_kwargs) -> None:
+        raise AssertionError("matching persisted state must not be resolved again")
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_from_doc_async",
+        _unexpected_resolve,
+    )
+
+    seed_result = {"scenario_id": "web_desktop", "space": "workspace"}
+    room = SimpleNamespace(ydoc=ydoc)
+    store = _FakeStore()
+    result = asyncio.run(
+        gateway_module._ensure_room_effective_materialized(
+            "bootstrap-persisted-ready",
+            store,
+            room,
+            seed_result=seed_result,
+        )
+    )
+
+    assert result is False
+    assert seed_result["mode"] == "persisted_effective_state"
+    assert seed_result["room_effective_reused"] is True
+    assert seed_result["room_effective_materialized"] is False
+    assert gateway_module._room_effective_branches_ready(ydoc) is True
 
 
 def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(monkeypatch) -> None:
@@ -2342,42 +2429,30 @@ def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(mo
 
     seen_current: list[str] = []
 
-    def _fake_rebuild_in_doc(self, target_ydoc, _webspace_id) -> None:
-        current = str(target_ydoc.get_map("ui").get("current_scenario") or "")
+    async def _fake_resolve(self, target_ydoc, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
+        current = str(scenario_id or target_ydoc.get_map("ui").get("current_scenario") or "")
         seen_current.append(current)
-        with target_ydoc.begin_transaction() as txn:
-            target_ydoc.get_map("ui").set(
-                txn,
-                "application",
-                {
-                    "desktop": {"pageSchema": {"id": current}},
-                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
-                },
-            )
-            target_ydoc.get_map("runtime").set(
-                txn,
-                "environment",
-                {
-                    "materialization": {
-                        "scenario_id": current,
-                        "required_branches": [
-                            "ui.application",
-                            "data.catalog",
-                            "data.installed",
-                            "data.desktop",
-                            "data.webio",
-                            "data.routing",
-                            "registry.merged",
-                        ],
-                    }
-                },
-            )
+        self._last_materialized_payload = {
+            "scenario_id": current,
+            "source_mode": "workspace",
+            "application": {
+                "desktop": {"pageSchema": {"id": current}},
+                "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+            },
+            "catalog": {"apps": [], "widgets": []},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+            "registry": {"widgets": {}, "modals": {}},
+            "skill_decls": [],
+        }
         self._last_rebuild_timings_ms = {"total": 1.0}
 
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "_rebuild_in_doc",
-        _fake_rebuild_in_doc,
+        "resolve_materialized_payload_from_doc_async",
+        _fake_resolve,
     )
 
     room = SimpleNamespace(ydoc=ydoc)

@@ -5753,7 +5753,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             # branches. Loading persisted state is still required, but
                             # projecting the scenario and emitting scenarios.synced
                             # here would start a second semantic rebuild.
-                            seed_kwargs.update({"emit_event": False, "seed_if_missing": False})
+                            seed_kwargs["seed_if_missing"] = False
                         seed_result = await _await_bootstrap_step(
                             "seed_from_scenario",
                             ensure_webspace_seeded_from_scenario(ystore, **seed_kwargs),
@@ -6545,7 +6545,7 @@ async def _apply_room_materialized_payload(
                     channel="core.yjs.gateway.materialized_payload",
                     governed=True,
                 ):
-                    runtime.apply_materialized_payload_in_doc(
+                    runtime.apply_materialized_payload_to_doc(
                         ydoc,
                         webspace_id,
                         payload,
@@ -7029,39 +7029,27 @@ async def _repair_room_effective_branches(
     if ydoc is None:
         return b""
     try:
-        import y_py as Y  # pylint: disable=import-outside-toplevel
         from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
 
-        before = Y.encode_state_vector(ydoc)
         runtime = WebspaceScenarioRuntime()
-        suppress_attr = "_suppress_backend_ystore_persist"
-        previous_suppress = int(getattr(room, suppress_attr, 0) or 0)
-        if not persist_repair:
-            setattr(room, suppress_attr, previous_suppress + 1)
-            deadline_attr = "_suppress_backend_ystore_persist_until"
-            try:
-                current_deadline = float(getattr(room, deadline_attr, 0.0) or 0.0)
-            except Exception:
-                current_deadline = 0.0
-            setattr(room, deadline_attr, max(current_deadline, time.monotonic() + 5.0))
-        try:
-            with ystore_write_metadata_sync(
-                root_names=["ui", "data", "registry", "runtime"],
-                source=f"yjs.gateway_ws.{reason}",
-                owner="core:yjs_gateway",
-                channel="core.yjs.gateway.repair",
-                governed=True,
-            ):
-                authoritative_scenario = _authoritative_current_scenario(webspace_id)
-                if authoritative_scenario:
-                    ui_map = ydoc.get_map("ui")
-                    with ydoc.begin_transaction() as txn:
-                        ui_map.set(txn, "current_scenario", authoritative_scenario)
-                runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - invariant repair needs in-doc materialization
-        finally:
-            if not persist_repair:
-                setattr(room, suppress_attr, previous_suppress)
-        if not _room_effective_branches_ready(ydoc):
+        scenario_id = _authoritative_current_scenario(webspace_id) or _room_current_scenario(ydoc)
+        await runtime.resolve_materialized_payload_from_doc_async(
+            ydoc,
+            webspace_id,
+            scenario_id=scenario_id,
+        )
+        payload = getattr(runtime, "_last_materialized_payload", None)
+        if not isinstance(payload, Mapping) or not payload:
+            raise RuntimeError("room_repair_resolver_missing_payload")
+        update, apply_result = await _apply_room_materialized_payload(
+            webspace_id,
+            ystore,
+            room,
+            payload,
+            reason=f"{reason}.resolved_repair",
+            persist_repair=bool(persist_repair),
+        )
+        if not bool(apply_result.get("ready")):
             _ylog.warning(
                 "YRoom effective branch repair did not restore required branches webspace=%s reason=%s snapshot=%s",
                 webspace_id,
@@ -7069,16 +7057,6 @@ async def _repair_room_effective_branches(
                 json.dumps(_room_effective_branch_snapshot(ydoc), ensure_ascii=True, sort_keys=True)[:1000],
             )
             return b""
-        update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
-        if update and ystore is not None and persist_repair:
-            async with ystore_write_metadata(
-                root_names=["ui", "data", "registry", "runtime"],
-                source=f"yjs.gateway_ws.{reason}",
-                owner="core:yjs_gateway",
-                channel="core.yjs.gateway.repair",
-                governed=True,
-            ):
-                await ystore.write_update(update, update_kind="diff", notify=False)
         _ylog.warning(
             "YRoom effective branches repaired webspace=%s reason=%s bytes=%s persisted=%s",
             webspace_id,
@@ -7105,113 +7083,87 @@ async def _ensure_room_effective_materialized(
     *,
     seed_result: dict[str, Any] | None = None,
 ) -> bool:
-    """
-    Ensure cold YRoom opens with effective desktop branches already present.
+    """Resolve and apply missing effective branches before exposing a cold room."""
 
-    ``ensure_webspace_seeded_from_scenario`` may legitimately reuse projected
-    scenario branches and emit an async semantic rebuild nudge. That is too late
-    for the first browser sync: the initial Yjs state can reach the client
-    before ``ui.application``/``data.catalog`` are materialized. For room
-    bootstrap we run the semantic materializer in the room YDoc synchronously
-    and persist just the resulting diff before exposing the room.
-    """
     ydoc = getattr(room, "ydoc", None)
-    authoritative_scenario = _authoritative_current_scenario(webspace_id)
     if ydoc is None:
         return False
+    authoritative_scenario = _authoritative_current_scenario(webspace_id)
     seed_scenario = str((seed_result or {}).get("scenario_id") or "").strip()
-    seed_overrode_current = bool((seed_result or {}).get("current_scenario_overridden"))
-    current_scenario = _room_current_scenario(ydoc)
-    if (
-        seed_scenario
-        and authoritative_scenario
-        and authoritative_scenario != seed_scenario
-        and seed_overrode_current
-    ):
-        _clear_authoritative_current_scenario(
-            webspace_id,
-            reason="room_bootstrap_seed_overrode_current",
-        )
+    if seed_scenario and bool((seed_result or {}).get("current_scenario_overridden")):
+        if authoritative_scenario and authoritative_scenario != seed_scenario:
+            _clear_authoritative_current_scenario(
+                webspace_id,
+                reason="room_bootstrap_seed_overrode_current",
+            )
         authoritative_scenario = seed_scenario
-    seed_requires_rebuild = bool(seed_scenario and seed_overrode_current)
-    materialize_current_scenario = authoritative_scenario or (seed_scenario if seed_requires_rebuild else "")
-    if _room_effective_branches_ready(ydoc) and not materialize_current_scenario and not seed_requires_rebuild:
+    current_scenario = _room_current_scenario(ydoc)
+    expected_scenario = authoritative_scenario or seed_scenario or current_scenario or "web_desktop"
+    if _room_effective_branches_ready(ydoc) and (
+        not expected_scenario or current_scenario == expected_scenario
+    ):
+        ready_result = await _finalize_materialized_room_bootstrap(
+            webspace_id,
+            ystore,
+            room,
+            scenario_id=current_scenario or expected_scenario,
+            space=str((seed_result or {}).get("space") or "workspace"),
+            mode="persisted_effective_state",
+        )
+        if seed_result is not None:
+            seed_result.update(
+                {
+                    "mode": "persisted_effective_state",
+                    "room_effective_materialized": False,
+                    "room_effective_reused": True,
+                    "room_bootstrap_marker_persisted": bool(ready_result.get("persisted")),
+                }
+            )
         return False
 
     try:
-        import y_py as Y  # pylint: disable=import-outside-toplevel
         from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
 
-        before = Y.encode_state_vector(ydoc)
         runtime = WebspaceScenarioRuntime()
-        with ystore_write_metadata_sync(
-            root_names=["ui", "data", "registry", "runtime"],
-            source="yjs.gateway_ws.room_bootstrap",
-            owner="core:yjs_gateway",
-            channel="core.yjs.gateway.bootstrap",
-            governed=True,
-        ):
-            if materialize_current_scenario:
-                ui_map = ydoc.get_map("ui")
-                with ydoc.begin_transaction() as txn:
-                    ui_map.set(txn, "current_scenario", materialize_current_scenario)
-            runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - room bootstrap needs in-doc materialization
-
-        if not _room_effective_branches_ready(ydoc):
-            if seed_result is not None:
-                seed_result["room_effective_materialized"] = False
-                seed_result["room_effective_materialize_error"] = "effective_branches_still_missing"
-            _ylog.warning(
-                "YRoom effective materialization left required branches missing webspace=%s",
-                webspace_id,
+        await runtime.resolve_materialized_payload_from_doc_async(
+            ydoc,
+            webspace_id,
+            scenario_id=expected_scenario,
+        )
+        payload = getattr(runtime, "_last_materialized_payload", None)
+        if not isinstance(payload, Mapping) or not payload:
+            raise RuntimeError("room_bootstrap_resolver_missing_payload")
+        update, apply_result = await _apply_room_materialized_payload(
+            webspace_id,
+            ystore,
+            room,
+            payload,
+            reason="room_bootstrap.resolve_apply",
+            persist_repair=True,
+        )
+        if not bool(apply_result.get("ready")):
+            raise RuntimeError(
+                str(apply_result.get("error") or "room_bootstrap_effective_branches_not_ready")
             )
-            return False
-
-        try:
-            ui_map = ydoc.get_map("ui")
-            scenario_id = str(
-                (seed_result or {}).get("scenario_id")
-                or ui_map.get("current_scenario")
-                or "web_desktop"
-            ).strip() or "web_desktop"
-            with ystore_write_metadata_sync(
-                root_names=["runtime"],
-                source="yjs.gateway_ws.room_bootstrap.ready",
-                owner="core:yjs_gateway",
-                channel="core.yjs.gateway.bootstrap",
-                governed=True,
-            ):
-                write_runtime_bootstrap_state(
-                    ydoc,
-                    webspace_id=webspace_id,
-                    scenario_id=scenario_id,
-                    state="ready",
-                    stage="room_bootstrap_ready",
-                    ready=True,
-                    mode=str((seed_result or {}).get("mode") or ""),
-                    extra={
-                        "space": str((seed_result or {}).get("space") or "").strip() or None,
-                        "room_effective_materialized": True,
-                    },
-                )
-        except Exception:
-            _ylog.debug("failed to write ready bootstrap marker webspace=%s", webspace_id, exc_info=True)
-
-        update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
-        persisted = False
-        if update:
-            async with ystore_write_metadata(
-                root_names=["ui", "data", "registry", "runtime"],
-                source="yjs.gateway_ws.room_bootstrap",
-                owner="core:yjs_gateway",
-                channel="core.yjs.gateway.bootstrap",
-                governed=True,
-            ):
-                persisted = bool(await ystore.write_update(update, update_kind="diff", notify=False))
+        ready_result = await _finalize_materialized_room_bootstrap(
+            webspace_id,
+            ystore,
+            room,
+            scenario_id=expected_scenario,
+            space=str((seed_result or {}).get("space") or "workspace"),
+            mode="resolved_payload",
+        )
         if seed_result is not None:
-            seed_result["room_effective_materialized"] = True
-            seed_result["room_effective_materialized_persisted"] = bool(persisted)
-            seed_result["room_effective_materialized_bytes"] = len(update or b"")
+            seed_result.update(
+                {
+                    "mode": "resolved_payload",
+                    "room_effective_materialized": True,
+                    "room_effective_materialized_persisted": bool(update),
+                    "room_effective_materialized_bytes": len(update or b""),
+                    "room_bootstrap_marker_persisted": bool(ready_result.get("persisted")),
+                    "room_resolver_timings_ms": dict(runtime._last_rebuild_timings_ms or {}),
+                }
+            )
         try:
             room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(ydoc)
             room._diag_effective_last_full_check_mono = time.monotonic()
@@ -7220,7 +7172,7 @@ async def _ensure_room_effective_materialized(
         _ylog.info(
             "YRoom effective branches materialized before open webspace=%s persisted=%s bytes=%d",
             webspace_id,
-            bool(persisted),
+            bool(update),
             len(update or b""),
         )
         return True
@@ -7244,6 +7196,7 @@ async def _finalize_materialized_room_bootstrap(
     *,
     scenario_id: str,
     space: str,
+    mode: str = "materialized_payload",
 ) -> dict[str, Any]:
     """Persist the ready marker after a payload-owned cold room bootstrap."""
 
@@ -7261,7 +7214,7 @@ async def _finalize_materialized_room_bootstrap(
             state="ready",
             stage="room_bootstrap_ready",
             ready=True,
-            mode="materialized_payload",
+            mode=str(mode or "").strip() or "materialized_payload",
             extra={
                 "space": str(space or "").strip() or None,
                 "room_effective_materialized": True,
@@ -7406,7 +7359,6 @@ async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None
             and (
                 row.is_dev
                 or row.effective_source_mode == "dev"
-                or str(webspace_id or "").strip().endswith("-dev")
             )
         )
     )
