@@ -182,6 +182,16 @@ class BuilderWorkflowService:
                 automation["status"] = "not_started"
         automation.setdefault("iteration", 0)
         automation.setdefault("source_prototype_revision", prototype.get("head_revision"))
+        if not str(automation.get("snapshot_task_id") or "").strip():
+            snapshot_path = Path(str(automation.get("snapshot_path") or "").strip())
+            try:
+                snapshot = json.loads((snapshot_path / "snapshot.json").read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                snapshot = {}
+            if isinstance(snapshot, Mapping):
+                snapshot_task_id = str(snapshot.get("task_id") or "").strip()
+                if snapshot_task_id:
+                    automation["snapshot_task_id"] = snapshot_task_id
 
         if "status" not in publication:
             publication["status"] = "published" if legacy_state == "publication" else "not_started"
@@ -380,6 +390,7 @@ class BuilderWorkflowService:
                 {
                     "status": "completed",
                     "head_task_id": metadata.get("task_id") or automation.get("head_task_id"),
+                    "snapshot_task_id": metadata.get("task_id") or automation.get("snapshot_task_id"),
                     "result_version": metadata.get("version") or automation.get("result_version"),
                     "snapshot_path": metadata.get("snapshot_path") or automation.get("snapshot_path"),
                     "completed_at": changed_at,

@@ -250,7 +250,11 @@ def test_preview_follow_active_resolves_current_automation(monkeypatch) -> None:
             describe=lambda kind, project_id: {
                 "active_phase": "automation",
                 "prototype": {"head_revision": "003"},
-                "automation": {"head_task_id": "task.current", "result_version": "0.2.0"},
+                "automation": {
+                    "head_task_id": "task.adaptation",
+                    "snapshot_task_id": "task.current",
+                    "result_version": "0.2.0",
+                },
                 "publication": {"current_version": None},
                 "capabilities": {
                     "can_preview_prototype": True,

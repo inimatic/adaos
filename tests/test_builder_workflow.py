@@ -100,6 +100,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
         metadata={"task_id": "task.1", "version": "0.1.0"},
     )["workflow"]
     assert completed["automation"]["status"] == "completed"
+    assert completed["automation"]["snapshot_task_id"] == "task.1"
     assert completed["capabilities"]["can_publish"] is True
 
     published = service.transition(

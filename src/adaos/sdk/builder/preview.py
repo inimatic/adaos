@@ -314,7 +314,9 @@ def select_target(
     elif stage_token == "prototype":
         display_revision = f"UI {target_revision}"
     elif stage_token == "automation":
-        current_automation = str(automation_state.get("head_task_id") or "current").strip() or "current"
+        current_automation = str(
+            automation_state.get("snapshot_task_id") or automation_state.get("head_task_id") or "current"
+        ).strip() or "current"
         if target_revision and target_revision != current_automation:
             raise ValueError("only the current Automation result can be shown in Preview")
         target_revision = current_automation
