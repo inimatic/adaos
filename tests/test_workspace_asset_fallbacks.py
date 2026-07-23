@@ -738,9 +738,6 @@ def test_skills_loader_imports_repo_workspace_handler_when_workspace_missing(tmp
 
     loaded: list[Path] = []
     loader = ImportlibSkillsLoader()
-    monkeypatch.setattr(loader, "_sync_runtime_from_repo_workspace_if_missing", lambda _root: None)
-    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda _root: None)
-    monkeypatch.setattr(loader, "_load_skill_data_projections", lambda _handler, _loaded: None)
     monkeypatch.setattr(loader, "_load_handler", lambda handler: loaded.append(handler))
 
     import asyncio

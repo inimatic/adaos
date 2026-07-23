@@ -621,6 +621,18 @@ That prewarm now feeds a real fast-cutover path:
 - if candidate promotion, root reconnect, or supervisor adoption fails,
   supervisor keeps the old listener and reschedules the transition
 
+Candidate startup is also a read-only boundary for shared skill runtime slots.
+Workspace-to-runtime source synchronization is an explicit development action,
+never an implicit handler-import step, and is prohibited in candidate mode.
+This prevents prewarm from doing minutes of synchronous filesystem work or
+changing artifacts still used by the active runtime.
+
+Timeout recovery must not remove a target slot until supervisor has confirmed
+that its runtime process exited. Persisted state alone cannot prove process
+termination; when no process handle is available, cleanup is deferred. This
+keeps a late-starting runtime from executing through a deleted virtual
+environment and source tree.
+
 This makes warm-switch a strict availability boundary. Constrained or
 unhealthy cases remain on the proven old runtime until a candidate can pass the
 barrier, unless an operator explicitly accepts a cold cutover.

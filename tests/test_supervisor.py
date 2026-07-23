@@ -68,6 +68,49 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     assert attempt["last_status"]["state"] == "failed"
 
 
+def test_timeout_rollback_defers_slot_cleanup_until_runtime_stop_is_confirmed(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor, "rollback_to_previous_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "rollback_installed_skill_runtimes", lambda: {})
+    monkeypatch.setattr(
+        supervisor,
+        "remove_inactive_slot",
+        lambda *_args, **_kwargs: pytest.fail("live target slot must not be removed by timeout reconciliation"),
+    )
+    monkeypatch.setattr(supervisor.time, "time", lambda: 120.0)
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_slot": "B",
+            "target_rev": "rev2026",
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_slot": "B",
+            "target_rev": "rev2026",
+            "transitioned_at": 10.0,
+        }
+    )
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
+    payload = supervisor._reconcile_update_status({"ok": True, "status": read_status()})
+
+    cleanup = payload["status"]["slot_cleanup"]
+    assert cleanup == {
+        "ok": True,
+        "removed": False,
+        "deferred": True,
+        "slot": "B",
+        "reason": "runtime_stop_not_confirmed",
+    }
+
+
 def test_update_attempt_read_write_normalizes_contract(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
 

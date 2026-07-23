@@ -1938,10 +1938,16 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
             failed_payload["rollback"] = {"ok": True, "slot": restored}
             failed_payload["message"] += f"; rolled back to slot {restored}"
         if target_slot:
-            failed_payload["slot_cleanup"] = remove_inactive_slot(
-                target_slot,
-                reason="supervisor.timeout_recovery",
-            )
+            # Timeout reconciliation has no process handle and cannot prove that
+            # the target runtime has exited. Removing its slot here leaves a
+            # live process executing from a deleted interpreter/source tree.
+            failed_payload["slot_cleanup"] = {
+                "ok": True,
+                "removed": False,
+                "deferred": True,
+                "slot": target_slot,
+                "reason": "runtime_stop_not_confirmed",
+            }
         if skill_runtime_rollback:
             failed_payload["skill_runtime_rollback"] = skill_runtime_rollback
             if restored and not bool(skill_runtime_rollback.get("ok")):

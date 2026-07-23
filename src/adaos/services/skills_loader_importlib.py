@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
 
@@ -20,8 +22,11 @@ _LOG = logging.getLogger("adaos.services.skills_loader")
 class ImportlibSkillsLoader(SkillsLoaderPort):
     async def import_all_handlers(self, skills_root: Any) -> None:
         root = Path(skills_root() if callable(skills_root) else skills_root)
-        self._sync_runtime_from_repo_workspace_if_missing(root)
-        self._sync_runtime_from_workspace_if_debug(root)
+        started_at = time.perf_counter()
+        source_sync_enabled = self._runtime_source_sync_enabled()
+        if source_sync_enabled:
+            await asyncio.to_thread(self._sync_runtime_from_repo_workspace_if_missing, root)
+            await asyncio.to_thread(self._sync_runtime_from_workspace, root)
         loaded: set[str] = set()
         loaded_declaration_manifests: set[Path] = set()
         for handler, skill_name in self._discover_runtime_handlers(root):
@@ -54,6 +59,13 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     _LOG.info("imported repo workspace skill handler skill=%s path=%s", skill_name, handler)
                 else:
                     _LOG.info("imported repo workspace skill handler path=%s", handler)
+        _LOG.info(
+            "skill handler import completed elapsed_s=%.3f loaded_skills=%d source_sync=%s candidate=%s",
+            time.perf_counter() - started_at,
+            len(loaded),
+            source_sync_enabled,
+            self._runtime_candidate_mode(),
+        )
 
     async def reload_skill_handlers(self, skills_root: Any, skill_name: str) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
@@ -309,27 +321,9 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             return None
 
     # ------------------------------------------------------------------
-    # Workspace/runtime sync helpers (DEBUG only)
+    # Explicit development workspace/runtime sync helpers
     # ------------------------------------------------------------------
-    def _sync_runtime_from_workspace_if_debug(self, runtime_root: Path) -> None:
-        """
-        In DEBUG-like modes keep runtime slots in sync with workspace
-        sources for owner skills by calling SkillManager.runtime_update(...).
-
-        This is called on every skills loader refresh (e.g. api --reload)
-        so edits in workspace are reflected in the active runtime slot
-        without manual reinstall.
-
-        The guard is intentionally loose for local/dev runs:
-          - if ADAOS_LOG_LEVEL is unset -> treat as DEBUG (sync enabled),
-          - if ADAOS_LOG_LEVEL is set and not DEBUG -> skip sync.
-        """
-        level = (os.getenv("ADAOS_LOG_LEVEL") or "").upper()
-        # In local/dev setups ADAOS_LOG_LEVEL is often unset; enable sync
-        # by default there, but honour explicit non-DEBUG settings.
-        if level and level != "DEBUG":
-            return
-
+    def _sync_runtime_from_workspace(self, runtime_root: Path) -> None:
         try:
             ctx = get_ctx()
             ws_root = ctx.paths.skills_workspace_dir()
@@ -360,6 +354,17 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     len(files),
                     len(tools),
                 )
+
+    @staticmethod
+    def _runtime_candidate_mode() -> bool:
+        return str(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE") or "active").strip().lower() == "candidate"
+
+    @classmethod
+    def _runtime_source_sync_enabled(cls) -> bool:
+        if cls._runtime_candidate_mode():
+            return False
+        raw = str(os.getenv("ADAOS_SKILL_RUNTIME_SOURCE_SYNC") or "").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     def _sync_runtime_from_repo_workspace_if_missing(self, runtime_root: Path) -> None:
         repo_ws_root = self._repo_workspace_skills_root()
