@@ -734,6 +734,15 @@ Standalone runtime-owned sidecar startup remains only as compatibility fallback 
 The sidecar must remain transport-only.
 The sidecar must not become the hidden owner of update status, rollback state, or degraded-mode business policy.
 
+A sidecar restart is a supervisor-owned transport transition, not only a
+process operation. The supervisor first synchronizes sidecar-controlled files
+from the validated active slot, starts exactly one new process generation, and
+then explicitly requests hub-root reconnect from the active runtime. The
+monitor rechecks the code fingerprint while holding the lifecycle lock so a
+validated-slot sync detected before an operator restart cannot produce a
+second restart after that request completes. Runtime watchdog reconnect remains
+a fallback, not the primary restart contract.
+
 ## Memory leak detection and profiling
 
 The supervisor should also become the local authority for memory leak detection, profiling escalation, and remote retrieval of profiling evidence.

@@ -7754,8 +7754,26 @@ class SupervisorManager:
             "process": payload.get("process"),
         }
 
-    async def restart_sidecar(self, *, reconnect_hub_root: bool = False) -> dict[str, Any]:
+    async def _reconnect_hub_root_after_sidecar_restart(self) -> dict[str, Any] | None:
+        if str(self._sidecar_role() or "").strip().lower() != "hub":
+            return None
+        try:
+            return await asyncio.to_thread(
+                self._runtime_request_json,
+                path="/api/node/hub-root/reconnect",
+                method="POST",
+                payload={},
+                timeout=5.0,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    async def restart_sidecar(self, *, reconnect_hub_root: bool = True) -> dict[str, Any]:
         async with self._lock:
+            # A validated slot may contain newer sidecar-controlled files than
+            # root. Sync before launch so one operator request produces one
+            # process generation and the monitor has nothing left to restart.
+            self._sync_sidecar_controlled_files_from_validated_slot()
             try:
                 new_proc, restart_result = await restart_realtime_sidecar_subprocess(
                     proc=self._sidecar_proc,
@@ -7783,16 +7801,8 @@ class SupervisorManager:
             self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
             self._persist_runtime_state()
         reconnect_result: dict[str, Any] | None = None
-        if reconnect_hub_root and str(self._sidecar_role() or "").strip().lower() == "hub":
-            try:
-                reconnect_result = self._runtime_request_json(
-                    path="/api/node/hub-root/reconnect",
-                    method="POST",
-                    payload={},
-                    timeout=5.0,
-                )
-            except Exception as exc:
-                reconnect_result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if reconnect_hub_root:
+            reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
         return {
             "ok": True,
             "restart": restart_result,
@@ -8076,6 +8086,7 @@ class SupervisorManager:
     async def monitor_forever(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            reconnect_hub_root_after_sidecar_restart = False
             sidecar_proc = self._sidecar_proc
             if sidecar_proc is not None and sidecar_proc.poll() is not None:
                 self._sidecar_last_restart_reason = "supervisor.sidecar.exited"
@@ -8149,11 +8160,28 @@ class SupervisorManager:
                             continue
                     try:
                         async with self._lock:
-                            if self._stopping:
+                            stale_code_restart = False
+                            if restart_reason in {
+                                "supervisor.sidecar.validated_slot_sync",
+                                "supervisor.sidecar.code_changed",
+                            }:
+                                refreshed_code_state = self._sidecar_code_state()
+                                refreshed_fingerprint = (
+                                    str(refreshed_code_state.get("fingerprint") or "").strip() or None
+                                )
+                                stale_code_restart = bool(
+                                    refreshed_fingerprint
+                                    and refreshed_fingerprint == self._sidecar_code_fingerprint
+                                )
+                                if stale_code_restart:
+                                    self._sidecar_code_change_pending_fingerprint = None
+                                    self._sidecar_code_change_pending_since = None
+                            if self._stopping or stale_code_restart:
                                 pass
                             elif self._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
                                 self._sidecar_last_restart_reason = restart_reason
                                 await self._spawn_sidecar_locked(reason=restart_reason)
+                                reconnect_hub_root_after_sidecar_restart = True
                             else:
                                 self._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
                                 new_proc, restart_result = await restart_realtime_sidecar_subprocess(
@@ -8173,8 +8201,16 @@ class SupervisorManager:
                                 self._sidecar_consecutive_probe_failures = 0
                                 self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
                                 self._persist_runtime_state()
+                                reconnect_hub_root_after_sidecar_restart = True
                     except Exception:
                         _LOG.warning("failed to restart adaos-realtime sidecar", exc_info=True)
+                if reconnect_hub_root_after_sidecar_restart:
+                    reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
+                    if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
+                        _LOG.warning(
+                            "failed to reconnect hub-root after sidecar restart: %s",
+                            reconnect_result.get("error") or reconnect_result,
+                        )
             await self._maybe_resume_or_continue_transition()
             candidate_proc = self._candidate_proc
             if candidate_proc is not None:
@@ -10374,7 +10410,9 @@ async def supervisor_runtime_candidate_stop(payload: dict[str, Any]) -> dict[str
 
 @app.post("/api/supervisor/sidecar/restart", dependencies=[Depends(require_token)])
 async def supervisor_sidecar_restart(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().restart_sidecar(reconnect_hub_root=bool(payload.get("reconnect_hub_root")))
+    return await _manager().restart_sidecar(
+        reconnect_hub_root=bool(payload.get("reconnect_hub_root", True))
+    )
 
 
 @app.get("/api/supervisor/update/status", dependencies=[Depends(require_token)])

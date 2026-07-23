@@ -3961,6 +3961,12 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
         return "new-proc", {"ok": True, "accepted": True, "reason": "restarted"}
 
     monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    sync_calls: list[bool] = []
+    monkeypatch.setattr(
+        manager,
+        "_sync_sidecar_controlled_files_from_validated_slot",
+        lambda: sync_calls.append(True) or {"changed": False},
+    )
     monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart_sidecar)
     monkeypatch.setattr(manager, "_runtime_request_json", lambda **kwargs: {"ok": True, "accepted": True})
     monkeypatch.setattr(manager, "_runtime_sidecar_runtime_payload", lambda: {"transport_owner": "sidecar"})
@@ -3972,14 +3978,135 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
     persisted: list[bool] = []
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: persisted.append(True))
 
-    payload = asyncio.run(manager.restart_sidecar(reconnect_hub_root=True))
+    payload = asyncio.run(manager.restart_sidecar())
 
     assert manager._sidecar_proc == "new-proc"
     assert payload["restart"]["accepted"] is True
     assert payload["reconnect"]["ok"] is True
     assert payload["runtime"]["transport_owner"] == "sidecar"
     assert payload["process"]["proc"] == "new-proc"
+    assert sync_calls == [True]
     assert persisted
+
+
+def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def poll(self):
+            return None
+
+    manager._sidecar_proc = _RunningProc()
+    manager._sidecar_code_fingerprint = "already-restarted"
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _healthy(*_args, **_kwargs):
+        return True
+
+    class _StopMonitor(Exception):
+        pass
+
+    async def _stop_after_sidecar_reconcile():
+        raise _StopMonitor
+
+    async def _unexpected_restart(**_kwargs):
+        raise AssertionError("a restart already absorbed under the manager lock must be coalesced")
+
+    reconnect_calls: list[bool] = []
+
+    async def _unexpected_reconnect():
+        reconnect_calls.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "already-restarted"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _unexpected_reconnect)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _unexpected_restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager.monitor_forever())
+
+    assert reconnect_calls == []
+
+
+def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def poll(self):
+            return None
+
+    old_proc = _RunningProc("old")
+    new_proc = _RunningProc("new")
+    manager._sidecar_proc = old_proc
+    manager._sidecar_code_fingerprint = "old-fingerprint"
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _healthy(*_args, **_kwargs):
+        return True
+
+    class _StopMonitor(Exception):
+        pass
+
+    async def _stop_after_sidecar_reconcile():
+        raise _StopMonitor
+
+    restart_calls: list[object] = []
+
+    async def _restart(*, proc, role=None, repo_root=None):
+        restart_calls.append((proc, role, repo_root))
+        return new_proc, {"ok": True, "accepted": True, "reason": "restarted"}
+
+    reconnect_calls: list[bool] = []
+
+    async def _reconnect():
+        reconnect_calls.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "new-fingerprint"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _reconnect)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager.monitor_forever())
+
+    assert len(restart_calls) == 1
+    assert restart_calls[0][:2] == (old_proc, "hub")
+    assert restart_calls[0][2]
+    assert reconnect_calls == [True]
+    assert manager._sidecar_proc is new_proc
+    assert manager._sidecar_code_fingerprint == "new-fingerprint"
 
 
 def test_supervisor_sidecar_health_uses_managed_listener_snapshot_without_tcp_probe(monkeypatch, tmp_path) -> None:

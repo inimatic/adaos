@@ -65,6 +65,9 @@ Checklist items use the same four-level MoSCoW-style priority vocabulary as
   - transport provenance and ownership boundary
   - current scope, lifecycle manager, and next planned boundaries
 - can be inspected and restarted independently through the local control API / CLI without restarting the hub process
+- a managed restart synchronizes validated sidecar source before launch and is
+  completed by an explicit active-runtime hub-root reconnect; code sync and
+  operator requests are coalesced into one process generation
 
 Managed autostart / runtime boundary:
 
