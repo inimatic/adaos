@@ -4,6 +4,7 @@ import copy
 import json
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,19 @@ class BuilderWorkflowError(ValueError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _replace_path(source: Path, target: Path) -> None:
+    """Retry a bounded atomic replace when Windows briefly locks the target."""
+
+    for attempt in range(6):
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if attempt >= 5:
+                raise
+            time.sleep(0.01 * (2**attempt))
 
 
 def _kind(value: Any) -> str:
@@ -114,7 +128,7 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError("prompt context exceeds the bounded state size")
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
-        temporary.replace(path)
+        _replace_path(temporary, path)
 
     def _project_version(self, object_type: str, object_id: str) -> str | None:
         kind = _kind(object_type)
@@ -195,6 +209,10 @@ class BuilderWorkflowService:
         active = str(workflow.get("active_phase") or "prototype")
         automation = _mapping(workflow.get("automation"))
         automation_status = str(automation.get("status") or "not_started")
+        retained_automation = bool(str(automation.get("snapshot_path") or "").strip())
+        automation_previewable = automation_status == "completed" or (
+            retained_automation and automation_status in {"adapting", "failed", "frozen"}
+        )
         mutable = not archived
         return {
             "can_edit_prototype": mutable and active == "prototype",
@@ -204,7 +222,7 @@ class BuilderWorkflowService:
             "can_return_to_prototype": mutable and active == "automation" and automation_status == "completed",
             "can_publish": mutable and active == "automation" and automation_status == "completed",
             "can_preview_prototype": object_type == "scenario",
-            "can_preview_automation": object_type == "scenario" and automation_status == "completed",
+            "can_preview_automation": object_type == "scenario" and automation_previewable,
             "can_preview_publication": object_type == "scenario"
             and str(_mapping(workflow.get("publication")).get("status") or "") == "published",
         }
@@ -502,8 +520,8 @@ class BuilderWorkflowService:
             if previous.exists():
                 shutil.rmtree(previous)
             if snapshot_root.exists():
-                snapshot_root.replace(previous)
-            temporary.replace(snapshot_root)
+                _replace_path(snapshot_root, previous)
+            _replace_path(temporary, snapshot_root)
             if previous.exists():
                 shutil.rmtree(previous)
         except Exception:

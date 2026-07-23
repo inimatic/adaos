@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
+from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService, _replace_path
 
 
 @pytest.fixture
@@ -34,6 +34,29 @@ def workflow_project(tmp_path: Path) -> tuple[BuilderWorkflowService, Path]:
         dev_scenarios_root=scenarios,
         state_dir=tmp_path / "state",
     ), root
+
+
+def test_atomic_replace_retries_transient_windows_lock(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    target = tmp_path / "target.json"
+    source.write_text("new", encoding="utf-8")
+    target.write_text("old", encoding="utf-8")
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path: Path, destination: Path) -> Path:
+        nonlocal attempts
+        attempts += 1
+        if path == source and attempts < 3:
+            raise PermissionError("temporarily locked")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+
+    _replace_path(source, target)
+
+    assert attempts == 3
+    assert target.read_text(encoding="utf-8") == "new"
 
 
 def test_workflow_migrates_legacy_state_without_mutating_it(
@@ -138,7 +161,12 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
 ) -> None:
     service, root = workflow_project
     service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.1", "snapshot_path": "retained/automation"},
+    )
     service.transition("scenario", "recipes", "request_return_to_prototype", metadata={"task_id": "task.2"})
 
     snapshot = service.snapshot_current_prototype(
@@ -160,6 +188,7 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
     assert returned["prototype"]["status"] == "working"
     assert returned["automation"]["status"] == "frozen"
     assert returned["prototype"]["derived_from_automation_task"] == "task.2"
+    assert returned["capabilities"]["can_preview_automation"] is True
 
 
 def test_failed_prototype_adaptation_restores_completed_automation(
