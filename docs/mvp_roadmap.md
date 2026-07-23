@@ -125,7 +125,7 @@ Checklist:
 - [ ] Add lint or validation warnings for direct skill-owned browser projection
   writes outside the approved SDK path.
 
-Local implementation checkpoint, 2026-07-21:
+Closed local implementation checkpoint, 2026-07-23:
 
 - synchronous handlers now enter the durable core bridge through
   `ProjectionService.apply_sync(...)`; an active event-loop thread must use the
@@ -138,7 +138,9 @@ Local implementation checkpoint, 2026-07-21:
 - deterministic local acceptance proves runtime and guard status cards plus
   notifications remain visible through the core-owned path without depending
   on `infrastate_skill`
-- these are local code/test claims only. Deployed stand validation and the
+- the closure recheck passed `80` focused Python tests, `99` focused Angular
+  tests, the Angular production build, and strict English/Russian MkDocs builds
+- these remain local code/test claims only. Deployed stand validation and the
   remaining packaging, activation, registry-miss diagnostics, and lint items
   stay open.
 
