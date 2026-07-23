@@ -17,6 +17,12 @@ from adaos.services.realtime_sidecar import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_public_nats_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+    monkeypatch.delenv("ROOT_BASE_URL", raising=False)
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))

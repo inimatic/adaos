@@ -985,7 +985,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0)
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []

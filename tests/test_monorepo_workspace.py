@@ -291,6 +291,7 @@ def test_sparse_checkout_scope(monkeypatch, monorepo, paths):
 
 def test_sparse_set_auto_stashes_dirty_worktree(monkeypatch, monorepo, paths):
     monkeypatch.setenv("ADAOS_TESTING", "0")
+    monkeypatch.setenv("ENV_TYPE", "prod")
     repo = _make_skill_repo(paths, monorepo)
 
     repo.install("weather_skill")

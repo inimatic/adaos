@@ -370,23 +370,35 @@ def test_sync_skill_env_merges_template_legacy_and_store(tmp_path: Path, monkeyp
 
 
 def test_skill_memory_and_skill_env_share_same_store(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
     env_path = tmp_path / "db" / "skill_env.json"
     legacy_memory = tmp_path / ".skill_memory.json"
     legacy_memory.write_text(json.dumps({"seed": 7}, ensure_ascii=False, indent=2), encoding="utf-8")
     monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(env_path))
     monkeypatch.delenv("ADAOS_SKILL_MEMORY_PATH", raising=False)
 
-    assert read_env()["seed"] == 7
-    assert skill_memory_get("seed") == 7
+    try:
+        assert read_env()["seed"] == 7
+        assert skill_memory_get("seed") == 7
 
-    set_env("alpha", {"enabled": True})
-    assert skill_memory_get("alpha") == {"enabled": True}
+        set_env("alpha", {"enabled": True})
+        assert skill_memory_get("alpha") == {"enabled": True}
 
-    skill_memory_set("beta", 42)
-    assert get_env("beta") == 42
+        skill_memory_set("beta", 42)
+        assert get_env("beta") == 42
+    finally:
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
 
 
 def test_skill_memory_concurrent_writes_share_atomic_store(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
     env_path = tmp_path / "db" / "skill_env.json"
     monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(env_path))
     monkeypatch.delenv("ADAOS_SKILL_MEMORY_PATH", raising=False)
@@ -394,13 +406,19 @@ def test_skill_memory_concurrent_writes_share_atomic_store(tmp_path: Path, monke
     def _write(index: int) -> None:
         skill_memory_set(f"k{index}", {"value": index})
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(_write, range(32)))
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(_write, range(32)))
 
-    payload = read_env()
-    for index in range(32):
-        assert payload[f"k{index}"] == {"value": index}
-    assert not list(env_path.parent.glob("*.tmp"))
+        payload = read_env()
+        for index in range(32):
+            assert payload[f"k{index}"] == {"value": index}
+        assert not list(env_path.parent.glob("*.tmp"))
+    finally:
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
 
 
 def test_skill_env_prefers_ctx_runtime_path_over_env_var(monkeypatch) -> None:
