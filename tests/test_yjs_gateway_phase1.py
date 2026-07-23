@@ -1924,7 +1924,7 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert transport["update_stream_buffer_used_total"] >= 5
 
 
-def test_refresh_live_room_reports_gateway_phase_timings(monkeypatch) -> None:
+def test_apply_materialized_payload_reports_gateway_phase_timings(monkeypatch) -> None:
     key = "gateway-phase-timings"
     update = b"phase-update"
     gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[])
@@ -1960,7 +1960,7 @@ def test_refresh_live_room_reports_gateway_phase_timings(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS", 5.0)
 
     result = asyncio.run(
-        gateway_module.refresh_live_webspace_effective_branches(
+        gateway_module.apply_materialized_payload_to_live_room(
             key,
             reason="test_refresh",
             materialized_payload={"ui": {"application": {}}},
@@ -1982,7 +1982,7 @@ def test_refresh_live_room_reports_gateway_phase_timings(monkeypatch) -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
-def test_refresh_live_room_does_not_wait_for_client_sync_when_room_has_no_clients(monkeypatch) -> None:
+def test_apply_materialized_payload_does_not_wait_for_client_sync_without_clients(monkeypatch) -> None:
     key = "gateway-no-client-sync-wait"
     update = b"no-client-update"
     gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[])
@@ -2009,7 +2009,7 @@ def test_refresh_live_room_does_not_wait_for_client_sync_when_room_has_no_client
 
     started = time.perf_counter()
     result = asyncio.run(
-        gateway_module.refresh_live_webspace_effective_branches(
+        gateway_module.apply_materialized_payload_to_live_room(
             key,
             reason="test_refresh",
             materialized_payload={"ui": {"application": {}}},
@@ -2029,7 +2029,7 @@ def test_refresh_live_room_does_not_wait_for_client_sync_when_room_has_no_client
     gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
 
 
-def test_refresh_live_room_client_sync_wait_is_opt_in(monkeypatch) -> None:
+def test_apply_materialized_payload_client_sync_wait_is_opt_in(monkeypatch) -> None:
     key = "gateway-client-sync-wait-disabled"
     update = b"wait-disabled-update"
     gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[object()])
@@ -2055,7 +2055,7 @@ def test_refresh_live_room_client_sync_wait_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS", 0.0)
 
     result = asyncio.run(
-        gateway_module.refresh_live_webspace_effective_branches(
+        gateway_module.apply_materialized_payload_to_live_room(
             key,
             reason="test_refresh",
             materialized_payload={"ui": {"application": {}}},
@@ -2393,6 +2393,49 @@ def test_room_bootstrap_reuses_matching_persisted_effective_state(monkeypatch) -
     assert seed_result["room_effective_reused"] is True
     assert seed_result["room_effective_materialized"] is False
     assert gateway_module._room_effective_branches_ready(ydoc) is True
+
+
+def test_room_bootstrap_accepts_bootstrap_validated_persisted_state(monkeypatch) -> None:
+    import y_py as Y
+
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "builder")
+        ydoc.get_map("runtime").set(
+            txn,
+            "environment",
+            {
+                "materialization": {
+                    "scenario_id": "builder",
+                    "required_branches": ["ui.application", "data.catalog"],
+                }
+            },
+        )
+
+    def _unexpected_full_check(_ydoc) -> bool:  # noqa: ANN001
+        raise AssertionError("bootstrap-validated state must not decode effective branches again")
+
+    monkeypatch.setattr(gateway_module, "_room_effective_branches_ready", _unexpected_full_check)
+    seed_result = {
+        "scenario_id": "builder",
+        "space": "workspace",
+        "mode": "persisted_effective_state",
+        "persisted_effective_state_ready": True,
+    }
+    room = SimpleNamespace(ydoc=ydoc)
+
+    result = asyncio.run(
+        gateway_module._ensure_room_effective_materialized(
+            "bootstrap-trusted-persisted",
+            SimpleNamespace(),
+            room,
+            seed_result=seed_result,
+        )
+    )
+
+    assert result is False
+    assert seed_result["room_effective_validation"] == "trusted_persisted_marker"
+    assert room._diag_effective_branch_snapshot["ready"] is True
 
 
 def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(monkeypatch) -> None:

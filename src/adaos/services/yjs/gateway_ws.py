@@ -2216,27 +2216,20 @@ def _mark_room_open(
         entry["last_open_at"] = now
         entry["last_open_mode"] = "cold_open" if created else "room_reuse"
         entry["last_open_total_ms"] = round(float(open_total_ms), 3) if open_total_ms is not None else None
-        entry["last_open_apply_updates_ms"] = (
-            round(float(lifecycle.get("apply_updates_ms") or 0.0), 3)
-            if created and lifecycle
-            else None
-        )
-        entry["last_open_bootstrap_total_ms"] = (
-            round(float(lifecycle.get("total_ms") or 0.0), 3)
-            if created and lifecycle
-            else None
-        )
-        entry["last_open_bootstrap_mode"] = (
-            str(lifecycle.get("mode") or "").strip() or None
-            if created and lifecycle
-            else None
-        )
-        entry["last_open_bootstrap_persisted_via"] = (
-            str(lifecycle.get("persisted_via") or "").strip() or None
-            if created and lifecycle
-            else None
-        )
-        entry["last_open_bootstrap_single_pass"] = bool(lifecycle.get("used_provided_ydoc")) if created and lifecycle else False
+        if created:
+            entry["last_open_apply_updates_ms"] = (
+                round(float(lifecycle.get("apply_updates_ms") or 0.0), 3) if lifecycle else None
+            )
+            entry["last_open_bootstrap_total_ms"] = (
+                round(float(lifecycle.get("total_ms") or 0.0), 3) if lifecycle else None
+            )
+            entry["last_open_bootstrap_mode"] = (
+                str(lifecycle.get("mode") or "").strip() or None if lifecycle else None
+            )
+            entry["last_open_bootstrap_persisted_via"] = (
+                str(lifecycle.get("persisted_via") or "").strip() or None if lifecycle else None
+            )
+            entry["last_open_bootstrap_single_pass"] = bool(lifecycle.get("used_provided_ydoc")) if lifecycle else False
 
 
 def _mark_room_reset(
@@ -5860,7 +5853,11 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 _ylog.warning("failed to evict YStore after room bootstrap failure webspace=%s", webspace_id, exc_info=True)
                         raise
         room = self.rooms[name]
-        if not _room_effective_top_level_ready(getattr(room, "ydoc", None)):
+        cached_snapshot = getattr(room, "_diag_effective_branch_snapshot", None)
+        effective_ready = bool(isinstance(cached_snapshot, dict) and cached_snapshot.get("ready"))
+        if not effective_ready:
+            effective_ready = _room_effective_top_level_ready(getattr(room, "ydoc", None))
+        if not effective_ready:
             repair_update = await _repair_room_effective_branches(
                 webspace_id,
                 getattr(room, "ystore", None),
@@ -5881,7 +5878,6 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 )
         else:
             try:
-                cached_snapshot = getattr(room, "_diag_effective_branch_snapshot", None)
                 if not (isinstance(cached_snapshot, dict) and cached_snapshot.get("ready")):
                     room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(room.ydoc)
                     room._diag_effective_last_full_check_mono = time.monotonic()
@@ -6732,7 +6728,7 @@ async def _apply_room_materialized_payload(
         return b"", {"ok": False, "ready": False, "error": f"{type(exc).__name__}: {exc}", "phase_timings_ms": phase_timings_ms}
 
 
-async def refresh_live_webspace_effective_branches(
+async def _update_live_webspace_effective_branches(
     webspace_id: str,
     *,
     reason: str = "live_room_refresh",
@@ -6741,7 +6737,7 @@ async def refresh_live_webspace_effective_branches(
     materialized_payload: Mapping[str, Any] | None = None,
     materialization_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Refresh effective scenario branches without tearing down live transports.
+    """Repair effective scenario branches without tearing down live transports.
 
     A scenario materialization refresh should update the active YDoc contents,
     not close the browser's YWS/WebRTC datachannel path. Hard room resets remain
@@ -6962,6 +6958,44 @@ async def refresh_live_webspace_effective_branches(
     }
 
 
+async def apply_materialized_payload_to_live_room(
+    webspace_id: str,
+    materialized_payload: Mapping[str, Any],
+    *,
+    reason: str = "materialized_payload_commit",
+    persist_repair: bool = True,
+    force_full_state_update: bool = False,
+    materialization_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply an already-resolved payload to the live room atomically."""
+
+    if not isinstance(materialized_payload, Mapping) or not materialized_payload:
+        raise ValueError("materialized_payload is required")
+    return await _update_live_webspace_effective_branches(
+        webspace_id,
+        reason=reason,
+        persist_repair=persist_repair,
+        force_full_state_update=force_full_state_update,
+        materialized_payload=materialized_payload,
+        materialization_identity=materialization_identity,
+    )
+
+
+async def reconcile_live_webspace_effective_branches(
+    webspace_id: str,
+    *,
+    reason: str = "live_room_reconcile",
+    persist_repair: bool = True,
+) -> dict[str, Any]:
+    """Repair a live room from its current selector and persisted sources."""
+
+    return await _update_live_webspace_effective_branches(
+        webspace_id,
+        reason=reason,
+        persist_repair=persist_repair,
+    )
+
+
 async def _repair_room_effective_branches_on_owner_loop(
     webspace_id: str,
     ystore: Any,
@@ -7099,6 +7133,36 @@ async def _ensure_room_effective_materialized(
         authoritative_scenario = seed_scenario
     current_scenario = _room_current_scenario(ydoc)
     expected_scenario = authoritative_scenario or seed_scenario or current_scenario or "web_desktop"
+    if (
+        str((seed_result or {}).get("mode") or "").strip() == "persisted_effective_state"
+        and bool((seed_result or {}).get("persisted_effective_state_ready"))
+        and current_scenario == expected_scenario
+        and seed_scenario == expected_scenario
+    ):
+        trusted_snapshot = {
+            "ready": True,
+            "mode": "persisted_effective_state",
+            "details": "trusted_persisted_marker",
+            "required_branches": list(_room_effective_required_branches(ydoc)),
+            "missing_required_branches": [],
+            "current_scenario": current_scenario,
+            "materialized_scenario": current_scenario,
+            "materialization_mismatch": False,
+        }
+        try:
+            room._diag_effective_branch_snapshot = trusted_snapshot
+            room._diag_effective_last_full_check_mono = time.monotonic()
+        except Exception:
+            pass
+        if seed_result is not None:
+            seed_result.update(
+                {
+                    "room_effective_materialized": False,
+                    "room_effective_reused": True,
+                    "room_effective_validation": "trusted_persisted_marker",
+                }
+            )
+        return False
     if _room_effective_branches_ready(ydoc) and (
         not expected_scenario or current_scenario == expected_scenario
     ):
@@ -7268,7 +7332,10 @@ async def _finalize_room_bootstrap_rebuild_status(
     """
     try:
         ydoc = getattr(room, "ydoc", None)
-        ready = _room_effective_top_level_ready(ydoc)
+        cached_snapshot = getattr(room, "_diag_effective_branch_snapshot", None)
+        ready = bool(isinstance(cached_snapshot, dict) and cached_snapshot.get("ready"))
+        if not ready:
+            ready = _room_effective_top_level_ready(ydoc)
         if seed_result is not None:
             seed_result["room_bootstrap_rebuild_status"] = "ready" if ready else "not_ready"
             seed_result["room_bootstrap_rebuild_error"] = None if ready else "effective_branches_not_ready"

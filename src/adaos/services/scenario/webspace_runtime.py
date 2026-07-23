@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping
+import atexit
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import hashlib
 import json
 import logging
@@ -16,6 +19,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 
@@ -87,6 +91,8 @@ _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS: dict[str, asyncio.Task[Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
+_MATERIALIZATION_CPU_EXECUTOR: ThreadPoolExecutor | None = None
+_MATERIALIZATION_CPU_EXECUTOR_LOCK = threading.Lock()
 
 
 def _is_control_flow_base_exception(exc: BaseException) -> bool:
@@ -3661,10 +3667,6 @@ def _trust_previous_materialized_branch_fingerprints_enabled() -> bool:
     return _env_flag_default_enabled("ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS")
 
 
-def _pointer_first_scenario_switch_enabled() -> bool:
-    return _env_flag_enabled("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH")
-
-
 def _preserve_live_state_on_rebuild_enabled() -> bool:
     return _env_flag_enabled("ADAOS_WEBSPACE_REBUILD_PRESERVE_LIVE_STATE")
 
@@ -3675,6 +3677,8 @@ def _publish_live_room_during_rebuild_enabled() -> bool:
 
 def _publish_live_room_for_rebuild(action: str) -> bool:
     action_token = str(action or "").strip().lower()
+    if action_token == "scenario_switch_rebuild":
+        return False
     if action_token == "builder_revision_apply":
         return _env_flag_default_enabled("ADAOS_BUILDER_REVISION_LIVE_ROOM_UPDATES")
     return _publish_live_room_during_rebuild_enabled()
@@ -3717,26 +3721,9 @@ def _refresh_live_room_after_rebuild_enabled() -> bool:
 
 def _defer_live_room_refresh_for_rebuild(action: str) -> bool:
     action_token = str(action or "").strip()
-    if action_token not in {"scenario_switch_rebuild", "builder_revision_apply"}:
-        return False
-    if action_token == "builder_revision_apply":
-        return _env_flag_enabled("ADAOS_BUILDER_REVISION_DEFER_LIVE_ROOM_REFRESH")
-    if (
-        _env_flag_enabled("ADAOS_TESTING")
-        and action_token == "scenario_switch_rebuild"
-        and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH") is None
-    ):
-        return False
-    return _env_flag_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH")
-
-
-def _skip_live_room_refresh_for_rebuild(action: str) -> bool:
-    action_token = str(action or "").strip()
-    if action_token != "scenario_switch_rebuild":
-        return False
-    if _env_flag_enabled("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_SKIP_LIVE_ROOM_REFRESH") is None:
-        return False
-    return _env_flag_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_SKIP_LIVE_ROOM_REFRESH")
+    return action_token == "builder_revision_apply" and _env_flag_enabled(
+        "ADAOS_BUILDER_REVISION_DEFER_LIVE_ROOM_REFRESH"
+    )
 
 
 def _live_room_refresh_debounce_s() -> float:
@@ -3746,36 +3733,6 @@ def _live_room_refresh_debounce_s() -> float:
     except Exception:
         value = 0.2
     return max(0.0, min(value, 10.0))
-
-
-def _fresh_doc_on_scenario_switch_enabled() -> bool:
-    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC")
-
-
-def _scenario_switch_payload_only_rebuild_enabled() -> bool:
-    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_PAYLOAD_ONLY_REBUILD")
-
-
-def _scenario_switch_atomic_live_commit_enabled() -> bool:
-    """Return whether selector and projection can be committed together.
-
-    The payload-only rebuild path applies all effective branches to the live
-    room in one transaction.  Publishing the selector before that transaction
-    creates a split document when a client misses the small pointer update but
-    receives the larger materialization update.
-    """
-    if _pointer_first_scenario_switch_enabled():
-        return False
-    if not _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_ATOMIC_LIVE_COMMIT"):
-        return False
-    return bool(
-        _fresh_doc_on_scenario_switch_enabled()
-        and _scenario_switch_payload_only_rebuild_enabled()
-        and _refresh_live_room_after_rebuild_enabled()
-        and not _publish_live_room_for_rebuild("scenario_switch_rebuild")
-        and not _defer_live_room_refresh_for_rebuild("scenario_switch_rebuild")
-        and not _skip_live_room_refresh_for_rebuild("scenario_switch_rebuild")
-    )
 
 
 def _scenario_switch_background_route_yield_s() -> float:
@@ -3835,6 +3792,51 @@ def _materialization_worker_enabled() -> bool:
     if explicit is not None:
         return _env_flag_enabled("ADAOS_MATERIALIZATION_WORKER")
     return not _env_flag_enabled("ADAOS_TESTING")
+
+
+def _materialization_cpu_workers() -> int:
+    raw = str(os.getenv("ADAOS_MATERIALIZATION_CPU_WORKERS") or "1").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 1
+    return max(1, min(value, 4))
+
+
+def _get_materialization_cpu_executor() -> ThreadPoolExecutor:
+    global _MATERIALIZATION_CPU_EXECUTOR
+
+    executor = _MATERIALIZATION_CPU_EXECUTOR
+    if executor is not None:
+        return executor
+    with _MATERIALIZATION_CPU_EXECUTOR_LOCK:
+        executor = _MATERIALIZATION_CPU_EXECUTOR
+        if executor is None:
+            executor = ThreadPoolExecutor(
+                max_workers=_materialization_cpu_workers(),
+                thread_name_prefix="adaos-materialize",
+            )
+            _MATERIALIZATION_CPU_EXECUTOR = executor
+    return executor
+
+
+def _shutdown_materialization_cpu_executor() -> None:
+    global _MATERIALIZATION_CPU_EXECUTOR
+
+    with _MATERIALIZATION_CPU_EXECUTOR_LOCK:
+        executor = _MATERIALIZATION_CPU_EXECUTOR
+        _MATERIALIZATION_CPU_EXECUTOR = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+    loop = asyncio.get_running_loop()
+    call = partial(function, *args, **kwargs)
+    return await loop.run_in_executor(_get_materialization_cpu_executor(), call)
+
+
+atexit.register(_shutdown_materialization_cpu_executor)
 
 
 def _materialization_worker_timeout_s() -> float:
@@ -4065,8 +4067,6 @@ async def _run_materialization_worker(
 
 
 def _scenario_switch_mode() -> str:
-    if _pointer_first_scenario_switch_enabled():
-        return "pointer_first"
     return "pointer_only"
 
 
@@ -6891,6 +6891,15 @@ class WebspaceScenarioRuntime:
         _record_timing(timings, "build_materialized_payload", stage_started)
         return resolved, payload, timings
 
+    def _prepare_materialization_skill_decls_sync(
+        self,
+        webspace_id: str,
+    ) -> tuple[List[Dict[str, Any]], str]:
+        source_mode = _resolve_projection_refresh_space(webspace_id)
+        declarations = self._collect_skill_decls(source_mode)
+        fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
+        return declarations, fingerprint
+
     async def resolve_materialized_payload_from_doc_async(
         self,
         ydoc: Y.YDoc,
@@ -6916,12 +6925,11 @@ class WebspaceScenarioRuntime:
         prepared_skill_decls = skill_decls_snapshot
         prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
         if prepared_skill_decls is None:
-            source_mode = await asyncio.to_thread(_resolve_projection_refresh_space, webspace_id)
             stage_started = time.perf_counter()
-            prepared_skill_decls = await asyncio.to_thread(self._collect_skill_decls, source_mode)
-            prepared_skill_fingerprint = str(
-                getattr(self, "_last_skill_decls_fingerprint", "") or ""
-            ).strip()
+            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
+                self._prepare_materialization_skill_decls_sync,
+                webspace_id,
+            )
             _record_timing(timings, "prepare_skill_decls", stage_started)
 
         _raise_if_rebuild_request_superseded(webspace_id, request_id)
@@ -6938,7 +6946,7 @@ class WebspaceScenarioRuntime:
         timings.update(_copy_timing_map(self._last_collect_inputs_timings_ms) or {})
 
         _raise_if_rebuild_request_superseded(webspace_id, request_id)
-        resolved, payload, worker_timings = await asyncio.to_thread(
+        resolved, payload, worker_timings = await _run_materialization_cpu(
             self._resolve_materialized_payload_from_inputs_sync,
             inputs,
         )
@@ -6998,15 +7006,11 @@ class WebspaceScenarioRuntime:
                 prepared_skill_decls = skill_decls_snapshot
                 prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
                 if prepared_skill_decls is None:
-                    source_mode = await asyncio.to_thread(_resolve_projection_refresh_space, webspace_id)
                     prepare_started = time.perf_counter()
-                    prepared_skill_decls = await asyncio.to_thread(
-                        self._collect_skill_decls,
-                        source_mode,
+                    prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
+                        self._prepare_materialization_skill_decls_sync,
+                        webspace_id,
                     )
-                    prepared_skill_fingerprint = str(
-                        getattr(self, "_last_skill_decls_fingerprint", "") or ""
-                    ).strip()
                     _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                 worker_result = await _run_materialization_worker(
                     webspace_id,
@@ -7089,15 +7093,11 @@ class WebspaceScenarioRuntime:
         prepared_skill_decls = skill_decls_snapshot
         prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
         if prepared_skill_decls is None:
-            source_mode = await asyncio.to_thread(_resolve_projection_refresh_space, webspace_id)
             stage_started = time.perf_counter()
-            prepared_skill_decls = await asyncio.to_thread(
-                self._collect_skill_decls,
-                source_mode,
+            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
+                self._prepare_materialization_skill_decls_sync,
+                webspace_id,
             )
-            prepared_skill_fingerprint = str(
-                getattr(self, "_last_skill_decls_fingerprint", "") or ""
-            ).strip()
             _record_timing(timings, "prepare_skill_decls", stage_started)
 
         operational_doc_started = time.perf_counter()
@@ -7118,7 +7118,7 @@ class WebspaceScenarioRuntime:
             collect_phase_timings = _copy_timing_map(self._last_collect_inputs_timings_ms) or {}
             timings.update(collect_phase_timings)
 
-            resolved, payload, worker_timings = await asyncio.to_thread(
+            resolved, payload, worker_timings = await _run_materialization_cpu(
                 self._resolve_materialized_payload_from_inputs_sync,
                 inputs,
             )
@@ -7300,18 +7300,11 @@ class WebspaceScenarioRuntime:
                         ydoc_timings["materialization_cache_hit"] = 0.0
                     else:
                         if _materialization_worker_enabled():
-                            source_mode = await asyncio.to_thread(
-                                _resolve_projection_refresh_space,
+                            prepare_started = time.perf_counter()
+                            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
+                                self._prepare_materialization_skill_decls_sync,
                                 webspace_id,
                             )
-                            prepare_started = time.perf_counter()
-                            prepared_skill_decls = await asyncio.to_thread(
-                                self._collect_skill_decls,
-                                source_mode,
-                            )
-                            prepared_skill_fingerprint = str(
-                                getattr(self, "_last_skill_decls_fingerprint", "") or ""
-                            ).strip()
                             _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                             worker_result = await _run_materialization_worker(
                                 webspace_id,
@@ -7323,7 +7316,7 @@ class WebspaceScenarioRuntime:
                                 skill_decls_fingerprint=prepared_skill_fingerprint,
                             )
                         else:
-                            worker_result = await asyncio.to_thread(
+                            worker_result = await _run_materialization_cpu(
                                 self._rebuild_fresh_doc_snapshot_sync,
                                 webspace_id,
                                 request_id=request_id,
@@ -8233,28 +8226,32 @@ def _schedule_live_room_refresh(
                 active_reason = str(current_request.get("reason") or "").strip() or "live_room_refresh"
                 started = time.perf_counter()
                 try:
-                    from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
-
                     refresh_kwargs: dict[str, Any] = {"reason": active_reason}
                     if "persist_repair" in current_request:
                         refresh_kwargs["persist_repair"] = bool(current_request.get("persist_repair"))
-                    if bool(current_request.get("force_full_state_update")):
-                        refresh_kwargs["force_full_state_update"] = True
                     request_payload = current_request.get("materialized_payload")
-                    if isinstance(request_payload, Mapping) and request_payload:
-                        refresh_kwargs["materialized_payload"] = request_payload
                     request_identity = current_request.get("materialization_identity")
-                    if isinstance(request_identity, Mapping) and request_identity:
-                        refresh_kwargs["materialization_identity"] = request_identity
-                    try:
-                        await refresh_live_webspace_effective_branches(
+                    if isinstance(request_payload, Mapping) and request_payload:
+                        from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room  # pylint: disable=import-outside-toplevel
+
+                        if bool(current_request.get("force_full_state_update")):
+                            refresh_kwargs["force_full_state_update"] = True
+                        await apply_materialized_payload_to_live_room(
+                            key,
+                            materialized_payload=request_payload,
+                            **refresh_kwargs,
+                            materialization_identity=(
+                                request_identity
+                                if isinstance(request_identity, Mapping) and request_identity
+                                else None
+                            ),
+                        )
+                    else:
+                        from adaos.services.yjs.gateway import reconcile_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
+
+                        await reconcile_live_webspace_effective_branches(
                             key,
                             **refresh_kwargs,
-                        )
-                    except TypeError:
-                        await refresh_live_webspace_effective_branches(
-                            key,
-                            reason=active_reason,
                         )
                     stats = _live_room_refresh_stats(key)
                     stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
@@ -8981,9 +8978,9 @@ async def _read_persisted_catalog_for_member_projection_check(webspace_id: str) 
 
 async def _refresh_live_room_for_member_catalog_projection(webspace_id: str, *, node_id: str) -> bool:
     try:
-        from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
+        from adaos.services.yjs.gateway import reconcile_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
 
-        result = await refresh_live_webspace_effective_branches(
+        result = await reconcile_live_webspace_effective_branches(
             webspace_id,
             reason=f"member_snapshot_refreshed_catalog_present:{node_id}",
         )
@@ -9358,6 +9355,8 @@ async def rebuild_webspace_from_sources(
     previous_status = describe_webspace_rebuild_state(webspace_id)
     effective_switch_timings = _copy_timing_map(switch_timings_ms) or _copy_timing_map(previous_status.get("switch_timings_ms"))
     effective_switch_mode = str(switch_mode or previous_status.get("switch_mode") or "").strip() or None
+    if requested_action == "scenario_switch_rebuild":
+        effective_switch_mode = "pointer_only"
     effective_materialization_identity = dict(materialization_identity) if isinstance(materialization_identity, Mapping) else None
     if effective_materialization_identity is None and requested_action == "scenario_switch_rebuild" and target_scenario:
         stage_started = time.perf_counter()
@@ -9412,6 +9411,7 @@ async def rebuild_webspace_from_sources(
     reset_room_result: dict[str, Any] | None = None
     ystore_reset = False
     fresh_doc_rebuild = False
+    scenario_switch_payload_rebuild = requested_action == "scenario_switch_rebuild"
 
     async def _write_reseed_pointer() -> None:
         try:
@@ -9452,33 +9452,18 @@ async def rebuild_webspace_from_sources(
                 exc_info=True,
             )
 
-    if requested_action == "scenario_switch_rebuild" and _fresh_doc_on_scenario_switch_enabled():
+    if scenario_switch_payload_rebuild:
         if not target_scenario:
             raise ValueError("scenario_id is required for scenario switch rebuild")
 
-        fresh_doc_rebuild = True
-        stage_started = time.perf_counter()
-        # The live room remains authoritative during an ordinary switch. Its
-        # branch diff is a valid continuation of the existing YStore snapshot;
-        # clearing the store here forced a synchronous full-state rewrite on
-        # every switch and made the UI wait on disk durability.
-        reset_room_result = {
-            "ok": True,
-            "skipped": "live_transport_and_ystore_preserved",
-            "close_reason": "scenario_switch_diff_commit",
-            "reset_route_runtime": False,
-            "closed_connections": 0,
-            "closed_webrtc_peers": 0,
-            "ystore_reset": False,
-        }
-        _record_timing(timings_ms, "fresh_doc_reset_runtime_state", stage_started)
+        timings_ms["scenario_switch_transport_preserved"] = 0.0
 
         if _scenario_switch_inline_listing_sync_enabled():
             stage_started = time.perf_counter()
             await _sync_webspace_listing_target(webspace_id)
-            _record_timing(timings_ms, "fresh_doc_sync_listing", stage_started)
+            _record_timing(timings_ms, "scenario_switch_sync_listing", stage_started)
         else:
-            timings_ms["fresh_doc_sync_listing_deferred"] = 0.0
+            timings_ms["scenario_switch_sync_listing_deferred"] = 0.0
 
     should_invalidate_loader_cache = bool(
         target_scenario
@@ -9605,18 +9590,15 @@ async def rebuild_webspace_from_sources(
     publish_live_room = bool(live_room_update_requested)
     if requested_action == "builder_revision_apply" and not prefer_live_room:
         publish_live_room = _builder_revision_detached_direct_live_room_updates_enabled()
-    payload_only_rebuild = (
-        requested_action == "scenario_switch_rebuild"
-        and fresh_doc_rebuild
-        and _scenario_switch_payload_only_rebuild_enabled()
-        and not publish_live_room
-        and _refresh_live_room_after_rebuild_enabled()
-        and not _defer_live_room_refresh_for_rebuild(requested_action)
-    )
+    payload_only_rebuild = scenario_switch_payload_rebuild
     try:
         stage_started = time.perf_counter()
         rebuild_timeout_s = _semantic_rebuild_timeout_s(requested_action)
-        initial_scenario_id = target_scenario if fresh_doc_rebuild or requested_action == "builder_revision_apply" else None
+        initial_scenario_id = (
+            target_scenario
+            if scenario_switch_payload_rebuild or requested_action == "builder_revision_apply"
+            else None
+        )
         builder_fresh_doc_rebuild = (
             requested_action == "builder_revision_apply" and _builder_revision_fresh_doc_rebuild_enabled()
         )
@@ -9821,7 +9803,10 @@ async def rebuild_webspace_from_sources(
 
     should_refresh_live_room = (
         not publish_live_room
-        and _refresh_live_room_after_rebuild_enabled()
+        and (
+            scenario_switch_payload_rebuild
+            or _refresh_live_room_after_rebuild_enabled()
+        )
         and requested_action
         in {
             "scenario_switch_rebuild",
@@ -9833,23 +9818,7 @@ async def rebuild_webspace_from_sources(
     )
     force_full_state_update = bool(fresh_doc_rebuild and ystore_reset)
     if should_refresh_live_room:
-        if _skip_live_room_refresh_for_rebuild(requested_action):
-            live_room_refresh_result = {
-                "ok": True,
-                "skipped": True,
-                "reason": "scenario_switch_read_model_only",
-                "materialized_payload_available": bool(materialized_payload),
-                "materialization_identity": _clone_json_like(effective_materialization_identity),
-            }
-            timings_ms["live_room_refresh_skipped"] = 0.0
-            _log.info(
-                "skipped live-room refresh after semantic rebuild webspace=%s action=%s reason=%s payload_available=%s",
-                webspace_id,
-                requested_action,
-                live_room_refresh_result["reason"],
-                bool(materialized_payload),
-            )
-        elif _defer_live_room_refresh_for_rebuild(requested_action):
+        if _defer_live_room_refresh_for_rebuild(requested_action):
             persist_repair = not (
                 requested_action == "builder_revision_apply"
                 and builder_fresh_doc_rebuild
@@ -9877,8 +9846,6 @@ async def rebuild_webspace_from_sources(
                     requested_action,
                 )
                 if requested_action in {"scenario_switch_rebuild", "builder_revision_apply", "reload", "reset"}:
-                    from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
-
                     persist_repair = not (
                         requested_action == "builder_revision_apply"
                         and builder_fresh_doc_rebuild
@@ -9887,20 +9854,25 @@ async def rebuild_webspace_from_sources(
                     refresh_kwargs: dict[str, Any] = {
                         "reason": f"semantic_rebuild:{requested_action}",
                         "persist_repair": persist_repair,
-                        "force_full_state_update": bool(force_full_state_update and persist_repair),
                     }
                     if materialized_payload:
-                        refresh_kwargs["materialized_payload"] = materialized_payload
-                        refresh_kwargs["materialization_identity"] = effective_materialization_identity
-                    try:
-                        live_room_refresh_result = await refresh_live_webspace_effective_branches(
+                        from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room  # pylint: disable=import-outside-toplevel
+
+                        refresh_kwargs["force_full_state_update"] = bool(
+                            force_full_state_update and persist_repair
+                        )
+                        live_room_refresh_result = await apply_materialized_payload_to_live_room(
+                            webspace_id,
+                            materialized_payload=materialized_payload,
+                            **refresh_kwargs,
+                            materialization_identity=effective_materialization_identity,
+                        )
+                    else:
+                        from adaos.services.yjs.gateway import reconcile_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
+
+                        live_room_refresh_result = await reconcile_live_webspace_effective_branches(
                             webspace_id,
                             **refresh_kwargs,
-                        )
-                    except TypeError:
-                        live_room_refresh_result = await refresh_live_webspace_effective_branches(
-                            webspace_id,
-                            reason=f"semantic_rebuild:{requested_action}",
                         )
                 else:
                     from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
@@ -10094,6 +10066,7 @@ async def rebuild_webspace_from_sources(
         "live_room_refresh": live_room_refresh_result,
         "workflow_sync": workflow_sync_result,
         "fresh_doc_rebuild": bool(fresh_doc_rebuild),
+        "atomic_payload_rebuild": bool(scenario_switch_payload_rebuild),
         "force_full_state_update": bool(force_full_state_update),
         "payload_only_rebuild": bool(payload_only_rebuild),
     }
@@ -10172,6 +10145,7 @@ def _schedule_scenario_switch_rebuild(
     request_source: str | None = None,
     request_client: str | None = None,
 ) -> None:
+    switch_mode = "pointer_only"
     request_id = str(request_id or "").strip() or secrets.token_hex(8)
     initial_phase_timings = _derive_phase_timings(
         switch_timings_ms=switch_timings_ms,
@@ -10859,8 +10833,8 @@ async def switch_webspace_scenario(
         str(request_client or "").strip() or "-",
     )
     switch_mode = _scenario_switch_mode()
-    atomic_selector_commit = _scenario_switch_atomic_live_commit_enabled()
-    selector_commit_mode = "materialization_transaction" if atomic_selector_commit else "eager_pointer"
+    atomic_selector_commit = True
+    selector_commit_mode = "materialization_transaction"
     loader_space = "workspace"
     try:
         if row:
@@ -11053,7 +11027,11 @@ async def switch_webspace_scenario(
                         _record_timing(timings_ms, "write_switch_pointer", stage_started)
 
         stage_started = time.perf_counter()
-        row = workspace_index.set_workspace_current_scenario_overlay(webspace_id, scenario_id)
+        row = await asyncio.to_thread(
+            workspace_index.set_workspace_current_scenario_overlay,
+            webspace_id,
+            scenario_id,
+        )
         _record_timing(timings_ms, "persist_current_scenario", stage_started)
     except Exception:
         finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)

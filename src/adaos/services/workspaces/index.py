@@ -58,7 +58,11 @@ def _dedupe_manifest_rows(rows: Iterable["WebspaceManifest"]) -> List["WebspaceM
     return out
 
 
-def _workspace_event_payload(row: "WebspaceManifest") -> dict[str, Any]:
+def _workspace_event_payload(
+    row: "WebspaceManifest",
+    *,
+    catalog_version: int | None = None,
+) -> dict[str, Any]:
     return {
         "workspace_id": row.workspace_id,
         "display_name": row.display_name,
@@ -68,15 +72,25 @@ def _workspace_event_payload(row: "WebspaceManifest") -> dict[str, Any]:
         "owner_scope": row.owner_scope,
         "profile_scope": row.profile_scope,
         "device_binding": row.device_binding,
-        "catalog_version": workspace_catalog_version(),
+        "catalog_version": (
+            int(catalog_version)
+            if catalog_version is not None
+            else workspace_catalog_version()
+        ),
     }
 
 
-def _emit_workspace_event(event_type: str, row: "WebspaceManifest" | None = None, *, workspace_id: str | None = None) -> None:
+def _emit_workspace_event(
+    event_type: str,
+    row: "WebspaceManifest" | None = None,
+    *,
+    workspace_id: str | None = None,
+    catalog_version: int | None = None,
+) -> None:
     try:
         ctx = get_ctx()
         payload = (
-            _workspace_event_payload(row)
+            _workspace_event_payload(row, catalog_version=catalog_version)
             if row is not None
             else {
                 "workspace_id": str(workspace_id or "").strip(),
@@ -1091,8 +1105,9 @@ def set_workspace_home_scenario_ref_overlay(workspace_id: str, scenario_ref: Any
 
 
 def set_workspace_current_scenario_overlay(workspace_id: str, scenario_id: Any) -> WebspaceManifest:
-    current = get_workspace_overlay(workspace_id)
-    overlay = dict(current) if isinstance(current, dict) else {}
+    workspace_id = _normalize_workspace_id(workspace_id)
+    current = ensure_workspace(workspace_id)
+    overlay = current.ui_overlay
     workspace = dict(overlay.get("workspace")) if isinstance(overlay.get("workspace"), dict) else {}
     normalized = _normalize_current_scenario(scenario_id)
     if normalized:
@@ -1105,7 +1120,27 @@ def set_workspace_current_scenario_overlay(workspace_id: str, scenario_id: Any) 
             overlay["workspace"] = workspace
         else:
             overlay.pop("workspace", None)
-    return set_workspace_overlay(workspace_id, overlay)
+    encoded_overlay = _encode_ui_overlay_json(overlay)
+    if encoded_overlay == current.ui_overlay_json:
+        return current
+
+    sql = get_ctx().sql
+    with sql.connect() as con:
+        _ensure_schema(con)
+        con.execute(
+            "UPDATE y_workspaces SET ui_overlay_json=? WHERE workspace_id=?",
+            (encoded_overlay, workspace_id),
+        )
+        catalog_version = _bump_workspace_catalog_version(con)
+        con.commit()
+
+    updated = replace(current, ui_overlay_json=encoded_overlay)
+    _emit_workspace_event(
+        "workspace.manifest.changed",
+        updated,
+        catalog_version=catalog_version,
+    )
+    return updated
 
 
 def set_workspace_installed_overlay(workspace_id: str, installed: Any) -> WebspaceManifest:

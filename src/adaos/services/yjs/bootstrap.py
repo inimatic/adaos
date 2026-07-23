@@ -260,12 +260,53 @@ def _project_seed_payload_to_compat_branches(ydoc: Y.YDoc, *, scenario_id: str) 
 
 def _project_runtime_environment(ydoc: Y.YDoc) -> bool:
     runtime_map = ydoc.get_map("runtime")
-    payload = runtime_environment_payload()
-    if _coerce_dict(runtime_map.get("environment") or {}) == payload:
+    current = _coerce_dict(runtime_map.get("environment") or {})
+    payload = dict(current)
+    payload.update(runtime_environment_payload())
+    if current == payload:
         return False
     with ydoc.begin_transaction() as txn:
         runtime_map.set(txn, "environment", _clone_json_like(payload))
     return True
+
+
+def _persisted_effective_state_ready(ydoc: Y.YDoc, *, scenario_id: str) -> bool:
+    """Validate a materialized snapshot without decoding its large branches."""
+
+    expected = str(scenario_id or "").strip()
+    if not expected:
+        return False
+    try:
+        ui_map = ydoc.get_map("ui")
+        runtime_map = ydoc.get_map("runtime")
+        current = str(ui_map.get("current_scenario") or "").strip()
+        environment = _coerce_dict(runtime_map.get("environment") or {})
+        materialization = _coerce_dict(environment.get("materialization") or {})
+        materialized = str(materialization.get("scenario_id") or "").strip()
+        bootstrap = _coerce_dict(runtime_map.get(BOOTSTRAP_RUNTIME_KEY) or {})
+        bootstrap_scenario = str(bootstrap.get("scenario_id") or "").strip()
+        if current != expected or materialized != expected:
+            return False
+        if not bool(bootstrap.get("ready")) or bootstrap_scenario != expected:
+            return False
+        required = materialization.get("required_branches")
+        if not isinstance(required, list) or not required:
+            return False
+        root_keys: dict[str, set[str]] = {}
+        for raw_path in required:
+            parts = [part for part in str(raw_path or "").split(".") if part]
+            if len(parts) != 2:
+                return False
+            root_name, key = parts
+            keys = root_keys.get(root_name)
+            if keys is None:
+                keys = {str(item) for item in ydoc.get_map(root_name).keys()}
+                root_keys[root_name] = keys
+            if key not in keys:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def _encode_bootstrap_diff(ydoc: Y.YDoc, before_state_vector: bytes | None) -> bytes | None:
@@ -435,7 +476,6 @@ async def ensure_webspace_seeded_from_scenario(
             return False
         return True
 
-    application = ui_map.get("application")
     requested_scenario_id = _resolve_requested_scenario(
         ui_map,
         default_scenario_id,
@@ -450,6 +490,20 @@ async def ensure_webspace_seeded_from_scenario(
             ui_map.set(txn, "current_scenario", requested_scenario_id)
         current_scenario_overridden = True
         result["current_scenario_overridden"] = True
+    if not current_scenario_overridden and _persisted_effective_state_ready(
+        target_doc,
+        scenario_id=requested_scenario_id,
+    ):
+        result["persisted_effective_state_ready"] = True
+        if runtime_environment_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
+        return _finish("persisted_effective_state")
+
+    application = ui_map.get("application")
     bootstrap_marker_changed = write_runtime_bootstrap_state(
         target_doc,
         webspace_id=webspace_id,
