@@ -186,6 +186,7 @@ class BuilderProjectCatalogService:
         selected_object_type: str | None = None,
         selected_object_id: str | None = None,
         webspace_id: str | None = None,
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         requested_kind = _kind(kind)
         kinds = [requested_kind] if requested_kind else ["scenario", "skill"]
@@ -217,6 +218,8 @@ class BuilderProjectCatalogService:
                 state = _prompt_summary(root)
                 current = current_kind == selected_kind and project_id == selected_id
                 archived = bool(state["archived"])
+                if archived and not include_archived:
+                    continue
                 version = str(manifest.get("version") or "DEV")
                 items.append(
                     {

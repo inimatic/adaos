@@ -180,6 +180,7 @@ class BuilderAutomationService:
                 "topic_id": f"prompt-project:{kind}:{project_id}",
                 "implementation_brief": brief,
                 "brief_path": str(brief_path or "").strip() or None,
+                "source_prototype_version": self._project_version(kind, project_id),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -438,6 +439,7 @@ class BuilderAutomationService:
                 "id": str(session.get("object_id") or ""),
                 "companion_skill_id": str(session.get("companion_skill_id") or "") or None,
             },
+            "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
             "iteration": int(session.get("iteration") or 0),
             "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
             "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
@@ -999,6 +1001,18 @@ class BuilderAutomationService:
         if not project_id:
             raise ValueError("object_id is required")
         return kind, project_id
+
+    def _project_version(self, object_type: str, object_id: str) -> str | None:
+        parent = self.dev_scenarios_root if object_type == "scenario" else self.dev_skills_root
+        manifest_name = "scenario.yaml" if object_type == "scenario" else "skill.yaml"
+        path = parent / object_id / manifest_name
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        except (OSError, ValueError, yaml.YAMLError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        return str(payload.get("version") or "").strip() or None
 
     def _session_path(self, object_type: str, object_id: str) -> Path:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"

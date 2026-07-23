@@ -11596,6 +11596,114 @@ async def prewarm_webspace_materialization_sources() -> dict[str, Any]:
         "modes": modes,
         "elapsed_ms": _elapsed_ms(started),
     }
+
+
+async def reload_workspace_webspaces_for_publication(
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any]:
+    """Reload workspace-backed consumers after a DEV artifact is published.
+
+    Publishing copies a new source tree into ``workspace``. Existing Yjs rooms
+    keep their materialized projection until they are explicitly rebuilt, so a
+    successful publication must invalidate and reload matching workspace-mode
+    webspaces. DEV webspaces are intentionally excluded: their source of truth
+    remains the DEV tree and Builder revision materialization flow.
+    """
+
+    object_type = str(object_type or "").strip().lower()
+    object_id = str(object_id or "").strip()
+    if object_type not in {"scenario", "skill"} or not object_id:
+        return {"ok": False, "accepted": False, "error": "project_identity_required"}
+
+    if object_type == "scenario":
+        scenarios_loader.invalidate_cache(scenario_id=object_id, space="workspace")
+
+    try:
+        rows = list(workspace_index.list_workspaces())
+    except Exception:
+        rows = []
+
+    targets: list[tuple[str, str]] = []
+    for row in rows:
+        if str(getattr(row, "effective_source_mode", "workspace") or "workspace").strip().lower() != "workspace":
+            continue
+        webspace_id = str(getattr(row, "workspace_id", "") or "").strip()
+        if not webspace_id:
+            continue
+        try:
+            state = await describe_webspace_operational_state(webspace_id)
+            scenario_id = str(state.current_scenario or state.effective_home_scenario or "").strip()
+        except Exception:
+            scenario_id = str(getattr(row, "effective_home_scenario", "") or "").strip()
+        if not scenario_id:
+            continue
+        if object_type == "scenario":
+            if scenario_id != object_id:
+                continue
+        else:
+            try:
+                manifest = scenarios_loader.read_manifest(scenario_id, space="workspace")
+                dependencies = {
+                    str(item).strip()
+                    for item in (manifest.get("depends") or [])
+                    if str(item).strip()
+                }
+            except Exception:
+                dependencies = set()
+            if object_id not in dependencies:
+                continue
+        targets.append((webspace_id, scenario_id))
+
+    reloaded: list[str] = []
+    failed: list[str] = []
+    for webspace_id, scenario_id in targets:
+        try:
+            await reload_webspace_from_scenario(
+                webspace_id,
+                scenario_id=scenario_id,
+                action=f"published_{object_type}_reload",
+                event_payload={
+                    "source": "registry.publication",
+                    "object_type": object_type,
+                    "object_id": object_id,
+                },
+            )
+            reloaded.append(webspace_id)
+        except Exception:
+            failed.append(webspace_id)
+            _log.warning(
+                "failed to reload workspace webspace=%s after publishing %s:%s",
+                webspace_id,
+                object_type,
+                object_id,
+                exc_info=True,
+            )
+
+    return {
+        "ok": not failed,
+        "accepted": bool(targets),
+        "object_type": object_type,
+        "object_id": object_id,
+        "reloaded_webspaces": reloaded,
+        "failed_webspaces": failed,
+    }
+
+
+@subscribe("registry.scenarios.published")
+async def _on_scenario_published(evt: Dict[str, Any]) -> None:
+    payload = _payload(evt)
+    scenario_id = str(payload.get("name") or payload.get("scenario_id") or "").strip()
+    if scenario_id:
+        await reload_workspace_webspaces_for_publication("scenario", scenario_id)
+
+
+@subscribe("registry.skills.published")
+async def _on_skill_published(evt: Dict[str, Any]) -> None:
+    payload = _payload(evt)
+    skill_id = str(payload.get("name") or payload.get("skill_id") or "").strip()
+    if skill_id:
+        await reload_workspace_webspaces_for_publication("skill", skill_id)
     _log.info("prewarmed webspace materialization sources result=%s", result)
     return result
 
@@ -11704,6 +11812,7 @@ __all__ = [
     "get_webspace_rebuild_materialized_payload",
     "invalidate_webspace_materialization_cache",
     "prewarm_webspace_materialization_sources",
+    "reload_workspace_webspaces_for_publication",
     "set_current_webspace_home",
     "rebuild_webspace_from_sources",
     "canonical_materialization_identity",

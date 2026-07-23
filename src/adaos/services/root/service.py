@@ -1482,18 +1482,6 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        if not result.dry_run:
-            emit(
-                self.ctx.bus,
-                "registry.skills.published",
-                {
-                    "name": result.name,
-                    "version": result.version,
-                    "previous_version": result.previous_version,
-                    "updated_at": result.updated_at,
-                },
-                "root.dev",
-            )
         # гарантируем, что подпуть есть в sparse-checkout (на случай узкой sparse-конфигурации)
         if result.dry_run:
             return result
@@ -1513,6 +1501,17 @@ class RootDeveloperService:
         )
         msg = f"publish(skill): {result.name} v{result.version}"
         sha = mgr.push(result.name, msg, signoff=signoff, bump=False)
+        emit(
+            self.ctx.bus,
+            "registry.skills.published",
+            {
+                "name": result.name,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
@@ -1574,18 +1573,6 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        if not result.dry_run:
-            emit(
-                self.ctx.bus,
-                "registry.scenarios.published",
-                {
-                    "name": result.name,
-                    "version": result.version,
-                    "previous_version": result.previous_version,
-                    "updated_at": result.updated_at,
-                },
-                "root.dev",
-            )
         if result.dry_run:
             return result
         try:
@@ -1603,6 +1590,17 @@ class RootDeveloperService:
         )
         msg = f"publish(scenario): {result.name} v{result.version}"
         sha = mgr.push(result.name, msg, signoff=signoff, bump=False)
+        emit(
+            self.ctx.bus,
+            "registry.scenarios.published",
+            {
+                "name": result.name,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 

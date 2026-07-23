@@ -246,6 +246,7 @@ async def list_workbench_projects(
     selected_object_type: str | None = None,
     selected_object_id: str | None = None,
     webspace_id: str | None = None,
+    include_archived: bool = False,
     service: BuilderProjectCatalogService = Depends(_get_project_catalog_service),
 ) -> list[dict[str, Any]]:
     try:
@@ -256,6 +257,7 @@ async def list_workbench_projects(
             selected_object_type=selected_object_type,
             selected_object_id=selected_object_id,
             webspace_id=webspace_id,
+            include_archived=include_archived,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

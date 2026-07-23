@@ -100,7 +100,29 @@ def test_project_catalog_api_forwards_bounded_query() -> None:
             "selected_object_type": "scenario",
             "selected_object_id": "shopping",
             "webspace_id": "dev1",
+            "include_archived": False,
         }
+    ]
+
+
+def test_project_catalog_hides_archived_projects_unless_requested(tmp_path: Path) -> None:
+    scenarios = tmp_path / "scenarios"
+    project = scenarios / "archived_scene"
+    project.mkdir(parents=True)
+    (project / "scenario.yaml").write_text(
+        "id: archived_scene\ntitle: Archived scene\ndescription: Old work\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (project / "prompt_state.json").write_text('{"archived": true}', encoding="utf-8")
+    service = BuilderProjectCatalogService(
+        skills_root=tmp_path / "skills",
+        scenarios_root=scenarios,
+        state_dir=tmp_path / "state",
+    )
+
+    assert service.list_projects() == []
+    assert [item["id"] for item in service.list_projects(include_archived=True)] == [
+        "scenario:archived_scene"
     ]
 
 

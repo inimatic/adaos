@@ -94,6 +94,8 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert started["ok"] is True
     status = service.status(object_type="scenario", object_id="recipes")
     assert status["session"]["status"] == "completed"
+    assert status["session"]["source_prototype_version"] == "0.1.0"
+    assert status["automation"]["source_prototype_version"] == "0.1.0"
     assert status["session"]["standard_prompt_version"].startswith("adaos-skill-realization/")
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
