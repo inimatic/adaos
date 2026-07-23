@@ -23,19 +23,16 @@ accepts the required evidence; closed tasks do not remain as checked rows.
 
 The local Wave 0-1 gate is closed. The active sequence is:
 
-1. close the remaining M1 packaging, activation-order, and diagnostics gaps;
-2. prove the same projection path on the target stand;
-3. build the M2 operator truth and durable operation plane;
-4. land the shared M3 activation runtime and migrate the three heavy operator
+1. prove the M1 projection path on the target stand;
+2. build the M2 operator truth and durable operation plane;
+3. land the shared M3 activation runtime and migrate the three heavy operator
    skills;
-5. finish browser/webspace acceptance and the release-candidate soak.
+4. finish browser/webspace acceptance and the release-candidate soak.
 
 ## Must
 
 | ID | State | Work and next proof | Owner |
 | --- | --- | --- | --- |
-| `M1-DECLARATIONS` | open | Preserve `skill.yaml`, `webui.json`, projections, routes, and stream metadata in installed artifacts; load them before handlers, subscriptions, and startup refreshes. Prove install plus activation ordering. | [MVP M1](mvp_roadmap.md#milestone-m1-runtime-projection-contract-freeze), [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
-| `M1-DIAGNOSTICS` | open | Diagnose successful publishes with no matching projection rule and warn on direct skill-owned browser/Yjs writes outside `ProjectionService`. | [MVP M1](mvp_roadmap.md#milestone-m1-runtime-projection-contract-freeze), [Semantic State Plane](architecture/semantic-state-plane.md) |
 | `TEST-001` / `MRI-003` | open | Make projection tests hermetic, stop collection-order replacement of the real `nats` package, and obtain a conclusive repository-wide test result. | [MVP Release Evidence](architecture/mvp-release-evidence.md) |
 | `M2-TRUTH` / `STATUS-007` | in progress | Populate compact runtime/update/slot/route/Yjs/member/guard cards, keep control traffic inside its own budget, and replace repeated full-summary polling with versioned push/delta consumption. | [MVP M2](mvp_roadmap.md#milestone-m2-operator-truth-plane), [Operational Event Model](architecture/operational-event-model-roadmap.md) |
 | `M2-OPERATIONS` | open | Persist accepted/running operations across restart and define cancellation, retry, recovery, and notification behavior. | [MVP M2](mvp_roadmap.md#milestone-m2-operator-truth-plane), [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |

@@ -242,6 +242,20 @@ Dependency admission policy:
 - Heavy/native dependency stacks such as Torch, TensorFlow, OpenCV, FAISS, EasyOCR, and transformer runtimes are rejected for in-process skills by default. They should be declared as `runtime.kind: service` with `runtime.env.mode: venv`, or later as a core-owned dependency profile.
 - `runtime.env.allow_heavy_dependencies: true` is a transitional override for controlled stand work. It keeps the operator-visible risk explicit and should not be used as the production shape for ML/model skills.
 
+### Declaration staging and activation order
+
+Runtime preparation copies `skill.yaml` and `webui.json` into the slot source
+artifact and verifies that their bytes match the source files. The resolved
+manifest retains `data_projections` and `data_routes`.
+
+Activation loads projection rules plus stream/Yjs receiver metadata from the
+target slot before smoke import and target lifecycle hooks. Startup discovery
+does the same before importing runtime or workspace handlers, so subscriptions
+and import-time refreshes see the active declaration set. A missing projection
+rule during a skill-owned publish is available in
+`/api/node/projection-diagnostics`; direct calls to write-capable core Yjs APIs
+also produce `projection.direct_yjs_write` validation warnings.
+
 ### Runtime lifecycle hooks
 
 AdaOS now supports optional lifecycle hooks in the resolved skill manifest.

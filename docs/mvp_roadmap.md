@@ -108,13 +108,13 @@ MVP outcome:
 
 Checklist:
 
-- [ ] Runtime packaging preserves `skill.yaml`, `webui.json`, and projection
+- [x] Runtime packaging preserves `skill.yaml`, `webui.json`, and projection
   declarations for installed skill artifacts.
-- [ ] Skill activation loads `data_projections`, `data_routes`, and stream
+- [x] Skill activation loads `data_projections`, `data_routes`, and stream
   receiver metadata before tools, subscriptions, or startup refreshes run.
 - [x] Add a first-class `ProjectionService.apply_sync(...)` or equivalent SDK
   bridge for short synchronous handlers.
-- [ ] Emit diagnostics when a skill returns success but no projection rule
+- [x] Emit diagnostics when a skill returns success but no projection rule
   exists for the slot it attempted to publish.
 - [x] Browser runtime consumes projection lifecycle states:
   `pending`, `refreshing`, `ready`, `stale`, and `error`.
@@ -122,7 +122,7 @@ Checklist:
   legacy desktop toast branches.
 - [x] Keep arbitrary runtime `ProjectionRecord` write surfaces unavailable to
   browser/API callers.
-- [ ] Add lint or validation warnings for direct skill-owned browser projection
+- [x] Add lint or validation warnings for direct skill-owned browser projection
   writes outside the approved SDK path.
 
 Closed local implementation checkpoint, 2026-07-23:
@@ -138,11 +138,19 @@ Closed local implementation checkpoint, 2026-07-23:
 - deterministic local acceptance proves runtime and guard status cards plus
   notifications remain visible through the core-owned path without depending
   on `infrastate_skill`
-- the closure recheck passed `80` focused Python tests, `99` focused Angular
+- runtime staging now verifies byte-identical `skill.yaml` and `webui.json`
+  artifacts, and activation/startup load projections, routes, and receiver
+  policy before target handlers or lifecycle refreshes run
+- successful skill publish attempts without a matching projection rule now
+  produce bounded, operator-visible diagnostics with skill, scope, slot,
+  webspace, payload size, and active-declaration state
+- skill validation reports `projection.direct_yjs_write` for direct calls to
+  write-capable core Yjs APIs while preserving read-only and SDK access paths
+- the original closure recheck passed `80` focused Python tests, `99` focused Angular
   tests, the Angular production build, and strict English/Russian MkDocs builds
-- these remain local code/test claims only. Deployed stand validation and the
-  remaining packaging, activation, registry-miss diagnostics, and lint items
-  stay open.
+- the declaration/diagnostics closure adds `77` focused Python tests and strict
+  MkDocs verification. These remain local code/test claims; deployed stand
+  validation stays open under `MVP-STAND-001`.
 
 Related docs:
 

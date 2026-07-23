@@ -73,6 +73,15 @@ The target state is:
   context.
 - [x] Added a first-class `ProjectionService.apply_sync(...)` bridge for short
   synchronous handlers; async handlers must await `apply(...)` explicitly.
+- [x] Runtime staging verifies that `skill.yaml` and `webui.json` survive
+  installation unchanged and keeps projection/route declarations in the
+  resolved manifest.
+- [x] Activation and startup discovery load projections, routes, and receiver
+  policy before importing target handlers or running target lifecycle hooks.
+- [x] Projection rule misses from skill-owned publishes are aggregated in
+  `/api/node/projection-diagnostics` and emit a rate-limited warning.
+- [x] Skill validation warns on calls to write-capable core Yjs APIs outside the
+  declared projection or SDK path.
 
 ## Transition Shims
 
@@ -93,17 +102,17 @@ architecture:
   [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md), starting with
   `ProjectionSlot`, `StreamReceiver`, dirty routing, set-if-changed, and
   diagnostics.
-- [ ] Make runtime packaging preserve projection metadata for every installed
+- [x] Make runtime packaging preserve projection metadata for every installed
   skill artifact.
-- [ ] Load skill projection declarations during activation before any tool,
+- [x] Load skill projection declarations during activation before any tool,
   subscription, or startup refresh can publish.
-- [ ] Add diagnostics for projection registry misses:
-  `scope`, `slot`, `skill`, `webspace_id`, and whether the skill manifest was
-  available.
+- [x] Add diagnostics for projection registry misses:
+  `scope`, `slot`, `skill`, `webspace_id`, and whether active runtime
+  declarations were loaded.
 - [ ] Keep status-card compact-boundary diagnostics in soak reports:
   `maxCardBytes`, `maxCardBytesObserved`, `oversizedCardTotal`, and
   `lastOversizedCard`.
-- [ ] Add a Yjs/write log event when a skill returns `ok` but no projection rule
+- [x] Add a Yjs/write log event when a skill returns `ok` but no projection rule
   exists for the slot it attempted to publish.
 - [ ] Add projection-pressure attribution that distinguishes:
   core rebuild, skill projection, stream snapshot, browser gateway replay, and
