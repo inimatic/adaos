@@ -128,6 +128,13 @@ def _record_projection_rule_miss(
     token_scope = str(scope or "").strip()
     token_slot = str(slot or "").strip()
     token_webspace = str(webspace_id or "").strip()
+    skill_name = owner.removeprefix("skill:")
+    try:
+        from adaos.services.skill.declarations import runtime_skill_declarations_snapshot
+
+        declaration_state = runtime_skill_declarations_snapshot(skill_name)
+    except Exception:
+        declaration_state = {}
     key = "\x1f".join((owner, token_scope, token_slot, token_webspace))
     now = time.time()
     should_log = False
@@ -142,7 +149,7 @@ def _record_projection_rule_miss(
                 _PROJECTION_RULE_MISS_STATS.pop(oldest, None)
             row = {
                 "owner": owner,
-                "skill": owner.removeprefix("skill:"),
+                "skill": skill_name,
                 "scope": token_scope,
                 "slot": token_slot,
                 "webspace_id": token_webspace or None,
@@ -156,6 +163,9 @@ def _record_projection_rule_miss(
         row["attempt_total"] = int(row.get("attempt_total") or 0) + 1
         row["last_at"] = now
         row["last_payload_bytes"] = _json_payload_bytes(value)
+        row["declarations_loaded"] = bool(declaration_state)
+        row["declared_projection_total"] = int(declaration_state.get("projection_total") or 0)
+        row["declared_route_total"] = int(declaration_state.get("route_total") or 0)
         last_log_at = float(row.get("_last_log_at") or 0.0)
         should_log = last_log_at <= 0.0 or now - last_log_at >= _PROJECTION_RULE_MISS_LOG_INTERVAL_SEC
         if should_log:
