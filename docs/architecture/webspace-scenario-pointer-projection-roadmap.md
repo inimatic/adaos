@@ -156,7 +156,7 @@ ownership model, see:
   `src/adaos/services/scenario/webspace_runtime.py`
 - Scenario projection into compatibility caches:
   `src/adaos/services/scenario/manager.py`
-- Bootstrap seed + rebuild nudge path:
+- Bootstrap snapshot load and explicit cold-room validation path:
   `src/adaos/services/yjs/bootstrap.py`
 - Operator diagnostics + benchmark/reporting:
   `src/adaos/apps/api/node_api.py`,
@@ -622,11 +622,10 @@ live publication contract is now atomic: validate the target, persist the
 desired scenario in the webspace control state, materialize the effective
 branches, then commit `ui.current_scenario` and those branches to the live room
 in one Yjs transaction. The selector is not published to the live document
-before the projection is ready. The older feature flag
-`ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH=1` remains accepted as an explicit
-eager-pointer compatibility mode. Deployments can also disable the atomic
-commit with `ADAOS_WEBSPACE_SCENARIO_SWITCH_ATOMIC_LIVE_COMMIT=0`, but that is
-a rollback mode rather than the target architecture.
+before the projection is ready. The former pointer-first, fresh-doc,
+payload-only, skip/defer-refresh, and atomic-commit feature flags are removed;
+ordinary switching has one production contract. Recovery keeps separate
+reload/reset/restore operations instead of configuration-driven switch modes.
 
 This transaction is the scenario-switch commit barrier. A browser must never
 observe a new selector paired with branches from the previous scenario as the
@@ -644,12 +643,13 @@ bookkeeping. The live scenario pointer is part of the later materialization
 transaction; semantic rebuild remains the sole owner of effective runtime
 branches after reconcile.
 
-Bootstrap fallback now follows the same ownership model. When canonical
-scenario projection is unavailable during startup, bootstrap seeds only the
-legacy compatibility cache branches plus `ui.current_scenario` and nudges a
-normal semantic rebuild. Emergency startup no longer writes `ui.application`,
-`data.catalog`, `data.installed`, `data.desktop`, or `registry.merged`
-directly.
+Bootstrap fallback now follows the same ownership model. It loads persisted
+state and validates a matching ready marker without scheduling a hidden
+semantic rebuild. When canonical scenario projection is unavailable during an
+empty-store startup, bootstrap seeds only legacy compatibility cache branches
+plus `ui.current_scenario`; the room owner then invokes the explicit resolver
+and apply pipeline. Emergency startup never writes `ui.application`,
+`data.catalog`, `data.installed`, `data.desktop`, or `registry.merged` directly.
 
 When an active live room is already attached, the final materialized payload is
 applied without closing YWS or WebRTC data channels. Avoiding the early pointer
@@ -950,6 +950,14 @@ Use this checklist as the authoritative progress tracker for the migration.
   `time_to_interactive_focus`, and `time_to_full_hydration`.
 - [x] Coalesce stale background hydration work when a newer scenario switch
   supersedes it.
+- [x] Bound process-owned materialization CPU work and keep live YDocs on their
+  owner loop. `ADAOS_MATERIALIZATION_CPU_WORKERS` defaults to 1 and is capped
+  at 4.
+- [x] Reuse a validated durable effective-state marker on cold room open instead
+  of decoding large branches and launching another materialization.
+- [ ] Define a generation-aware CRDT checkpoint protocol across server YStore,
+  browser YDoc, and optional IndexedDB. This is required to bound long-term
+  Yjs struct history without turning an ordinary switch into a reconnect.
 
 ### 5.5. ABI and Renderer Readiness Contract
 
@@ -970,6 +978,8 @@ Use this checklist as the authoritative progress tracker for the migration.
   as mandatory runtime inputs.
 - [x] Demote those branches to optional compatibility caches.
 - [x] Remove obsolete switch-time materialize-and-copy code paths.
+- [x] Remove obsolete pointer-first/fresh-doc/skip/defer/atomic switch flags;
+  ordinary scenario switching now has one atomic live-commit contract.
 - [x] Update architecture and operator docs to describe the new ownership
   model.
 

@@ -390,16 +390,13 @@ The browser-facing rule should be explicit:
 
 ## Current Gaps Relative To That Contract
 
-The current codebase is close, but still fragmented:
+The normal switch path and cold-room bootstrap now have explicit ownership:
+bootstrap loads/validates, the resolver produces a plain payload, and live-room
+apply commits selector plus projection without transport teardown. Remaining
+gaps are in recovery unification and phased rendering:
 
-- bootstrap seeding relies on `scenarios.synced -> rebuild_webspace_async()`
-  as an event side effect rather than an explicit rebuild pipeline
-- reload/reset is closer to the target contract now that soft reload no longer
-  tears down the room or piggybacks on a second rebuild via
-  `scenarios.synced`, but the recovery family is still broader than the final
-  single reconcile contract
-- scenario switch uses a different projection path than reload/reset instead of
-  reusing the same semantic rebuild primitive
+- reload/reset no longer piggyback on `scenarios.synced`, but the recovery
+  family is still broader than the final single reconcile contract
 - snapshot restore restores persisted Yjs state without a follow-up semantic
   reconcile step
 - projection loading is still partly hidden inside rebuild logic, which makes

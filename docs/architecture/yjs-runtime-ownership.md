@@ -90,6 +90,7 @@ PyO3 and therefore becomes another native memory leak.
 | YStore replay compaction | keep | bound replay entries/bytes and persist a recoverable base snapshot |
 | idle room eviction | keep | end unused transport/session ownership and release room resources |
 | fresh-doc materialization worker | keep | isolate full snapshot creation and enforce timeout/RSS/result budgets |
+| payload resolver CPU executor | keep | run non-YDoc resolution off the event loop with a bounded process-owned pool |
 | realtime/YWS sidecar boundary | keep as target architecture | preserve browser channels across A/B core updates |
 | snapshot preflight subprocess | keep | reject corrupt native updates before they enter the runtime |
 | scenario-switch subprocess | removed | payload-only resolution runs in the long-lived runtime; CPU work is threaded and YDoc ownership stays explicit |
@@ -100,6 +101,34 @@ The sidecar must eventually own the long-lived YWS transport and YDoc runtime,
 not semantic Builder routing or scenario policy. Core A/B handoff transfers an
 explicit channel/session contract. It must not infer topology from webspace
 suffixes.
+
+## Yjs Operation Contract
+
+| Operation | Input | May mutate a live YDoc | Transport effect |
+| --- | --- | --- | --- |
+| bootstrap load | durable YStore snapshot | only static environment fields when changed | preserves the room/channel |
+| payload resolve | canonical scenario, skills, and overlays | no | none |
+| payload apply | already-resolved payload | yes, one selector/projection transaction | preserves the room/channel |
+| reconcile | current selector plus canonical sources | yes, only as explicit repair | preserves the room/channel |
+| reset/restore | explicit recovery command | replaces or recreates state | reconnect is expected |
+
+`apply_materialized_payload_to_live_room` and
+`reconcile_live_webspace_effective_branches` are intentionally separate public
+APIs. Reconcile cannot accept a prepared payload, and apply cannot silently
+fall back to source resolution. Ordinary scenario switching uses resolve then
+apply. Hard room reset is not a switch primitive.
+
+Bootstrap preserves runtime-owned `runtime.environment.materialization`
+metadata while refreshing static environment fields. A durable snapshot is
+reused without decoding large effective branches when its ready marker,
+selector, materialized scenario, and required top-level branches agree. A
+missing or stale marker takes the full validation/repair path. Bootstrap does
+not emit `scenarios.synced` or schedule a hidden semantic rebuild.
+
+Non-YDoc resolver work uses a bounded executor. The default is one worker;
+`ADAOS_MATERIALIZATION_CPU_WORKERS` may be set from 1 through 4 after profiling
+the target host. Live YDocs remain on their room owner loop regardless of this
+setting.
 
 ## Acceptance Evidence
 
@@ -154,6 +183,32 @@ On the 40-switch plateau, end-to-end readiness was 5.770 s p50 and 6.995 s
 p95. Rebuild time was 4.175 s p50 and 4.936 s p95. These timings remain the
 input to materialization parallelism work; they are not part of the ownership
 fix.
+
+### Switch-path acceptance, 2026-07-23
+
+After resolver, bootstrap, and live-apply ownership were simplified, the local
+Windows runtime completed a 20-switch warm-up followed by three blocks of 120
+alternating `web_desktop` / generated DEV scenario switches:
+
+- all 360 measured switches reached `ready`; no timeout or transient control
+  failure occurred;
+- the final 120-switch block held RSS at 298.6 -> 298.4 MiB and private memory
+  at 314.5 -> 311.3 MiB, with 14 threads before and after;
+- the room stayed at generation 1 with zero reset/drop and zero pending
+  send/store tasks;
+- average server-ready time was 184 ms, 171 ms, and 222 ms for the three
+  blocks; the final block ranged from 107 to 997 ms under concurrent browser
+  activity;
+- replay pressure auto-backup converged to zero replay entries/bytes and an
+  up-to-date persisted snapshot.
+
+The compact Yjs snapshot still grew by about 0.8 KiB per alternating switch.
+That is CRDT struct/history growth, not retained process memory or a blocked
+channel. It requires a future generation-aware server/client checkpoint
+protocol that also invalidates stale browser IndexedDB history. An implicit
+room reset on ordinary switch would reconnect the UI and allow an old client
+document to merge the discarded history back, so it is not an acceptable
+workaround.
 
 ## Upgrade Rules
 
