@@ -12,6 +12,7 @@ from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
 from adaos.services.workspace_registry import (
     list_workspace_registry_entries,
+    load_workspace_registry,
     rebuild_workspace_registry,
     registry_pattern_set,
     upsert_workspace_registry_entry,
@@ -156,6 +157,47 @@ def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_p
     assert payload["scenarios"] == []
     assert "required declaration is missing" in caplog.text
     assert "unsupported_present=scenario.json" in caplog.text
+
+
+def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    workspace_registry_path(workspace).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "skills": [
+                    {
+                        "kind": "skill",
+                        "id": "weather_skill",
+                        "name": "weather_skill",
+                        "manifest": "skills/weather_skill/skill.yaml",
+                    }
+                ],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "legacy_scene",
+                        "name": "legacy_scene",
+                        "manifest": "scenarios/legacy_scene/scenario.json",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert [item["name"] for item in payload["skills"]] == ["weather_skill"]
+    assert payload["scenarios"] == []
+    assert "workspace registry entry rejected" in caplog.text
+    assert "required=scenario.yaml" in caplog.text
 
 
 def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Path):

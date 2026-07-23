@@ -153,6 +153,11 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
                 ctx.scenarios_repo.install(name)
             except Exception as exc:
                 errors.append(f"scenarios/{name}: {exc}")
+        reconcile_result: dict[str, Any] | None = None
+        try:
+            reconcile_result = reconcile_workspace_db_to_materialized(ctx)
+        except Exception as exc:
+            errors.append(f"reconcile: {exc}")
         return {
             "ok": len(errors) == 0,
             "mode": "archive",
@@ -162,6 +167,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "registry_scenarios": registry_scenarios,
             "fallback_used": fallback_used,
             "errors": errors,
+            "reconcile": reconcile_result,
             "patterns": desired,
         }
 
@@ -185,6 +191,20 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "patterns": desired,
         }
 
+    try:
+        reconcile_result = reconcile_workspace_db_to_materialized(ctx)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "skills": skills,
+            "scenarios": scenarios,
+            "registry_skills": registry_skills,
+            "registry_scenarios": registry_scenarios,
+            "fallback_used": fallback_used,
+            "error": f"workspace reconcile failed after pull: {exc}",
+            "patterns": desired,
+        }
+
     return {
         "ok": True,
         "skills": skills,
@@ -192,6 +212,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "registry_skills": registry_skills,
         "registry_scenarios": registry_scenarios,
         "fallback_used": fallback_used,
+        "reconcile": reconcile_result,
         "patterns": desired,
     }
 

@@ -212,6 +212,37 @@ def _repo_workspace_skills_root(ctx: AgentContext) -> Path | None:
     return None
 
 
+def _ctx_path(ctx: AgentContext, attr_name: str) -> Path | None:
+    try:
+        attr = getattr(ctx.paths, attr_name, None)
+        value = attr() if callable(attr) else attr
+        if value:
+            return Path(value).expanduser().resolve()
+    except Exception:
+        return None
+    return None
+
+
+def _workspace_skill_manifest_exists(ctx: AgentContext, skill_name: str) -> bool:
+    token = str(skill_name or "").strip()
+    if not token:
+        return False
+
+    roots: list[Path] = []
+    for attr_name in ("skills_workspace_dir", "skills_dir"):
+        root = _ctx_path(ctx, attr_name)
+        if root is not None and root not in roots:
+            roots.append(root)
+
+    repo_root = _repo_workspace_skills_root(ctx)
+    if repo_root is not None and repo_root not in roots:
+        roots.append(repo_root)
+
+    if not roots:
+        return True
+    return any((root / token / "skill.yaml").is_file() for root in roots)
+
+
 def _resolve_workspace_skill_source(ctx: AgentContext, skill_name: str, workspace_root: Path, workspace_skills_root: Path) -> Path:
     local_path = (workspace_skills_root / skill_name).resolve()
     if local_path.exists():
@@ -321,6 +352,12 @@ async def list_skills(
             continue
         item = _to_mapping(row)
         name = str(item.get("name") or item.get("id") or item.get("repr") or "").strip()
+        if name and not _workspace_skill_manifest_exists(ctx, name):
+            log.error(
+                "installed skill hidden: required declaration is missing name=%s required=skill.yaml",
+                name,
+            )
+            continue
         if name:
             item["version"] = _resolve_list_skill_version(
                 ctx=ctx,
@@ -356,6 +393,12 @@ async def installed_status(mgr: SkillManager = Depends(_get_manager), ctx: Agent
             continue
         name = str(getattr(row, "name", "") or "").strip()
         if not name:
+            continue
+        if not _workspace_skill_manifest_exists(ctx, name):
+            log.error(
+                "installed skill status hidden: required declaration is missing name=%s required=skill.yaml",
+                name,
+            )
             continue
 
         meta = mgr.get(name)

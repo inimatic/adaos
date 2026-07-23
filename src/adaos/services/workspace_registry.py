@@ -341,11 +341,33 @@ def _normalize_entries(kind: RegistryKind, raw_entries: Any) -> list[dict[str, A
         name = _clean_text(raw.get("name")) or _clean_text(raw.get("id"))
         if not name:
             continue
+        if not _registry_entry_manifest_supported(kind, raw, name=name):
+            continue
         item = dict(raw)
         item["kind"] = kind[:-1]
         item["name"] = name
         merged[name] = item
     return [merged[key] for key in sorted(merged, key=str.lower)]
+
+
+def _registry_entry_manifest_supported(kind: RegistryKind, raw: dict[str, Any], *, name: str) -> bool:
+    manifest = _clean_text(raw.get("manifest"))
+    source = raw.get("source")
+    if not manifest and isinstance(source, dict):
+        manifest = _clean_text(source.get("manifest"))
+    if not manifest:
+        return True
+    required = _REQUIRED_MANIFEST_BY_KIND[kind]
+    if Path(manifest).name == required:
+        return True
+    _LOG.error(
+        "workspace registry entry rejected: unsupported declaration kind=%s name=%s required=%s manifest=%s",
+        kind[:-1],
+        name,
+        required,
+        manifest,
+    )
+    return False
 
 
 def _find_existing_registry_entry(
