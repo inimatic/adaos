@@ -138,25 +138,32 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             return
         if not isinstance(payload, dict):
             return
+        declaration_name = str(skill_name or payload.get("name") or "").strip()
         entries = payload.get("data_projections") or []
-        if isinstance(entries, list) and entries:
-            try:
-                projections = get_ctx().projections
+        try:
+            projections = get_ctx().projections
+            replace_skill_manifest = getattr(projections, "replace_skill_manifest", None)
+            if declaration_name and callable(replace_skill_manifest):
+                replace_skill_manifest(declaration_name, payload)
+            elif isinstance(entries, list) and entries:
                 load_manifest = getattr(projections, "load_manifest", None)
                 if callable(load_manifest):
                     load_manifest(payload)
                 else:
                     projections.load_entries(entries)
+            if isinstance(entries, list) and entries:
                 _LOG.info("loaded skill data_projections path=%s entries=%d", manifest_path, len(entries))
-            except Exception:
-                _LOG.debug("failed to load skill data_projections path=%s", manifest_path, exc_info=True)
-        declaration_name = str(skill_name or payload.get("name") or "").strip()
+        except Exception:
+            _LOG.debug("failed to load skill data_projections path=%s", manifest_path, exc_info=True)
         if declaration_name:
-            load_runtime_skill_declarations(
-                declaration_name,
-                payload,
-                artifact_root=manifest_path.parent,
-            )
+            try:
+                load_runtime_skill_declarations(
+                    declaration_name,
+                    payload,
+                    artifact_root=manifest_path.parent,
+                )
+            except Exception:
+                _LOG.debug("failed to cache skill runtime declarations path=%s", manifest_path, exc_info=True)
 
     @staticmethod
     def _find_skill_manifest(handler: Path) -> Optional[Path]:

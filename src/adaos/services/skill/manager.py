@@ -2750,7 +2750,7 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self._load_runtime_data_projections(data)
+        self._load_runtime_data_projections(data, skill_name=name)
         tools = data.get("tools") or {}
         target_tool = _resolve_runtime_tool_name(tool, data.get("default_tool"), tools)
         if not target_tool:
@@ -2931,7 +2931,7 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self._load_runtime_data_projections(data)
+        self._load_runtime_data_projections(data, skill_name=name)
         tools = data.get("tools") or {}
         if tool:
             target_tool = tool
@@ -3090,14 +3090,22 @@ class SkillManager:
             return json.loads(path.read_text(encoding="utf-8"))
         raise FileNotFoundError("skill manifest not found")
 
-    def _load_runtime_data_projections(self, manifest: Mapping[str, Any]) -> int:
+    def _load_runtime_data_projections(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        skill_name: str | None = None,
+    ) -> int:
         entries = manifest.get("data_projections") if isinstance(manifest, Mapping) else []
-        if not isinstance(entries, list) or not entries:
-            return 0
         projections = getattr(self.ctx, "projections", None)
         if projections is None:
             return 0
         try:
+            replace_skill_manifest = getattr(projections, "replace_skill_manifest", None)
+            if skill_name and callable(replace_skill_manifest):
+                return int(replace_skill_manifest(skill_name, dict(manifest)))
+            if not isinstance(entries, list) or not entries:
+                return 0
             load_manifest = getattr(projections, "load_manifest", None)
             if callable(load_manifest):
                 return int(load_manifest(dict(manifest)))
@@ -3115,7 +3123,7 @@ class SkillManager:
         *,
         artifact_root: Path,
     ) -> dict[str, Any]:
-        projection_total = self._load_runtime_data_projections(manifest)
+        projection_total = self._load_runtime_data_projections(manifest, skill_name=name)
         loaded = load_runtime_skill_declarations(
             name,
             manifest,

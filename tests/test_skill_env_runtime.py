@@ -828,6 +828,8 @@ data_routes:
     assert rule.targets[0].backend == "yjs"
     assert rule.targets[0].path == "data/contracts/snapshot"
     assert mgr.run_tool(skill_name, "ping", {}) == {"ok": True}
+    mgr._load_runtime_declarations(skill_name, {"data_projections": []}, artifact_root=skill_dir)
+    assert ctx.projections.resolve_rule("subnet", "contract.snapshot") is None
 
 
 def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
