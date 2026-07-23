@@ -146,6 +146,59 @@ def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
     assert not (tmp_path / "outside.txt").exists()
 
 
+def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _scenario(dev_scenarios, "recipe_book")
+    _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
+    snapshot = state_dir / "builder" / "workflow_snapshots" / "scenario" / "recipe_book" / "automation"
+    snapshot.mkdir(parents=True)
+    (snapshot / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"application": {}}}),
+        encoding="utf-8",
+    )
+    (snapshot / "snapshot.json").write_text(json.dumps({"task_id": "task.previous"}), encoding="utf-8")
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {
+                "companion_skill_id": "recipe_book_skill",
+                "workflow_transition": "return_to_prototype",
+            },
+            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+        }
+    )
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        assert "returns the completed Automation result to Prototype" in prompt
+        assert (workspace / "scenarios" / "recipe_book" / ".builder_previous_automation" / "webui.json").is_file()
+        skill = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
+        skill.write_text(skill.read_text(encoding="utf-8") + "\n# forbidden change\n", encoding="utf-8")
+        return CodexRunResult(returncode=0)
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+        max_repair_attempts=0,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is False
+    assert "may not modify the frozen Automation implementation" in result["error"]
+    assert "forbidden change" not in (dev_skills / "recipe_book_skill" / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     monkeypatch.setenv("ADAOS_TOKEN", "secret")

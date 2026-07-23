@@ -105,6 +105,46 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
 12. **Observe and repair**: guard, quarantine, NLU Teacher, status, and
     runtime diagnostics feed new Builder tasks when the design needs repair.
 
+## Prototype And Automation Workflow
+
+Builder has one mutable process at a time. `Prototype` and `Automation` are
+the only possible values of `workflow.active_phase`; `Publication` is an
+immutable release snapshot and is never an active editing phase. The
+authoritative persisted contract is `adaos.builder.workflow.v1` in the DEV
+project's `prompt_state.json`.
+
+Lifecycle selection, workflow state, and Preview are independent:
+
+- selecting a Lifecycle node only changes local Builder navigation;
+- `workflow.active_phase` controls which conversation and files may be edited;
+- `preview_target` controls what the paired Preview renders and may point to a
+  read-only snapshot that is different from the active process.
+
+The supported transitions are:
+
+| From | Action | To | Durable effect |
+| --- | --- | --- | --- |
+| Prototype | hand off/start Automation | Automation | current Prototype head becomes frozen input |
+| Automation working | Automation completes | Automation completed | replace the single retained Automation snapshot |
+| Automation completed | publish | Automation completed | create or replace the current Publication snapshot |
+| Automation completed | return to Prototype | Prototype | built-in LLM derives a new safe Prototype revision |
+
+Returning to Prototype does not thaw or overwrite the completed Automation.
+The local realization worker receives the retained Automation as immutable
+input, may edit only scenario-facing declarative prototype files, and is
+rejected if it changes the companion skill or the retained snapshot. Real
+tool, service, credential, device, external-network, and production-data
+bindings are removed from the new Prototype and replaced with bounded local
+state or mock data. A later handoff receives both that Prototype as the current
+requirement and the retained Automation as its previous implementation.
+
+Only one Automation snapshot is retained under Builder runtime state; a new
+completed Automation replaces it. It is not copied into the published
+scenario. Historical implementation recovery remains a Forge/VCS concern.
+
+The scenario version source of truth is `scenario.yaml`. Compatibility
+`scenario.json` content must not override its lifecycle or publication version.
+
 ## Relationship To Skills
 
 Skills remain the reusable capability unit.

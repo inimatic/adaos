@@ -5546,6 +5546,7 @@ class WebspaceScenarioRuntime:
         scenario_id_override: str | None = None,
         skill_decls_override: Iterable[Mapping[str, Any]] | None = None,
         skill_decls_fingerprint_override: str | None = None,
+        scenario_content_override: Mapping[str, Any] | None = None,
     ) -> WebspaceResolverInputs:
         collect_timings: Dict[str, float] = {}
         self._last_collect_inputs_timings_ms = None
@@ -5603,12 +5604,19 @@ class WebspaceScenarioRuntime:
         _record_timing(collect_timings, "collect_inputs_manifest", stage_started)
 
         stage_started = time.perf_counter()
-        scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = _resolve_scenario_sections_in_doc(
-            ydoc,
-            webspace_id=webspace_id,
-            scenario_id=scenario_id,
-            source_mode=mode,
-        )
+        if isinstance(scenario_content_override, Mapping) and scenario_content_override:
+            scenario_app_ui, base_catalog, registry_entry = _extract_scenario_sections_from_content(
+                scenario_content_override
+            )
+            scenario_source = "builder_preview_override"
+            legacy_fallback = False
+        else:
+            scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = _resolve_scenario_sections_in_doc(
+                ydoc,
+                webspace_id=webspace_id,
+                scenario_id=scenario_id,
+                source_mode=mode,
+            )
         _record_timing(collect_timings, "collect_inputs_scenario_sections", stage_started)
         if metadata:
             metadata = dict(metadata)
@@ -6894,8 +6902,9 @@ class WebspaceScenarioRuntime:
     def _prepare_materialization_skill_decls_sync(
         self,
         webspace_id: str,
+        source_mode_override: str | None = None,
     ) -> tuple[List[Dict[str, Any]], str]:
-        source_mode = _resolve_projection_refresh_space(webspace_id)
+        source_mode = str(source_mode_override or "").strip() or _resolve_projection_refresh_space(webspace_id)
         declarations = self._collect_skill_decls(source_mode)
         fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
         return declarations, fingerprint
@@ -6910,6 +6919,8 @@ class WebspaceScenarioRuntime:
         materialization_identity: Mapping[str, Any] | None = None,
         skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
         skill_decls_fingerprint: str | None = None,
+        scenario_content_override: Mapping[str, Any] | None = None,
+        skill_source_mode: str | None = None,
     ) -> WebUIRegistryEntry:
         """Resolve a payload from an owner-loop YDoc without mutating it."""
 
@@ -6929,6 +6940,7 @@ class WebspaceScenarioRuntime:
             prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
                 self._prepare_materialization_skill_decls_sync,
                 webspace_id,
+                skill_source_mode,
             )
             _record_timing(timings, "prepare_skill_decls", stage_started)
 
@@ -6941,6 +6953,7 @@ class WebspaceScenarioRuntime:
             scenario_id_override=scenario_id,
             skill_decls_override=prepared_skill_decls,
             skill_decls_fingerprint_override=prepared_skill_fingerprint,
+            scenario_content_override=scenario_content_override,
         )
         _record_timing(timings, "collect_inputs", stage_started)
         timings.update(_copy_timing_map(self._last_collect_inputs_timings_ms) or {})
@@ -6976,6 +6989,8 @@ class WebspaceScenarioRuntime:
         isolate_process: bool | None = None,
         skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
         skill_decls_fingerprint: str | None = None,
+        scenario_content_override: Mapping[str, Any] | None = None,
+        skill_source_mode: str | None = None,
     ) -> WebUIRegistryEntry:
         """Resolve a materialized payload without mutating an intermediate YDoc."""
         materialize_started = time.perf_counter()
@@ -6991,7 +7006,12 @@ class WebspaceScenarioRuntime:
         self._last_rebuild_state_vector = None
         self._last_worker_diagnostics = None
 
-        use_process_worker = _materialization_worker_enabled() and isolate_process is not False
+        use_process_worker = (
+            _materialization_worker_enabled()
+            and isolate_process is not False
+            and not scenario_content_override
+            and not skill_source_mode
+        )
         if use_process_worker:
             stage_started = time.perf_counter()
             worker_result = _get_cached_materialized_worker_result(
@@ -7010,6 +7030,7 @@ class WebspaceScenarioRuntime:
                     prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
                         self._prepare_materialization_skill_decls_sync,
                         webspace_id,
+                        skill_source_mode,
                     )
                     _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                 worker_result = await _run_materialization_worker(
@@ -7097,6 +7118,7 @@ class WebspaceScenarioRuntime:
             prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
                 self._prepare_materialization_skill_decls_sync,
                 webspace_id,
+                skill_source_mode,
             )
             _record_timing(timings, "prepare_skill_decls", stage_started)
 
@@ -7113,6 +7135,7 @@ class WebspaceScenarioRuntime:
                 scenario_id_override=scenario_id,
                 skill_decls_override=prepared_skill_decls,
                 skill_decls_fingerprint_override=prepared_skill_fingerprint,
+                scenario_content_override=scenario_content_override,
             )
             _record_timing(timings, "collect_inputs", stage_started)
             collect_phase_timings = _copy_timing_map(self._last_collect_inputs_timings_ms) or {}
@@ -9321,6 +9344,8 @@ async def rebuild_webspace_from_sources(
     switch_mode: str | None = None,
     switch_timings_ms: Mapping[str, Any] | None = None,
     materialization_identity: Mapping[str, Any] | None = None,
+    scenario_content_override: Mapping[str, Any] | None = None,
+    skill_source_mode: str | None = None,
 ) -> dict[str, Any]:
     """
     Single semantic rebuild primitive for the current runtime.
@@ -9590,7 +9615,7 @@ async def rebuild_webspace_from_sources(
     publish_live_room = bool(live_room_update_requested)
     if requested_action == "builder_revision_apply" and not prefer_live_room:
         publish_live_room = _builder_revision_detached_direct_live_room_updates_enabled()
-    payload_only_rebuild = scenario_switch_payload_rebuild
+    payload_only_rebuild = scenario_switch_payload_rebuild or bool(scenario_content_override)
     try:
         stage_started = time.perf_counter()
         rebuild_timeout_s = _semantic_rebuild_timeout_s(requested_action)
@@ -9639,6 +9664,10 @@ async def rebuild_webspace_from_sources(
                 # off the event loop, but do not pay for a second runtime.
                 "isolate_process": False,
             }
+            if scenario_content_override:
+                payload_rebuild_kwargs["scenario_content_override"] = scenario_content_override
+            if str(skill_source_mode or "").strip():
+                payload_rebuild_kwargs["skill_source_mode"] = str(skill_source_mode).strip()
             if str(request_id or "").strip():
                 payload_rebuild_kwargs["request_id"] = request_id
             rebuild_coro = runtime.resolve_materialized_payload_async(webspace_id, **payload_rebuild_kwargs)
@@ -10540,11 +10569,71 @@ async def reload_webspace_from_scenario(
     return result
 
 
+def _builder_preview_content_override(
+    scenario_id: str,
+    *,
+    stage: str,
+    revision: str | None,
+    label: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    stage_token = str(stage or "").strip().lower()
+    if stage_token not in {"prototype", "automation", "publication"}:
+        return None, None
+    source_space = "workspace" if stage_token == "publication" else "dev"
+    content: Mapping[str, Any] | None = None
+    if stage_token == "prototype" and str(revision or "").strip():
+        root = scenarios_loader.scenario_root_for_space(scenario_id, "dev")
+        revision_path = root / "ui_revisions" / f"{str(revision).strip()}.json"
+        try:
+            revision_payload = json.loads(revision_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Builder prototype revision is unavailable: {revision}") from exc
+        content = revision_payload.get("after_webui") if isinstance(revision_payload, Mapping) else None
+    elif stage_token == "automation":
+        from adaos.services.runtime_paths import current_state_dir
+
+        snapshot_path = (
+            current_state_dir()
+            / "builder"
+            / "workflow_snapshots"
+            / "scenario"
+            / scenario_id
+            / "automation"
+            / "webui.json"
+        )
+        try:
+            snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Builder Automation snapshot is unavailable: {scenario_id}") from exc
+        content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
+    if not isinstance(content, Mapping):
+        content = scenarios_loader.read_content(scenario_id, space=source_space)
+    if not isinstance(content, Mapping) or not content:
+        raise ValueError(f"Builder {stage_token} preview source is unavailable: {scenario_id}")
+
+    override = _clone_json_like(content)
+    ui = override.get("ui") if isinstance(override.get("ui"), Mapping) else {}
+    application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
+    desktop = application.get("desktop") if isinstance(application.get("desktop"), Mapping) else {}
+    page = desktop.get("pageSchema") if isinstance(desktop.get("pageSchema"), Mapping) else {}
+    if page:
+        existing_title = str(page.get("title") or scenario_id).strip() or scenario_id
+        prefix = {
+            "prototype": f"proto:{str(revision or 'current').strip() or 'current'}",
+            "automation": "active:",
+            "publication": f"public:{str(revision or 'current').strip() or 'current'}",
+        }[stage_token]
+        page["title"] = str(label or f"{prefix} {existing_title}").strip()
+    return dict(override), source_space
+
+
 async def apply_builder_revision_materialization(
     webspace_id: str,
     *,
     scenario_id: str,
     revision: str | None = None,
+    preview_stage: str | None = None,
+    preview_label: str | None = None,
     source_fingerprint: str | None = None,
     user_id: str | None = None,
     roles: Any = None,
@@ -10673,6 +10762,12 @@ async def apply_builder_revision_materialization(
         roles=roles,
         policy_fingerprint=policy_fingerprint,
     )
+    scenario_content_override, skill_source_mode = _builder_preview_content_override(
+        resolved_scenario_id,
+        stage=str(preview_stage or ""),
+        revision=revision,
+        label=preview_label,
+    )
     request_id = f"builder-revision-{materialization_identity['key_hash']}-{int(time.time() * 1000)}"
     trace = _payload_command_trace(event_payload or {})
     _log.info(
@@ -10698,6 +10793,8 @@ async def apply_builder_revision_materialization(
         request_id=request_id,
         switch_mode="materialization_pointer_compat",
         materialization_identity=materialization_identity,
+        scenario_content_override=scenario_content_override,
+        skill_source_mode=skill_source_mode,
     )
     result.update(
         {

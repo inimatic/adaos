@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import time
 import types
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -4460,6 +4462,77 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
     assert result["webspace_identity_update"]["attempted"] is True
     assert result["webspace_identity_update"]["changed"] is True
     assert result["webspace_identity_update"]["home_scenario_before"] == "prompt_engineer_scenario"
+
+
+def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeypatch, tmp_path: Path) -> None:
+    scenario_root = tmp_path / "dev" / "scenarios" / "recipes"
+    revisions = scenario_root / "ui_revisions"
+    revisions.mkdir(parents=True)
+    prototype = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes prototype"}}}},
+    }
+    (revisions / "002.json").write_text(
+        json.dumps({"after_webui": prototype}),
+        encoding="utf-8",
+    )
+    state_dir = tmp_path / "state"
+    automation_dir = state_dir / "builder" / "workflow_snapshots" / "scenario" / "recipes" / "automation"
+    automation_dir.mkdir(parents=True)
+    automation = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes automation"}}}},
+    }
+    (automation_dir / "webui.json").write_text(json.dumps(automation), encoding="utf-8")
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "scenario_root_for_space",
+        lambda scenario_id, space: scenario_root,
+    )
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+
+    prototype_content, prototype_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="prototype",
+        revision="002",
+        label=None,
+    )
+    automation_content, automation_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="automation",
+        revision="task.current",
+        label=None,
+    )
+
+    assert prototype_space == "dev"
+    assert prototype_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "proto:002 Recipes prototype"
+    assert automation_space == "dev"
+    assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Recipes automation"
+
+
+def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+    publication = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Published recipes"}}}},
+    }
+
+    def _read_content(scenario_id: str, *, space: str):
+        calls.append((scenario_id, space))
+        return publication
+
+    monkeypatch.setattr(webspace_runtime_module.scenarios_loader, "read_content", _read_content)
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="publication",
+        revision="0.2.0",
+        label=None,
+    )
+
+    assert calls == [("recipes", "workspace")]
+    assert source_space == "workspace"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
 
 
 def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> None:

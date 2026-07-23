@@ -96,6 +96,7 @@ def _binding_semantic_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -
         "purpose",
         "active_draft_id",
         "selection",
+        "preview_target",
         "dialog",
     )
     return all(left.get(key) == right.get(key) for key in keys)
@@ -515,6 +516,7 @@ class BuilderWorkbenchService:
             "purpose": "builder_prompt_ide",
             "active_draft_id": None,
             "selection": _project_selection("scenario", "builder", title="Builder"),
+            "preview_target": None,
             "dialog": self.dialog_widget_config(
                 source_id,
                 dev_webspace_id=relation.target_webspace_id,
@@ -575,6 +577,9 @@ class BuilderWorkbenchService:
             "purpose": "builder_prompt_ide",
             "active_draft_id": active_draft_token,
             "selection": selection,
+            "preview_target": dict(existing.get("preview_target"))
+            if isinstance(existing.get("preview_target"), Mapping)
+            else None,
             "dialog": self.dialog_widget_config(
                 source_id,
                 active_draft_id=active_draft_token,
@@ -614,6 +619,27 @@ class BuilderWorkbenchService:
         if selection == previous:
             return binding
         updated = {**binding, "selection": selection, "updated_at": _now()}
+        if not previous or (
+            str(previous.get("object_type") or "") != str(selection.get("object_type") or "")
+            or str(previous.get("object_id") or "") != str(selection.get("object_id") or "")
+        ):
+            updated["preview_target"] = None
+        _write_json(self.binding_path(source_id), updated)
+        if persist_projection:
+            self.publish_projection_sync(source_id)
+        return updated
+
+    def set_preview_target(
+        self,
+        *,
+        source_webspace_id: str | None = None,
+        target: Mapping[str, Any] | None,
+        persist_projection: bool = False,
+    ) -> dict[str, Any]:
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        binding = self.get_workspace_binding(source_id)
+        normalized = dict(target) if isinstance(target, Mapping) else None
+        updated = {**binding, "preview_target": normalized, "updated_at": _now()}
         _write_json(self.binding_path(source_id), updated)
         if persist_projection:
             self.publish_projection_sync(source_id)

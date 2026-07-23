@@ -181,6 +181,31 @@ builder/web_desktop toggles. The flag
 `ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS=0` is a
 diagnostic escape hatch, not the target architecture.
 
+## Lifecycle Preview Targets
+
+Builder persists an explicit `adaos.builder.preview_target.v1` alongside the
+workbench binding. Clicking a Lifecycle node does not materialize it. The
+separate **Show in Preview** action selects one of these sources:
+
+| Target | Source | Version policy | Header prefix |
+| --- | --- | --- | --- |
+| Prototype | exact DEV `ui_revisions/NNN.json` snapshot | any retained UI revision | `proto:` |
+| Automation | single retained Builder runtime snapshot | current completed result only | `active:` |
+| Publication | workspace artifact | current published version only | `public:` |
+
+Prototype and Automation use DEV skill declarations; Publication uses
+workspace declarations. The Automation snapshot lives outside the DEV
+artifact tree, so publication cannot accidentally package Builder runtime
+history. Materialization applies the selected scenario content as an explicit
+payload override without rewriting the scenario pointer or the selected
+Lifecycle node.
+
+`follow_active=true` means the target is initially resolved from
+`workflow.active_phase`; an explicit historical selection is read-only and
+does not change that phase. The Builder header presents the editable process
+(`WORKING`) and the rendered target (`VIEWING`) separately so a user can move
+through the tree without mistaking navigation for a state transition.
+
 ## Workspace Catalog
 
 `workspace_catalog_state.version` increments in the same SQLite transaction

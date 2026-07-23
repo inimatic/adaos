@@ -421,6 +421,16 @@ class LocalSkillFactoryWorker:
                     f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
                 )
             shutil.copytree(skill_source, skill_destination)
+            automation_snapshot = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / "scenario"
+                / target_id
+                / "automation"
+            )
+            if automation_snapshot.is_dir():
+                shutil.copytree(automation_snapshot, destination / ".builder_previous_automation")
         elif target_type == "skill":
             source = self.dev_skills_root / target_id
             destination = workspace / "skills" / target_id
@@ -448,6 +458,7 @@ class LocalSkillFactoryWorker:
         artifacts = dict(request.get("artifacts") or {})
         brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()
         iteration = str(artifacts.get("iteration_instruction") or "").strip()
+        workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
         packet = {
             "schema": PACKET_SCHEMA,
@@ -459,9 +470,39 @@ class LocalSkillFactoryWorker:
             "constraints": dict(assignment.get("constraints") or {}),
             "brief": brief,
             "iteration_instruction": iteration,
+            "workflow_transition": workflow_transition or None,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
+        transition_requirements = """
+## Workflow transition constraints
+
+This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill or the retained `.builder_previous_automation` snapshot. The functional Automation implementation remains frozen for Preview and for the next Automation cycle.
+""" if workflow_transition == "return_to_prototype" else """
+## Previous Automation
+
+When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as the immutable previous Automation edition supplied alongside the current Prototype requirements. Use it as implementation context, but never edit it.
+"""
+        required_result = """1. Inspect all existing files under the target paths before editing.
+2. Edit only the current scenario's declarative prototype files; do not modify the companion skill.
+3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
+4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
+5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
+6. Run relevant bounded checks and fix failures caused by your changes.
+7. Do not edit anything outside these task paths: {allowed_paths}.
+8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect all existing files under the target paths before editing.
+2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
+3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
+4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
+5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
+6. Run relevant bounded checks. Fix failures caused by your changes.
+7. Do not edit anything outside these task paths: {allowed_paths}.
+8. Do not access secrets, production data, other AdaOS runtime state, or external APIs."""
+        required_result = required_result.format(
+            target_id=target_id,
+            companion=companion,
+            allowed_paths=", ".join(allowed),
+        )
         prompt = f"""# AdaOS local realization task
 
 You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
@@ -480,16 +521,11 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 
 {iteration or 'This is the initial realization. Implement the complete first working version.'}
 
+{transition_requirements}
+
 ## Required result
 
-1. Inspect all existing files under the target paths before editing.
-2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
-3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
-4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
-5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
-6. Run relevant bounded checks. Fix failures caused by your changes.
-7. Do not edit anything outside these task paths: {', '.join(allowed)}.
-8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
+{required_result}
 
 Conclude with a concise summary of implemented behavior and checks. The worker, not you, creates result/provenance files and the git commit.
 """
@@ -528,6 +564,20 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         invalid = [path for path in changed_paths if not any(path == item.rstrip("/") or path.startswith(item) for item in allowed)]
         if invalid:
             raise ValueError(f"Codex changed paths outside the task scope: {invalid}")
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        transition = str(artifacts.get("workflow_transition") or "").strip()
+        if transition == "return_to_prototype":
+            forbidden = [
+                path
+                for path in changed_paths
+                if path.startswith("skills/") or "/.builder_previous_automation/" in f"/{path}"
+            ]
+            if forbidden:
+                raise ValueError(
+                    "return_to_prototype may not modify the frozen Automation implementation: "
+                    f"{forbidden}"
+                )
 
     def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
         errors: list[str] = []
