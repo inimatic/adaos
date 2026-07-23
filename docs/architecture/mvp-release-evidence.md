@@ -69,9 +69,13 @@ window. The runner uses `passed`, `failed`, and `inconclusive` as distinct CI
 outcomes and stores bundles under `artifacts/e2e-runs/` by default.
 
 The repository-wide Python gate is conclusive only when collection completes
-and a JUnit result is retained. The 2026-07-23 baseline collected `1144` tests
-with `47` failures, `0` collection errors, and `1` skip; it is evidence of a
-working gate, not a passing release.
+and a JUnit result is retained. The 2026-07-23 process-isolated baseline ran
+all `2871` collected tests in six segments: `2855` passed, `8` failed, `8`
+skipped, and `0` errored. The remaining failures are one API module-state
+leak, one Neural installer staging failure, and six NLU Teacher
+validation/apply failures. The segmented reports are evidence of a working
+complete gate, not a passing release; `TEST-001` remains open until those
+clusters reach zero and the bounded aggregate command terminates reliably.
 
 ## Required MVP Sections
 
