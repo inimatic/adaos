@@ -2018,8 +2018,11 @@ Important lacunae found during Phase 6 implementation:
   recorded under `projection_window.ledger_backfill`, and later startup
   reconciliation checks the retained window without rewriting an identical
   YDoc. Live LLM-log create/update versions are now mirrored directly to the
-  ledger as well. Rows already discarded by an older bounded release cannot be
-  reconstructed by this migration.
+  ledger as well. Migration upserts threads and messages in bounded SQLite
+  batches instead of opening transactions per row; a full default 144-record
+  legacy window completes in under one second in the local acceptance test.
+  Rows already discarded by an older bounded release cannot be reconstructed
+  by this migration.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a

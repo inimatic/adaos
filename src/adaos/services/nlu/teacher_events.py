@@ -162,37 +162,51 @@ def backfill_teacher_history_to_ledger(webspace_id: str, teacher: Mapping[str, A
             existing_llm_log_ids.add(log_id)
 
     already_present = 0
-    ensured = 0
+    pending_records: list[dict[str, Any]] = []
     for event in events:
         event_id = str(event.get("id") or "").strip()
         if event_id and event_id in existing_event_ids:
             already_present += 1
-            ensured += 1
             continue
-        stored = conversation_links.append_teacher_event_message(
-            webspace_id=webspace_id,
-            text=str(event.get("request_text") or event.get("title") or event.get("kind") or "NLU Teacher event"),
-            request_id=event.get("request_id") if isinstance(event.get("request_id"), str) else None,
-            candidate_id=_ledger_event_candidate_id(event),
-            kind=f"event.{event.get('kind') or 'teacher'}",
-            payload={"event": event},
-            meta={"migration": _LEDGER_BACKFILL_SCHEMA, **coerce_dict(event.get("_meta"))},
-            idempotency_key=_ledger_record_idempotency_key("event", event),
+        pending_records.append(
+            {
+                "text": str(
+                    event.get("request_text") or event.get("title") or event.get("kind") or "NLU Teacher event"
+                ),
+                "request_id": event.get("request_id") if isinstance(event.get("request_id"), str) else None,
+                "candidate_id": _ledger_event_candidate_id(event),
+                "kind": f"event.{event.get('kind') or 'teacher'}",
+                "payload": {"event": event},
+                "meta": {"migration": _LEDGER_BACKFILL_SCHEMA, **coerce_dict(event.get("_meta"))},
+                "idempotency_key": _ledger_record_idempotency_key("event", event),
+            }
         )
-        if stored is None:
-            raise RuntimeError(f"Teacher ledger event backfill failed for webspace={webspace_id}")
-        ensured += 1
 
     for log in llm_logs:
         log_id = str(log.get("id") or log.get("log_id") or "").strip()
         if log_id and log_id in existing_llm_log_ids:
             already_present += 1
-            ensured += 1
             continue
-        stored = append_llm_log_to_ledger(webspace_id, log, migration=_LEDGER_BACKFILL_SCHEMA)
-        if stored is None:
-            raise RuntimeError(f"Teacher ledger LLM log backfill failed for webspace={webspace_id}")
-        ensured += 1
+        request_id = log.get("request_id") if isinstance(log.get("request_id"), str) else None
+        pending_records.append(
+            {
+                "text": f"NLU Teacher LLM log{f' {request_id}' if request_id else ''}",
+                "request_id": request_id,
+                "candidate_id": log.get("candidate_id") if isinstance(log.get("candidate_id"), str) else None,
+                "kind": "llm_log",
+                "payload": {"llm_log": log},
+                "meta": {"migration": _LEDGER_BACKFILL_SCHEMA},
+                "idempotency_key": _ledger_record_idempotency_key("llm_log", log),
+            }
+        )
+
+    stored = conversation_links.append_teacher_event_messages(webspace_id=webspace_id, records=pending_records)
+    if len(stored) != len(pending_records):
+        raise RuntimeError(
+            f"Teacher ledger batch backfill failed for webspace={webspace_id} "
+            f"expected={len(pending_records)} stored={len(stored)}"
+        )
+    ensured = already_present + len(stored)
 
     if was_completed:
         return previous

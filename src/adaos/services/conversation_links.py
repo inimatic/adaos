@@ -182,17 +182,9 @@ def ensure_builder_conversation(webspace_id: str | None = None) -> dict[str, Any
     }
 
 
-def ensure_teacher_conversation(
-    webspace_id: str | None = None,
-    *,
-    request_id: str | None = None,
-    candidate_id: str | None = None,
-    title: str | None = None,
-    meta: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+def ensure_teacher_conversation_base(webspace_id: str | None = None) -> dict[str, Any]:
     ws = _safe_id(webspace_id, "default")
     cid = teacher_conversation_id(ws)
-    tid = teacher_thread_id(webspace_id=ws, request_id=request_id, candidate_id=candidate_id)
     stored = False
     try:
         if conversation_store.ensure_schema():
@@ -220,8 +212,35 @@ def ensure_teacher_conversation(
                 },
                 meta={"surface": "teacher"},
             )
+            stored = True
+    except Exception:
+        stored = False
+    return {
+        "conversation_id": cid,
+        "webspace_id": ws,
+        "channel_id": TEACHER_CHANNEL_ID,
+        "owner": TEACHER_OWNER,
+        "kind": "teacher",
+        "stored": stored,
+    }
+
+
+def ensure_teacher_conversation(
+    webspace_id: str | None = None,
+    *,
+    request_id: str | None = None,
+    candidate_id: str | None = None,
+    title: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ref = ensure_teacher_conversation_base(webspace_id)
+    ws = ref["webspace_id"]
+    tid = teacher_thread_id(webspace_id=ws, request_id=request_id, candidate_id=candidate_id)
+    stored = bool(ref.get("stored"))
+    try:
+        if stored:
             conversation_store.start_thread(
-                conversation_id=cid,
+                conversation_id=ref["conversation_id"],
                 thread_id=tid,
                 title=_clean(title, request_id or candidate_id or "NLU Teacher request"),
                 created_by={"type": "core", "id": "nlu_teacher"},
@@ -232,16 +251,11 @@ def ensure_teacher_conversation(
                     **dict(meta or {}),
                 },
             )
-            stored = True
     except Exception:
         stored = False
     return {
-        "conversation_id": cid,
+        **ref,
         "thread_id": tid,
-        "webspace_id": ws,
-        "channel_id": TEACHER_CHANNEL_ID,
-        "owner": TEACHER_OWNER,
-        "kind": "teacher",
         "request_id": _clean(request_id) or None,
         "candidate_id": _clean(candidate_id) or None,
         "stored": stored,
@@ -353,5 +367,77 @@ def append_teacher_event_message(
         },
         meta={"conversation_ref": ref, **dict(meta or {})},
         route_id="nlu_teacher",
+        request_id=request_id,
         idempotency_key=idempotency_key,
     )
+
+
+def append_teacher_event_messages(
+    *,
+    webspace_id: str | None = None,
+    records: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Append a Teacher migration batch without per-row schema/base transactions."""
+    base = ensure_teacher_conversation_base(webspace_id)
+    if not base.get("stored") or not records:
+        return []
+    threads: dict[str, dict[str, Any]] = {}
+    messages: list[dict[str, Any]] = []
+    for raw in records:
+        item = dict(raw)
+        request_id = item.get("request_id") if isinstance(item.get("request_id"), str) else None
+        candidate_id = item.get("candidate_id") if isinstance(item.get("candidate_id"), str) else None
+        text = str(item.get("text") or "NLU Teacher event")
+        meta = dict(item.get("meta") or {})
+        thread_id = teacher_thread_id(
+            webspace_id=base["webspace_id"],
+            request_id=request_id,
+            candidate_id=candidate_id,
+        )
+        ref = {
+            **base,
+            "thread_id": thread_id,
+            "request_id": _clean(request_id) or None,
+            "candidate_id": _clean(candidate_id) or None,
+        }
+        threads[thread_id] = {
+            "conversation_id": base["conversation_id"],
+            "thread_id": thread_id,
+            "title": _clean(text[:120], request_id or candidate_id or "NLU Teacher request"),
+            "created_by": {"type": "core", "id": "nlu_teacher"},
+            "meta": {
+                "webspace_id": base["webspace_id"],
+                "request_id": _clean(request_id),
+                "candidate_id": _clean(candidate_id),
+                **meta,
+            },
+        }
+        payload = {
+            "kind": str(item.get("kind") or "teacher_event"),
+            "text": text,
+            "conversation_id": base["conversation_id"],
+            "thread_id": thread_id,
+            "request_id": request_id,
+            "candidate_id": candidate_id,
+            **dict(item.get("payload") or {}),
+        }
+        messages.append(
+            {
+                "conversation_id": base["conversation_id"],
+                "thread_id": thread_id,
+                "webspace_id": base["webspace_id"],
+                "channel_id": TEACHER_CHANNEL_ID,
+                "owner": TEACHER_OWNER,
+                "role": "system",
+                "text": text,
+                "actor_id": "core:nlu_teacher",
+                "actor_label": "NLU Teacher",
+                "payload": payload,
+                "meta": {"conversation_ref": ref, **meta},
+                "route_id": "nlu_teacher",
+                "request_id": request_id,
+                "idempotency_key": item.get("idempotency_key"),
+            }
+        )
+    conversation_store.start_threads_batch(list(threads.values()))
+    return conversation_store.append_messages_batch(messages)

@@ -5961,6 +5961,112 @@ def test_retired_runtime_stop_uses_runtime_lifecycle_scope(monkeypatch, tmp_path
     ]
 
 
+def test_supervisor_adopts_slot_matched_listener_before_runtime_api_is_ready(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _ExistingProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.args = ["/slots/B/venv/bin/python", "-m", "adaos.apps.autostart_runner", "--port", "8778"]
+            self.cwd = "/slots/B/repo"
+            self._created_at = 123.0
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "B", "argv": ["/slots/B/venv/bin/python"], "cwd": "/slots/B/repo"},
+    )
+    monkeypatch.setattr(supervisor, "_listener_owner_pid", lambda host, port: 4242)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
+    monkeypatch.setattr(supervisor, "_AdoptedProcess", _ExistingProc)
+    monkeypatch.setattr(
+        supervisor,
+        "_read_json",
+        lambda _path: {
+            "managed_pid": 4242,
+            "runtime_instance_id": "rt-b-c-existing",
+            "transition_role": "active",
+            "managed_slot": "B",
+        },
+    )
+    monkeypatch.setattr(manager, "slot_runtime_port", lambda slot=None: 8778)
+    monkeypatch.setattr(manager, "slot_runtime_base_url", lambda slot=None: "http://127.0.0.1:8778")
+    monkeypatch.setattr(manager, "_reset_memory_baseline_scope", lambda **_kwargs: None)
+
+    adopted = manager._adopt_active_runtime_listener(reason="supervisor.start")
+
+    assert adopted is True
+    assert manager._proc is not None
+    assert manager._proc.pid == 4242
+    assert manager._managed_runtime_instance_id == "rt-b-c-existing"
+    assert manager._managed_start_reason == "supervisor.start"
+
+
+def test_supervisor_refuses_pre_ready_listener_from_wrong_slot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _WrongSlotProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.args = ["/slots/A/venv/bin/python", "-m", "adaos.apps.autostart_runner", "--port", "8778"]
+            self.cwd = "/slots/A/repo"
+            self._created_at = 123.0
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "B", "argv": ["/slots/B/venv/bin/python"], "cwd": "/slots/B/repo"},
+    )
+    monkeypatch.setattr(supervisor, "_listener_owner_pid", lambda host, port: 4343)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
+    monkeypatch.setattr(supervisor, "_AdoptedProcess", _WrongSlotProc)
+    monkeypatch.setattr(manager, "slot_runtime_port", lambda slot=None: 8778)
+    monkeypatch.setattr(manager, "slot_runtime_base_url", lambda slot=None: "http://127.0.0.1:8778")
+
+    assert manager._adopt_active_runtime_listener(reason="supervisor.start") is False
+    assert manager._proc is None
+
+
+def test_supervisor_schedules_retired_runtime_cleanup_across_self_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    captured: dict[str, object] = {}
+
+    class _RetiredProc:
+        @staticmethod
+        def poll():
+            return None
+
+    class _CleanupProc:
+        pid = 4545
+
+    manager._retired_runtime_procs[4444] = _RetiredProc()
+
+    def _popen(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _CleanupProc()
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _popen)
+
+    result = manager._schedule_retired_runtime_cleanup()
+
+    assert result == {"ok": True, "scheduled": True, "cleanup_pid": 4545, "pids": [4444]}
+    assert "pids = [4444]" in captured["args"][2]
+
+
 def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")

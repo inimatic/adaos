@@ -451,9 +451,18 @@ Rules:
 - managed Linux units use `KillMode=process`. During a supervisor-requested
   root restart, the supervisor deliberately preserves the already-ready active
   runtime and realtime sidecar. The replacement supervisor adopts both
-  listeners by PID before deciding to spawn anything, so the control-plane
-  binary can change without tearing down the data plane. Explicit service stop
-  still performs the normal graceful child shutdown.
+  listeners by PID before deciding to spawn anything. Runtime adoption may use
+  slot executable/cwd identity while the runtime API is temporarily busy; API
+  readiness is then handled by the normal bounded health watchdog. A runtime
+  launched under supervisor ownership never performs its own listener
+  takeover, and monitor respawn retries adoption before spawning. This keeps a
+  slow `/api/status` response from turning root promotion into a stop-before-
+  ready handoff. Explicit service stop still performs the normal graceful child
+  shutdown.
+- a runtime already retired during fast cutover is not preserved as active
+  data plane state across the following root restart. If its asynchronous
+  cleanup is still pending, a detached bounded cleanup terminates that retired
+  process after the old supervisor exits.
 - root promotion checks effective root parity, not only the candidate manifest:
   if the current bootstrap/operator-control path list changes between
   rollouts, stale root files such as `adaos node` diagnostics are detected and

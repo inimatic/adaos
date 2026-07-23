@@ -1355,6 +1355,59 @@ def start_thread(
     return _row_to_thread(row)
 
 
+def start_threads_batch(threads: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Upsert conversation threads in one transaction for migration/import paths."""
+    if not threads or not ensure_schema():
+        return []
+    thread_ids: list[str] = []
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            for raw in threads:
+                item = dict(raw)
+                conversation_id = str(item.get("conversation_id") or "").strip()
+                if not conversation_id:
+                    raise ValueError("conversation_id is required")
+                thread_id = _normalize_id(item.get("thread_id"), "thread")
+                now = float(item.get("ts") or time.time())
+                con.execute(
+                    """
+                    INSERT INTO conversation_threads(
+                        thread_id, conversation_id, title, status, created_at,
+                        updated_at, created_by_json, meta_json
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    ON CONFLICT(thread_id) DO UPDATE SET
+                        conversation_id=excluded.conversation_id,
+                        title=COALESCE(excluded.title, conversation_threads.title),
+                        status=excluded.status,
+                        updated_at=excluded.updated_at,
+                        created_by_json=excluded.created_by_json,
+                        meta_json=excluded.meta_json
+                    """,
+                    (
+                        thread_id,
+                        conversation_id,
+                        str(item.get("title") or "").strip() or None,
+                        str(item.get("status") or "active").strip() or "active",
+                        now,
+                        now,
+                        _json_dump(dict(item.get("created_by") or {})),
+                        _json_dump(dict(item.get("meta") or {})),
+                    ),
+                )
+                thread_ids.append(thread_id)
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        rows = [
+            con.execute("SELECT * FROM conversation_threads WHERE thread_id=?", (thread_id,)).fetchone()
+            for thread_id in thread_ids
+        ]
+    return [_row_to_thread(row) for row in rows if row is not None]
+
+
 def _row_to_thread(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "thread_id": row["thread_id"],
@@ -2153,6 +2206,126 @@ def append_message(
     if meta:
         message_payload["_meta"] = dict(meta)
     return message_payload
+
+
+def append_messages_batch(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Append idempotent ledger messages with one SQLite write transaction."""
+    if not messages or not ensure_schema():
+        return []
+    rows: list[sqlite3.Row] = []
+    next_seq: dict[str, int] = {}
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            for raw in messages:
+                item = dict(raw)
+                conversation_id = str(item.get("conversation_id") or "").strip()
+                webspace_id = str(item.get("webspace_id") or "").strip()
+                role = str(item.get("role") or "").strip()
+                text = str(item.get("text") or "")
+                if not conversation_id or not webspace_id or not role:
+                    raise ValueError("conversation_id, webspace_id, and role are required")
+                payload = dict(item.get("payload") or {})
+                message_id = _normalize_id(payload.get("id"), "m")
+                idempotency_key = str(item.get("idempotency_key") or "").strip() or None
+                existing = None
+                if idempotency_key:
+                    existing = con.execute(
+                        """
+                        SELECT * FROM conversation_messages
+                        WHERE conversation_id=? AND idempotency_key=?
+                        """,
+                        (conversation_id, idempotency_key),
+                    ).fetchone()
+                if existing is None:
+                    existing = con.execute(
+                        "SELECT * FROM conversation_messages WHERE message_id=?",
+                        (message_id,),
+                    ).fetchone()
+                if existing is not None:
+                    rows.append(existing)
+                    continue
+                if conversation_id not in next_seq:
+                    maximum = con.execute(
+                        "SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE conversation_id=?",
+                        (conversation_id,),
+                    ).fetchone()[0]
+                    next_seq[conversation_id] = int(maximum or 0)
+                next_seq[conversation_id] += 1
+                seq = next_seq[conversation_id]
+                now = float(item.get("ts") or time.time())
+                thread_id = str(item.get("thread_id") or "").strip() or None
+                channel_id = str(item.get("channel_id") or "").strip() or None
+                owner = str(item.get("owner") or "").strip() or None
+                actor_id = str(item.get("actor_id") or "").strip() or None
+                actor_label = str(item.get("actor_label") or "").strip() or None
+                actor_icon = str(item.get("actor_icon") or "").strip() or None
+                route_id = str(item.get("route_id") or "").strip() or None
+                request_id = str(item.get("request_id") or "").strip() or None
+                turn_trace_id = str(item.get("turn_trace_id") or "").strip() or None
+                retention_class = str(item.get("retention_class") or "normal").strip() or "normal"
+                redaction_state = str(item.get("redaction_state") or "active").strip() or "active"
+                con.execute(
+                    """
+                    INSERT INTO conversation_messages(
+                        message_id, conversation_id, thread_id, seq, webspace_id, channel_id, owner,
+                        actor_id, actor_label, actor_icon, role, text, route_id, ts,
+                        request_id, turn_trace_id, idempotency_key, retention_class,
+                        retention_until, redaction_state, redacted_at, redaction_reason,
+                        payload_json, meta_json, created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        message_id,
+                        conversation_id,
+                        thread_id,
+                        seq,
+                        webspace_id,
+                        channel_id,
+                        owner,
+                        actor_id,
+                        actor_label,
+                        actor_icon,
+                        role,
+                        text,
+                        route_id,
+                        now,
+                        request_id,
+                        turn_trace_id,
+                        idempotency_key,
+                        retention_class,
+                        item.get("retention_until"),
+                        redaction_state,
+                        item.get("redacted_at"),
+                        str(item.get("redaction_reason") or "").strip() or None,
+                        _json_dump(payload),
+                        _json_dump(dict(item.get("meta") or {})),
+                        now,
+                    ),
+                )
+                _message_fts_upsert(
+                    con,
+                    message_id=message_id,
+                    conversation_id=conversation_id,
+                    thread_id=thread_id,
+                    webspace_id=webspace_id,
+                    channel_id=channel_id,
+                    owner=owner,
+                    role=role,
+                    text=text,
+                )
+                inserted = con.execute(
+                    "SELECT * FROM conversation_messages WHERE message_id=?",
+                    (message_id,),
+                ).fetchone()
+                if inserted is not None:
+                    rows.append(inserted)
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    return [_row_to_message(row) for row in rows]
 
 
 def list_projection(

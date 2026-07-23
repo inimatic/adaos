@@ -1317,6 +1317,7 @@ def _stop_previous_server(host: str, port: int) -> None:
                 candidate_port,
                 token=token,
                 reason=f"{current_owner}.takeover",
+                lifecycle_scope="runtime_retire",
             )
         if stopped:
             continue
@@ -1406,7 +1407,14 @@ def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: b
     subprocess.Popen(**popen_kwargs)
 
 
-def _request_graceful_shutdown(host: str, port: int, *, token: str | None, reason: str = "cli.stop") -> bool:
+def _request_graceful_shutdown(
+    host: str,
+    port: int,
+    *,
+    token: str | None,
+    reason: str = "cli.stop",
+    lifecycle_scope: str = "subnet",
+) -> bool:
     url = f"http://{host}:{int(port)}/api/admin/shutdown"
     headers = {"Content-Type": "application/json"}
     if token:
@@ -1414,7 +1422,12 @@ def _request_graceful_shutdown(host: str, port: int, *, token: str | None, reaso
     try:
         response = requests.post(
             url,
-            json={"reason": reason, "drain_timeout_sec": 5.0, "signal_delay_sec": 0.2},
+            json={
+                "reason": reason,
+                "drain_timeout_sec": 5.0,
+                "signal_delay_sec": 0.2,
+                "lifecycle_scope": str(lifecycle_scope or "subnet"),
+            },
             headers=headers,
             timeout=(2.0, 15.0),
         )

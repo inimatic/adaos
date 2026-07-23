@@ -544,6 +544,42 @@ def test_teacher_history_backfill_is_idempotent_and_preserves_llm_logs():
     assert page["total_message_count"] == 2
 
 
+def test_teacher_history_backfill_batches_a_full_legacy_window():
+    from adaos.services import conversation_links, conversation_store
+    from adaos.services.nlu import teacher_events
+
+    webspace_id = "ws-teacher-ledger-batch-window"
+    teacher = {
+        "events": [
+            {
+                "id": f"evt-batch-{index}",
+                "ts": float(index),
+                "request_id": f"req-batch-{index}",
+                "request_text": f"batch request {index}",
+                "kind": "not_obtained",
+                "raw": {"id": f"item-batch-{index}"},
+            }
+            for index in range(96)
+        ],
+        "llm_logs": [
+            {
+                "id": f"log-batch-{index}",
+                "ts": float(index),
+                "request_id": f"req-batch-{index}",
+                "status": "complete",
+            }
+            for index in range(48)
+        ],
+    }
+
+    marker = teacher_events.backfill_teacher_history_to_ledger(webspace_id, teacher)
+    messages = conversation_store.list_messages(conversation_links.teacher_conversation_id(webspace_id), limit=500)
+
+    assert marker["records_ensured"] == 144
+    assert marker["elapsed_ms"] < 5000.0
+    assert len(messages) == 144
+
+
 @pytest.mark.anyio
 async def test_live_llm_log_create_and_update_are_mirrored_to_ledger(monkeypatch):
     from adaos.services.nlu import llm_teacher_runtime
