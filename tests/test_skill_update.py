@@ -10,6 +10,7 @@ from adaos.adapters.git.cli_git import CliGitClient
 from adaos.adapters.git.cli_git import GitError
 from adaos.adapters.skills.git_repo import GitSkillRepository
 from adaos.services.skill.update import SkillUpdateService
+from adaos.services.workspace_registry import rebuild_workspace_registry, write_workspace_registry
 
 
 class _MiniPaths:
@@ -65,10 +66,7 @@ def _init_monorepo(root: Path, *, tracked_skill_env: bool) -> Path:
         encoding="utf-8",
     )
     (desktop_skill_dir / ".skill_env.json").write_text('{"mode":"desktop-remote-v1"}\n', encoding="utf-8")
-    (remote / "registry.json").write_text(
-        '{\n  "version": 1,\n  "updated_at": "2026-01-01T00:00:00+00:00",\n  "skills": [],\n  "scenarios": []\n}\n',
-        encoding="utf-8",
-    )
+    write_workspace_registry(remote, rebuild_workspace_registry(remote))
 
     _run_git(["add", "-A"], cwd=remote)
     _run_git(["commit", "-m", "seed infrastate"], cwd=remote)
