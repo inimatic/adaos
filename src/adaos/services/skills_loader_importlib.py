@@ -10,6 +10,7 @@ from typing import Any, Iterable, Optional, Tuple
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.declarations import load_runtime_skill_declarations
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 import yaml
 
@@ -22,10 +23,10 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         self._sync_runtime_from_repo_workspace_if_missing(root)
         self._sync_runtime_from_workspace_if_debug(root)
         loaded: set[str] = set()
-        loaded_projection_manifests: set[Path] = set()
+        loaded_declaration_manifests: set[Path] = set()
         for handler, skill_name in self._discover_runtime_handlers(root):
+            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=skill_name)
             if self._try_load_handler(handler, skill_name=skill_name, source="runtime"):
-                self._load_skill_data_projections(handler, loaded_projection_manifests)
                 if skill_name:
                     loaded.add(skill_name)
                     _LOG.info("imported skill handler skill=%s path=%s", skill_name, handler)
@@ -35,8 +36,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         # Dev/fast-path: load handlers straight from the workspace tree when a
         # skill does not have an installed runtime bundle under .runtime.
         for handler, skill_name in self._discover_workspace_handlers(root, loaded):
+            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=skill_name)
             if self._try_load_handler(handler, skill_name=skill_name, source="workspace"):
-                self._load_skill_data_projections(handler, loaded_projection_manifests)
                 if skill_name:
                     loaded.add(skill_name)
                     _LOG.info("imported workspace skill handler skill=%s path=%s", skill_name, handler)
@@ -46,8 +47,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         # Repo-bundled workspace skills are a final fallback for builtin skills
         # when the node-local workspace tree does not contain the sources.
         for handler, skill_name in self._discover_repo_workspace_handlers(root, loaded):
+            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=skill_name)
             if self._try_load_handler(handler, skill_name=skill_name, source="repo_workspace"):
-                self._load_skill_data_projections(handler, loaded_projection_manifests)
                 if skill_name:
                     loaded.add(skill_name)
                     _LOG.info("imported repo workspace skill handler skill=%s path=%s", skill_name, handler)
@@ -65,10 +66,10 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             handlers = [handler for handler, name in self._discover_workspace_handlers(root, loaded) if name == target]
         if not handlers:
             handlers = [handler for handler, name in self._discover_repo_workspace_handlers(root, set()) if name == target]
-        loaded_projection_manifests: set[Path] = set()
+        loaded_declaration_manifests: set[Path] = set()
         loaded_handlers: list[str] = []
         for handler in handlers:
-            self._load_skill_data_projections(handler, loaded_projection_manifests)
+            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=target)
             self._load_handler(handler, reload=True)
             loaded_handlers.append(str(handler))
             _LOG.info("reloaded skill handler skill=%s path=%s", target, handler)
@@ -113,7 +114,13 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             )
             return False
 
-    def _load_skill_data_projections(self, handler: Path, loaded: set[Path]) -> None:
+    def _load_skill_declarations(
+        self,
+        handler: Path,
+        loaded: set[Path],
+        *,
+        skill_name: str | None,
+    ) -> None:
         manifest_path = self._find_skill_manifest(handler)
         if manifest_path is None:
             return
@@ -132,18 +139,24 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if not isinstance(payload, dict):
             return
         entries = payload.get("data_projections") or []
-        if not isinstance(entries, list) or not entries:
-            return
-        try:
-            projections = get_ctx().projections
-            load_manifest = getattr(projections, "load_manifest", None)
-            if callable(load_manifest):
-                load_manifest(payload)
-            else:
-                projections.load_entries(entries)
-            _LOG.info("loaded skill data_projections path=%s entries=%d", manifest_path, len(entries))
-        except Exception:
-            _LOG.debug("failed to load skill data_projections path=%s", manifest_path, exc_info=True)
+        if isinstance(entries, list) and entries:
+            try:
+                projections = get_ctx().projections
+                load_manifest = getattr(projections, "load_manifest", None)
+                if callable(load_manifest):
+                    load_manifest(payload)
+                else:
+                    projections.load_entries(entries)
+                _LOG.info("loaded skill data_projections path=%s entries=%d", manifest_path, len(entries))
+            except Exception:
+                _LOG.debug("failed to load skill data_projections path=%s", manifest_path, exc_info=True)
+        declaration_name = str(skill_name or payload.get("name") or "").strip()
+        if declaration_name:
+            load_runtime_skill_declarations(
+                declaration_name,
+                payload,
+                artifact_root=manifest_path.parent,
+            )
 
     @staticmethod
     def _find_skill_manifest(handler: Path) -> Optional[Path]:

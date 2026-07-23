@@ -15,6 +15,7 @@ from adaos.sdk.skill_env import get_env, read_env, set_env, skill_env_path
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill import manager as skill_manager_module
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
@@ -246,12 +247,18 @@ def test_prepare_runtime_preserves_browser_contract_fields(tmp_path: Path, monke
             ),
             encoding="utf-8",
         )
+        webui_text = json.dumps(
+            {"webio": {"receivers": {"contract.webui": {"mode": "replace"}}}},
+            indent=2,
+        )
+        (skill_dir / "webui.json").write_text(webui_text, encoding="utf-8")
 
         mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
         monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
 
         result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
         resolved = json.loads(Path(result.resolved_manifest).read_text(encoding="utf-8"))
+        staged_root = Path(resolved["source"])
 
         assert resolved["webui"]["file"] == "webui.json"
         assert resolved["activation"]["mode"] == "lazy"
@@ -260,6 +267,8 @@ def test_prepare_runtime_preserves_browser_contract_fields(tmp_path: Path, monke
         assert resolved["memory_budget"]["expected_rss_mb"] == 32
         assert resolved["lifecycle"]["dispose"] == "dispose"
         assert resolved["tools"]["refresh"]["schema"]["output"]["required"] == ["ok", "status", "receiver"]
+        assert (staged_root / "skill.yaml").read_bytes() == (skill_dir / "skill.yaml").read_bytes()
+        assert (staged_root / "webui.json").read_text(encoding="utf-8") == webui_text
     finally:
         shutil.rmtree(skill_dir, ignore_errors=True)
         shutil.rmtree(runtime_root, ignore_errors=True)
@@ -764,7 +773,7 @@ def test_prepare_runtime_copies_bucket_data_when_migration_file_missing(monkeypa
     assert (env.data_root("1.1.0") / "files" / "blob.txt").read_text(encoding="utf-8") == "blob"
 
 
-def test_run_tool_loads_runtime_data_projections(monkeypatch) -> None:
+def test_activate_runtime_loads_declarations_before_handlers(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
     skill_name = "runtime_projection_skill"
@@ -785,26 +794,40 @@ data_projections:
     targets:
       - backend: yjs
         path: data/contracts/snapshot
+data_routes:
+  - surface: modal:contract
+    route: stream
+    receiver: contract.events
 """.lstrip(),
+        encoding="utf-8",
+    )
+    (skill_dir / "webui.json").write_text(
+        '{"webio":{"receivers":{"contract.webui":{"mode":"replace"}}}}',
         encoding="utf-8",
     )
 
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
     monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
-    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+    def _assert_declarations_loaded(**_kwargs) -> None:
+        rule = ctx.projections.resolve_rule("subnet", "contract.snapshot")
+        assert rule is not None
+        assert runtime_stream_receiver_patterns(skill_name) == (
+            "contract.events",
+            "contract.webui",
+        )
+
+    monkeypatch.setattr(mgr, "_smoke_import", _assert_declarations_loaded)
     monkeypatch.setattr(skill_manager_module, "execute_tool", lambda *args, **kwargs: {"ok": True})
 
     runtime = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
     mgr.activate_runtime(skill_name, version=runtime.version, slot=runtime.slot)
 
-    assert ctx.projections.resolve_rule("subnet", "contract.snapshot") is None
-
-    assert mgr.run_tool(skill_name, "ping", {}) == {"ok": True}
     rule = ctx.projections.resolve_rule("subnet", "contract.snapshot")
 
     assert rule is not None
     assert rule.targets[0].backend == "yjs"
     assert rule.targets[0].path == "data/contracts/snapshot"
+    assert mgr.run_tool(skill_name, "ping", {}) == {"ok": True}
 
 
 def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
