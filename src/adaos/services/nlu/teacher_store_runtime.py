@@ -7,7 +7,11 @@ from collections.abc import Iterable
 from typing import Any, Mapping, Optional
 
 from adaos.sdk.core.decorators import subscribe
-from adaos.services.nlu.teacher_events import rebuild_teacher_derived_views
+from adaos.services.nlu.teacher_events import (
+    rebuild_teacher_derived_views,
+    teacher_projection_limits,
+    teacher_projection_needs_compaction,
+)
 from adaos.services.nlu.teacher_store import load_teacher_state, save_teacher_state
 from adaos.services.nlu.ycoerce import coerce_dict, is_mapping_like, iter_mappings
 from adaos.services.yjs.doc import async_get_ydoc
@@ -102,14 +106,23 @@ def _merge_list_by_id(
 def _merge_teacher(*, current: dict[str, Any], saved: dict[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = dict(saved)
     merged.update(current)
+    limits = teacher_projection_limits()
 
-    merged["events"] = _merge_list_by_id(current=current.get("events"), saved=saved.get("events"), max_items=500)
+    merged["events"] = _merge_list_by_id(
+        current=current.get("events"),
+        saved=saved.get("events"),
+        max_items=limits["events"],
+    )
     merged["revisions"] = _merge_list_by_id(current=current.get("revisions"), saved=saved.get("revisions"), max_items=200)
     merged["candidates"] = _merge_list_by_id(current=current.get("candidates"), saved=saved.get("candidates"), max_items=200)
     merged["dataset"] = _merge_list_by_id(current=current.get("dataset"), saved=saved.get("dataset"), max_items=500)
     merged["items"] = _merge_list_by_id(current=current.get("items"), saved=saved.get("items"), max_items=200)
     merged["plan"] = _merge_list_by_id(current=current.get("plan"), saved=saved.get("plan"), max_items=200)
-    merged["llm_logs"] = _merge_list_by_id(current=current.get("llm_logs"), saved=saved.get("llm_logs"), max_items=300)
+    merged["llm_logs"] = _merge_list_by_id(
+        current=current.get("llm_logs"),
+        saved=saved.get("llm_logs"),
+        max_items=limits["llm_logs"],
+    )
 
     rebuild_teacher_derived_views(merged)
     return merged
@@ -160,16 +173,19 @@ async def _rehydrate_teacher_projection(evt: Any) -> None:
     try:
         saved = load_teacher_state(webspace_id=webspace_id) or {}
         current = await _read_teacher_from_ydoc(webspace_id)
-        if not saved and "events_by_candidate" not in current:
+        needs_compaction = teacher_projection_needs_compaction(current)
+        if not saved and not needs_compaction:
             return
         merged = _merge_teacher(current=current, saved=saved)
         await _write_teacher_to_ydoc(webspace_id, merged)
         save_teacher_state(webspace_id=webspace_id, teacher=merged)
         _log.info(
-            "rehydrated nlu_teacher projection webspace=%s saved=%s removed_legacy_events=%s",
+            "rehydrated bounded nlu_teacher projection webspace=%s saved=%s compacted=%s removed_legacy_events=%s limits=%s",
             webspace_id,
             bool(saved),
+            needs_compaction,
             "events_by_candidate" in current,
+            teacher_projection_limits(),
         )
     except Exception:
         _log.debug("rehydrate failed webspace=%s", webspace_id, exc_info=True)

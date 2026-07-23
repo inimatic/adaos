@@ -41,7 +41,12 @@ def save_teacher_state(*, webspace_id: str, teacher: Mapping[str, Any]) -> None:
     path = teacher_state_path(webspace_id)
     tmp = path.with_suffix(".json.tmp")
     try:
-        tmp.write_text(json.dumps(teacher, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload = json.loads(json.dumps(teacher, ensure_ascii=False, default=str))
+        from adaos.services.nlu.teacher_events import rebuild_teacher_derived_views, teacher_projection_needs_compaction
+
+        if teacher_projection_needs_compaction(payload):
+            rebuild_teacher_derived_views(payload)
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
     except Exception:
         _log.warning("failed to write teacher state path=%s", path, exc_info=True)

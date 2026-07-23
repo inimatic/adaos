@@ -668,6 +668,16 @@ scenario. The overlay has a short TTL, never mutates or republishes the local
 YDoc, and does not upgrade live state-sync health; it is recovery containment,
 not a second collaborative source of truth.
 
+The browser now checks that authoritative render snapshot immediately after a
+scenario command acknowledgement. It no longer serializes a fixed 1.6-second
+delay, a five-second local-materialization poll, and only then the render
+snapshot fallback. That old sequence made a completed sub-200 ms backend
+switch appear as a repeatable 6.6-7 second UI transition whenever the local
+materialization predicate lagged behind the acknowledged projection. A stale
+but connected local provider is repaired in the background after the
+authoritative render becomes available; a disconnected provider still uses
+the blocking resync recovery path.
+
 Current rollback guidance if pointer-only switch regresses runtime behavior:
 
 - if `ui.current_scenario` flips before the visible projection, first verify

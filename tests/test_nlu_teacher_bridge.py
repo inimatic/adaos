@@ -445,3 +445,125 @@ async def test_teacher_store_runtime_removes_legacy_event_projection_on_ready(mo
     assert len(saves) == 1
     assert "events_by_candidate" not in writes[0]
     assert "events_by_candidate" not in saves[0]
+
+
+def test_teacher_durable_projection_is_bounded_and_keeps_newest_threads():
+    from adaos.services.nlu import teacher_events
+
+    teacher = {
+        "events": [
+            {
+                "id": f"evt-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index:03d}",
+                "request_text": f"request {index}",
+                "kind": "candidate.proposed",
+                "raw": {"id": f"cand-{index}", "payload": "x" * 2000},
+            }
+            for index in range(140)
+        ],
+        "llm_logs": [
+            {
+                "id": f"log-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index:03d}",
+                "response": {"raw": "y" * 4000},
+            }
+            for index in range(140)
+        ],
+        "candidates": [
+            {
+                "id": f"cand-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index:03d}",
+                "kind": "skill",
+                "status": "pending",
+                "candidate": {"name": f"candidate {index}"},
+            }
+            for index in range(140)
+        ],
+    }
+
+    teacher_events.rebuild_teacher_derived_views(teacher)
+    limits = teacher_events.teacher_projection_limits()
+
+    assert len(teacher["events"]) == limits["events"]
+    assert len(teacher["llm_logs"]) == limits["llm_logs"]
+    assert len(teacher["threads_by_request"]) == limits["threads_by_request"]
+    assert len(teacher["threads_by_candidate"]) == limits["threads_by_candidate"]
+    assert teacher["threads_by_request"][-1]["request_id"] == "req-139"
+    assert all(len(str(item.get("details") or "")) <= 2000 for item in teacher["threads_by_candidate"])
+    assert teacher["projection_window"]["source_of_truth"] == "conversation_ledger"
+    assert teacher["projection_window"]["truncated"]["events"] is True
+    assert teacher["projection_window"]["truncated"]["llm_logs"] is True
+
+
+def test_teacher_history_page_reads_canonical_ledger_on_demand():
+    from adaos.services import conversation_links
+    from adaos.services.nlu import teacher_events
+
+    webspace_id = "ws-teacher-history-page"
+    request_id = "req-history"
+    for index in range(3):
+        event = {
+            "id": f"evt-history-{index}",
+            "ts": float(index + 1),
+            "webspace_id": webspace_id,
+            "request_id": request_id,
+            "request_text": f"history request {index}",
+            "kind": "not_obtained",
+            "title": "Intent not obtained",
+            "raw": {"id": f"item-{index}", "request_id": request_id, "text": f"history request {index}"},
+        }
+        stored = conversation_links.append_teacher_event_message(
+            webspace_id=webspace_id,
+            text=event["request_text"],
+            request_id=request_id,
+            kind="event.not_obtained",
+            payload={"event": event},
+        )
+        assert stored is not None
+
+    page = teacher_events.read_teacher_history_page(webspace_id, request_id=request_id, limit=2)
+
+    assert page["source"] == "conversation_ledger"
+    assert page["thread_id"] == conversation_links.teacher_thread_id(
+        webspace_id=webspace_id,
+        request_id=request_id,
+    )
+    assert len(page["messages"]) == 2
+    assert len(page["events"]) == 2
+    assert page["total_message_count"] == 3
+    assert page["has_more_before"] is True
+    assert page["before_cursor"]
+    assert page["threads_by_request"][0]["details_truncated"] is False
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_compacts_oversized_projection_without_saved_state(monkeypatch):
+    from adaos.services.nlu import teacher_events, teacher_store_runtime
+
+    limits = teacher_events.teacher_projection_limits()
+    writes: list[dict] = []
+
+    async def _read(_webspace_id: str) -> dict:
+        return {
+            "events": [
+                {"id": f"evt-{index}", "ts": float(index), "request_id": f"req-{index}"}
+                for index in range(limits["events"] + 10)
+            ],
+            "llm_logs": [],
+        }
+
+    async def _write(_webspace_id: str, teacher: dict) -> None:
+        writes.append(teacher)
+
+    monkeypatch.setattr(teacher_store_runtime, "load_teacher_state", lambda **_kwargs: {})
+    monkeypatch.setattr(teacher_store_runtime, "_read_teacher_from_ydoc", _read)
+    monkeypatch.setattr(teacher_store_runtime, "_write_teacher_to_ydoc", _write)
+    monkeypatch.setattr(teacher_store_runtime, "save_teacher_state", lambda **_kwargs: None)
+
+    await teacher_store_runtime._on_sys_ready({"webspace_id": "ws-teacher-compact"})  # type: ignore[attr-defined]
+
+    assert len(writes) == 1
+    assert len(writes[0]["events"]) == limits["events"]

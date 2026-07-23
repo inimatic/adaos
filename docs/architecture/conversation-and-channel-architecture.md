@@ -1996,6 +1996,20 @@ Important lacunae found during Phase 6 implementation:
   migration on `sys.ready` as well as `scenarios.synced`, so a durable snapshot
   cannot retain the legacy expansion indefinitely when no scenario package is
   synchronized after restart.
+- [x] `[must]` Bound the replicated Teacher operational projection. The default
+  window retains at most 96 events, 48 LLM log rows, 32 request threads, and 48
+  candidate threads. Request detail text is capped at 12,000 characters and
+  candidate threads carry a compact summary plus a ledger query instead of a
+  duplicate request transcript. These limits can be overridden through the
+  corresponding `ADAOS_NLU_TEACHER_*_MAX` environment settings, but increasing
+  them must be treated as a CRDT replication-budget change. The projection
+  publishes its effective limits under `data.nlu_teacher.projection_window`.
+- [x] `[must]` Serve complete Teacher history from the canonical ledger on
+  demand. `GET /api/nlu/teacher/{webspace_id}/history` returns a cursor-paged
+  ledger reconstruction and accepts optional `request_id` and `candidate_id`
+  filters. Filtered trace and dialog-context reads use the same ledger path and
+  fall back to the bounded projection only when no ledger rows exist. Scenario
+  materialization and ordinary Yjs synchronization never read full history.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a

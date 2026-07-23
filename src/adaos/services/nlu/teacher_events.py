@@ -10,8 +10,11 @@ from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 
-_MAX_EVENTS = int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX", "500") or "500")
-_MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "250") or "250")
+_MAX_EVENTS = int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX", "96") or "96")
+_MAX_LLM_LOGS = int(os.getenv("ADAOS_NLU_TEACHER_LLM_LOGS_MAX", "48") or "48")
+_MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "32") or "32")
+_MAX_CANDIDATE_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATE_THREADS_MAX", "48") or "48")
+_MAX_THREAD_DETAILS_CHARS = int(os.getenv("ADAOS_NLU_TEACHER_THREAD_DETAILS_MAX_CHARS", "12000") or "12000")
 
 
 def _nlu_teacher_events_write_meta():
@@ -27,6 +30,77 @@ def _as_list_of_dicts(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, (str, bytes, bytearray)) or isinstance(value, Mapping) or not isinstance(value, Iterable):
         return []
     return [dict(x) for x in iter_mappings(value)]
+
+
+def _row_ts(item: Mapping[str, Any]) -> float:
+    try:
+        return float(item.get("ts") or item.get("created_at") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def teacher_projection_limits() -> dict[str, int]:
+    return {
+        "events": max(0, _MAX_EVENTS),
+        "llm_logs": max(0, _MAX_LLM_LOGS),
+        "threads_by_request": max(0, _MAX_THREADS),
+        "threads_by_candidate": max(0, _MAX_CANDIDATE_THREADS),
+        "thread_details_chars": max(0, _MAX_THREAD_DETAILS_CHARS),
+    }
+
+
+def _bounded_tail(items: list[dict[str, Any]], maximum: int) -> tuple[list[dict[str, Any]], bool]:
+    if maximum <= 0 or len(items) <= maximum:
+        return items, False
+    return items[-maximum:], True
+
+
+def bound_teacher_projection(teacher: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the operational Teacher window in replicated durable state."""
+    limits = teacher_projection_limits()
+    previous = coerce_dict(teacher.get("projection_window"))
+    truncated = coerce_dict(previous.get("truncated"))
+
+    for key in ("events", "llm_logs"):
+        items = sorted(
+            _as_list_of_dicts(teacher.get(key)),
+            key=_row_ts,
+        )
+        bounded, dropped = _bounded_tail(items, limits[key])
+        teacher[key] = bounded
+        truncated[key] = bool(truncated.get(key)) or dropped
+
+    teacher["projection_window"] = {
+        "schema": "adaos.nlu_teacher.projection_window.v1",
+        "source_of_truth": "conversation_ledger",
+        "history_mode": "on_demand",
+        "history_endpoint": "/api/nlu/teacher/{webspace_id}/history",
+        "limits": limits,
+        "retained": {
+            "events": len(_as_list_of_dicts(teacher.get("events"))),
+            "llm_logs": len(_as_list_of_dicts(teacher.get("llm_logs"))),
+        },
+        "truncated": truncated,
+    }
+    return teacher
+
+
+def teacher_projection_needs_compaction(teacher: Mapping[str, Any]) -> bool:
+    limits = teacher_projection_limits()
+    if "events_by_candidate" in teacher:
+        return True
+    if limits["events"] > 0 and len(_as_list_of_dicts(teacher.get("events"))) > limits["events"]:
+        return True
+    if limits["llm_logs"] > 0 and len(_as_list_of_dicts(teacher.get("llm_logs"))) > limits["llm_logs"]:
+        return True
+    if limits["threads_by_request"] > 0 and len(_as_list_of_dicts(teacher.get("threads_by_request"))) > limits["threads_by_request"]:
+        return True
+    if limits["threads_by_candidate"] > 0 and len(_as_list_of_dicts(teacher.get("threads_by_candidate"))) > limits["threads_by_candidate"]:
+        return True
+    for item in _as_list_of_dicts(teacher.get("threads_by_request")):
+        if limits["thread_details_chars"] > 0 and len(str(item.get("details") or "")) > limits["thread_details_chars"]:
+            return True
+    return not bool(coerce_dict(teacher.get("projection_window")))
 
 
 def _json_text(value: Any) -> str:
@@ -326,7 +400,7 @@ def rebuild_teacher_projection_from_ledger(webspace_id: str, *, limit: int = 100
     for key in ("items", "events", "candidates", "revisions", "llm_logs"):
         teacher[key] = sorted(
             [dict(item) for item in iter_mappings(teacher.get(key))],
-            key=lambda item: float(item.get("ts") or item.get("created_at") or 0.0),
+            key=_row_ts,
         )
     rebuild_teacher_derived_views(teacher)
     return teacher
@@ -462,7 +536,7 @@ def _thread_log_text(
     return "\n".join(lines).strip() + "\n"
 
 
-def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
+def rebuild_threads(teacher: dict[str, Any], *, bounded: bool = True) -> dict[str, Any]:
     """
     Builds derived thread views for schema-driven UI:
 
@@ -554,6 +628,11 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             subtitle_parts.append(f"errors={len(diagnostics)}")
         subtitle = ", ".join(subtitle_parts)
 
+        details_truncated = False
+        if bounded and _MAX_THREAD_DETAILS_CHARS > 0 and len(details) > _MAX_THREAD_DETAILS_CHARS:
+            details = details[:_MAX_THREAD_DETAILS_CHARS].rstrip() + "\n... (load full history from ledger)\n"
+            details_truncated = True
+
         threads_by_request.append(
             {
                 "id": f"req.{rid}",
@@ -563,6 +642,8 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
                 "created_at": request_ts or None,
                 "created_at_label": request_time,
                 "details": details,
+                "details_truncated": details_truncated,
+                "history_query": {"request_id": rid},
                 "diagnostics": _json_text(diagnostics) if diagnostics else "",
                 "has_error_details": bool(diagnostics),
                 "candidate_id": pending_candidate_id,
@@ -596,6 +677,21 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             cid = c.get("id") if isinstance(c.get("id"), str) else ""
             if not cid:
                 continue
+            candidate_details = details
+            if bounded:
+                candidate_details = _json_text(
+                    {
+                        "request_id": rid,
+                        "candidate_id": cid,
+                        "kind": cand_kind,
+                        "name": name,
+                        "description": description,
+                        "status": c.get("status"),
+                        "target": dict(target_obj) if isinstance(target_obj, Mapping) else None,
+                        "action": action_summary,
+                        "history": "load from conversation ledger",
+                    }
+                )
             threads_by_candidate.append(
                 {
                     "id": cid,
@@ -616,15 +712,19 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
                     "request_id": rid,
                     "title": name or cid,
                     "subtitle": req_text or rid,
-                    "details": details,
+                    "details": candidate_details,
+                    "details_truncated": bounded,
+                    "history_query": {"request_id": rid, "candidate_id": cid},
                 }
             )
 
-    # Keep the newest threads (roughly by embedded timestamps).
-    if _MAX_THREADS > 0 and len(threads_by_request) > _MAX_THREADS:
+    threads_by_request.sort(key=_row_ts)
+    if bounded and _MAX_THREADS > 0 and len(threads_by_request) > _MAX_THREADS:
         threads_by_request = threads_by_request[-_MAX_THREADS:]
-    if _MAX_THREADS > 0 and len(threads_by_candidate) > _MAX_THREADS * 2:
-        threads_by_candidate = threads_by_candidate[-(_MAX_THREADS * 2) :]
+    request_created_at = {str(item.get("request_id") or ""): _row_ts(item) for item in threads_by_request}
+    threads_by_candidate.sort(key=lambda item: request_created_at.get(str(item.get("request_id") or ""), 0.0))
+    if bounded and _MAX_CANDIDATE_THREADS > 0 and len(threads_by_candidate) > _MAX_CANDIDATE_THREADS:
+        threads_by_candidate = threads_by_candidate[-_MAX_CANDIDATE_THREADS:]
 
     teacher["threads_by_request"] = threads_by_request
     teacher["threads_by_candidate"] = threads_by_candidate
@@ -741,12 +841,108 @@ def rebuild_workbench_signals(teacher: dict[str, Any]) -> dict[str, Any]:
     return teacher
 
 
-def rebuild_teacher_derived_views(teacher: dict[str, Any]) -> dict[str, Any]:
+def rebuild_teacher_derived_views(teacher: dict[str, Any], *, bounded: bool = True) -> dict[str, Any]:
     """Rebuild bounded UI views without persisting duplicate event history."""
     teacher.pop("events_by_candidate", None)
-    rebuild_threads(teacher)
+    if bounded:
+        bound_teacher_projection(teacher)
+    rebuild_threads(teacher, bounded=bounded)
     rebuild_workbench_signals(teacher)
+    if bounded:
+        window = coerce_dict(teacher.get("projection_window"))
+        window["retained"] = {
+            **coerce_dict(window.get("retained")),
+            "threads_by_request": len(_as_list_of_dicts(teacher.get("threads_by_request"))),
+            "threads_by_candidate": len(_as_list_of_dicts(teacher.get("threads_by_candidate"))),
+        }
+        teacher["projection_window"] = window
     return teacher
+
+
+def read_teacher_history_page(
+    webspace_id: str,
+    *,
+    request_id: str | None = None,
+    candidate_id: str | None = None,
+    before_cursor: Any = None,
+    limit: int = 32,
+) -> dict[str, Any]:
+    """Reconstruct a paged Teacher view from the canonical conversation ledger."""
+    from adaos.services import conversation_links, conversation_store
+
+    clean_request_id = str(request_id or "").strip() or None
+    clean_candidate_id = str(candidate_id or "").strip() or None
+    conversation_id = conversation_links.teacher_conversation_id(webspace_id)
+    thread_id = (
+        conversation_links.teacher_thread_id(webspace_id=webspace_id, request_id=clean_request_id)
+        if clean_request_id
+        else None
+    )
+    page = conversation_store.list_projection(
+        conversation_id,
+        thread_id=thread_id,
+        before_cursor=before_cursor,
+        limit=max(1, min(int(limit or 32), 64)),
+        max_items=64,
+    )
+    messages = [dict(item) for item in iter_mappings(page.get("messages"))]
+    teacher: dict[str, Any] = {
+        "items": [],
+        "events": [],
+        "candidates": [],
+        "revisions": [],
+        "llm_logs": [],
+    }
+    for message in messages:
+        item = _teacher_item_from_ledger_message(message)
+        if item:
+            _append_unique(teacher["items"], item, fallback_key=str(message.get("id") or ""))
+        event = _event_from_ledger_message(message)
+        if event:
+            _append_unique(teacher["events"], event, fallback_key=str(message.get("id") or ""))
+            _accumulate_event_projection(teacher, event)
+
+    def _request_matches(item: Mapping[str, Any]) -> bool:
+        return not clean_request_id or str(item.get("request_id") or "").strip() == clean_request_id
+
+    def _candidate_matches(item: Mapping[str, Any]) -> bool:
+        if not clean_candidate_id:
+            return True
+        direct = str(item.get("candidate_id") or item.get("id") or "").strip()
+        raw = coerce_dict(item.get("raw"))
+        raw_id = str(raw.get("candidate_id") or raw.get("id") or "").strip()
+        return clean_candidate_id in {direct, raw_id}
+
+    for key in ("items", "events", "candidates", "revisions", "llm_logs"):
+        rows = [item for item in _as_list_of_dicts(teacher.get(key)) if _request_matches(item)]
+        if key in {"events", "candidates", "revisions"} and clean_candidate_id:
+            rows = [item for item in rows if _candidate_matches(item)]
+        teacher[key] = sorted(
+            rows,
+            key=_row_ts,
+        )
+    rebuild_teacher_derived_views(teacher, bounded=False)
+    return {
+        "ok": True,
+        "schema": "adaos.nlu_teacher.ledger_history.v1",
+        "webspace_id": webspace_id,
+        "request_id": clean_request_id,
+        "candidate_id": clean_candidate_id,
+        "source": "conversation_ledger",
+        "conversation_id": conversation_id,
+        "thread_id": thread_id,
+        "events": teacher["events"],
+        "llm_logs": teacher["llm_logs"],
+        "items": teacher["items"],
+        "candidates": teacher["candidates"],
+        "revisions": teacher["revisions"],
+        "threads_by_request": teacher.get("threads_by_request") or [],
+        "threads_by_candidate": teacher.get("threads_by_candidate") or [],
+        "messages": messages,
+        "has_more_before": bool(page.get("has_more_before")),
+        "before_cursor": str(page.get("before_cursor") or ""),
+        "total_message_count": int(page.get("total_message_count") or 0),
+    }
 
 
 def make_event(

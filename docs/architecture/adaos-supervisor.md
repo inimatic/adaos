@@ -557,9 +557,12 @@ For Yjs-backed experiences, the target rule should be explicit:
 
 This is already the direction used by `nlu_teacher`:
 
-- working state is visible under `data.nlu_teacher.*`
-- durable state is also persisted under `.adaos/state/skills/nlu_teacher/<webspace>.json`
-- rehydrate merges durable snapshot and current Yjs content after `scenarios.synced`
+- bounded working state is visible under `data.nlu_teacher.*`
+- the canonical full history is the node-local `kind=teacher` conversation ledger
+- `.adaos/state/skills/nlu_teacher/<webspace>.json` is a bounded recovery
+  projection, not an independent full-history authority
+- rehydrate compacts and reconciles the projection on `sys.ready` and
+  `scenarios.synced`; older history is read from the ledger on demand
 
 That pattern is target-aligned because it treats live projection state as rebuildable rather than as the sole owner of migration truth.
 

@@ -19,7 +19,7 @@ import yaml
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
-from adaos.services.nlu.teacher_events import append_event, make_event
+from adaos.services.nlu.teacher_events import append_event, make_event, teacher_projection_limits
 from adaos.services.nlu.teacher_governance import (
     append_deferred_enrichment,
     apply_candidate_governance,
@@ -3599,7 +3599,8 @@ async def _append_llm_log(webspace_id: str, entry: dict[str, Any]) -> None:
             teacher = _teacher_obj(data_map)
             logs = list(iter_mappings(teacher.get("llm_logs")))
             logs.append(entry)
-            teacher["llm_logs"] = logs[-300:]
+            log_limit = teacher_projection_limits()["llm_logs"]
+            teacher["llm_logs"] = logs[-log_limit:] if log_limit > 0 else logs
             teacher = record_budget_event(
                 teacher,
                 status=str(entry.get("status") or "unknown"),
@@ -3630,7 +3631,8 @@ async def _patch_llm_log(webspace_id: str, *, log_id: str, patch: dict[str, Any]
                     next_logs.append(updated)
                 else:
                     next_logs.append(item)
-            teacher["llm_logs"] = next_logs[-300:]
+            log_limit = teacher_projection_limits()["llm_logs"]
+            teacher["llm_logs"] = next_logs[-log_limit:] if log_limit > 0 else next_logs
             if updated_log is not None and isinstance(patch.get("status"), str):
                 protocol = updated_log.get("protocol") if isinstance(updated_log.get("protocol"), Mapping) else {}
                 cache = protocol.get("cache") if isinstance(protocol.get("cache"), Mapping) else None
