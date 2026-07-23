@@ -66,6 +66,124 @@ The result should be one of:
 - `inconclusive`: the runner could not verify the target due to runner,
   network, credentials, or missing-diagnostics problems
 
+## Root-Orchestrated Validation Campaigns
+
+The distributed stand design extends the post-deploy runner without making a
+skill the rollout authority. The ownership boundary should be:
+
+- Root owns test-node registration, campaign policy, assignment, aggregation,
+  release verdicts, quarantine, audit, and developer notification.
+- The Hub control plane accepts a narrow signed assignment, asks supervisor to
+  converge to the exact candidate build, and launches an allowlisted test
+  profile in a bounded subprocess.
+- Supervisor remains the only local authority that activates or rolls back a
+  core slot. Root may request rollback; a skill must not switch slots itself.
+- The existing stand runner remains the deterministic node-side test engine.
+- An optional `release_validation_agent` skill may expose typed tools, status,
+  and operator UI, but it is only an adapter. It must not accept arbitrary
+  commands, pytest arguments, or shell payloads through the Hub API.
+
+This fits the existing control plane: Root already dispatches core update and
+rollback requests, Hub reports update state to Root, and supervisor owns local
+candidate validation and slot recovery. Validation assignments should reuse
+that authenticated routed path rather than introduce an unauthenticated event
+channel.
+
+### Root Records
+
+Keep a reusable test definition separate from one execution:
+
+- `TestSuite`: immutable or versioned scenario id, allowed safety profile,
+  runner version, required capabilities, checks, and timeout policy.
+- `TestNode`: node id, subnet/environment labels, capabilities, allowed
+  profiles, lease expiry, last heartbeat, active core build, and runner build.
+- `ValidationCampaign`: campaign id, exact candidate build id and digest,
+  suite version, node selector, deadline, quorum, rollout id, previous known
+  good build, artifact policy, and requester.
+- `ValidationAssignment`: campaign/node binding, attempt, idempotency key,
+  signed single-use token, deadline, state, and evidence references.
+
+Semantic versions are not sufficient assignment targets. Every campaign must
+bind an immutable build digest or commit plus artifact identity, then wait
+until supervisor reports that exact identity active and ready.
+
+Assignment states are `assigned`, `updating`, `waiting_for_version`, `ready`,
+`running`, `uploading`, and one of `passed`, `failed`, `inconclusive`, or
+`timed_out`. Campaign states are `pending`, `dispatching`, `running`, then
+`passed`, `failed`, or `inconclusive`; release disposition is recorded
+separately as `validated`, `suspect`, `quarantined`, or `defective`.
+
+### Campaign Flow
+
+1. CI publishes an immutable candidate and creates a campaign at Root.
+2. Root selects live, leased test nodes that match the suite capabilities and
+   issues idempotent, short-lived assignments.
+3. Each Hub asks supervisor to update, then waits for exact build identity and
+   readiness. Failure to converge is `inconclusive` or `update_failed`, not a
+   failed product assertion.
+4. The node runs API/Yjs deterministic checks first and Playwright only for a
+   suite that declares browser capability.
+5. The node uploads a redacted manifest, checks, logs, and browser evidence;
+   Root retains content hashes and durable references.
+6. Root applies deterministic quorum and severity policy, records the verdict,
+   updates CI, and creates an operator action when intervention is required.
+
+Delivery is at-least-once, so assignment ids and report sequence numbers must
+be idempotent. Tokens are scoped to campaign, node, version, and suite, have a
+short TTL, and cannot select a different executable profile. Resource, time,
+artifact-size, and secret-redaction limits are enforced on the node.
+
+### Verdict And Rollback Policy
+
+Root must distinguish a product failure from runner/environment failure. One
+flaky browser timeout must not mark a release defective or trigger a broad
+rollback.
+
+- `inconclusive`: retain candidate status, publish a neutral/warning CI result,
+  and retry or replace the test node.
+- non-critical deterministic failure: mark the build `suspect`, fail the CI
+  check, and open a developer action with evidence.
+- critical safety invariant: quarantine immediately; mark `defective` only
+  after the configured quorum/reproduction rule, except for explicitly listed
+  single-node hard safety invariants.
+- automatic rollback: allowed only for the canary/test rollout ring, with a
+  known-good previous slot and an audited policy match. Root requests it and
+  supervisor executes it. Wider production rollback remains a separate
+  governed decision.
+
+Verdict history is append-only. Manual override, retry, quarantine release,
+and rollback acknowledgement require actor and reason fields.
+
+### Developer Notification
+
+Use one durable AdaOS record as the source of truth, then fan out adapters:
+
+1. Root creates or updates a release-validation incident and a Pending Action
+   containing build identity, severity, failed invariants, node/quorum state,
+   evidence links, and allowed actions.
+2. Root updates the CI commit/check status for the exact build. This is the
+   primary developer-workflow signal and can block promotion.
+3. Optional Slack, Teams, email, or generic webhook adapters project the same
+   incident. They are notification channels, not verdict authorities.
+4. AdaOS operator UI and Root MCP expose campaign, incident, evidence, retry,
+   quarantine, and rollback-request state from the durable record.
+
+This ordering prevents a lost chat message from losing the decision and keeps
+CI, operator UI, and external notifications consistent.
+
+### Incremental Delivery
+
+1. Define schemas, states, severity taxonomy, and append-only verdict history.
+2. Add the Root test-node registry with heartbeat leases and capabilities.
+3. Implement one observe-only assignment and report path for one node.
+4. Add exact-version convergence and API/Yjs suites using the current runner.
+5. Add the Playwright capability and permanent browser identity.
+6. Add quorum, CI check callback, incident/Pending Action, and optional webhook
+   adapters.
+7. Enable canary-only rollback policy, then storm and soak profiles.
+
+Do not enable automatic rollback before steps 1-6 have stand evidence.
+
 ## Current Executable Slice
 
 The first implementation now lives in:

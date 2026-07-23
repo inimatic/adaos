@@ -69,13 +69,19 @@ window. The runner uses `passed`, `failed`, and `inconclusive` as distinct CI
 outcomes and stores bundles under `artifacts/e2e-runs/` by default.
 
 The repository-wide Python gate is conclusive only when collection completes
-and a JUnit result is retained. The 2026-07-23 process-isolated baseline ran
-all `2871` collected tests in six segments: `2855` passed, `8` failed, `8`
-skipped, and `0` errored. The remaining failures are one API module-state
-leak, one Neural installer staging failure, and six NLU Teacher
-validation/apply failures. The segmented reports are evidence of a working
-complete gate, not a passing release; `TEST-001` remains open until those
-clusters reach zero and the bounded aggregate command terminates reliably.
+and a JUnit result is retained. On 2026-07-23, both the six-process isolated
+gate and the aggregate command collected `2873` tests: `2865` passed, `8`
+skipped, `0` failed, and `0` errored. The aggregate command terminated
+normally in `534` wall-clock seconds (`528.072` seconds in JUnit), so
+`TEST-001` / `MRI-003` is closed and has been removed from the active issue
+tracker. The focused M1 declarations/diagnostics plus M2 operations acceptance
+profile also passed all `99` tests.
+
+The clean run still reports two non-failing unawaited-coroutine warnings in
+the synchronous NLU lookup/read-model fallback and post-summary logging noise
+from completed runtime-memory-profile callbacks. Treat these as test/runtime
+hygiene debt if the warning policy is tightened; they do not invalidate the
+recorded assertions or process exit.
 
 ## Required MVP Sections
 
@@ -99,9 +105,9 @@ that is not needed to prove the invariant. Record the redaction version in the
 manifest and retain failed/inconclusive bundles longer than successful local
 runs.
 
-## Closed Wave 0–1 Local Acceptance Profile
+## Closed Wave 0-1 Local Acceptance Profile
 
-The local Wave 0–1 gate closed on 2026-07-23. Keep this command set as its
+The local Wave 0-1 gate closed on 2026-07-23. Keep this command set as its
 regression profile; it does not replace the separate target-stand gate.
 
 For the MVP planning/evidence and projection-runtime slice, the minimum local
