@@ -195,7 +195,11 @@ Without that, a candidate process can look indistinguishable from the active pro
 
 Before cutover is explicitly committed, a prewarmed `candidate` runtime must stay passive on root-facing traffic subjects.
 
-That means a candidate may establish root control connectivity for diagnostics, but it must not yet subscribe to the same root-routed traffic subjects as the active runtime:
+Candidate API readiness does not require a root/NATS connection. Bootstrap
+registers the bridge factory but defers opening the local sidecar session until
+`promote-active`. This keeps prewarm from displacing or competing with the
+active runtime's transport session. A candidate must not subscribe to the same
+root-routed traffic subjects as the active runtime:
 
 - `tg.input.<hub_id>`
 - `io.tg.in.<hub_id>.text`
@@ -221,6 +225,9 @@ It only defines the moment when supervisor may end passive mode:
 - the candidate flips to `transition_role=active`, reconnects root-facing transport,
   installs and flushes the scoped `route.v2.to_hub.<hub_id>.*` subscription,
   and only then reports that it owns live hub traffic
+- the sidecar admits at most two concurrent local NATS relay sessions during
+  this authority handoff, so the old active session remains usable until the
+  promoted runtime reports the flushed subscription
 - supervisor adopts that promoted process as the managed active runtime instead of launching a second fresh process when warm-switch succeeds
 - if promotion or adoption fails, supervisor tears the candidate down, keeps
   the old active listener, and defers the transition; cold fallback requires

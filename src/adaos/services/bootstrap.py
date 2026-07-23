@@ -1393,8 +1393,15 @@ class BootstrapService:
         self._boot_tasks.append(task)
         return task
 
-    def _start_hub_root_bridge_task(self, coro_factory: Callable[[], Awaitable[Any]]) -> asyncio.Task:
+    def _start_hub_root_bridge_task(
+        self,
+        coro_factory: Callable[[], Awaitable[Any]],
+        *,
+        start_immediately: bool = True,
+    ) -> asyncio.Task | None:
         self._hub_root_bridge_factory = coro_factory
+        if not start_immediately:
+            return None
         return self._start_boot_task_once(self._hub_root_bridge_task_name, coro_factory)
 
     def _ensure_hub_root_bridge_task(
@@ -10623,8 +10630,16 @@ class BootstrapService:
                             else:
                                 delay = min(max(delay, 0.5), 2.0)
 
-                # TODO restore nats WS subscription
-                self._start_hub_root_bridge_task(_nats_bridge_supervisor)
+                candidate_transport_deferred = _hub_root_candidate_passive_mode()
+                self._start_hub_root_bridge_task(
+                    _nats_bridge_supervisor,
+                    start_immediately=not candidate_transport_deferred,
+                )
+                if candidate_transport_deferred:
+                    self._log.info(
+                        "nats candidate transport deferred until promotion instance=%s",
+                        str(runtime_identity_snapshot().get("runtime_instance_id") or ""),
+                    )
         except Exception:
             try:
                 if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or os.getenv("ADAOS_CLI_DEBUG", "0") == "1":

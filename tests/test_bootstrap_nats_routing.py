@@ -187,6 +187,39 @@ async def test_hub_root_reconnect_rearms_completed_bridge_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_candidate_bridge_is_registered_without_connecting_until_promotion() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        started.set()
+        await stop.wait()
+
+    assert service._start_hub_root_bridge_task(bridge, start_immediately=False) is None
+    assert service._find_live_boot_task(service._hub_root_bridge_task_name) is None
+    assert started.is_set() is False
+
+    try:
+        result = await service.request_hub_root_reconnect()
+
+        assert result["ok"] is True
+        assert result["bridge"]["started"] is True
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_hub_root_reconnect_rearms_running_bridge_without_active_connection() -> None:
     service = bootstrap_mod.BootstrapService(
         SimpleNamespace(config=SimpleNamespace(role="hub")),

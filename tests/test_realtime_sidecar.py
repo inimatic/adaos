@@ -69,6 +69,12 @@ class _FakeRemoteWS:
         return None
 
 
+class _FakeInfoRemoteWS(_FakeRemoteWS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recv_queue.put_nowait(b'INFO {"server_id":"test","proto":1}\r\n')
+
+
 class ConnectionClosedOK(Exception):
     pass
 
@@ -834,6 +840,64 @@ async def test_realtime_sidecar_probe_does_not_supersede_active_local_client(
         with contextlib.suppress(Exception):
             await reader.read()
     finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_keeps_two_local_nats_sessions_during_runtime_handoff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    remote_sessions: list[_FakeInfoRemoteWS] = []
+
+    async def _fake_connect(*args, **kwargs):
+        session = _FakeInfoRemoteWS()
+        remote_sessions.append(session)
+        return session
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.02")
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    await server.start()
+    first_reader = first_writer = second_reader = second_writer = None
+    try:
+        first_reader, first_writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        assert await asyncio.wait_for(first_reader.readuntil(b"\r\n"), timeout=1.0) == (
+            b'INFO {"server_id":"test","proto":1}\r\n'
+        )
+
+        second_reader, second_writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        assert await asyncio.wait_for(second_reader.readuntil(b"\r\n"), timeout=1.0) == (
+            b'INFO {"server_id":"test","proto":1}\r\n'
+        )
+
+        first_writer.write(b"PING\r\n")
+        second_writer.write(b"PONG\r\n")
+        await asyncio.gather(first_writer.drain(), second_writer.drain())
+        for _ in range(50):
+            if len(remote_sessions) == 2 and remote_sessions[0].sent and remote_sessions[1].sent:
+                break
+            await asyncio.sleep(0.01)
+
+        assert len(remote_sessions) == 2
+        assert remote_sessions[0].sent == [b"PING\r\n"]
+        assert remote_sessions[1].sent == [b"PONG\r\n"]
+        assert remote_sessions[0].closed is False
+        assert server._stats.superseded_total == 0
+        assert server._stats.overlap_admitted_total == 1
+        assert len(server._live_session_tasks()) == 2
+    finally:
+        for writer in (first_writer, second_writer):
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
         await server.close()
 
 
