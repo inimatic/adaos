@@ -115,7 +115,7 @@ def test_rebuild_workspace_registry_prefers_scenario_yaml_title_and_i18n(tmp_pat
     assert entry["version"] == "0.3.2"
 
 
-def test_rebuild_workspace_registry_ignores_scenario_json_declaration_content(tmp_path: Path, caplog, monkeypatch):
+def test_rebuild_workspace_registry_accepts_scenario_json_as_derived_runtime_projection(tmp_path: Path, caplog, monkeypatch):
     monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
     caplog.set_level(logging.WARNING, logger="adaos.workspace_registry")
     workspace = tmp_path / "workspace"
@@ -145,7 +145,7 @@ def test_rebuild_workspace_registry_ignores_scenario_json_declaration_content(tm
     assert entry["manifest"] == "scenarios/web_desktop/scenario.yaml"
     assert entry["version"] == "0.3.10"
     assert entry["updated_at"] == "2026-07-05T04:58:01+00:00"
-    assert "unsupported declaration files" in caplog.text
+    assert "unsupported declaration files" not in caplog.text
 
 
 def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_path: Path, caplog, monkeypatch):

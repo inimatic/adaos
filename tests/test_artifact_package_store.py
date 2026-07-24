@@ -37,6 +37,12 @@ def _scenario(root: Path) -> Path:
     (scenario / "webui.json").write_text('{"ui": {}}\n', encoding="utf-8")
     (scenario / "assets" / "icon.svg").write_text("<svg/>\n", encoding="utf-8")
     (scenario / "builder.draft.json").write_text('{"private": true}\n', encoding="utf-8")
+    (scenario / "prompt_state.json").write_text('{"workflow": "prototype"}\n', encoding="utf-8")
+    (scenario / "builder_memory.md").write_text("private notes\n", encoding="utf-8")
+    (scenario / "tests").mkdir()
+    (scenario / "tests" / "test_contract.py").write_text("assert True\n", encoding="utf-8")
+    (scenario / "ui_revisions").mkdir()
+    (scenario / "ui_revisions" / "001.json").write_text('{}\n', encoding="utf-8")
     (scenario / "__pycache__" / "generated.pyc").write_bytes(b"cache")
     return scenario
 
@@ -54,6 +60,10 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
     assert verified.ref == first.ref
     assert "scenario.yaml" in verified.file_names
     assert "builder.draft.json" not in verified.file_names
+    assert "prompt_state.json" not in verified.file_names
+    assert "builder_memory.md" not in verified.file_names
+    assert not any(item.startswith("tests/") for item in verified.file_names)
+    assert not any(item.startswith("ui_revisions/") for item in verified.file_names)
     assert not any("__pycache__" in item for item in verified.file_names)
 
 
@@ -75,7 +85,7 @@ def test_package_accepts_zero_byte_files(tmp_path: Path) -> None:
         "name: empty_file_skill\nversion: 1.0.0\n",
         encoding="utf-8",
     )
-    (artifact / "builder_system_prompt.md").write_bytes(b"")
+    (artifact / "config.json").write_bytes(b"")
 
     built = build_artifact_package(artifact, kind="skill", source_ref=_source())
     verified = verify_artifact_package(
@@ -86,7 +96,7 @@ def test_package_accepts_zero_byte_files(tmp_path: Path) -> None:
     record = next(
         item
         for item in verified.package_manifest["files"]
-        if item["path"] == "builder_system_prompt.md"
+        if item["path"] == "config.json"
     )
     assert record["size"] == 0
 

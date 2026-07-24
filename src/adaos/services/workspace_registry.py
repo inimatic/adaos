@@ -23,9 +23,13 @@ _REQUIRED_MANIFEST_BY_KIND: dict[RegistryKind, str] = {
     "skills": "skill.yaml",
     "scenarios": "scenario.yaml",
 }
-_UNSUPPORTED_MANIFESTS_BY_KIND: dict[RegistryKind, tuple[str, ...]] = {
+_NON_CANONICAL_MANIFESTS_BY_KIND: dict[RegistryKind, tuple[str, ...]] = {
     "skills": ("skill.yml", "manifest.yaml", "manifest.yml", "skill.json", "manifest.json", "adaos.skill.yaml"),
     "scenarios": ("scenario.yml", "scenario.json"),
+}
+_DERIVED_RUNTIME_MANIFESTS_BY_KIND: dict[RegistryKind, tuple[str, ...]] = {
+    "skills": (),
+    "scenarios": ("scenario.json",),
 }
 
 
@@ -484,7 +488,7 @@ def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, di
     if not path.exists():
         unsupported = [
             name
-            for name in _UNSUPPORTED_MANIFESTS_BY_KIND[kind]
+            for name in _NON_CANONICAL_MANIFESTS_BY_KIND[kind]
             if (directory / name).exists()
         ]
         _LOG.error(
@@ -514,7 +518,8 @@ def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, di
         return None, {}
     unsupported = [
         name
-        for name in _UNSUPPORTED_MANIFESTS_BY_KIND[kind]
+        for name in _NON_CANONICAL_MANIFESTS_BY_KIND[kind]
+        if name not in _DERIVED_RUNTIME_MANIFESTS_BY_KIND[kind]
         if (directory / name).exists()
     ]
     if unsupported:

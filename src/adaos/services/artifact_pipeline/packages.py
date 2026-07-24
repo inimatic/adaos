@@ -38,11 +38,23 @@ _EXCLUDED_DIRS = {
     "__pycache__",
     "build",
     "dist",
+    "llm_jobs",
     "node_modules",
+    "prep",
+    "tests",
+    "tz",
+    "ui_revisions",
 }
 _EXCLUDED_FILES = {
     ".DS_Store",
     "builder.draft.json",
+    "builder_memory.md",
+    "builder_system_prompt.md",
+    "prep_prompt.md",
+    "prep_result.json",
+    "prep_result_prompt.md",
+    "prompt_state.json",
+    "skill_prompt.md",
 }
 _EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 _MANIFEST_BY_KIND: dict[ArtifactKind, str] = {
