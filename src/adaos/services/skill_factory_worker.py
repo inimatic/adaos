@@ -11,10 +11,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from uuid import uuid4
 
 import yaml
 
+from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_sources import (
+    SourceSnapshotError,
+    materialize_source_snapshot,
+    source_tree_digest,
+    verify_source_snapshot,
+)
 
 
 RUNNER_VERSION = "adaos-local-codex-worker/0.1.0"
@@ -274,7 +282,7 @@ class LocalSkillFactoryWorker:
             if workspace.exists():
                 shutil.rmtree(workspace)
             workspace.mkdir(parents=True)
-            self._materialize_sources(assignment, workspace)
+            source_snapshot = self._materialize_sources(assignment, workspace)
             # Generated caches from an earlier DEV run are not source.  Drop
             # them before the git baseline so their later cleanup cannot look
             # like a forbidden edit to an immutable companion skill.
@@ -333,6 +341,13 @@ class LocalSkillFactoryWorker:
                 "instruction_packet_hash": packet_hash,
                 "dependency_changes": self._dependency_changes(workspace),
                 "source_refs": dict(assignment.get("source_refs") or {}),
+                "base_revision": str((assignment.get("forge") or {}).get("base_revision") or "") or None,
+                "source_snapshot": {
+                    "snapshot_id": source_snapshot.get("snapshot_id"),
+                    "digest": source_snapshot.get("digest"),
+                }
+                if source_snapshot
+                else None,
                 "tool_versions": {"python": sys.version.split()[0]},
                 "created_at": _now_iso(),
             }
@@ -407,7 +422,19 @@ class LocalSkillFactoryWorker:
             except Exception:
                 _log.warning("local worker progress callback failed task=%s status=%s", task_id, status, exc_info=True)
 
-    def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> None:
+    def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any] | None:
+        forge = dict(assignment.get("forge") or {})
+        snapshot_reference = dict(forge.get("source_snapshot") or {})
+        if snapshot_reference:
+            base_revision = str(forge.get("base_revision") or "").strip()
+            if base_revision != str(snapshot_reference.get("digest") or "").strip():
+                raise SourceSnapshotError("task base revision differs from its immutable source snapshot")
+            return materialize_source_snapshot(
+                state_dir=self.state_dir,
+                reference=snapshot_reference,
+                workspace=workspace,
+            )
+
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill").strip().lower()
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
@@ -445,6 +472,7 @@ class LocalSkillFactoryWorker:
             shutil.copytree(source, destination)
         else:
             raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
+        return None
 
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
         request = dict(assignment.get("realize_request") or {})
@@ -862,6 +890,43 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             sources.append((workspace / "skills" / skill_id, self.dev_skills_root / skill_id))
         else:
             sources.append((workspace / "skills" / target_id, self.dev_skills_root / target_id))
+        snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+        if snapshot_reference:
+            manifest = verify_source_snapshot(state_dir=self.state_dir, reference=snapshot_reference)
+            expected = {
+                str(item.get("path") or "").strip().replace("\\", "/"): str(item.get("digest") or "")
+                for item in manifest.get("artifacts") or []
+                if isinstance(item, Mapping)
+            }
+            for _source, destination in sources:
+                relative = (
+                    f"scenarios/{destination.name}"
+                    if destination.parent == self.dev_scenarios_root
+                    else f"skills/{destination.name}"
+                )
+                expected_digest = expected.get(relative)
+                if not expected_digest:
+                    raise SourceSnapshotError(f"task snapshot does not contain mutable source {relative}")
+                actual_digest = source_tree_digest(destination)
+                if actual_digest != expected_digest:
+                    raise SourceSnapshotError(
+                        f"DEV source changed while Codex was running: {relative}; "
+                        "the completed result was preserved in the task workspace and was not applied"
+                    )
+            expected_by_destination = {
+                destination: expected[
+                    f"scenarios/{destination.name}"
+                    if destination.parent == self.dev_scenarios_root
+                    else f"skills/{destination.name}"
+                ]
+                for _source, destination in sources
+            }
+            self._replace_artifacts_transactionally(
+                sources,
+                expected_by_destination=expected_by_destination,
+            )
+            return
+
         for source, destination in sources:
             if not source.exists():
                 continue
@@ -871,6 +936,70 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             else:
                 shutil.copytree(source, destination)
             self._cleanup_generated_files(destination)
+
+    def _replace_artifacts_transactionally(
+        self,
+        sources: Sequence[tuple[Path, Path]],
+        *,
+        expected_by_destination: Mapping[Path, str],
+    ) -> None:
+        transaction_id = uuid4().hex
+        staged_rows: list[tuple[Path, Path, Path]] = []
+        switched: list[tuple[Path, Path]] = []
+        try:
+            for source, destination in sources:
+                if not source.is_dir():
+                    raise FileNotFoundError(f"task result is missing source directory: {source}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                staged = destination.parent / f".{destination.name}.apply.{transaction_id}"
+                backup = destination.parent / f".{destination.name}.backup.{transaction_id}"
+                shutil.copytree(source, staged)
+                prompt_state = destination / "prompt_state.json"
+                if prompt_state.is_file():
+                    shutil.copy2(prompt_state, staged / "prompt_state.json")
+                previous_automation = staged / ".builder_previous_automation"
+                if previous_automation.exists():
+                    shutil.rmtree(previous_automation)
+                self._cleanup_generated_files(staged)
+                staged_rows.append((staged, destination, backup))
+
+            for staged, destination, backup in staged_rows:
+                expected_digest = str(expected_by_destination.get(destination) or "")
+                if not expected_digest or source_tree_digest(destination) != expected_digest:
+                    raise SourceSnapshotError(
+                        f"DEV source changed during result activation: {destination.name}; "
+                        "the transaction was rolled back"
+                    )
+                if destination.exists():
+                    replace_with_retry(destination, backup)
+                try:
+                    replace_with_retry(staged, destination)
+                except Exception:
+                    if backup.exists() and not destination.exists():
+                        replace_with_retry(backup, destination)
+                    raise
+                switched.append((destination, backup))
+        except Exception as apply_error:
+            rollback_errors: list[str] = []
+            for destination, backup in reversed(switched):
+                try:
+                    if destination.exists():
+                        shutil.rmtree(destination)
+                    if backup.exists():
+                        replace_with_retry(backup, destination)
+                except Exception as exc:
+                    rollback_errors.append(f"{destination}: {type(exc).__name__}: {exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"DEV result activation failed ({apply_error}); rollback also failed: {rollback_errors}"
+                ) from apply_error
+            raise
+        finally:
+            for staged, _destination, backup in staged_rows:
+                if staged.exists():
+                    shutil.rmtree(staged, ignore_errors=True)
+                if backup.exists():
+                    shutil.rmtree(backup, ignore_errors=True)
 
 
 __all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor"]

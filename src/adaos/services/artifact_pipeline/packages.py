@@ -29,6 +29,7 @@ PACKAGE_MANIFEST_PATH = ".adaos/package-manifest.json"
 PACKAGE_MANIFEST_SCHEMA = "adaos.artifact.component_package.v1"
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _EXCLUDED_DIRS = {
+    ".builder_previous_automation",
     ".git",
     ".mypy_cache",
     ".pytest_cache",

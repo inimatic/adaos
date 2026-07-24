@@ -99,6 +99,13 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["standard_prompt_version"].startswith("adaos-skill-realization/")
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == status["session"]["current_task_id"]
+    )
+    assert task["forge"]["base_revision"].startswith("sha256:")
+    assert task["forge"]["base_revision"] == task["forge"]["source_snapshot"]["digest"]
     assert (service.dev_skills_root / "recipes_skill" / "skill.yaml").exists()
     assert "new_skill" not in (service.dev_skills_root / "recipes_skill" / "handlers" / "main.py").read_text(
         encoding="utf-8"

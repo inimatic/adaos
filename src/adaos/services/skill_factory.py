@@ -439,6 +439,16 @@ class SkillFactoryService:
 
         user_subnet_id = _text(raw.get("user_subnet_id") or raw.get("subnet_id")) or None
         base_branch = _text(repo.get("base_branch")) or f"dev/{user_subnet_id or 'local'}"
+        base_revision = _text(repo.get("base_revision")) or None
+        source_snapshot = _mapping(repo.get("source_snapshot"))
+        if source_snapshot:
+            snapshot_id = _text(source_snapshot.get("snapshot_id"))
+            snapshot_digest = _text(source_snapshot.get("digest"))
+            if len(snapshot_id) != 64 or snapshot_digest != f"sha256:{snapshot_id}":
+                raise ValueError("repo.source_snapshot must carry a content-addressed SHA-256 identity")
+            if base_revision and base_revision != snapshot_digest:
+                raise ValueError("repo.base_revision must match repo.source_snapshot.digest")
+            base_revision = snapshot_digest
         sparse_paths = _normalize_sparse_paths(repo.get("sparse_paths")) if repo.get("sparse_paths") else self.calculate_sparse_paths(target, draft=draft)
         forge_project = _text(repo.get("forge_project") or raw.get("forge_project") or user_subnet_id or "local_devspace")
 
@@ -494,6 +504,8 @@ class SkillFactoryService:
                 "forge_project": forge_project,
                 "repo_url": repo.get("repo_url"),
                 "base_branch": base_branch,
+                "base_revision": base_revision,
+                "source_snapshot": source_snapshot or None,
                 "sparse_paths": sparse_paths,
             },
             "realization_policy": realization_policy,
@@ -546,6 +558,8 @@ class SkillFactoryService:
                     "repo_url": repo.get("repo_url"),
                     "forge_project": repo.get("forge_project"),
                     "base_branch": repo.get("base_branch"),
+                    "base_revision": repo.get("base_revision"),
+                    "source_snapshot": _mapping(repo.get("source_snapshot")) or None,
                     "branch": branch,
                     "branch_creator": "dev_node",
                     "sparse_paths": forge_sparse_paths,
@@ -1201,6 +1215,8 @@ class SkillFactoryService:
                 "repo_url": forge.get("repo_url"),
                 "forge_project": forge.get("forge_project"),
                 "base_branch": forge.get("base_branch"),
+                "base_revision": forge.get("base_revision"),
+                "source_snapshot": _mapping(forge.get("source_snapshot")) or None,
                 "branch": forge.get("branch"),
                 "branch_creator": forge.get("branch_creator") or "dev_node",
                 "sparse_paths": _normalize_sparse_paths(forge.get("sparse_paths")),

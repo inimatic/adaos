@@ -15,6 +15,7 @@ from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_sources import capture_source_snapshot
 from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
@@ -673,10 +674,48 @@ class BuilderAutomationService:
         project_id = str(session["object_id"])
         companion = str(session["companion_skill_id"])
         sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
+        source_artifacts: list[tuple[str, str, Path]] = [
+            (
+                kind,
+                project_id,
+                (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id,
+            )
+        ]
         if kind == "scenario":
             sparse_paths.append(f"skills/{companion}/")
+            source_artifacts.append(("skill", companion, self.dev_skills_root / companion))
         sparse_paths.append(f"docs/requirements/{project_id}/")
+        attachments: list[tuple[str, Path, str]] = []
+        if kind == "scenario":
+            automation_snapshot = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / "scenario"
+                / project_id
+                / "automation"
+            )
+            if automation_snapshot.is_dir():
+                attachments.append(
+                    (
+                        "previous_automation",
+                        automation_snapshot,
+                        f"scenarios/{project_id}/.builder_previous_automation",
+                    )
+                )
+        source_snapshot = capture_source_snapshot(
+            state_dir=self.state_dir,
+            artifacts=source_artifacts,
+            attachments=attachments,
+            created_at=_now_iso(),
+        )
+        request_id = (
+            f"realize.{_safe_token(kind)}.{_safe_token(project_id)}."
+            f"{_safe_token(session.get('change_id'), fallback='change')}."
+            f"{max(0, int(session.get('iteration') or 0))}"
+        )
         request = {
+            "request_id": request_id,
             "target": {"type": kind, "id": project_id},
             "source": {
                 "type": "prompt_ide_execute" if not iteration_instruction else "builder_automation_chat",
@@ -691,7 +730,12 @@ class BuilderAutomationService:
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
             },
-            "repo": {"sparse_paths": sparse_paths, "base_branch": "dev/local"},
+            "repo": {
+                "sparse_paths": sparse_paths,
+                "base_branch": "dev/local",
+                "base_revision": source_snapshot["digest"],
+                "source_snapshot": source_snapshot,
+            },
             "constraints": {
                 "no_external_api": True,
                 "no_secrets": True,
