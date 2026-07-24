@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +16,7 @@ from adaos.domain.artifact_release import (
 )
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.artifact_pipeline.storage import atomic_write_json
 
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
@@ -52,21 +51,6 @@ class ActivationResult:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 class WorkspaceActivationManager:
@@ -128,7 +112,7 @@ class WorkspaceActivationManager:
 
     def _write_operation(self, operation: dict[str, Any]) -> None:
         operation["updated_at"] = _now_iso()
-        _atomic_write_json(self.operation_path(str(operation["operation_id"])), operation)
+        atomic_write_json(self.operation_path(str(operation["operation_id"])), operation)
 
     def _phase(
         self,
@@ -207,7 +191,7 @@ class WorkspaceActivationManager:
             raise ActivationError(f"activation would create an incompatible WorkspaceLock: {exc}") from exc
 
     def _write_lock(self, lock: WorkspaceLock) -> None:
-        _atomic_write_json(self.lock_path, lock.to_dict())
+        atomic_write_json(self.lock_path, lock.to_dict())
 
     def _target_for(self, package: ArtifactPackageRef) -> Path:
         plural = "skills" if package.kind == "skill" else "scenarios"
@@ -234,7 +218,7 @@ class WorkspaceActivationManager:
                 shutil.rmtree(target)
         previous = operation.get("previous_lock")
         if isinstance(previous, Mapping):
-            _atomic_write_json(self.lock_path, previous)
+            atomic_write_json(self.lock_path, previous)
         else:
             self.lock_path.unlink(missing_ok=True)
         stage = self.staging_root / str(operation["operation_id"])
@@ -381,7 +365,7 @@ class WorkspaceActivationManager:
             history = self.lock_history_root / (
                 f"{desired.lock_revision:08d}-{desired.to_dict()['lock_digest'].split(':', 1)[1]}.json"
             )
-            _atomic_write_json(history, desired.to_dict())
+            atomic_write_json(history, desired.to_dict())
             shutil.rmtree(stage_root, ignore_errors=True)
             shutil.rmtree(backup_root, ignore_errors=True)
             operation["status"] = "completed"

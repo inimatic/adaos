@@ -22,6 +22,7 @@ from adaos.domain.artifact_release import (
     canonical_json_bytes,
     sha256_digest,
 )
+from adaos.services.artifact_pipeline.storage import replace_with_retry
 
 
 PACKAGE_MANIFEST_PATH = ".adaos/package-manifest.json"
@@ -384,7 +385,7 @@ class ContentAddressedPackageStore:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, target)
+            replace_with_retry(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
         return verified

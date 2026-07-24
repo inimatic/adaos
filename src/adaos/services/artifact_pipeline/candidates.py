@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +11,7 @@ from adaos.domain.artifact_release import (
     ProjectRelease,
     canonical_payload_digest,
 )
+from adaos.services.artifact_pipeline.storage import atomic_write_json
 
 
 CandidateStatus = Literal["draft", "validated", "trial", "accepted", "rejected", "stale"]
@@ -356,18 +355,7 @@ class CandidateStore:
 
     def save(self, candidate: CandidateRecord) -> Path:
         path = self.path(candidate.candidate_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-                json.dump(candidate.to_dict(), handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_json(path, candidate.to_dict())
         return path
 
     def load(self, candidate_id: str) -> CandidateRecord:

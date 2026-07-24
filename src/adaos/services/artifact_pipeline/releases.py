@@ -69,6 +69,53 @@ class ReleasePlan:
             },
         }
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ReleasePlan":
+        raw_release = value.get("release")
+        raw_packages = value.get("packages")
+        raw_bindings = value.get("bindings") or []
+        if not isinstance(raw_release, Mapping):
+            raise DependencyResolutionError("release plan release must be an object")
+        if not isinstance(raw_packages, list) or not isinstance(raw_bindings, list):
+            raise DependencyResolutionError("release plan packages and bindings must be lists")
+        release = ProjectRelease.from_mapping(raw_release)
+        packages = tuple(
+            ArtifactPackageRef.from_mapping(item)
+            for item in raw_packages
+            if isinstance(item, Mapping)
+        )
+        bindings = tuple(
+            DependencyBinding.from_mapping(item)
+            for item in raw_bindings
+            if isinstance(item, Mapping)
+        )
+        reverse: dict[str, set[str]] = defaultdict(set)
+        for binding in bindings:
+            reverse[binding.dependency].add(binding.consumer)
+        plan = cls(
+            release=release,
+            packages=packages,
+            bindings=bindings,
+            reverse_consumers={
+                key: tuple(sorted(consumers)) for key, consumers in sorted(reverse.items())
+            },
+        )
+        package_by_key = {item.key: item for item in packages}
+        if len(package_by_key) != len(packages):
+            raise DependencyResolutionError("stored release plan has duplicate package identities")
+        for component in release.components:
+            if package_by_key.get(component.key) != component:
+                raise DependencyResolutionError(
+                    f"stored release plan is missing component {component.key}"
+                )
+        for dependency in release.resolved_dependencies:
+            package = package_by_key.get(dependency.key)
+            if package is None or package.digest != dependency.package_digest:
+                raise DependencyResolutionError(
+                    f"stored release plan is missing dependency {dependency.key}"
+                )
+        return plan
+
 
 def _semver_triplet(value: str) -> tuple[int, int, int]:
     try:
