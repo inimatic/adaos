@@ -150,6 +150,30 @@ def test_version_mismatch_marks_campaign_failed(tmp_path: Path) -> None:
     assert assignment["checks"][-1]["detail"] == "target_build_mismatch"
 
 
+def test_short_git_commit_matches_observed_full_commit(tmp_path: Path) -> None:
+    identity = tmp_path / "id"
+    identity.write_text("test", encoding="utf-8")
+    service = ReleaseValidationService(
+        state_path=tmp_path / "state.json",
+        runner=SshObserveRunner(executor=_successful_executor),
+    )
+    service.register_node(_node(identity))
+    service.register_suite(_suite())
+    service.create_campaign(
+        ValidationCampaign(
+            campaign_id="manual-short-commit-01",
+            suite_id="adaos-observe-smoke",
+            target_build=TARGET_BUILD[:7],
+            node_ids=("linux-exp-01",),
+        )
+    )
+
+    result = service.run_campaign("manual-short-commit-01")
+
+    assert result["state"] == "passed"
+    assert result["assignments"][0]["checks"][-1]["detail"] == "target_build_observed"
+
+
 def test_ssh_transport_failure_is_inconclusive_not_defective(tmp_path: Path) -> None:
     identity = tmp_path / "id"
     identity.write_text("test", encoding="utf-8")
@@ -178,3 +202,38 @@ def test_ssh_transport_failure_is_inconclusive_not_defective(tmp_path: Path) -> 
     assert result["state"] == "inconclusive"
     assert result["result"]["failed"] == 0
     assert result["assignments"][0]["result"]["reason"] == "ssh_transport_error"
+
+
+def test_ssh_connect_timeout_is_inconclusive_with_bounded_budget(tmp_path: Path) -> None:
+    identity = tmp_path / "id"
+    identity.write_text("test", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def timeout(argv: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        observed["argv"] = argv
+        observed["timeout_s"] = timeout_s
+        raise subprocess.TimeoutExpired(argv, timeout_s)
+
+    service = ReleaseValidationService(
+        state_path=tmp_path / "state.json",
+        runner=SshObserveRunner(executor=timeout),
+    )
+    service.register_node(_node(identity))
+    service.register_suite(_suite())
+    service.create_campaign(
+        ValidationCampaign(
+            campaign_id="manual-timeout-01",
+            suite_id="adaos-observe-smoke",
+            target_build=TARGET_BUILD,
+            node_ids=("linux-exp-01",),
+        )
+    )
+
+    result = service.run_campaign("manual-timeout-01")
+
+    assert result["state"] == "inconclusive"
+    assert result["result"]["failed"] == 0
+    assert result["result"]["timed_out"] == 0
+    assert result["assignments"][0]["result"]["reason"] == "ssh_connect_timed_out"
+    assert float(observed["timeout_s"]) >= 15.0
+    assert "ConnectTimeout=10" in observed["argv"]

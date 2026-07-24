@@ -31,6 +31,7 @@ _HOST_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$")
 _USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _POSIX_PATH_RE = re.compile(r"^/[a-zA-Z0-9_./-]+$")
 _SLOT_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
+_GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _MAX_EVENTS = 500
 
 
@@ -59,6 +60,24 @@ def _string_tuple(values: Iterable[Any]) -> tuple[str, ...]:
 def _assignment_id(campaign_id: str, node_id: str, attempt: int = 1) -> str:
     digest = hashlib.sha256(f"{campaign_id}:{node_id}:{attempt}".encode("utf-8")).hexdigest()[:24]
     return f"assignment-{digest}"
+
+
+def _target_matches(target_build: str, observed: Iterable[Any]) -> bool:
+    target = str(target_build or "").strip()
+    candidates = {
+        str(value).strip()
+        for value in observed
+        if value is not None and str(value).strip()
+    }
+    if target in candidates:
+        return True
+    if not _GIT_COMMIT_RE.fullmatch(target):
+        return False
+    target_lower = target.lower()
+    return any(
+        _GIT_COMMIT_RE.fullmatch(candidate) and candidate.lower().startswith(target_lower)
+        for candidate in candidates
+    )
 
 
 @dataclass(slots=True)
@@ -123,7 +142,7 @@ class TestSuite:
     checks: tuple[str, ...] = OBSERVE_CHECKS
     profile: str = "observe"
     required_capabilities: tuple[str, ...] = ("adaos.runtime.observe",)
-    timeout_s: float = 45.0
+    timeout_s: float = 90.0
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 
@@ -252,7 +271,7 @@ class SshObserveRunner:
             "-o",
             "BatchMode=yes",
             "-o",
-            "ConnectTimeout=5",
+            "ConnectTimeout=10",
             "-o",
             "StrictHostKeyChecking=yes",
             f"{node.ssh_user}@{node.host}",
@@ -300,7 +319,7 @@ class SshObserveRunner:
             return {"state": "inconclusive", "reason": "identity_file_missing", "checks": []}
 
         checks: list[dict[str, Any]] = []
-        timeout_s = max(2.0, min(30.0, suite.timeout_s / max(1, len(suite.checks))))
+        timeout_s = max(15.0, min(30.0, suite.timeout_s / max(1, len(suite.checks))))
         commands = {
             "ssh_connect": "true",
             "service_active": "systemctl is-active adaos.service",
@@ -321,6 +340,8 @@ class SshObserveRunner:
                 result = self._execute(node, commands[check_id], timeout_s)
             except subprocess.TimeoutExpired:
                 checks.append(self._check(check_id, started, "error", "ssh_timeout"))
+                if check_id == "ssh_connect":
+                    return {"state": "inconclusive", "reason": "ssh_connect_timed_out", "checks": checks}
                 return {"state": "timed_out", "reason": f"{check_id}_timed_out", "checks": checks}
             except (OSError, ValueError) as exc:
                 checks.append(self._check(check_id, started, "error", f"runner_unavailable:{type(exc).__name__}"))
@@ -408,8 +429,7 @@ class SshObserveRunner:
                 "git_commit",
             )
         }
-        candidates = {str(value) for value in observed.values() if value is not None}
-        ok = target_build in candidates
+        ok = _target_matches(target_build, observed.values())
         evidence = {"active_slot": slot, "expected_target": target_build, **observed}
         detail = "target_build_observed" if ok else "target_build_mismatch"
         return self._check(check_id, started, "passed" if ok else "failed", detail, evidence)
