@@ -567,6 +567,16 @@ class BuilderWorkbenchService:
             selection = _project_selection("scenario", explicit_runtime_id, previous=previous_selection)
         else:
             selection = dict(previous_selection) if previous_selection else _project_selection("scenario", "builder", title="Builder")
+        preview_target = (
+            dict(existing.get("preview_target"))
+            if isinstance(existing.get("preview_target"), Mapping)
+            else None
+        )
+        if not previous_selection or (
+            str(previous_selection.get("object_type") or "") != str(selection.get("object_type") or "")
+            or str(previous_selection.get("object_id") or "") != str(selection.get("object_id") or "")
+        ):
+            preview_target = None
         binding = {
             "source_webspace_id": source_id,
             "dev_webspace_id": dev_id,
@@ -577,9 +587,7 @@ class BuilderWorkbenchService:
             "purpose": "builder_prompt_ide",
             "active_draft_id": active_draft_token,
             "selection": selection,
-            "preview_target": dict(existing.get("preview_target"))
-            if isinstance(existing.get("preview_target"), Mapping)
-            else None,
+            "preview_target": preview_target,
             "dialog": self.dialog_widget_config(
                 source_id,
                 active_draft_id=active_draft_token,

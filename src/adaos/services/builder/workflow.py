@@ -144,11 +144,15 @@ class BuilderWorkflowService:
         kind = _kind(object_type)
         if kind != "scenario":
             return self._project_version(kind, object_id)
-        path = self.project_root(kind, object_id) / "ui_revisions" / "current.txt"
+        revision_dir = self.project_root(kind, object_id) / "ui_revisions"
+        path = revision_dir / "current.txt"
         try:
-            return str(path.read_text(encoding="utf-8-sig")).strip() or self._project_version(kind, object_id)
+            revision = str(path.read_text(encoding="utf-8-sig")).strip()
         except OSError:
-            return self._project_version(kind, object_id)
+            return None
+        if not revision.isdigit() or not (revision_dir / f"{revision}.json").is_file():
+            return None
+        return revision
 
     def _normalized_workflow(
         self,
@@ -168,7 +172,7 @@ class BuilderWorkflowService:
         publication = _mapping(raw.get("publication"))
         current_revision = self.current_prototype_revision(object_type, object_id)
         prototype.setdefault("head_revision", current_revision)
-        if current_revision and active_phase == "prototype":
+        if _kind(object_type) == "scenario" and active_phase == "prototype":
             prototype["head_revision"] = current_revision
         prototype.setdefault("status", "working" if active_phase == "prototype" else "frozen")
         prototype.setdefault("stable", legacy_state in {"prototype_stable", "automation", "publication"})

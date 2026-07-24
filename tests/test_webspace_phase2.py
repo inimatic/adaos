@@ -4535,6 +4535,40 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
 
 
+def test_builder_prototype_preview_synthesizes_an_empty_canvas_for_legacy_default_scenarios(monkeypatch) -> None:
+    legacy_content = {
+        "id": "template-id",
+        "version": "0.1.0",
+        "name": "New Scenario",
+        "steps": [],
+    }
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: legacy_content,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_manifest",
+        lambda scenario_id, *, space: {"id": scenario_id, "name": "Recipe Book"},
+    )
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "test01_recipes",
+        stage="prototype",
+        revision=None,
+        label=None,
+    )
+
+    page = content["ui"]["application"]["desktop"]["pageSchema"]
+    assert source_space == "dev"
+    assert page["id"] == "test01_recipes"
+    assert page["title"] == "proto:current Recipe Book"
+    assert page["widgets"] == []
+    assert page["meta"]["builder"]["compatibility_fallback"] is True
+    assert "ui" not in legacy_content
+
+
 def test_legacy_automation_preview_falls_back_to_current_dev_descriptor(monkeypatch, tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     current = {

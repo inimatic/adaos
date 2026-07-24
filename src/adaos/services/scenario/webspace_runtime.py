@@ -10581,9 +10581,12 @@ def _builder_preview_content_override(
         return None, None
     source_space = "workspace" if stage_token == "publication" else "dev"
     content: Mapping[str, Any] | None = None
-    if stage_token == "prototype" and str(revision or "").strip():
+    revision_token = str(revision or "").strip()
+    if stage_token == "prototype" and revision_token:
+        if not revision_token.isdigit():
+            raise ValueError(f"Builder prototype revision is unavailable: {revision}")
         root = scenarios_loader.scenario_root_for_space(scenario_id, "dev")
-        revision_path = root / "ui_revisions" / f"{str(revision).strip()}.json"
+        revision_path = root / "ui_revisions" / f"{revision_token}.json"
         try:
             revision_payload = json.loads(revision_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -10619,6 +10622,31 @@ def _builder_preview_content_override(
     application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
     desktop = application.get("desktop") if isinstance(application.get("desktop"), Mapping) else {}
     page = desktop.get("pageSchema") if isinstance(desktop.get("pageSchema"), Mapping) else {}
+    if stage_token == "prototype" and not page:
+        try:
+            manifest = scenarios_loader.read_manifest(scenario_id, space=source_space)
+        except Exception:
+            manifest = {}
+        title = str(
+            manifest.get("title")
+            or manifest.get("name")
+            or scenario_id
+        ).strip() or scenario_id
+        page = {
+            "id": scenario_id,
+            "title": title,
+            "layout": {
+                "type": "single",
+                "pattern": "stack",
+                "areas": [{"id": "main", "role": "main"}],
+            },
+            "widgets": [],
+            "meta": {"builder": {"empty_canvas": True, "compatibility_fallback": True}},
+        }
+        desktop["pageSchema"] = page
+        application["desktop"] = desktop
+        ui["application"] = application
+        override["ui"] = ui
     if page:
         existing_title = str(page.get("title") or scenario_id).strip() or scenario_id
         prefix = {

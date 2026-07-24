@@ -78,6 +78,31 @@ def test_workflow_migrates_legacy_state_without_mutating_it(
     assert "workflow" not in json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
 
 
+def test_scenario_without_ui_revision_uses_current_content_not_manifest_version(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    (root / "ui_revisions" / "current.txt").unlink()
+    (root / "ui_revisions" / "001.json").unlink()
+
+    workflow = service.describe("scenario", "recipes")
+
+    assert service.current_prototype_revision("scenario", "recipes") is None
+    assert workflow["prototype"]["head_revision"] is None
+
+
+def test_invalid_ui_revision_pointer_is_not_treated_as_a_revision(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    (root / "ui_revisions" / "current.txt").write_text("0.2.0\n", encoding="utf-8")
+
+    workflow = service.describe("scenario", "recipes")
+
+    assert service.current_prototype_revision("scenario", "recipes") is None
+    assert workflow["prototype"]["head_revision"] is None
+
+
 def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
