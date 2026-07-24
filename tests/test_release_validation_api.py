@@ -94,6 +94,19 @@ def test_release_validation_api_registers_observe_contracts(monkeypatch) -> None
     assert service.nodes[0]["allowed_profiles"] == ("observe",)
 
 
+def test_release_validation_api_allows_latest_installed_campaign(monkeypatch) -> None:
+    client, _service, _bus = _client(monkeypatch)
+
+    response = client.post(
+        "/api/release-validation/campaigns",
+        json={"suite_id": "observe-smoke", "node_ids": ["linux-exp-01"]},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["target_build"] == ""
+    assert response.json()["target_policy"] == "latest_installed"
+
+
 def test_release_validation_api_notifies_after_terminal_run(monkeypatch) -> None:
     client, _service, bus = _client(monkeypatch)
 

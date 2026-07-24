@@ -26,6 +26,7 @@ OBSERVE_CHECKS = (
 )
 TERMINAL_ASSIGNMENT_STATES = frozenset({"passed", "failed", "inconclusive", "timed_out"})
 TERMINAL_CAMPAIGN_STATES = frozenset({"passed", "failed", "inconclusive", "cancelled"})
+TARGET_POLICIES = frozenset({"exact", "latest_installed"})
 _ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}$")
 _HOST_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$")
 _USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
@@ -178,8 +179,9 @@ class TestSuite:
 class ValidationCampaign:
     campaign_id: str
     suite_id: str
-    target_build: str
+    target_build: str | None
     node_ids: tuple[str, ...]
+    target_policy: str = "auto"
     quorum: int = 1
     state: str = "pending"
     created_at: str = field(default_factory=_now)
@@ -191,8 +193,15 @@ class ValidationCampaign:
         self.campaign_id = _validate_id(self.campaign_id, "campaign_id")
         self.suite_id = _validate_id(self.suite_id, "suite_id")
         self.target_build = str(self.target_build or "").strip()
-        if not self.target_build or len(self.target_build) > 128 or any(ch.isspace() for ch in self.target_build):
+        if len(self.target_build) > 128 or any(ch.isspace() for ch in self.target_build):
             raise ValueError("invalid_target_build")
+        self.target_policy = str(self.target_policy or "auto").strip().lower()
+        if self.target_policy == "auto":
+            self.target_policy = "exact" if self.target_build else "latest_installed"
+        if self.target_policy not in TARGET_POLICIES:
+            raise ValueError("invalid_target_policy")
+        if self.target_policy == "exact" and not self.target_build:
+            raise ValueError("exact_target_build_required")
         self.node_ids = _string_tuple(self.node_ids)
         if not self.node_ids or len(self.node_ids) != len(set(self.node_ids)):
             raise ValueError("invalid_campaign_nodes")
@@ -309,7 +318,13 @@ class SshObserveRunner:
             {"stderr": stderr},
         )
 
-    def run(self, node: TestNode, suite: TestSuite, target_build: str) -> dict[str, Any]:
+    def run(
+        self,
+        node: TestNode,
+        suite: TestSuite,
+        target_build: str | None,
+        target_policy: str = "exact",
+    ) -> dict[str, Any]:
         if not node.enabled:
             return {"state": "inconclusive", "reason": "node_disabled", "checks": []}
         if suite.profile not in node.allowed_profiles:
@@ -375,7 +390,7 @@ class SshObserveRunner:
                 checks.append(self._check(check_id, started, "error", "ssh_transport_unclassified"))
                 return {"state": "inconclusive", "reason": "ssh_transport_error", "checks": checks}
 
-            check = self._evaluate(check_id, started, result, target_build)
+            check = self._evaluate(check_id, started, result, target_build, target_policy)
             if transport_timeout:
                 check["transport_attempts"] = _SSH_TRANSPORT_ATTEMPTS
             checks.append(check)
@@ -388,7 +403,8 @@ class SshObserveRunner:
         check_id: str,
         started: float,
         result: subprocess.CompletedProcess[str],
-        target_build: str,
+        target_build: str | None,
+        target_policy: str,
     ) -> dict[str, Any]:
         stdout = str(result.stdout or "").strip()
         stderr = str(result.stderr or "").strip()[-1000:]
@@ -455,9 +471,19 @@ class SshObserveRunner:
                 "git_commit",
             )
         }
-        ok = _target_matches(target_build, observed.values())
-        evidence = {"active_slot": slot, "expected_target": target_build, **observed}
-        detail = "target_build_observed" if ok else "target_build_mismatch"
+        identity_observed = any(value is not None and str(value).strip() for value in observed.values())
+        if target_policy == "latest_installed":
+            ok = identity_observed
+            detail = "installed_build_observed" if ok else "installed_build_identity_missing"
+        else:
+            ok = _target_matches(str(target_build or ""), observed.values())
+            detail = "target_build_observed" if ok else "target_build_mismatch"
+        evidence = {
+            "active_slot": slot,
+            "target_policy": target_policy,
+            "expected_target": target_build or None,
+            **observed,
+        }
         return self._check(check_id, started, "passed" if ok else "failed", detail, evidence)
 
 
@@ -577,6 +603,7 @@ class ReleaseValidationService:
                 campaign_id=model.campaign_id,
                 suite_id=model.suite_id,
                 target_build=model.target_build,
+                target_policy=model.target_policy,
                 node_ids=list(model.node_ids),
             )
             self._save_locked()
@@ -618,7 +645,7 @@ class ReleaseValidationService:
 
             with self._lock:
                 node = TestNode.from_dict(self._state["nodes"][assignment.node_id])
-            outcome = self.runner.run(node, suite, campaign.target_build)
+            outcome = self.runner.run(node, suite, campaign.target_build, campaign.target_policy)
 
             with self._lock:
                 assignment = ValidationAssignment.from_dict(self._state["assignments"][assignment_id])

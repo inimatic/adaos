@@ -174,6 +174,47 @@ def test_short_git_commit_matches_observed_full_commit(tmp_path: Path) -> None:
     assert result["assignments"][0]["checks"][-1]["detail"] == "target_build_observed"
 
 
+def test_latest_installed_campaign_accepts_active_slot_identity(tmp_path: Path) -> None:
+    identity = tmp_path / "id"
+    identity.write_text("test", encoding="utf-8")
+    service = ReleaseValidationService(
+        state_path=tmp_path / "state.json",
+        runner=SshObserveRunner(executor=_successful_executor),
+    )
+    service.register_node(_node(identity))
+    service.register_suite(_suite())
+    created = service.create_campaign(
+        ValidationCampaign(
+            campaign_id="manual-latest-installed-01",
+            suite_id="adaos-observe-smoke",
+            target_build=None,
+            node_ids=("linux-exp-01",),
+        )
+    )
+
+    result = service.run_campaign("manual-latest-installed-01")
+
+    assert created["target_policy"] == "latest_installed"
+    assert created["target_build"] == ""
+    assert result["state"] == "passed"
+    identity_check = result["assignments"][0]["checks"][-1]
+    assert identity_check["detail"] == "installed_build_observed"
+    assert identity_check["evidence"]["target_policy"] == "latest_installed"
+
+
+def test_existing_campaign_without_policy_remains_exact() -> None:
+    campaign = ValidationCampaign.from_dict(
+        {
+            "campaign_id": "legacy-exact-01",
+            "suite_id": "adaos-observe-smoke",
+            "target_build": TARGET_BUILD,
+            "node_ids": ["linux-exp-01"],
+        }
+    )
+
+    assert campaign.target_policy == "exact"
+
+
 def test_ssh_transport_failure_is_inconclusive_not_defective(tmp_path: Path) -> None:
     identity = tmp_path / "id"
     identity.write_text("test", encoding="utf-8")

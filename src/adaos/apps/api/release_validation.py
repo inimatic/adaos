@@ -50,7 +50,8 @@ class TestSuiteRequest(BaseModel):
 class ValidationCampaignRequest(BaseModel):
     campaign_id: str | None = None
     suite_id: str
-    target_build: str
+    target_build: str | None = None
+    target_policy: str = "auto"
     node_ids: list[str]
     quorum: int = 1
 
@@ -66,7 +67,7 @@ def _notification_text(campaign: dict[str, Any]) -> str:
     result = campaign.get("result") if isinstance(campaign.get("result"), dict) else {}
     return (
         f"AdaOS validation {state}: {campaign.get('campaign_id')}\n"
-        f"Target: {campaign.get('target_build')}\n"
+        f"Target: {campaign.get('target_build') or 'latest installed'}\n"
         f"Passed: {result.get('passed', 0)}, failed: {result.get('failed', 0)}, "
         f"inconclusive: {result.get('inconclusive', 0)}, timed out: {result.get('timed_out', 0)}"
     )
@@ -107,6 +108,7 @@ def create_campaign(body: ValidationCampaignRequest) -> dict[str, Any]:
             campaign_id=body.campaign_id or f"campaign-{uuid.uuid4().hex[:12]}",
             suite_id=body.suite_id,
             target_build=body.target_build,
+            target_policy=body.target_policy,
             node_ids=tuple(body.node_ids),
             quorum=body.quorum,
         )
