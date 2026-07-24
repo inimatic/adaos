@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -10,8 +12,12 @@ from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 
-_MAX_EVENTS = int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX", "500") or "500")
-_MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "250") or "250")
+_MAX_EVENTS = int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX", "96") or "96")
+_MAX_LLM_LOGS = int(os.getenv("ADAOS_NLU_TEACHER_LLM_LOGS_MAX", "48") or "48")
+_MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "32") or "32")
+_MAX_CANDIDATE_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATE_THREADS_MAX", "48") or "48")
+_MAX_THREAD_DETAILS_CHARS = int(os.getenv("ADAOS_NLU_TEACHER_THREAD_DETAILS_MAX_CHARS", "12000") or "12000")
+_LEDGER_BACKFILL_SCHEMA = "adaos.nlu_teacher.ledger_backfill.v1"
 
 
 def _nlu_teacher_events_write_meta():
@@ -27,6 +33,211 @@ def _as_list_of_dicts(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, (str, bytes, bytearray)) or isinstance(value, Mapping) or not isinstance(value, Iterable):
         return []
     return [dict(x) for x in iter_mappings(value)]
+
+
+def _row_ts(item: Mapping[str, Any]) -> float:
+    try:
+        return float(item.get("ts") or item.get("created_at") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def teacher_projection_limits() -> dict[str, int]:
+    return {
+        "events": max(0, _MAX_EVENTS),
+        "llm_logs": max(0, _MAX_LLM_LOGS),
+        "threads_by_request": max(0, _MAX_THREADS),
+        "threads_by_candidate": max(0, _MAX_CANDIDATE_THREADS),
+        "thread_details_chars": max(0, _MAX_THREAD_DETAILS_CHARS),
+    }
+
+
+def _bounded_tail(items: list[dict[str, Any]], maximum: int) -> tuple[list[dict[str, Any]], bool]:
+    if maximum <= 0 or len(items) <= maximum:
+        return items, False
+    return items[-maximum:], True
+
+
+def bound_teacher_projection(teacher: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the operational Teacher window in replicated durable state."""
+    limits = teacher_projection_limits()
+    previous = coerce_dict(teacher.get("projection_window"))
+    truncated = coerce_dict(previous.get("truncated"))
+
+    for key in ("events", "llm_logs"):
+        items = sorted(
+            _as_list_of_dicts(teacher.get(key)),
+            key=_row_ts,
+        )
+        bounded, dropped = _bounded_tail(items, limits[key])
+        teacher[key] = bounded
+        truncated[key] = bool(truncated.get(key)) or dropped
+
+    projection_window = {
+        "schema": "adaos.nlu_teacher.projection_window.v1",
+        "source_of_truth": "conversation_ledger",
+        "history_mode": "on_demand",
+        "history_endpoint": "/api/nlu/teacher/{webspace_id}/history",
+        "limits": limits,
+        "retained": {
+            "events": len(_as_list_of_dicts(teacher.get("events"))),
+            "llm_logs": len(_as_list_of_dicts(teacher.get("llm_logs"))),
+        },
+        "truncated": truncated,
+    }
+    ledger_backfill = coerce_dict(previous.get("ledger_backfill"))
+    if ledger_backfill:
+        projection_window["ledger_backfill"] = ledger_backfill
+    teacher["projection_window"] = projection_window
+    return teacher
+
+
+def teacher_ledger_backfill_completed(teacher: Mapping[str, Any]) -> bool:
+    marker = coerce_dict(coerce_dict(teacher.get("projection_window")).get("ledger_backfill"))
+    return marker.get("schema") == _LEDGER_BACKFILL_SCHEMA and marker.get("completed") is True
+
+
+def _ledger_record_idempotency_key(record_kind: str, item: Mapping[str, Any]) -> str:
+    item_id = str(item.get("id") or item.get("log_id") or "").strip()
+    canonical = json.dumps(dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if record_kind == "llm_log":
+        item_id = f"{item_id or 'anonymous'}:{content_hash}"
+    elif not item_id:
+        item_id = content_hash
+    return f"nlu-teacher-ledger-v1:{record_kind}:{item_id}"
+
+
+def _ledger_event_candidate_id(event: Mapping[str, Any]) -> str | None:
+    raw = coerce_dict(event.get("raw"))
+    value = raw.get("id") if str(event.get("kind") or "").startswith("candidate.") else event.get("candidate_id")
+    return str(value).strip() if isinstance(value, str) and value.strip() else None
+
+
+def append_llm_log_to_ledger(
+    webspace_id: str,
+    log: Mapping[str, Any],
+    *,
+    migration: str | None = None,
+) -> dict[str, Any] | None:
+    from adaos.services import conversation_links
+
+    log_dict = dict(log)
+    request_id = log_dict.get("request_id") if isinstance(log_dict.get("request_id"), str) else None
+    meta = {"migration": migration} if migration else {}
+    return conversation_links.append_teacher_event_message(
+        webspace_id=webspace_id,
+        text=f"NLU Teacher LLM log{f' {request_id}' if request_id else ''}",
+        request_id=request_id,
+        candidate_id=log_dict.get("candidate_id") if isinstance(log_dict.get("candidate_id"), str) else None,
+        kind="llm_log",
+        payload={"llm_log": log_dict},
+        meta=meta,
+        idempotency_key=_ledger_record_idempotency_key("llm_log", log_dict),
+    )
+
+
+def backfill_teacher_history_to_ledger(webspace_id: str, teacher: Mapping[str, Any]) -> dict[str, Any]:
+    """Ensure legacy durable Teacher rows exist in the canonical ledger."""
+    from adaos.services import conversation_links, conversation_store
+
+    previous = coerce_dict(coerce_dict(teacher.get("projection_window")).get("ledger_backfill"))
+    was_completed = previous.get("schema") == _LEDGER_BACKFILL_SCHEMA and previous.get("completed") is True
+
+    started = time.perf_counter()
+    events = sorted(_as_list_of_dicts(teacher.get("events")), key=_row_ts)
+    llm_logs = sorted(_as_list_of_dicts(teacher.get("llm_logs")), key=_row_ts)
+    conversation_id = conversation_links.teacher_conversation_id(webspace_id)
+    existing_event_ids: set[str] = set()
+    existing_llm_log_ids: set[str] = set()
+    existing_messages = conversation_store.list_messages(conversation_id, limit=5000, ascending=False)
+    for message in existing_messages:
+        embedded_event = coerce_dict(message.get("event"))
+        event_id = str(embedded_event.get("id") or "").strip()
+        if event_id:
+            existing_event_ids.add(event_id)
+        embedded_log = coerce_dict(message.get("llm_log"))
+        log_id = str(embedded_log.get("id") or embedded_log.get("log_id") or "").strip()
+        if log_id:
+            existing_llm_log_ids.add(log_id)
+
+    already_present = 0
+    pending_records: list[dict[str, Any]] = []
+    for event in events:
+        event_id = str(event.get("id") or "").strip()
+        if event_id and event_id in existing_event_ids:
+            already_present += 1
+            continue
+        pending_records.append(
+            {
+                "text": str(
+                    event.get("request_text") or event.get("title") or event.get("kind") or "NLU Teacher event"
+                ),
+                "request_id": event.get("request_id") if isinstance(event.get("request_id"), str) else None,
+                "candidate_id": _ledger_event_candidate_id(event),
+                "kind": f"event.{event.get('kind') or 'teacher'}",
+                "payload": {"event": event},
+                "meta": {"migration": _LEDGER_BACKFILL_SCHEMA, **coerce_dict(event.get("_meta"))},
+                "idempotency_key": _ledger_record_idempotency_key("event", event),
+            }
+        )
+
+    for log in llm_logs:
+        log_id = str(log.get("id") or log.get("log_id") or "").strip()
+        if log_id and log_id in existing_llm_log_ids:
+            already_present += 1
+            continue
+        request_id = log.get("request_id") if isinstance(log.get("request_id"), str) else None
+        pending_records.append(
+            {
+                "text": f"NLU Teacher LLM log{f' {request_id}' if request_id else ''}",
+                "request_id": request_id,
+                "candidate_id": log.get("candidate_id") if isinstance(log.get("candidate_id"), str) else None,
+                "kind": "llm_log",
+                "payload": {"llm_log": log},
+                "meta": {"migration": _LEDGER_BACKFILL_SCHEMA},
+                "idempotency_key": _ledger_record_idempotency_key("llm_log", log),
+            }
+        )
+
+    stored = conversation_links.append_teacher_event_messages(webspace_id=webspace_id, records=pending_records)
+    if len(stored) != len(pending_records):
+        raise RuntimeError(
+            f"Teacher ledger batch backfill failed for webspace={webspace_id} "
+            f"expected={len(pending_records)} stored={len(stored)}"
+        )
+    ensured = already_present + len(stored)
+
+    if was_completed:
+        return previous
+    return {
+        "schema": _LEDGER_BACKFILL_SCHEMA,
+        "completed": True,
+        "completed_at": time.time(),
+        "events_total": len(events),
+        "llm_logs_total": len(llm_logs),
+        "records_ensured": ensured,
+        "already_present": already_present,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+    }
+
+
+def teacher_projection_needs_compaction(teacher: Mapping[str, Any]) -> bool:
+    limits = teacher_projection_limits()
+    if "events_by_candidate" in teacher:
+        return True
+    if limits["events"] > 0 and len(_as_list_of_dicts(teacher.get("events"))) > limits["events"]:
+        return True
+    if limits["llm_logs"] > 0 and len(_as_list_of_dicts(teacher.get("llm_logs"))) > limits["llm_logs"]:
+        return True
+    if limits["threads_by_request"] > 0 and len(_as_list_of_dicts(teacher.get("threads_by_request"))) > limits["threads_by_request"]:
+        return True
+    if limits["threads_by_candidate"] > 0 and len(_as_list_of_dicts(teacher.get("threads_by_candidate"))) > limits["threads_by_candidate"]:
+        return True
+    for item in _as_list_of_dicts(teacher.get("threads_by_request")):
+        if limits["thread_details_chars"] > 0 and len(str(item.get("details") or "")) > limits["thread_details_chars"]:
+            return True
+    return not bool(coerce_dict(teacher.get("projection_window")))
 
 
 def _json_text(value: Any) -> str:
@@ -279,6 +490,21 @@ def _event_from_ledger_message(message: Mapping[str, Any]) -> dict[str, Any] | N
     }
 
 
+def _llm_log_from_ledger_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
+    payload = coerce_dict(message)
+    embedded = coerce_dict(payload.get("llm_log"))
+    if not embedded:
+        return None
+    log = dict(embedded)
+    log.setdefault("id", log.get("log_id") or f"llm.ledger.{payload.get('id') or payload.get('message_id')}")
+    log.setdefault("ts", payload.get("ts") or time.time())
+    log.setdefault("request_id", payload.get("request_id"))
+    meta = coerce_dict(log.get("_meta"))
+    meta.setdefault("ledger_message_id", payload.get("id") or payload.get("message_id"))
+    log["_meta"] = meta
+    return log
+
+
 def _accumulate_event_projection(teacher: dict[str, Any], event: Mapping[str, Any]) -> None:
     kind = str(event.get("kind") or "").strip()
     raw = coerce_dict(event.get("raw"))
@@ -322,11 +548,14 @@ def rebuild_teacher_projection_from_ledger(webspace_id: str, *, limit: int = 100
         if event:
             _append_unique(teacher["events"], event, fallback_key=str(message.get("id") or ""))
             _accumulate_event_projection(teacher, event)
+        llm_log = _llm_log_from_ledger_message(message)
+        if llm_log:
+            _append_unique(teacher["llm_logs"], llm_log, fallback_key=str(message.get("id") or ""))
 
     for key in ("items", "events", "candidates", "revisions", "llm_logs"):
         teacher[key] = sorted(
             [dict(item) for item in iter_mappings(teacher.get(key))],
-            key=lambda item: float(item.get("ts") or item.get("created_at") or 0.0),
+            key=_row_ts,
         )
     rebuild_teacher_derived_views(teacher)
     return teacher
@@ -462,7 +691,7 @@ def _thread_log_text(
     return "\n".join(lines).strip() + "\n"
 
 
-def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
+def rebuild_threads(teacher: dict[str, Any], *, bounded: bool = True) -> dict[str, Any]:
     """
     Builds derived thread views for schema-driven UI:
 
@@ -554,6 +783,11 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             subtitle_parts.append(f"errors={len(diagnostics)}")
         subtitle = ", ".join(subtitle_parts)
 
+        details_truncated = False
+        if bounded and _MAX_THREAD_DETAILS_CHARS > 0 and len(details) > _MAX_THREAD_DETAILS_CHARS:
+            details = details[:_MAX_THREAD_DETAILS_CHARS].rstrip() + "\n... (load full history from ledger)\n"
+            details_truncated = True
+
         threads_by_request.append(
             {
                 "id": f"req.{rid}",
@@ -563,6 +797,8 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
                 "created_at": request_ts or None,
                 "created_at_label": request_time,
                 "details": details,
+                "details_truncated": details_truncated,
+                "history_query": {"request_id": rid},
                 "diagnostics": _json_text(diagnostics) if diagnostics else "",
                 "has_error_details": bool(diagnostics),
                 "candidate_id": pending_candidate_id,
@@ -596,6 +832,21 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             cid = c.get("id") if isinstance(c.get("id"), str) else ""
             if not cid:
                 continue
+            candidate_details = details
+            if bounded:
+                candidate_details = _json_text(
+                    {
+                        "request_id": rid,
+                        "candidate_id": cid,
+                        "kind": cand_kind,
+                        "name": name,
+                        "description": description,
+                        "status": c.get("status"),
+                        "target": dict(target_obj) if isinstance(target_obj, Mapping) else None,
+                        "action": action_summary,
+                        "history": "load from conversation ledger",
+                    }
+                )
             threads_by_candidate.append(
                 {
                     "id": cid,
@@ -616,15 +867,19 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
                     "request_id": rid,
                     "title": name or cid,
                     "subtitle": req_text or rid,
-                    "details": details,
+                    "details": candidate_details,
+                    "details_truncated": bounded,
+                    "history_query": {"request_id": rid, "candidate_id": cid},
                 }
             )
 
-    # Keep the newest threads (roughly by embedded timestamps).
-    if _MAX_THREADS > 0 and len(threads_by_request) > _MAX_THREADS:
+    threads_by_request.sort(key=_row_ts)
+    if bounded and _MAX_THREADS > 0 and len(threads_by_request) > _MAX_THREADS:
         threads_by_request = threads_by_request[-_MAX_THREADS:]
-    if _MAX_THREADS > 0 and len(threads_by_candidate) > _MAX_THREADS * 2:
-        threads_by_candidate = threads_by_candidate[-(_MAX_THREADS * 2) :]
+    request_created_at = {str(item.get("request_id") or ""): _row_ts(item) for item in threads_by_request}
+    threads_by_candidate.sort(key=lambda item: request_created_at.get(str(item.get("request_id") or ""), 0.0))
+    if bounded and _MAX_CANDIDATE_THREADS > 0 and len(threads_by_candidate) > _MAX_CANDIDATE_THREADS:
+        threads_by_candidate = threads_by_candidate[-_MAX_CANDIDATE_THREADS:]
 
     teacher["threads_by_request"] = threads_by_request
     teacher["threads_by_candidate"] = threads_by_candidate
@@ -741,12 +996,111 @@ def rebuild_workbench_signals(teacher: dict[str, Any]) -> dict[str, Any]:
     return teacher
 
 
-def rebuild_teacher_derived_views(teacher: dict[str, Any]) -> dict[str, Any]:
+def rebuild_teacher_derived_views(teacher: dict[str, Any], *, bounded: bool = True) -> dict[str, Any]:
     """Rebuild bounded UI views without persisting duplicate event history."""
     teacher.pop("events_by_candidate", None)
-    rebuild_threads(teacher)
+    if bounded:
+        bound_teacher_projection(teacher)
+    rebuild_threads(teacher, bounded=bounded)
     rebuild_workbench_signals(teacher)
+    if bounded:
+        window = coerce_dict(teacher.get("projection_window"))
+        window["retained"] = {
+            **coerce_dict(window.get("retained")),
+            "threads_by_request": len(_as_list_of_dicts(teacher.get("threads_by_request"))),
+            "threads_by_candidate": len(_as_list_of_dicts(teacher.get("threads_by_candidate"))),
+        }
+        teacher["projection_window"] = window
     return teacher
+
+
+def read_teacher_history_page(
+    webspace_id: str,
+    *,
+    request_id: str | None = None,
+    candidate_id: str | None = None,
+    before_cursor: Any = None,
+    limit: int = 32,
+) -> dict[str, Any]:
+    """Reconstruct a paged Teacher view from the canonical conversation ledger."""
+    from adaos.services import conversation_links, conversation_store
+
+    clean_request_id = str(request_id or "").strip() or None
+    clean_candidate_id = str(candidate_id or "").strip() or None
+    conversation_id = conversation_links.teacher_conversation_id(webspace_id)
+    thread_id = (
+        conversation_links.teacher_thread_id(webspace_id=webspace_id, request_id=clean_request_id)
+        if clean_request_id
+        else None
+    )
+    page = conversation_store.list_projection(
+        conversation_id,
+        thread_id=thread_id,
+        before_cursor=before_cursor,
+        limit=max(1, min(int(limit or 32), 64)),
+        max_items=64,
+    )
+    messages = [dict(item) for item in iter_mappings(page.get("messages"))]
+    teacher: dict[str, Any] = {
+        "items": [],
+        "events": [],
+        "candidates": [],
+        "revisions": [],
+        "llm_logs": [],
+    }
+    for message in messages:
+        item = _teacher_item_from_ledger_message(message)
+        if item:
+            _append_unique(teacher["items"], item, fallback_key=str(message.get("id") or ""))
+        event = _event_from_ledger_message(message)
+        if event:
+            _append_unique(teacher["events"], event, fallback_key=str(message.get("id") or ""))
+            _accumulate_event_projection(teacher, event)
+        llm_log = _llm_log_from_ledger_message(message)
+        if llm_log:
+            _append_unique(teacher["llm_logs"], llm_log, fallback_key=str(message.get("id") or ""))
+
+    def _request_matches(item: Mapping[str, Any]) -> bool:
+        return not clean_request_id or str(item.get("request_id") or "").strip() == clean_request_id
+
+    def _candidate_matches(item: Mapping[str, Any]) -> bool:
+        if not clean_candidate_id:
+            return True
+        direct = str(item.get("candidate_id") or item.get("id") or "").strip()
+        raw = coerce_dict(item.get("raw"))
+        raw_id = str(raw.get("candidate_id") or raw.get("id") or "").strip()
+        return clean_candidate_id in {direct, raw_id}
+
+    for key in ("items", "events", "candidates", "revisions", "llm_logs"):
+        rows = [item for item in _as_list_of_dicts(teacher.get(key)) if _request_matches(item)]
+        if key in {"events", "candidates", "revisions"} and clean_candidate_id:
+            rows = [item for item in rows if _candidate_matches(item)]
+        teacher[key] = sorted(
+            rows,
+            key=_row_ts,
+        )
+    rebuild_teacher_derived_views(teacher, bounded=False)
+    return {
+        "ok": True,
+        "schema": "adaos.nlu_teacher.ledger_history.v1",
+        "webspace_id": webspace_id,
+        "request_id": clean_request_id,
+        "candidate_id": clean_candidate_id,
+        "source": "conversation_ledger",
+        "conversation_id": conversation_id,
+        "thread_id": thread_id,
+        "events": teacher["events"],
+        "llm_logs": teacher["llm_logs"],
+        "items": teacher["items"],
+        "candidates": teacher["candidates"],
+        "revisions": teacher["revisions"],
+        "threads_by_request": teacher.get("threads_by_request") or [],
+        "threads_by_candidate": teacher.get("threads_by_candidate") or [],
+        "messages": messages,
+        "has_more_before": bool(page.get("has_more_before")),
+        "before_cursor": str(page.get("before_cursor") or ""),
+        "total_message_count": int(page.get("total_message_count") or 0),
+    }
 
 
 def make_event(
@@ -818,6 +1172,7 @@ async def append_event(webspace_id: str, event: Mapping[str, Any]) -> None:
             kind=f"event.{event_dict.get('kind') or 'teacher'}",
             payload={"event": event_dict},
             meta=coerce_dict(event_dict.get("_meta")),
+            idempotency_key=_ledger_record_idempotency_key("event", event_dict),
         )
     except Exception:
         pass

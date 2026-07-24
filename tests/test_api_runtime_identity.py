@@ -5,7 +5,7 @@ import sys
 import types
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
@@ -73,6 +73,51 @@ def test_background_boot_explicit_env_overrides_managed_mode(monkeypatch) -> Non
 
     monkeypatch.setenv("ADAOS_RUNTIME_BACKGROUND_BOOT", "yes")
     assert api_server._background_boot_enabled() is True
+
+
+def test_runtime_retire_shutdown_skips_subnet_lifecycle(monkeypatch) -> None:
+    emitted: list[str] = []
+
+    async def _emit(event_type: str, _payload: dict, *, drain_timeout: float) -> bool:
+        emitted.append(event_type)
+        return True
+
+    monkeypatch.setattr(api_server, "request_drain", lambda **_kwargs: None)
+    monkeypatch.setattr(api_server, "_emit_shutdown_event", _emit)
+    monkeypatch.setattr(api_server, "_write_runtime_profile_shutdown_debug", lambda _payload: None)
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(subnet_id="sn_test")),
+    )
+    monkeypatch.setattr(api_server.app.state, "shutdown_requested", False, raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_reason", "signal", raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_drain_timeout", 5.0, raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_lifecycle_scope", "subnet", raising=False)
+    monkeypatch.setattr(api_server.app.state, "shutdown_stopping_emitted", False, raising=False)
+    background = BackgroundTasks()
+
+    response = asyncio.run(
+        api_server.admin_shutdown(
+            api_server.ShutdownRequest(
+                reason="supervisor.fast_cutover.old_active_stop",
+                drain_timeout_sec=5.0,
+                signal_delay_sec=0.25,
+                lifecycle_scope="runtime_retire",
+            ),
+            background,
+        )
+    )
+
+    assert response.accepted is True
+    assert emitted == []
+    assert api_server.app.state.shutdown_lifecycle_scope == "runtime_retire"
+    assert api_server.app.state.shutdown_stopping_emitted is True
+    assert len(background.tasks) == 1
+
+
+def test_shutdown_request_defaults_to_subnet_lifecycle() -> None:
+    assert api_server.ShutdownRequest().lifecycle_scope == "subnet"
 
 
 def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
@@ -422,20 +467,31 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
 
-    reconnect_calls: list[tuple[str | None, str | None]] = []
+    reconnect_calls: list[tuple[str | None, str | None, bool]] = []
     service_start_reasons: list[str] = []
     call_order: list[str] = []
+    from adaos.services import autostart
 
     class _ServiceSupervisor:
         async def start_all(self) -> None:
             call_order.append("services")
 
-    async def _reconnect(*, transport: str | None = None, url_override: str | None = None):
+    async def _reconnect(
+        *,
+        transport: str | None = None,
+        url_override: str | None = None,
+        wait_for_authority: bool = False,
+    ):
         call_order.append("reconnect")
-        reconnect_calls.append((transport, url_override))
-        return {"ok": True, "accepted": True}
+        reconnect_calls.append((transport, url_override, wait_for_authority))
+        return {"ok": True, "accepted": True, "authority": {"required": True, "ready": True}}
 
     monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+    monkeypatch.setattr(
+        autostart,
+        "ensure_linux_process_handoff_unit",
+        lambda: {"ok": True, "changed": False, "kill_mode": "process"},
+    )
     monkeypatch.setattr(api_server, "request_hub_root_reconnect", _reconnect)
     monkeypatch.setattr(
         api_server,
@@ -457,7 +513,8 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     assert payload["reconnect"]["ok"] is True
     assert payload["service_start"]["background"] is True
     assert payload["service_start"]["scheduled"] is True
-    assert reconnect_calls == [(None, None)]
+    assert payload["supervisor_handoff_unit"]["kill_mode"] == "process"
+    assert reconnect_calls == [(None, None, True)]
     assert service_start_reasons == ["test.cutover"]
     assert call_order == ["reconnect"]
 
@@ -478,6 +535,78 @@ def test_promote_active_is_idempotent_for_active_runtime(monkeypatch) -> None:
     assert payload["accepted"] is False
     assert payload["runtime"]["transition_role"] == "active"
     assert payload["runtime"]["admin_mutation_allowed"] is True
+
+
+def test_candidate_runtime_promotion_rejects_missing_hub_root_authority(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
+    monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    from adaos.services import autostart
+
+    async def _reconnect(**_kwargs):
+        return {
+            "ok": False,
+            "authority": {
+                "required": True,
+                "ready": False,
+                "error": "hub_root_authority_timeout",
+            },
+        }
+
+    monkeypatch.setattr(
+        autostart,
+        "ensure_linux_process_handoff_unit",
+        lambda: {"ok": True, "changed": False, "kill_mode": "process"},
+    )
+    monkeypatch.setattr(api_server, "request_hub_root_reconnect", _reconnect)
+
+    with pytest.raises(api_server.HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_runtime_promote_active(
+                api_server.RuntimePromoteActiveRequest(reason="test.cutover", reconnect_hub_root=True)
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "hub_root_authority_not_ready"
+
+
+def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
+    monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    from adaos.services import autostart
+
+    wait_values: list[bool] = []
+
+    async def _reconnect(*, wait_for_authority: bool, **_kwargs):
+        wait_values.append(wait_for_authority)
+        return {"ok": True, "authority": {"required": False, "ready": None}}
+
+    monkeypatch.setattr(api_server, "get_ctx", lambda: types.SimpleNamespace(config=types.SimpleNamespace(role="member")))
+    monkeypatch.setattr(
+        autostart,
+        "ensure_linux_process_handoff_unit",
+        lambda: {"ok": True, "changed": False, "kill_mode": "process"},
+    )
+    monkeypatch.setattr(api_server, "request_hub_root_reconnect", _reconnect)
+    monkeypatch.setattr(
+        api_server,
+        "_schedule_promoted_runtime_service_start",
+        lambda _reason: {"background": True, "scheduled": True},
+    )
+
+    payload = asyncio.run(
+        api_server.admin_runtime_promote_active(
+            api_server.RuntimePromoteActiveRequest(reason="test.member.cutover", reconnect_hub_root=True)
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["reconnect"]["authority"]["required"] is False
+    assert wait_values == [False]
 
 
 def test_admin_root_mcp_logs_returns_local_logs_by_default(monkeypatch) -> None:

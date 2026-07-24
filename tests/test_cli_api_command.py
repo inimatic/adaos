@@ -504,6 +504,32 @@ def test_api_stop_prefers_graceful_shutdown(monkeypatch):
     assert "Stopped AdaOS API gracefully at http://127.0.0.1:8779" in result.stdout
 
 
+def test_takeover_shutdown_uses_runtime_retire_scope(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 202
+
+    def _post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(api_cmd.requests, "post", _post)
+    monkeypatch.setattr(api_cmd, "_wait_for_server_exit", lambda host, port, timeout: True)
+
+    stopped = api_cmd._request_graceful_shutdown(
+        "127.0.0.1",
+        8778,
+        token="t1",
+        reason="autostart.takeover",
+        lifecycle_scope="runtime_retire",
+    )
+
+    assert stopped is True
+    assert captured["json"]["lifecycle_scope"] == "runtime_retire"
+
+
 def test_api_stop_fails_for_non_local_hub_url(monkeypatch):
     runner = CliRunner()
     conf = NodeConfig(

@@ -106,6 +106,18 @@ workspace runtime update lock. Builder context/preview projection writes are
 coalesced by source webspace and published in background, so event handlers do
 not hold the event bus while a YDoc projection is persisted.
 
+### Conversation Ledger I/O
+
+The conversation ledger is a blocking SQLite boundary. Voice-chat snapshot
+recovery and history paging run in worker threads before their compact stream
+projection is published on the event loop. A browser attach can therefore wait
+for ledger recovery without delaying scenario-switch control, websocket
+publishing, or loop-lag monitoring.
+
+Demand coalescing remains useful burst control, but it is not a substitute for
+this ownership rule: subscription handlers must not execute ledger queries on
+the event-loop thread.
+
 ### Skill Activation Admission
 
 SDK subscription wrappers now load the skill activation policy and evaluate it
@@ -237,8 +249,8 @@ When diagnosing a rebuild lag incident:
 8. For cold reconnect lag, separate startup event handlers from scenario
    switch cost. `browsers_skill`, diagnostics, notebook, voice/chat, and other
    stream snapshot handlers may run during browser attach; they should schedule
-   projection work and avoid synchronous snapshot construction in subscription
-   handlers.
+   projection work and avoid synchronous snapshot construction or conversation
+   ledger I/O in subscription handlers.
 9. If `scenario_projection_sync` is dominated by `ystore_apply_updates`, inspect
    `replay_window_entries`, `replay_window_bytes`, `last_auto_backup_reason`,
    and `auto_backup_inflight`. Replay pressure detected during an auto-backup

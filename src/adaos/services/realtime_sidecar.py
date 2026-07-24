@@ -1129,6 +1129,15 @@ def _realtime_probe_grace_s() -> float:
     return max(0.0, min(value, 2.0))
 
 
+def _realtime_max_local_sessions() -> int:
+    raw = os.getenv("ADAOS_REALTIME_MAX_LOCAL_SESSIONS")
+    try:
+        value = int(str(raw if raw is not None else "2").strip() or "2")
+    except Exception:
+        value = 2
+    return max(1, min(value, 8))
+
+
 def _ws_socket(ws: Any) -> Any | None:
     try:
         transport = getattr(ws, "transport", None)
@@ -1505,6 +1514,7 @@ class _RelayStats:
     remote_connect_retry_delay_s: float | None = None
     remote_quarantine_total: int = 0
     superseded_total: int = 0
+    overlap_admitted_total: int = 0
     last_session_open_at: float | None = None
     last_session_close_at: float | None = None
     last_remote_connect_error: str | None = None
@@ -1519,7 +1529,7 @@ class RealtimeSidecarServer:
         self._server: asyncio.AbstractServer | None = None
         self._route_servers: dict[str, Any] = {}
         self._media_server: asyncio.AbstractServer | None = None
-        self._active_task: asyncio.Task[Any] | None = None
+        self._active_tasks: set[asyncio.Task[Any]] = set()
         self._diag_task: asyncio.Task[Any] | None = None
         self._stopped = asyncio.Event()
         self._stats = _RelayStats()
@@ -1541,6 +1551,7 @@ class RealtimeSidecarServer:
             remote_connect_retry_total=int(previous.remote_connect_retry_total or 0),
             remote_quarantine_total=int(previous.remote_quarantine_total or 0),
             superseded_total=int(previous.superseded_total or 0),
+            overlap_admitted_total=int(previous.overlap_admitted_total or 0),
             last_session_open_at=time.monotonic(),
             last_session_close_at=previous.last_session_close_at,
             last_remote_connect_error=previous.last_remote_connect_error,
@@ -1581,6 +1592,7 @@ class RealtimeSidecarServer:
             "listen": f"{self._host}:{self._port}",
             "session_id": self._stats.session_id,
             "active_session": self._stats.active_session,
+            "active_session_total": len(self._live_session_tasks()),
             "ownership_boundary": "transport_only",
             "enablement_policy": realtime_sidecar_enablement_policy(),
             "route_tunnel_contract": realtime_sidecar_route_tunnel_contract(),
@@ -1617,6 +1629,7 @@ class RealtimeSidecarServer:
             "remote_connect_retry_delay_s": self._stats.remote_connect_retry_delay_s,
             "remote_quarantine_total": self._stats.remote_quarantine_total,
             "superseded_total": self._stats.superseded_total,
+            "overlap_admitted_total": self._stats.overlap_admitted_total,
             "last_session_open_ago_s": _ago(self._stats.last_session_open_at),
             "last_session_close_ago_s": _ago(self._stats.last_session_close_at),
             "last_remote_disconnect_ago_s": _ago(self._stats.last_remote_disconnect_at),
@@ -1665,10 +1678,12 @@ class RealtimeSidecarServer:
 
     async def close(self) -> None:
         self._stopped.set()
-        if self._active_task is not None and not self._active_task.done():
-            self._active_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._active_task
+        active_tasks = self._live_session_tasks()
+        for task in active_tasks:
+            task.cancel()
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
+        self._active_tasks.clear()
         for server in list(self._route_servers.values()):
             server.close()
         for server in list(self._route_servers.values()):
@@ -2390,12 +2405,18 @@ class RealtimeSidecarServer:
         send_q: asyncio.Queue[bytes] = asyncio.Queue()
         send_event = asyncio.Event()
         recv_q: asyncio.Queue[bytes] = asyncio.Queue()
+        pending_ping_sources: deque[str] = deque()
+        if len(self._live_session_tasks()) <= 1:
+            self._pending_ping_sources = pending_ping_sources
+        client_pings_outstanding = 0
+        sidecar_pings_outstanding = 0
 
         async def _queue_remote_payload(payload: bytes) -> None:
             await send_q.put(payload)
             send_event.set()
 
         async def _local_reader_loop() -> None:
+            nonlocal client_pings_outstanding
             while True:
                 chunk = await reader.read(65536)
                 if not chunk:
@@ -2405,12 +2426,14 @@ class RealtimeSidecarServer:
                 if chunk == NATS_PING:
                     self._stats.local_nats_pings_tx += 1
                     self._stats.client_nats_pings_outstanding += 1
-                    self._pending_ping_sources.append("client")
+                    client_pings_outstanding += 1
+                    pending_ping_sources.append("client")
                 elif chunk == NATS_PONG:
                     self._stats.local_nats_pongs_tx += 1
                 await _queue_remote_payload(chunk)
 
         async def _remote_writer_loop() -> None:
+            nonlocal client_pings_outstanding, sidecar_pings_outstanding
             recv_task: asyncio.Task[Any] | None = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
             wake_task: asyncio.Task[Any] | None = None
             try:
@@ -2437,20 +2460,28 @@ class RealtimeSidecarServer:
                             self._stats.remote_nats_pings_rx += 1
                         elif payload == NATS_PONG:
                             self._stats.remote_nats_pongs_rx += 1
-                            source = self._pending_ping_sources.popleft() if self._pending_ping_sources else None
+                            source = pending_ping_sources.popleft() if pending_ping_sources else None
                             if source == "sidecar":
+                                if sidecar_pings_outstanding > 0:
+                                    sidecar_pings_outstanding -= 1
                                 if self._stats.sidecar_nats_pings_outstanding > 0:
                                     self._stats.sidecar_nats_pings_outstanding -= 1
                                 self._stats.sidecar_nats_pongs_rx += 1
                                 recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
                                 continue
                             if source == "client":
+                                if client_pings_outstanding > 0:
+                                    client_pings_outstanding -= 1
                                 if self._stats.client_nats_pings_outstanding > 0:
                                     self._stats.client_nats_pings_outstanding -= 1
-                            elif self._stats.client_nats_pings_outstanding > 0:
-                                self._stats.client_nats_pings_outstanding -= 1
-                            elif self._stats.sidecar_nats_pings_outstanding > 0:
-                                self._stats.sidecar_nats_pings_outstanding -= 1
+                            elif client_pings_outstanding > 0:
+                                client_pings_outstanding -= 1
+                                if self._stats.client_nats_pings_outstanding > 0:
+                                    self._stats.client_nats_pings_outstanding -= 1
+                            elif sidecar_pings_outstanding > 0:
+                                sidecar_pings_outstanding -= 1
+                                if self._stats.sidecar_nats_pings_outstanding > 0:
+                                    self._stats.sidecar_nats_pings_outstanding -= 1
                                 self._stats.sidecar_nats_pongs_rx += 1
                                 recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
                                 continue
@@ -2501,13 +2532,15 @@ class RealtimeSidecarServer:
                 self._stats.last_local_tx_at = time.monotonic()
 
         async def _sidecar_keepalive_loop(*, interval_s: float) -> None:
+            nonlocal sidecar_pings_outstanding
             while True:
                 await asyncio.sleep(interval_s)
                 if getattr(ws, "closed", False):
                     return
-                if self._stats.sidecar_nats_pings_outstanding > 0:
+                if sidecar_pings_outstanding > 0:
                     continue
-                self._pending_ping_sources.append("sidecar")
+                pending_ping_sources.append("sidecar")
+                sidecar_pings_outstanding += 1
                 self._stats.sidecar_nats_pings_tx += 1
                 self._stats.sidecar_nats_pings_outstanding += 1
                 await _queue_remote_payload(NATS_PING)
@@ -2535,7 +2568,6 @@ class RealtimeSidecarServer:
         session_id = f"rt-{uuid.uuid4().hex[:10]}"
         self._begin_session_stats(session_id=session_id)
         self._stats.session_open_total = int(self._stats.session_open_total or 0) + 1
-        self._pending_ping_sources = deque()
         try:
             ws, remote_url = await self._connect_remote_with_retry(session_id=session_id, writer=writer)
             self._stats.remote_url = remote_url
@@ -2565,7 +2597,6 @@ class RealtimeSidecarServer:
                 )
             self._log(f"session error id={session_id} err={details}")
         finally:
-            self._stats.active_session = False
             self._stats.session_close_total = int(self._stats.session_close_total or 0) + 1
             self._stats.last_session_close_at = time.monotonic()
             self._stats.last_remote_disconnect_at = time.monotonic()
@@ -2579,6 +2610,12 @@ class RealtimeSidecarServer:
                 await writer.wait_closed()
             self._log(f"session close id={session_id}")
 
+    def _live_session_tasks(self) -> set[asyncio.Task[Any]]:
+        live = {task for task in self._active_tasks if not task.done()}
+        if len(live) != len(self._active_tasks):
+            self._active_tasks = live
+        return live
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         sock = writer.get_extra_info("socket")
         try:
@@ -2587,7 +2624,8 @@ class RealtimeSidecarServer:
         except Exception:
             pass
         self._stats.local_client_total = int(self._stats.local_client_total or 0) + 1
-        if self._active_task is not None and not self._active_task.done():
+        active_tasks = self._live_session_tasks()
+        if active_tasks:
             try:
                 await asyncio.wait_for(reader.read(1), timeout=_realtime_probe_grace_s())
             except asyncio.TimeoutError:
@@ -2602,14 +2640,23 @@ class RealtimeSidecarServer:
                 with contextlib.suppress(Exception):
                     await writer.wait_closed()
                 return
-            self._log("superseding previous local NATS client")
-            self._stats.superseded_total = int(self._stats.superseded_total or 0) + 1
-            self._active_task.cancel()
+            if len(active_tasks) >= _realtime_max_local_sessions():
+                self._log("rejecting local NATS client: concurrent session limit reached")
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                return
+            self._stats.overlap_admitted_total = int(self._stats.overlap_admitted_total or 0) + 1
+            self._log("admitting overlapping local NATS client for runtime handoff")
+        task = asyncio.create_task(self._bridge_session(reader, writer), name="adaos-realtime-session")
+        self._active_tasks.add(task)
+        self._stats.active_session = True
+        try:
             with contextlib.suppress(BaseException):
-                await self._active_task
-        self._active_task = asyncio.create_task(self._bridge_session(reader, writer), name="adaos-realtime-session")
-        with contextlib.suppress(BaseException):
-            await self._active_task
+                await task
+        finally:
+            self._active_tasks.discard(task)
+            self._stats.active_session = bool(self._live_session_tasks())
 
 
 async def run_realtime_sidecar(*, host: str | None = None, port: int | None = None) -> int:

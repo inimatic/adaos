@@ -123,6 +123,14 @@ Migration selection is bounded:
 - successful migration clears transient process state during activation and
   should not leave persistent UI noise
 
+Handler discovery is read-only with respect to installed skill runtime slots.
+For an explicit local development workflow, `ADAOS_SKILL_RUNTIME_SOURCE_SYNC=1`
+allows the loader to synchronize workspace sources before discovery. The sync
+runs outside the event loop and is always disabled in a prewarmed core
+`candidate`, because candidate startup must not mutate runtime state shared with
+the active process. Normal install, update, activation, and background migration
+remain the production mutation paths.
+
 During prepare/activate, the affected skill is temporarily deactivated with
 `status=disabled`, `reason=runtime_migration_in_progress`, and an operation id.
 If migration fails, AdaOS leaves the skill deactivated with

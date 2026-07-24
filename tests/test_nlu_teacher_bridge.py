@@ -445,3 +445,346 @@ async def test_teacher_store_runtime_removes_legacy_event_projection_on_ready(mo
     assert len(saves) == 1
     assert "events_by_candidate" not in writes[0]
     assert "events_by_candidate" not in saves[0]
+
+
+def test_teacher_durable_projection_is_bounded_and_keeps_newest_threads():
+    from adaos.services.nlu import teacher_events
+
+    teacher = {
+        "events": [
+            {
+                "id": f"evt-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index:03d}",
+                "request_text": f"request {index}",
+                "kind": "candidate.proposed",
+                "raw": {"id": f"cand-{index}", "payload": "x" * 2000},
+            }
+            for index in range(140)
+        ],
+        "llm_logs": [
+            {
+                "id": f"log-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index:03d}",
+                "response": {"raw": "y" * 4000},
+            }
+            for index in range(140)
+        ],
+        "candidates": [
+            {
+                "id": f"cand-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index:03d}",
+                "kind": "skill",
+                "status": "pending",
+                "candidate": {"name": f"candidate {index}"},
+            }
+            for index in range(140)
+        ],
+        "projection_window": {
+            "ledger_backfill": {
+                "schema": "adaos.nlu_teacher.ledger_backfill.v1",
+                "completed": True,
+            }
+        },
+    }
+
+    teacher_events.rebuild_teacher_derived_views(teacher)
+    limits = teacher_events.teacher_projection_limits()
+
+    assert len(teacher["events"]) == limits["events"]
+    assert len(teacher["llm_logs"]) == limits["llm_logs"]
+    assert len(teacher["threads_by_request"]) == limits["threads_by_request"]
+    assert len(teacher["threads_by_candidate"]) == limits["threads_by_candidate"]
+    assert teacher["threads_by_request"][-1]["request_id"] == "req-139"
+    assert all(len(str(item.get("details") or "")) <= 2000 for item in teacher["threads_by_candidate"])
+    assert teacher["projection_window"]["source_of_truth"] == "conversation_ledger"
+    assert teacher["projection_window"]["truncated"]["events"] is True
+    assert teacher["projection_window"]["truncated"]["llm_logs"] is True
+    assert teacher["projection_window"]["ledger_backfill"]["completed"] is True
+
+
+def test_teacher_history_backfill_is_idempotent_and_preserves_llm_logs():
+    from adaos.services import conversation_links, conversation_store
+    from adaos.services.nlu import teacher_events
+
+    webspace_id = "ws-teacher-ledger-backfill"
+    event = {
+        "id": "evt-backfill-1",
+        "ts": 10.0,
+        "webspace_id": webspace_id,
+        "request_id": "req-backfill-1",
+        "request_text": "backfill request",
+        "kind": "not_obtained",
+        "title": "Intent not obtained",
+        "raw": {"id": "item-backfill-1", "request_id": "req-backfill-1", "text": "backfill request"},
+    }
+    llm_log = {
+        "id": "log-backfill-1",
+        "ts": 11.0,
+        "request_id": "req-backfill-1",
+        "status": "complete",
+        "response": {"decision": "propose"},
+    }
+    teacher = {"events": [event], "llm_logs": [llm_log]}
+
+    marker = teacher_events.backfill_teacher_history_to_ledger(webspace_id, teacher)
+    teacher["projection_window"] = {"ledger_backfill": marker}
+    repeated = teacher_events.backfill_teacher_history_to_ledger(webspace_id, teacher)
+
+    conversation_id = conversation_links.teacher_conversation_id(webspace_id)
+    messages = conversation_store.list_messages(conversation_id)
+    page = teacher_events.read_teacher_history_page(webspace_id, request_id="req-backfill-1", limit=32)
+    assert marker["completed"] is True
+    assert repeated == marker
+    assert len(messages) == 2
+    assert [item["id"] for item in page["events"]] == ["evt-backfill-1"]
+    assert [item["id"] for item in page["llm_logs"]] == ["log-backfill-1"]
+    assert page["total_message_count"] == 2
+
+
+def test_teacher_history_backfill_batches_a_full_legacy_window():
+    from adaos.services import conversation_links, conversation_store
+    from adaos.services.nlu import teacher_events
+
+    webspace_id = "ws-teacher-ledger-batch-window"
+    teacher = {
+        "events": [
+            {
+                "id": f"evt-batch-{index}",
+                "ts": float(index),
+                "request_id": f"req-batch-{index}",
+                "request_text": f"batch request {index}",
+                "kind": "not_obtained",
+                "raw": {"id": f"item-batch-{index}"},
+            }
+            for index in range(96)
+        ],
+        "llm_logs": [
+            {
+                "id": f"log-batch-{index}",
+                "ts": float(index),
+                "request_id": f"req-batch-{index}",
+                "status": "complete",
+            }
+            for index in range(48)
+        ],
+    }
+
+    marker = teacher_events.backfill_teacher_history_to_ledger(webspace_id, teacher)
+    messages = conversation_store.list_messages(conversation_links.teacher_conversation_id(webspace_id), limit=500)
+
+    assert marker["records_ensured"] == 144
+    assert marker["elapsed_ms"] < 5000.0
+    assert len(messages) == 144
+
+
+@pytest.mark.anyio
+async def test_live_llm_log_create_and_update_are_mirrored_to_ledger(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-teacher-live-llm-ledger"
+    mirrored: list[dict] = []
+
+    def _mirror(_webspace_id: str, log: dict) -> dict:
+        assert _webspace_id == webspace_id
+        mirrored.append(dict(log))
+        return {"id": f"message-{len(mirrored)}"}
+
+    monkeypatch.setattr(llm_teacher_runtime, "append_llm_log_to_ledger", _mirror)
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"events": [], "llm_logs": []})
+
+    await llm_teacher_runtime._append_llm_log(  # type: ignore[attr-defined]
+        webspace_id,
+        {"id": "log-live-1", "request_id": "req-live-1", "status": "pending"},
+    )
+    await llm_teacher_runtime._patch_llm_log(  # type: ignore[attr-defined]
+        webspace_id,
+        log_id="log-live-1",
+        patch={"status": "complete", "response": {"decision": "propose"}},
+    )
+
+    assert [item["status"] for item in mirrored] == ["pending", "complete"]
+    assert mirrored[-1]["response"] == {"decision": "propose"}
+
+
+def test_teacher_history_page_reads_canonical_ledger_on_demand():
+    from adaos.services import conversation_links
+    from adaos.services.nlu import teacher_events
+
+    webspace_id = "ws-teacher-history-page"
+    request_id = "req-history"
+    for index in range(3):
+        event = {
+            "id": f"evt-history-{index}",
+            "ts": float(index + 1),
+            "webspace_id": webspace_id,
+            "request_id": request_id,
+            "request_text": f"history request {index}",
+            "kind": "not_obtained",
+            "title": "Intent not obtained",
+            "raw": {"id": f"item-{index}", "request_id": request_id, "text": f"history request {index}"},
+        }
+        stored = conversation_links.append_teacher_event_message(
+            webspace_id=webspace_id,
+            text=event["request_text"],
+            request_id=request_id,
+            kind="event.not_obtained",
+            payload={"event": event},
+        )
+        assert stored is not None
+
+    page = teacher_events.read_teacher_history_page(webspace_id, request_id=request_id, limit=2)
+
+    assert page["source"] == "conversation_ledger"
+    assert page["thread_id"] == conversation_links.teacher_thread_id(
+        webspace_id=webspace_id,
+        request_id=request_id,
+    )
+    assert len(page["messages"]) == 2
+    assert len(page["events"]) == 2
+    assert page["total_message_count"] == 3
+    assert page["has_more_before"] is True
+    assert page["before_cursor"]
+    assert page["threads_by_request"][0]["details_truncated"] is False
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_compacts_oversized_projection_without_saved_state(monkeypatch):
+    from adaos.services.nlu import teacher_events, teacher_store_runtime
+
+    limits = teacher_events.teacher_projection_limits()
+    writes: list[dict] = []
+
+    async def _read(_webspace_id: str) -> dict:
+        return {
+            "events": [
+                {"id": f"evt-{index}", "ts": float(index), "request_id": f"req-{index}"}
+                for index in range(limits["events"] + 10)
+            ],
+            "llm_logs": [],
+        }
+
+    async def _write(_webspace_id: str, teacher: dict) -> None:
+        writes.append(teacher)
+
+    monkeypatch.setattr(teacher_store_runtime, "load_teacher_state", lambda **_kwargs: {})
+    monkeypatch.setattr(teacher_store_runtime, "_read_teacher_from_ydoc", _read)
+    monkeypatch.setattr(teacher_store_runtime, "_write_teacher_to_ydoc", _write)
+    monkeypatch.setattr(teacher_store_runtime, "save_teacher_state", lambda **_kwargs: None)
+
+    await teacher_store_runtime._on_sys_ready({"webspace_id": "ws-teacher-compact"})  # type: ignore[attr-defined]
+
+    assert len(writes) == 1
+    assert len(writes[0]["events"]) == limits["events"]
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_backfills_before_projection_is_bounded(monkeypatch):
+    from adaos.services.nlu import teacher_events, teacher_store_runtime
+
+    webspace_id = "ws-teacher-backfill-before-bound"
+    limits = teacher_events.teacher_projection_limits()
+    source_count = limits["events"] + 9
+    seen_counts: list[int] = []
+    writes: list[dict] = []
+
+    async def _read(_webspace_id: str) -> dict:
+        return {
+            "events": [
+                {"id": f"evt-before-bound-{index}", "ts": float(index), "request_id": f"req-{index}"}
+                for index in range(source_count)
+            ],
+            "llm_logs": [],
+        }
+
+    def _backfill(_webspace_id: str, teacher: dict) -> dict:
+        seen_counts.append(len(teacher["events"]))
+        return {
+            "schema": "adaos.nlu_teacher.ledger_backfill.v1",
+            "completed": True,
+            "events_total": len(teacher["events"]),
+            "llm_logs_total": 0,
+            "records_ensured": len(teacher["events"]),
+            "already_present": 0,
+            "elapsed_ms": 1.0,
+        }
+
+    async def _write(_webspace_id: str, teacher: dict) -> None:
+        writes.append(teacher)
+
+    monkeypatch.setattr(teacher_store_runtime, "load_teacher_state", lambda **_kwargs: {})
+    monkeypatch.setattr(teacher_store_runtime, "_read_teacher_from_ydoc", _read)
+    monkeypatch.setattr(teacher_store_runtime, "_write_teacher_to_ydoc", _write)
+    monkeypatch.setattr(teacher_store_runtime, "save_teacher_state", lambda **_kwargs: None)
+    monkeypatch.setattr(teacher_store_runtime, "backfill_teacher_history_to_ledger", _backfill)
+
+    await teacher_store_runtime._on_sys_ready({"webspace_id": webspace_id})  # type: ignore[attr-defined]
+
+    assert seen_counts == [source_count]
+    assert len(writes) == 1
+    assert len(writes[0]["events"]) == limits["events"]
+    assert writes[0]["projection_window"]["ledger_backfill"]["events_total"] == source_count
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_preserves_projection_when_ledger_backfill_fails(monkeypatch):
+    from adaos.services.nlu import teacher_events, teacher_store_runtime
+
+    webspace_id = "ws-teacher-backfill-failure"
+    limits = teacher_events.teacher_projection_limits()
+    writes: list[dict] = []
+    saves: list[dict] = []
+
+    async def _read(_webspace_id: str) -> dict:
+        return {
+            "events": [
+                {"id": f"evt-failure-{index}", "ts": float(index)}
+                for index in range(limits["events"] + 1)
+            ],
+            "llm_logs": [],
+        }
+
+    def _fail_backfill(_webspace_id: str, _teacher: dict) -> dict:
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(teacher_store_runtime, "load_teacher_state", lambda **_kwargs: {})
+    monkeypatch.setattr(teacher_store_runtime, "_read_teacher_from_ydoc", _read)
+    monkeypatch.setattr(teacher_store_runtime, "_write_teacher_to_ydoc", lambda *_args: writes.append({}))
+    monkeypatch.setattr(teacher_store_runtime, "save_teacher_state", lambda **kwargs: saves.append(kwargs))
+    monkeypatch.setattr(teacher_store_runtime, "backfill_teacher_history_to_ledger", _fail_backfill)
+
+    await teacher_store_runtime._on_sys_ready({"webspace_id": webspace_id})  # type: ignore[attr-defined]
+
+    assert writes == []
+    assert saves == []
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_does_not_rewrite_identical_projection(monkeypatch):
+    from adaos.services.nlu import teacher_store_runtime
+
+    webspace_id = "ws-teacher-identical-projection"
+    current = teacher_store_runtime._merge_teacher(  # type: ignore[attr-defined]
+        current={"events": [], "llm_logs": []},
+        saved={},
+    )
+    writes: list[dict] = []
+    saves: list[dict] = []
+
+    async def _read(_webspace_id: str) -> dict:
+        return current
+
+    monkeypatch.setattr(teacher_store_runtime, "load_teacher_state", lambda **_kwargs: current)
+    monkeypatch.setattr(teacher_store_runtime, "_read_teacher_from_ydoc", _read)
+    monkeypatch.setattr(teacher_store_runtime, "_write_teacher_to_ydoc", lambda *_args: writes.append({}))
+    monkeypatch.setattr(teacher_store_runtime, "save_teacher_state", lambda **kwargs: saves.append(kwargs))
+
+    await teacher_store_runtime._on_scenarios_synced({"webspace_id": webspace_id})  # type: ignore[attr-defined]
+
+    assert writes == []
+    assert saves == []

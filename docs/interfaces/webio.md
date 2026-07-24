@@ -1166,6 +1166,36 @@ Most manifests should omit this block and rely on the runtime defaults. Use
 explicit focus policy only for unusual overlay flows, such as nested overlays
 or flows that intentionally do not return focus to the opener.
 
+### NLU Teacher History
+
+`data.nlu_teacher` is a bounded operational projection, not a transcript
+store. Its `projection_window` object reports the active event, LLM-log,
+thread, and detail-size limits. Consumers must not assume that an absent older
+row was deleted from the Teacher history.
+
+For upgraded nodes, `projection_window.ledger_backfill.completed=true` means
+that all Teacher events and LLM-log rows still present in the pre-compaction
+disk/YJS state were idempotently ensured in the ledger before the projection
+was shortened. If the ledger is unavailable, this marker is not written and
+the unbounded source state is retained. Independent LLM-log versions are
+ledger records, so they remain available after their YJS window rolls over.
+
+Use the authenticated ledger endpoint for older or request-specific data:
+
+```text
+GET /api/nlu/teacher/{webspace_id}/history
+    ?request_id={request_id}
+    &candidate_id={candidate_id}
+    &before_cursor={cursor}
+    &limit=32
+```
+
+The response uses schema `adaos.nlu_teacher.ledger_history.v1` and returns
+`messages`, reconstructed `events`, `llm_logs`, request/candidate threads,
+`has_more_before`, and `before_cursor`. The maximum page size is 64. This API is
+an explicit read path; it is not called by scenario switching or CRDT room
+bootstrap.
+
 ## Simplifications and Limitations
 
 * Switching webspaces still reloads the page to keep the YDoc tree simple.

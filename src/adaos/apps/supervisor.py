@@ -789,7 +789,7 @@ def _warm_switch_strict_cutover_enabled() -> bool:
 def _warm_switch_cold_fallback_enabled() -> bool:
     raw = os.getenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK")
     if raw is None:
-        return True
+        return False
     return str(raw or "").strip().lower() in {
         "1",
         "true",
@@ -1938,10 +1938,16 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
             failed_payload["rollback"] = {"ok": True, "slot": restored}
             failed_payload["message"] += f"; rolled back to slot {restored}"
         if target_slot:
-            failed_payload["slot_cleanup"] = remove_inactive_slot(
-                target_slot,
-                reason="supervisor.timeout_recovery",
-            )
+            # Timeout reconciliation has no process handle and cannot prove that
+            # the target runtime has exited. Removing its slot here leaves a
+            # live process executing from a deleted interpreter/source tree.
+            failed_payload["slot_cleanup"] = {
+                "ok": True,
+                "removed": False,
+                "deferred": True,
+                "slot": target_slot,
+                "reason": "runtime_stop_not_confirmed",
+            }
         if skill_runtime_rollback:
             failed_payload["skill_runtime_rollback"] = skill_runtime_rollback
             if restored and not bool(skill_runtime_rollback.get("ok")):
@@ -2583,6 +2589,82 @@ def _positive_int_or_none(value: Any) -> int | None:
     return item if item > 0 else None
 
 
+class _AdoptedProcess:
+    """Small Popen-compatible handle for a listener inherited across supervisor restart."""
+
+    def __init__(self, pid: int) -> None:
+        if psutil is None:
+            raise RuntimeError("psutil is required to adopt an existing process")
+        process = psutil.Process(int(pid))
+        self.pid = int(pid)
+        self._created_at = float(process.create_time())
+        try:
+            self.args = list(process.cmdline())
+        except Exception:
+            self.args = []
+        try:
+            self.cwd = str(process.cwd())
+        except Exception:
+            self.cwd = None
+
+    def _process(self) -> Any | None:
+        if psutil is None:
+            return None
+        try:
+            process = psutil.Process(self.pid)
+            if abs(float(process.create_time()) - self._created_at) > 0.001:
+                return None
+            return process
+        except Exception:
+            return None
+
+    def poll(self) -> int | None:
+        process = self._process()
+        return None if process is not None and process.is_running() else 0
+
+    def terminate(self) -> None:
+        process = self._process()
+        if process is not None:
+            process.terminate()
+
+    def kill(self) -> None:
+        process = self._process()
+        if process is not None:
+            process.kill()
+
+
+def _listener_owner_pid(host: str, port: int) -> int | None:
+    if psutil is None:
+        return None
+    expected_port = int(port)
+    expected_host = str(host or "127.0.0.1").strip()
+    try:
+        connections = psutil.net_connections(kind="tcp")
+    except Exception:
+        return None
+    for connection in connections:
+        if str(getattr(connection, "status", "")).upper() != "LISTEN":
+            continue
+        address = getattr(connection, "laddr", None)
+        if not address or int(getattr(address, "port", 0) or 0) != expected_port:
+            continue
+        bound_host = str(getattr(address, "ip", "") or "")
+        if expected_host not in {"0.0.0.0", "::", ""} and bound_host not in {
+            expected_host,
+            "0.0.0.0",
+            "::",
+            "::1" if expected_host == "127.0.0.1" else expected_host,
+        }:
+            continue
+        try:
+            pid = int(getattr(connection, "pid", 0) or 0)
+        except Exception:
+            pid = 0
+        if pid > 0:
+            return pid
+    return None
+
+
 def _format_slot_value(template: str, values: dict[str, str]) -> str:
     fields = {field_name for _, field_name, _, _ in Formatter().parse(template) if field_name}
     payload = dict(values)
@@ -2597,13 +2679,15 @@ class SupervisorManager:
         self.runtime_port = int(runtime_port)
         self.token = str(token or "").strip() or None
         ensure_memory_store()
-        self._proc: subprocess.Popen[Any] | None = None
-        self._candidate_proc: subprocess.Popen[Any] | None = None
-        self._sidecar_proc: subprocess.Popen[Any] | None = None
+        self._proc: Any | None = None
+        self._candidate_proc: Any | None = None
+        self._sidecar_proc: Any | None = None
         self._desired_running = True
         self._stopping = False
         self._lock = asyncio.Lock()
         self._monitor_task: asyncio.Task[Any] | None = None
+        self._retired_runtime_tasks: set[asyncio.Task[Any]] = set()
+        self._retired_runtime_procs: dict[int, Any] = {}
         self._restart_count = 0
         self._last_start_at: float | None = None
         self._last_exit_at: float | None = None
@@ -4073,6 +4157,142 @@ class SupervisorManager:
             "mode": "self_exit",
             "delay_sec": delay_sec,
             "wrapper_refresh": wrapper_refresh,
+        }
+
+    def _schedule_managed_handoff_reaper(self) -> dict[str, Any]:
+        pids = sorted(
+            {
+                int(pid)
+                for pid in (
+                    getattr(self._proc, "pid", None),
+                    getattr(self._sidecar_proc, "pid", None),
+                )
+                if isinstance(pid, int) and pid > 0
+            }
+        )
+        if not pids:
+            return {"ok": True, "scheduled": False, "reason": "no_managed_children"}
+        service_name = str(os.getenv("ADAOS_AUTOSTART_SERVICE") or "adaos.service").strip() or "adaos.service"
+        supervisor_port = _supervisor_port()
+        code = "\n".join(
+            [
+                "import os, signal, socket, subprocess, time",
+                f"pids = {pids!r}",
+                f"service_name = {service_name!r}",
+                f"supervisor_port = {supervisor_port!r}",
+                "time.sleep(4.0)",
+                "inactive_total = 0",
+                "for _ in range(24):",
+                "    active = subprocess.run(['systemctl', 'is-active', '--quiet', service_name], check=False).returncode == 0",
+                "    if active:",
+                "        inactive_total = 0",
+                "        try:",
+                "            with socket.create_connection(('127.0.0.1', supervisor_port), timeout=0.5):",
+                "                raise SystemExit(0)",
+                "        except OSError:",
+                "            pass",
+                "    else:",
+                "        inactive_total += 1",
+                "        if inactive_total >= 3:",
+                "            break",
+                "    time.sleep(1.0)",
+                "for pid in pids:",
+                "    try:",
+                "        os.kill(pid, signal.SIGTERM)",
+                "    except ProcessLookupError:",
+                "        pass",
+                "time.sleep(3.0)",
+                "for pid in pids:",
+                "    try:",
+                "        os.kill(pid, 0)",
+                "    except ProcessLookupError:",
+                "        continue",
+                "    try:",
+                "        os.kill(pid, signal.SIGKILL)",
+                "    except ProcessLookupError:",
+                "        pass",
+            ]
+        )
+        try:
+            reaper = subprocess.Popen(
+                [sys.executable, "-c", code],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "scheduled": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "pids": pids,
+            }
+        return {
+            "ok": True,
+            "scheduled": True,
+            "reaper_pid": int(reaper.pid),
+            "pids": pids,
+            "service": service_name,
+            "supervisor_port": supervisor_port,
+        }
+
+    def _schedule_retired_runtime_cleanup(self) -> dict[str, Any]:
+        pids = sorted(
+            pid
+            for pid, proc in self._retired_runtime_procs.items()
+            if pid > 0 and proc is not None and proc.poll() is None
+        )
+        if not pids:
+            return {"ok": True, "scheduled": False, "reason": "no_retired_runtimes"}
+        code = "\n".join(
+            [
+                "import os, signal, time",
+                f"pids = {pids!r}",
+                "def send(pid, sig):",
+                "    try:",
+                "        os.killpg(os.getpgid(pid), sig)",
+                "    except (ProcessLookupError, PermissionError):",
+                "        try:",
+                "            os.kill(pid, sig)",
+                "        except ProcessLookupError:",
+                "            pass",
+                "time.sleep(1.0)",
+                "for pid in pids:",
+                "    send(pid, signal.SIGTERM)",
+                "time.sleep(3.0)",
+                "for pid in pids:",
+                "    try:",
+                "        os.kill(pid, 0)",
+                "    except ProcessLookupError:",
+                "        continue",
+                "    send(pid, signal.SIGKILL)",
+            ]
+        )
+        try:
+            cleanup = subprocess.Popen(
+                [sys.executable, "-c", code],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "scheduled": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "pids": pids,
+            }
+        return {
+            "ok": True,
+            "scheduled": True,
+            "cleanup_pid": int(cleanup.pid),
+            "pids": pids,
         }
 
     def _refresh_autostart_wrapper(self, *, reason: str) -> dict[str, Any]:
@@ -6270,6 +6490,8 @@ class SupervisorManager:
             "bootstrap_update": bootstrap_update,
             "slot_structure": slot_structure,
             "restart_count": int(self._restart_count),
+            "retired_runtime_drain_pending": len(self._retired_runtime_tasks),
+            "preserve_children_on_supervisor_restart": bool(self._service_restart_pending),
             "last_start_at": self._last_start_at,
             "last_stop_reason": self._last_stop_reason,
             "candidate_last_stop_reason": self._candidate_last_stop_reason,
@@ -7148,8 +7370,107 @@ class SupervisorManager:
         payload["_served_by"] = "supervisor_fallback"
         return _reconcile_update_status(payload)
 
-    async def _spawn_runtime_locked(self, *, reason: str = "supervisor.start") -> None:
+    def _adopt_active_runtime_listener(self, *, reason: str) -> bool:
+        current_slot = str(active_slot() or "").strip().upper() or None
+        runtime_port = self.slot_runtime_port(current_slot)
+        runtime_url = self.slot_runtime_base_url(current_slot)
+        listener_pid = _listener_owner_pid(self.runtime_host, runtime_port)
+        if not listener_pid:
+            return False
+        adopted = _AdoptedProcess(listener_pid)
+        identity: dict[str, Any] = {}
+        api_ready = _runtime_api_ready(runtime_url, token=self.token, timeout=1.5)
+        if api_ready:
+            headers = {"Accept": "application/json"}
+            if self.token:
+                headers["X-AdaOS-Token"] = self.token
+            try:
+                with requests.get(runtime_url + "/api/status", headers=headers, timeout=2.0) as response:
+                    response.raise_for_status()
+                    payload = response.json()
+                if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+                    identity = dict(payload["runtime"])
+            except Exception:
+                identity = {}
+        else:
+            managed = _proc_details(adopted, cwd_hint=str(adopted.cwd or "").strip() or None)
+            expected_executable, expected_cwd, matches_active_slot = self._managed_runtime_slot_expectations(
+                manifest=active_slot_manifest(),
+                managed_executable=managed.get("managed_executable"),
+                managed_cwd=managed.get("managed_cwd"),
+            )
+            if matches_active_slot is not True:
+                _LOG.warning(
+                    "supervisor refused pre-ready runtime adoption slot=%s url=%s pid=%s expected_executable=%s "
+                    "actual_executable=%s expected_cwd=%s actual_cwd=%s",
+                    current_slot,
+                    runtime_url,
+                    listener_pid,
+                    expected_executable,
+                    managed.get("managed_executable"),
+                    expected_cwd,
+                    managed.get("managed_cwd"),
+                )
+                return False
+            persisted = _read_json(_supervisor_runtime_state_path())
+            try:
+                persisted_pid = int(persisted.get("managed_pid") or 0)
+            except Exception:
+                persisted_pid = 0
+            if persisted_pid == listener_pid:
+                identity = {
+                    "runtime_instance_id": persisted.get("runtime_instance_id"),
+                    "transition_role": persisted.get("transition_role"),
+                    "slot": persisted.get("managed_slot"),
+                }
+            _LOG.info(
+                "supervisor adopting slot-matched runtime listener before API readiness slot=%s url=%s pid=%s",
+                current_slot,
+                runtime_url,
+                listener_pid,
+            )
+        reported_slot = str(identity.get("slot") or "").strip().upper()
+        reported_role = str(identity.get("transition_role") or "active").strip().lower()
+        if reported_slot and current_slot and reported_slot != current_slot:
+            raise RuntimeError(
+                f"runtime listener on {runtime_url} reports slot {reported_slot}, expected {current_slot}"
+            )
+        if reported_role != "active":
+            raise RuntimeError(
+                f"runtime listener on {runtime_url} reports transition role {reported_role or 'unknown'}"
+            )
+        self._proc = adopted
+        self._managed_runtime_instance_id = str(identity.get("runtime_instance_id") or "").strip() or None
+        self._managed_transition_role = "active"
+        self._managed_slot = current_slot
+        self._managed_runtime_port = runtime_port
+        self._managed_runtime_base_url = runtime_url
+        self._managed_runtime_cwd = str(adopted.cwd or "").strip() or None
+        self._managed_start_reason = str(reason or "supervisor.adopt.active_listener")
+        self._last_start_at = float(getattr(adopted, "_created_at", time.time()))
+        self._last_error = None
+        self._runtime_unhealthy_since = None
+        self._runtime_unhealthy_kind = None
+        self._reset_memory_baseline_scope(managed_pid=listener_pid)
+        _LOG.info(
+            "supervisor adopted active runtime listener slot=%s url=%s pid=%s instance=%s",
+            current_slot,
+            runtime_url,
+            listener_pid,
+            self._managed_runtime_instance_id,
+        )
+        return True
+
+    async def _spawn_runtime_locked(
+        self,
+        *,
+        reason: str = "supervisor.start",
+        adopt_existing: bool = False,
+    ) -> None:
         if self._proc is not None and self._proc.poll() is None:
+            return
+        if adopt_existing and self._adopt_active_runtime_listener(reason="supervisor.adopt.active_listener"):
+            self._persist_runtime_state()
             return
         profile_mode = self._desired_memory_profile_mode()
         profile_session_id = str(self._memory_active_session_id or "").strip() or None
@@ -7207,10 +7528,23 @@ class SupervisorManager:
             return
         code_state = self._sidecar_code_state()
         repo_root = str(self._sidecar_repo_root() or "").strip() or None
-        self._sidecar_proc = await start_realtime_sidecar_subprocess(
-            role=self._sidecar_role(),
-            repo_root=repo_root,
-        )
+        existing = realtime_sidecar_listener_snapshot(role=self._sidecar_role())
+        listener_pid = existing.get("listener_pid")
+        listener_ready = False
+        if bool(existing.get("listener_running")) and listener_pid:
+            listener_ready = await probe_realtime_sidecar_ready(
+                host=str(existing.get("host") or "127.0.0.1"),
+                port=int(existing.get("port") or 0),
+                timeout_s=1.5,
+            )
+        if listener_ready:
+            self._sidecar_proc = _AdoptedProcess(int(listener_pid))
+            _LOG.info("supervisor adopted realtime sidecar listener pid=%s", listener_pid)
+        else:
+            self._sidecar_proc = await start_realtime_sidecar_subprocess(
+                role=self._sidecar_role(),
+                repo_root=repo_root,
+            )
         self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
         self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
         self._sidecar_code_fingerprint_updated_at = time.time() if self._sidecar_code_fingerprint else None
@@ -7270,7 +7604,7 @@ class SupervisorManager:
         async with self._lock:
             self._stopping = False
             self._desired_running = True
-            await self._spawn_runtime_locked(reason=reason)
+            await self._spawn_runtime_locked(reason=reason, adopt_existing=True)
 
     async def ensure_sidecar_started(self) -> dict[str, Any]:
         async with self._lock:
@@ -7281,12 +7615,12 @@ class SupervisorManager:
     async def _terminate_proc_locked(
         self,
         *,
-        proc: subprocess.Popen[Any] | None = None,
+        proc: Any | None,
         base_url: str | None = None,
         graceful: bool,
         reason: str,
+        lifecycle_scope: str = "subnet",
     ) -> None:
-        proc = proc or self._proc
         if proc is None:
             return
         if proc.poll() is not None:
@@ -7317,13 +7651,15 @@ class SupervisorManager:
                     profile_session_id or None,
                     getattr(proc, "pid", None),
                 )
-                response = requests.post(
+                response = await asyncio.to_thread(
+                    requests.post,
                     shutdown_url,
                     headers=headers,
                     json={
                         "reason": reason,
                         "drain_timeout_sec": float(drain_timeout_sec),
                         "signal_delay_sec": float(signal_delay_sec),
+                        "lifecycle_scope": str(lifecycle_scope or "subnet"),
                     },
                     timeout=_runtime_shutdown_request_timeout(
                         drain_timeout_sec=drain_timeout_sec,
@@ -7424,10 +7760,13 @@ class SupervisorManager:
         raise RuntimeError(self._last_error)
 
     async def _terminate_candidate_proc_locked(self, *, graceful: bool, reason: str) -> None:
+        candidate_proc = self._candidate_proc
+        if candidate_proc is None:
+            return
         candidate_slot = str(self._candidate_slot or "").strip().upper() or None
         candidate_base_url = self.slot_runtime_base_url(candidate_slot) if candidate_slot else None
         await self._terminate_proc_locked(
-            proc=self._candidate_proc,
+            proc=candidate_proc,
             base_url=candidate_base_url,
             graceful=graceful,
             reason=reason,
@@ -7440,13 +7779,57 @@ class SupervisorManager:
         self._candidate_runtime_cwd = None
         self._persist_runtime_state()
 
+    def _schedule_retired_runtime_stop(
+        self,
+        *,
+        proc: Any,
+        base_url: str,
+        reason: str,
+    ) -> asyncio.Task[Any]:
+        async def _retire() -> None:
+            try:
+                await self._terminate_proc_locked(
+                    proc=proc,
+                    base_url=base_url,
+                    graceful=True,
+                    reason=reason,
+                    lifecycle_scope="runtime_retire",
+                )
+            except Exception:
+                _LOG.warning(
+                    "failed to retire old active runtime after cutover reason=%s pid=%s",
+                    reason,
+                    getattr(proc, "pid", None),
+                    exc_info=True,
+                )
+
+        try:
+            retired_pid = int(getattr(proc, "pid", 0) or 0)
+        except Exception:
+            retired_pid = 0
+        if retired_pid > 0:
+            self._retired_runtime_procs[retired_pid] = proc
+        task = asyncio.create_task(
+            _retire(),
+            name=f"adaos-supervisor-retire-runtime-{getattr(proc, 'pid', 'unknown')}",
+        )
+        self._retired_runtime_tasks.add(task)
+
+        def _retire_done(done: asyncio.Task[Any]) -> None:
+            self._retired_runtime_tasks.discard(done)
+            if retired_pid > 0:
+                self._retired_runtime_procs.pop(retired_pid, None)
+
+        task.add_done_callback(_retire_done)
+        return task
+
     async def restart_runtime(self, *, reason: str = "supervisor.restart") -> dict[str, Any]:
         decision = self._transition_continuity_guard_decision(operation="restart")
         if decision is not None:
             self._raise_restart_continuity_block(decision)
         async with self._lock:
             self._desired_running = True
-            await self._terminate_proc_locked(graceful=True, reason=reason)
+            await self._terminate_proc_locked(proc=self._proc, graceful=True, reason=reason)
             self._last_stop_reason = str(reason or "supervisor.restart")
             await self._spawn_runtime_locked(reason=reason)
             self._restart_count += 1
@@ -7457,7 +7840,7 @@ class SupervisorManager:
         async with self._lock:
             self._desired_running = False
             self._stopping = True
-            await self._terminate_proc_locked(graceful=True, reason=reason)
+            await self._terminate_proc_locked(proc=self._proc, graceful=True, reason=reason)
             self._last_stop_reason = str(reason or "supervisor.stop")
             await self._terminate_candidate_proc_locked(graceful=True, reason=f"{reason}.candidate")
             self._persist_runtime_state()
@@ -7478,8 +7861,26 @@ class SupervisorManager:
             "process": payload.get("process"),
         }
 
-    async def restart_sidecar(self, *, reconnect_hub_root: bool = False) -> dict[str, Any]:
+    async def _reconnect_hub_root_after_sidecar_restart(self) -> dict[str, Any] | None:
+        if str(self._sidecar_role() or "").strip().lower() != "hub":
+            return None
+        try:
+            return await asyncio.to_thread(
+                self._runtime_request_json,
+                path="/api/node/hub-root/reconnect",
+                method="POST",
+                payload={},
+                timeout=5.0,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    async def restart_sidecar(self, *, reconnect_hub_root: bool = True) -> dict[str, Any]:
         async with self._lock:
+            # A validated slot may contain newer sidecar-controlled files than
+            # root. Sync before launch so one operator request produces one
+            # process generation and the monitor has nothing left to restart.
+            self._sync_sidecar_controlled_files_from_validated_slot()
             try:
                 new_proc, restart_result = await restart_realtime_sidecar_subprocess(
                     proc=self._sidecar_proc,
@@ -7507,16 +7908,8 @@ class SupervisorManager:
             self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
             self._persist_runtime_state()
         reconnect_result: dict[str, Any] | None = None
-        if reconnect_hub_root and str(self._sidecar_role() or "").strip().lower() == "hub":
-            try:
-                reconnect_result = self._runtime_request_json(
-                    path="/api/node/hub-root/reconnect",
-                    method="POST",
-                    payload={},
-                    timeout=5.0,
-                )
-            except Exception as exc:
-                reconnect_result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if reconnect_hub_root:
+            reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
         return {
             "ok": True,
             "restart": restart_result,
@@ -7754,11 +8147,12 @@ class SupervisorManager:
         if self.token:
             headers["X-AdaOS-Token"] = self.token
         candidate_base_url = self.slot_runtime_base_url(resolved_slot)
-        response = requests.post(
+        response = await asyncio.to_thread(
+            requests.post,
             candidate_base_url + "/api/admin/runtime/promote-active",
             headers=headers,
             json={"reason": reason, "reconnect_hub_root": True},
-            timeout=15.0,
+            timeout=20.0,
         )
         response.raise_for_status()
         payload = response.json()
@@ -7768,6 +8162,11 @@ class SupervisorManager:
         promoted_role = str(runtime.get("transition_role") or "").strip().lower()
         if promoted_role != "active":
             raise RuntimeError("candidate runtime did not report active role after promotion")
+        reconnect = payload.get("reconnect") if isinstance(payload.get("reconnect"), dict) else {}
+        authority = reconnect.get("authority") if isinstance(reconnect.get("authority"), dict) else {}
+        authority_required = authority.get("required") is not False
+        if not bool(reconnect.get("ok")) or (authority_required and authority.get("ready") is not True):
+            raise RuntimeError("candidate runtime did not acquire hub-root route authority")
         promoted_instance_id = str(runtime.get("runtime_instance_id") or self._candidate_runtime_instance_id or "").strip() or None
         async with self._lock:
             proc = self._candidate_proc
@@ -7794,6 +8193,7 @@ class SupervisorManager:
     async def monitor_forever(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            reconnect_hub_root_after_sidecar_restart = False
             sidecar_proc = self._sidecar_proc
             if sidecar_proc is not None and sidecar_proc.poll() is not None:
                 self._sidecar_last_restart_reason = "supervisor.sidecar.exited"
@@ -7863,15 +8263,35 @@ class SupervisorManager:
                             if self._desired_running and not self._stopping:
                                 async with self._lock:
                                     if self._proc is None and self._desired_running and not self._stopping:
-                                        await self._spawn_runtime_locked(reason="supervisor.monitor.ensure_running")
+                                        await self._spawn_runtime_locked(
+                                            reason="supervisor.monitor.ensure_running",
+                                            adopt_existing=True,
+                                        )
                             continue
                     try:
                         async with self._lock:
-                            if self._stopping:
+                            stale_code_restart = False
+                            if restart_reason in {
+                                "supervisor.sidecar.validated_slot_sync",
+                                "supervisor.sidecar.code_changed",
+                            }:
+                                refreshed_code_state = self._sidecar_code_state()
+                                refreshed_fingerprint = (
+                                    str(refreshed_code_state.get("fingerprint") or "").strip() or None
+                                )
+                                stale_code_restart = bool(
+                                    refreshed_fingerprint
+                                    and refreshed_fingerprint == self._sidecar_code_fingerprint
+                                )
+                                if stale_code_restart:
+                                    self._sidecar_code_change_pending_fingerprint = None
+                                    self._sidecar_code_change_pending_since = None
+                            if self._stopping or stale_code_restart:
                                 pass
                             elif self._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
                                 self._sidecar_last_restart_reason = restart_reason
                                 await self._spawn_sidecar_locked(reason=restart_reason)
+                                reconnect_hub_root_after_sidecar_restart = True
                             else:
                                 self._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
                                 new_proc, restart_result = await restart_realtime_sidecar_subprocess(
@@ -7891,8 +8311,16 @@ class SupervisorManager:
                                 self._sidecar_consecutive_probe_failures = 0
                                 self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
                                 self._persist_runtime_state()
+                                reconnect_hub_root_after_sidecar_restart = True
                     except Exception:
                         _LOG.warning("failed to restart adaos-realtime sidecar", exc_info=True)
+                if reconnect_hub_root_after_sidecar_restart:
+                    reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
+                    if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
+                        _LOG.warning(
+                            "failed to reconnect hub-root after sidecar restart: %s",
+                            reconnect_result.get("error") or reconnect_result,
+                        )
             await self._maybe_resume_or_continue_transition()
             candidate_proc = self._candidate_proc
             if candidate_proc is not None:
@@ -7912,7 +8340,10 @@ class SupervisorManager:
                 if self._desired_running and not self._stopping:
                     async with self._lock:
                         if self._proc is None and self._desired_running and not self._stopping:
-                            await self._spawn_runtime_locked(reason="supervisor.monitor.ensure_running")
+                            await self._spawn_runtime_locked(
+                                reason="supervisor.monitor.ensure_running",
+                                adopt_existing=True,
+                            )
                 continue
             rc = proc.poll()
             if rc is None:
@@ -8022,7 +8453,10 @@ class SupervisorManager:
             async with self._lock:
                 if self._proc is None and self._desired_running and not self._stopping:
                     await asyncio.sleep(1.0)
-                    await self._spawn_runtime_locked(reason="supervisor.monitor.respawn_after_exit")
+                    await self._spawn_runtime_locked(
+                        reason="supervisor.monitor.respawn_after_exit",
+                        adopt_existing=True,
+                    )
 
     async def start(self) -> None:
         try:
@@ -8043,6 +8477,20 @@ class SupervisorManager:
             self._monitor_task.cancel()
             with contextlib.suppress(BaseException):
                 await self._monitor_task
+        preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
+        if preserve_managed_children:
+            reaper = self._schedule_managed_handoff_reaper()
+            retired_cleanup = self._schedule_retired_runtime_cleanup()
+            _LOG.info(
+                "supervisor restart handoff preserving runtime pid=%s and sidecar pid=%s reaper=%s "
+                "retired_cleanup=%s",
+                getattr(self._proc, "pid", None),
+                getattr(self._sidecar_proc, "pid", None),
+                reaper,
+                retired_cleanup,
+            )
+            self._persist_runtime_state()
+            return
         async with self._lock:
             await self._terminate_candidate_proc_locked(graceful=True, reason="supervisor.shutdown.candidate")
         await self.stop(reason="supervisor.shutdown")
@@ -9296,10 +9744,9 @@ class SupervisorManager:
                     candidate_launch_state = "promoted_to_active"
                     candidate_launch_message = "passive candidate runtime promoted to active via warm-switch cutover"
                     if old_active_proc is not None and old_active_proc.poll() is None:
-                        await self._terminate_proc_locked(
+                        self._schedule_retired_runtime_stop(
                             proc=old_active_proc,
                             base_url=old_active_url,
-                            graceful=True,
                             reason="supervisor.fast_cutover.old_active_stop",
                         )
                     write_core_update_status(
@@ -10082,7 +10529,9 @@ async def supervisor_runtime_candidate_stop(payload: dict[str, Any]) -> dict[str
 
 @app.post("/api/supervisor/sidecar/restart", dependencies=[Depends(require_token)])
 async def supervisor_sidecar_restart(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().restart_sidecar(reconnect_hub_root=bool(payload.get("reconnect_hub_root")))
+    return await _manager().restart_sidecar(
+        reconnect_hub_root=bool(payload.get("reconnect_hub_root", True))
+    )
 
 
 @app.get("/api/supervisor/update/status", dependencies=[Depends(require_token)])

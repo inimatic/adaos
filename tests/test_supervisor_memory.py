@@ -1145,12 +1145,19 @@ def test_supervisor_profile_mode_shutdown_uses_extended_grace(monkeypatch, tmp_p
     proc = _Proc()
     manager._proc = proc
 
-    asyncio.run(manager._terminate_proc_locked(graceful=True, reason="supervisor.runtime.listener_lost"))
+    asyncio.run(
+        manager._terminate_proc_locked(
+            proc=proc,
+            graceful=True,
+            reason="supervisor.runtime.listener_lost",
+        )
+    )
 
     assert captured["json"] == {
         "reason": "supervisor.runtime.listener_lost",
         "drain_timeout_sec": 20.0,
         "signal_delay_sec": 1.0,
+        "lifecycle_scope": "subnet",
     }
     assert captured["timeout"] == 23.0
     assert sleeps

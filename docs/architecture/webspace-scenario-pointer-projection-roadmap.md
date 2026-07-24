@@ -668,6 +668,16 @@ scenario. The overlay has a short TTL, never mutates or republishes the local
 YDoc, and does not upgrade live state-sync health; it is recovery containment,
 not a second collaborative source of truth.
 
+The browser now checks that authoritative render snapshot immediately after a
+scenario command acknowledgement. It no longer serializes a fixed 1.6-second
+delay, a five-second local-materialization poll, and only then the render
+snapshot fallback. That old sequence made a completed sub-200 ms backend
+switch appear as a repeatable 6.6-7 second UI transition whenever the local
+materialization predicate lagged behind the acknowledged projection. A stale
+but connected local provider is repaired in the background after the
+authoritative render becomes available; a disconnected provider still uses
+the blocking resync recovery path.
+
 Current rollback guidance if pointer-only switch regresses runtime behavior:
 
 - if `ui.current_scenario` flips before the visible projection, first verify
@@ -1095,6 +1105,10 @@ Changes validated in this slice:
   `ADAOS_WEBSPACE_SCENARIO_SWITCH_BACKGROUND_ROUTE_YIELD_S` (default runtime
   value: `0.02`). This lets the API response leave the route before the
   background rebuild monopolizes the event loop.
+- Voice-chat snapshot recovery and history paging now cross the blocking
+  conversation-ledger boundary in worker threads. Browser subscription bursts
+  can overlap a scenario rebuild without serializing SQLite work on the event
+  loop.
 - Live materialized payload apply now uses one Yjs transaction for the payload
   path while regular rebuild keeps the older two-phase behavior.
 - Successful materialized payload apply can use a synthetic ready snapshot via

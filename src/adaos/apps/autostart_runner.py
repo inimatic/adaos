@@ -91,6 +91,11 @@ def _skip_pending_update_requested() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _supervisor_owns_runtime_lifecycle() -> bool:
+    raw = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _prepared_restart_manifest_wait_timeout_sec() -> float:
     try:
         return max(0.0, float(str(os.getenv("ADAOS_PREPARED_RESTART_MANIFEST_WAIT_SEC") or "20").strip() or "20"))
@@ -1271,8 +1276,16 @@ def main() -> None:
         advertised_base = _advertise_base(host, port)
         os.environ["ADAOS_AUTOSTART_MODE"] = "1"
         os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = "autostart_runner"
-        phase = "stop_previous_server"
-        _stop_previous_server(host, port)
+        if _supervisor_owns_runtime_lifecycle():
+            phase = "supervisor_owned_bind"
+            _LOG.info(
+                "supervisor owns runtime listener handoff; skipping self-directed takeover host=%s port=%s",
+                host,
+                port,
+            )
+        else:
+            phase = "stop_previous_server"
+            _stop_previous_server(host, port)
         phase = "write_pidfile"
         pidfile = _pidfile_path(host, port)
         _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner="autostart")

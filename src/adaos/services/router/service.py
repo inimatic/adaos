@@ -3578,7 +3578,8 @@ class RouterService:
             ledger_projection: dict[str, Any] = {}
             ledger_messages: list[dict[str, Any]] = []
             try:
-                recovered = conversation_store.recover_projection_from_store(
+                recovered = await asyncio.to_thread(
+                    conversation_store.recover_projection_from_store,
                     current if isinstance(current, dict) else {},
                     conversation_id=resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
@@ -3690,7 +3691,8 @@ class RouterService:
                         _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
                     return
             try:
-                projection = ledger_projection or conversation_store.recover_projection_from_store(
+                projection = ledger_projection or await asyncio.to_thread(
+                    conversation_store.recover_projection_from_store,
                     current if isinstance(current, dict) else {},
                     conversation_id=resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
@@ -3784,7 +3786,8 @@ class RouterService:
             if not resolved_topic_id:
                 resolved_topic_id = _voice_chat_topic_id_from_sources(cached if isinstance(cached, dict) else {}, *cached_messages)
             try:
-                projection = conversation_store.list_projection(
+                projection = await asyncio.to_thread(
+                    conversation_store.list_projection,
                     resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
                     before_cursor=before_cursor,

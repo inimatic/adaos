@@ -65,7 +65,6 @@ data_routes:
         projections = _Projections()
 
     loader = ImportlibSkillsLoader()
-    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda root: None)
 
     def _assert_declarations_precede_handler(_handler: Path) -> None:
         assert loaded_entries
@@ -106,7 +105,6 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
 
     loader = ImportlibSkillsLoader()
     monkeypatch.setattr(loader, "_sync_runtime_from_repo_workspace_if_missing", lambda root: None)
-    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda root: None)
     warnings: list[str] = []
     projection_loads: list[Path] = []
 
@@ -199,3 +197,29 @@ def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> Non
         sys.modules.pop(mod_name, None)
         if hasattr(builtins, "_adaos_reload_import_counter"):
             delattr(builtins, "_adaos_reload_import_counter")
+
+
+def test_runtime_source_sync_is_explicit_and_never_runs_in_candidate(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(
+        loader,
+        "_sync_runtime_from_repo_workspace_if_missing",
+        lambda _root: calls.append("repo"),
+    )
+    monkeypatch.setattr(loader, "_sync_runtime_from_workspace", lambda _root: calls.append("workspace"))
+    monkeypatch.delenv("ADAOS_SKILL_RUNTIME_SOURCE_SYNC", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_TRANSITION_ROLE", raising=False)
+    assert ImportlibSkillsLoader._runtime_source_sync_enabled() is False
+    asyncio.run(loader.import_all_handlers(tmp_path))
+    assert calls == []
+
+    monkeypatch.setenv("ADAOS_SKILL_RUNTIME_SOURCE_SYNC", "1")
+    assert ImportlibSkillsLoader._runtime_source_sync_enabled() is True
+    asyncio.run(loader.import_all_handlers(tmp_path))
+    assert calls == ["repo", "workspace"]
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    assert ImportlibSkillsLoader._runtime_source_sync_enabled() is False
+    asyncio.run(loader.import_all_handlers(tmp_path))
+    assert calls == ["repo", "workspace"]

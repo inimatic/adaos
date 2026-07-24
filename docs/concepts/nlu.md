@@ -383,8 +383,12 @@ dispatched through AdaOS after phrase-check evidence confirms that the applied
 template returns the planned intent. User corrections such as "no, that is not
 it" are linked back to the previous candidate and start another teacher cycle.
 
-Teacher state is projected into YJS under `data.nlu_teacher.*` for UI inspection, and also persisted on disk
-under `.adaos/state/skills/nlu_teacher/<webspace_id>.json` so it survives YJS reload/reset.
+Teacher operational state is projected into YJS under
+`data.nlu_teacher.*` for UI inspection and persisted as a bounded recovery
+projection under `.adaos/state/skills/nlu_teacher/<webspace_id>.json`. The
+node-local Teacher conversation ledger owns full event and LLM-log history;
+older data is loaded through the paged Teacher history API. Upgrades backfill
+the legacy disk/YJS rows into that ledger before applying projection limits.
 
 ## Web UI: NLU Teacher
 

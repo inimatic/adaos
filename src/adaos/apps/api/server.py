@@ -160,7 +160,7 @@ import logging
 import platform, time
 import signal
 import sys
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 def _maybe_set_windows_selector_loop() -> None:
@@ -439,6 +439,10 @@ async def _emit_shutdown_event(event_type: str, payload: dict[str, Any], *, drai
 async def _request_process_shutdown(delay_sec: float = _DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC) -> None:
     await asyncio.sleep(max(0.0, float(delay_sec)))
     signal.raise_signal(signal.SIGINT)
+
+
+def _shutdown_emits_subnet_lifecycle(app: FastAPI) -> bool:
+    return str(getattr(app.state, "shutdown_lifecycle_scope", "subnet") or "subnet") != "runtime_retire"
 
 
 async def _run_core_update_shutdown(app: FastAPI, *, reason: str, drain_timeout_sec: float, signal_delay_sec: float) -> None:
@@ -760,6 +764,7 @@ async def lifespan(app: FastAPI):
         app.state.shutdown_requested = False
         app.state.shutdown_reason = "signal"
         app.state.shutdown_drain_timeout = _DEFAULT_SHUTDOWN_DRAIN_SEC
+        app.state.shutdown_lifecycle_scope = "subnet"
         app.state.shutdown_stopping_emitted = False
         reset_runtime_lifecycle()
         app.state.core_update_task = None
@@ -1134,7 +1139,10 @@ async def lifespan(app: FastAPI):
             app.state.runtime_event_loop_lag_task = None
         try:
             conf = get_ctx().config
-            if not getattr(app.state, "shutdown_stopping_emitted", False):
+            if (
+                _shutdown_emits_subnet_lifecycle(app)
+                and not getattr(app.state, "shutdown_stopping_emitted", False)
+            ):
                 await _emit_shutdown_event(
                     "subnet.stopping",
                     {
@@ -1154,7 +1162,11 @@ async def lifespan(app: FastAPI):
             pass
         # On graceful shutdown, notify Telegram and UI if enabled
         try:
-            if tg_enabled and str(getattr(app.state, "shutdown_reason", "signal") or "signal") != "cli.restart":
+            if (
+                _shutdown_emits_subnet_lifecycle(app)
+                and tg_enabled
+                and str(getattr(app.state, "shutdown_reason", "signal") or "signal") != "cli.restart"
+            ):
                 conf = get_ctx().config
                 ctx = _get_ctx()
                 api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
@@ -1200,15 +1212,16 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         try:
-            conf = get_ctx().config
-            await _emit_shutdown_event(
-                "subnet.stopped",
-                {
-                    "subnet_id": conf.subnet_id,
-                    "reason": getattr(app.state, "shutdown_reason", "signal"),
-                },
-                drain_timeout=float(getattr(app.state, "shutdown_drain_timeout", _DEFAULT_SHUTDOWN_DRAIN_SEC)),
-            )
+            if _shutdown_emits_subnet_lifecycle(app):
+                conf = get_ctx().config
+                await _emit_shutdown_event(
+                    "subnet.stopped",
+                    {
+                        "subnet_id": conf.subnet_id,
+                        "reason": getattr(app.state, "shutdown_reason", "signal"),
+                    },
+                    drain_timeout=float(getattr(app.state, "shutdown_drain_timeout", _DEFAULT_SHUTDOWN_DRAIN_SEC)),
+                )
         except Exception:
             pass
         try:
@@ -1317,6 +1330,7 @@ class ShutdownRequest(BaseModel):
     reason: str = Field(default="cli.stop", min_length=1, max_length=128)
     drain_timeout_sec: float = Field(default=_DEFAULT_SHUTDOWN_DRAIN_SEC, ge=0.0, le=30.0)
     signal_delay_sec: float = Field(default=_DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC, ge=0.0, le=5.0)
+    lifecycle_scope: Literal["subnet", "runtime_retire"] = "subnet"
 
 
 class ShutdownResponse(BaseModel):
@@ -1477,6 +1491,7 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
     app.state.shutdown_requested = True
     app.state.shutdown_reason = body.reason
     app.state.shutdown_drain_timeout = float(body.drain_timeout_sec)
+    app.state.shutdown_lifecycle_scope = body.lifecycle_scope
     profile_mode = str(os.getenv("ADAOS_SUPERVISOR_PROFILE_MODE") or "normal").strip().lower()
     shutdown_debug_payload: dict[str, Any] = {
         "entered_at": time.time(),
@@ -1519,15 +1534,21 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
                 "runtime memory profile finalize during admin shutdown did not complete result=%s",
                 finish_result,
             )
-    stopping_payload = {
-        "subnet_id": conf.subnet_id,
-        "reason": body.reason,
-    }
-    await _emit_shutdown_event(
-        "subnet.stopping",
-        stopping_payload,
-        drain_timeout=body.drain_timeout_sec,
-    )
+    if _shutdown_emits_subnet_lifecycle(app):
+        stopping_payload = {
+            "subnet_id": conf.subnet_id,
+            "reason": body.reason,
+        }
+        await _emit_shutdown_event(
+            "subnet.stopping",
+            stopping_payload,
+            drain_timeout=body.drain_timeout_sec,
+        )
+    else:
+        _runtime_log.info(
+            "runtime-scoped shutdown skips subnet lifecycle events reason=%s",
+            body.reason,
+        )
     app.state.shutdown_stopping_emitted = True
     background.add_task(_request_process_shutdown, body.signal_delay_sec)
     return ShutdownResponse(
@@ -1858,13 +1879,56 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             "reconnect": None,
         }
 
+    handoff_unit: dict[str, Any] | None = None
+    try:
+        from adaos.services.autostart import ensure_linux_process_handoff_unit
+
+        handoff_unit = ensure_linux_process_handoff_unit()
+    except Exception as exc:
+        handoff_unit = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+    if (
+        sys.platform.startswith("linux")
+        and _truthy_value(os.getenv("ADAOS_AUTOSTART_MANAGED"))
+        and not bool((handoff_unit or {}).get("ok"))
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "error": "supervisor_handoff_unit_unavailable",
+                "handoff_unit": handoff_unit,
+            },
+        )
     os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = "active"
     reconnect_result: dict[str, Any] | None = None
     if bool(body.reconnect_hub_root):
         try:
-            reconnect_result = await request_hub_root_reconnect()
+            node_role = str(getattr(get_ctx().config, "role", "hub") or "hub").strip().lower()
+        except Exception:
+            node_role = "hub"
+        hub_root_authority_required = node_role == "hub"
+        try:
+            reconnect_result = await request_hub_root_reconnect(
+                wait_for_authority=hub_root_authority_required
+            )
         except Exception as exc:
             reconnect_result = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+        authority = (
+            reconnect_result.get("authority")
+            if isinstance(reconnect_result, dict) and isinstance(reconnect_result.get("authority"), dict)
+            else {}
+        )
+        if not bool((reconnect_result or {}).get("ok")) or (
+            hub_root_authority_required and authority.get("ready") is not True
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "ok": False,
+                    "error": "hub_root_authority_not_ready",
+                    "reconnect": reconnect_result,
+                },
+            )
     service_start = _schedule_promoted_runtime_service_start(body.reason)
     return {
         "ok": True,
@@ -1874,6 +1938,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         "runtime": _runtime_identity_public_payload(),
         "reconnect": reconnect_result,
         "service_start": service_start,
+        "supervisor_handoff_unit": handoff_unit,
     }
 
 
