@@ -68,6 +68,29 @@ def test_package_digest_changes_with_content(tmp_path: Path) -> None:
     assert first.ref.manifest_digest != second.ref.manifest_digest
 
 
+def test_package_accepts_zero_byte_files(tmp_path: Path) -> None:
+    artifact = tmp_path / "empty-file-skill"
+    artifact.mkdir()
+    (artifact / "skill.yaml").write_text(
+        "name: empty_file_skill\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (artifact / "builder_system_prompt.md").write_bytes(b"")
+
+    built = build_artifact_package(artifact, kind="skill", source_ref=_source())
+    verified = verify_artifact_package(
+        built.archive_bytes,
+        expected_digest=built.ref.digest,
+    )
+
+    record = next(
+        item
+        for item in verified.package_manifest["files"]
+        if item["path"] == "builder_system_prompt.md"
+    )
+    assert record["size"] == 0
+
+
 def test_package_verifier_rejects_traversal_and_symlink_entries() -> None:
     traversal = io.BytesIO()
     with zipfile.ZipFile(traversal, "w") as archive:
@@ -120,4 +143,3 @@ def test_store_quarantines_corrupt_existing_package(tmp_path: Path) -> None:
 
     assert not package_path.exists()
     assert list((tmp_path / "packages" / "quarantine").glob("*.verification-failed.*.zip"))
-

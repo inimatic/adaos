@@ -53,6 +53,7 @@ from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
     RemoteReleaseRepository,
+    build_artifact_package,
 )
 
 from cryptography import x509
@@ -2578,121 +2579,238 @@ class RootDeveloperService:
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
         self._validate_artifact_preflight(kind, name, source)
-        source_payload = self._manifest_payload(source, kind)
-        source_data = source_payload[1] if source_payload else {}
-        publish_bump_index = (
-            bump_index(
-                effective_skill_bump(
-                    source_data,
-                    "patch",
-                    has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
-                )
-            )
-            if kind == "skills"
-            else bump_index("patch")
-        )
-        manifest_meta = self._update_manifest(
-            kind,
-            source,
-            name,
-            None,
-            version_bump_index=publish_bump_index,
-            set_prototype=False,
-        )
-        if kind == "scenarios":
-            _sync_scenario_content_metadata(source, name, manifest_meta)
-        try:
-            upsert_workspace_registry_entry(
-                workspace,
-                kind,
-                source,
-                version=(manifest_meta or {}).get("version"),
-                updated_at=(manifest_meta or {}).get("updated_at"),
-                extra={
-                    "publisher": {
-                        "owner_id": owner_id,
-                        "node_id": cfg.node_settings.id or cfg.node_id,
-                    }
-                },
-            )
-        except Exception:
-            _log.debug("failed to update local workspace registry after push kind=%s name=%s", kind, name, exc_info=True)
-        archive_bytes = create_zip_bytes(source)
-        archive_b64 = archive_bytes_to_b64(archive_bytes)
-        digest = hashlib.sha256(archive_bytes).hexdigest()
+        commit_message = _normalize_draft_commit_message(message)
+        commit_metadata = _normalize_draft_metadata(metadata)
+        change_id = str(commit_metadata.get("change_id") or "").strip()
+        publication = self._artifact_publication_service(cfg)
         cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
-        commit_message = _normalize_draft_commit_message(message)
-        commit_metadata = _normalize_draft_metadata(metadata)
-        if kind == "skills":
-            response = client.push_skill_draft(
+
+        def result_from_checkpoint(
+            *,
+            source_ref: ArtifactSourceRef,
+            stored_path: str,
+            pushed_source: Any,
+            response_metadata: Mapping[str, Any],
+            archive_bytes: bytes,
+        ) -> ArtifactPushResult:
+            _, version, updated_at = self._artifact_manifest_info(source, kind)
+            return ArtifactPushResult(
+                kind=kind.rstrip("s"),
                 name=name,
-                archive_b64=archive_b64,
-                node_id=node_id,
-                verify=verify,
-                cert=(cert_path, key_path),
-                sha256=digest,
+                stored_path=stored_path,
+                sha256=hashlib.sha256(archive_bytes).hexdigest(),
+                bytes_uploaded=len(archive_bytes),
+                version=version,
+                updated_at=updated_at,
+                commit=source_ref.revision,
                 message=commit_message,
-                metadata=commit_metadata,
+                metadata=_normalize_draft_metadata(response_metadata),
+                package_digest=pushed_source.package.digest,
+                source_revision=source_ref.revision,
             )
-        else:
-            response = client.push_scenario_draft(
-                name=name,
-                archive_b64=archive_b64,
-                node_id=node_id,
-                verify=verify,
-                cert=(cert_path, key_path),
-                sha256=digest,
-                message=commit_message,
-                metadata=commit_metadata,
-            )
-        stored = response.get("stored_path")
-        if not isinstance(stored, str) or not stored:
-            raise RootServiceError("Root did not return stored_path")
-        commit = str(response.get("commit") or "").strip()
-        if not commit:
-            raise RootServiceError("Root stored the draft archive but did not confirm a Forge commit")
-        response_metadata = _normalize_draft_metadata(
-            response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
-        )
-        if commit_metadata and response_metadata != commit_metadata:
-            raise RootServiceError("Root returned stale Forge commit metadata for the draft archive")
-        source_ref = ArtifactSourceRef(
-            forge="adaos-root",
-            repository=str(getattr(cfg.dev_settings, "forge_repo", None) or "inimatic/adaos-registry"),
-            revision=commit,
-            path_scope=(stored.rstrip("/") + "/",),
-        )
-        pushed_source = self._artifact_publication_service(cfg).record_push(
-            kind=kind.rstrip("s"),
-            artifact_id=name,
-            artifact_dir=source,
-            source_ref=source_ref,
-            change_ids=tuple(
-                item
-                for item in (
-                    str(commit_metadata.get("change_id") or "").strip(),
+
+        if change_id and publication.pushed_source_path(kind.rstrip("s"), name).is_file():
+            recorded = publication.load_pushed_source(kind.rstrip("s"), name)
+            if change_id in recorded.change_ids:
+                try:
+                    publication.verify_pushed_source(recorded, source)
+                except Exception as exc:
+                    raise RootServiceError(
+                        f"checkpoint id {change_id} was already used for different content"
+                    ) from exc
+                archive_bytes = create_zip_bytes(source)
+                stored_path = str(recorded.source_ref.path_scope[0]).rstrip("/")
+                return result_from_checkpoint(
+                    source_ref=recorded.source_ref,
+                    stored_path=stored_path,
+                    pushed_source=recorded,
+                    response_metadata=commit_metadata,
+                    archive_bytes=archive_bytes,
                 )
-                if item
-            ),
-        )
-        return ArtifactPushResult(
-            kind=kind.rstrip("s"),
-            name=name,
-            stored_path=stored,
-            sha256=digest,
-            bytes_uploaded=len(archive_bytes),
-            version=(manifest_meta or {}).get("version"),
-            updated_at=(manifest_meta or {}).get("updated_at"),
-            commit=commit,
-            message=commit_message,
-            metadata=_normalize_draft_metadata(
-                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else commit_metadata
-            ),
-            package_digest=pushed_source.package.digest,
-            source_revision=source_ref.revision,
-        )
+
+        if change_id:
+            try:
+                draft_info = client.get_draft_info(
+                    kind=kind,
+                    name=name,
+                    node_id=node_id,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                )
+            except Exception:
+                draft_info = {}
+            draft_metadata = _normalize_draft_metadata(
+                draft_info.get("metadata") if isinstance(draft_info.get("metadata"), Mapping) else {}
+            )
+            if str(draft_metadata.get("change_id") or "").strip() == change_id:
+                archive_bytes = create_zip_bytes(source)
+                digest = hashlib.sha256(archive_bytes).hexdigest()
+                expected_digest = str(draft_info.get("sha256") or "").strip().lower()
+                if expected_digest and expected_digest != digest:
+                    raise RootServiceError(
+                        f"checkpoint id {change_id} was already used for different content"
+                    )
+                stored = str(draft_info.get("stored_path") or "").strip()
+                commit = str(draft_info.get("commit") or "").strip()
+                if not stored or not commit:
+                    raise RootServiceError("Root checkpoint receipt is incomplete")
+                source_ref = ArtifactSourceRef(
+                    forge="adaos-root",
+                    repository=str(
+                        getattr(cfg.dev_settings, "forge_repo", None)
+                        or "inimatic/adaos-registry"
+                    ),
+                    revision=commit,
+                    path_scope=(stored.rstrip("/") + "/",),
+                )
+                pushed_source = publication.record_push(
+                    kind=kind.rstrip("s"),
+                    artifact_id=name,
+                    artifact_dir=source,
+                    source_ref=source_ref,
+                    change_ids=(change_id,),
+                )
+                return result_from_checkpoint(
+                    source_ref=source_ref,
+                    stored_path=stored,
+                    pushed_source=pushed_source,
+                    response_metadata=draft_metadata,
+                    archive_bytes=archive_bytes,
+                )
+
+        rollback_paths = [
+            source / ("skill.yaml" if kind == "skills" else "scenario.yaml"),
+            workspace / "registry.json",
+        ]
+        if kind == "scenarios":
+            rollback_paths.append(source / "scenario.json")
+        snapshots = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in rollback_paths
+        }
+        remote_committed = False
+        try:
+            source_payload = self._manifest_payload(source, kind)
+            source_data = source_payload[1] if source_payload else {}
+            publish_bump_index = (
+                bump_index(
+                    effective_skill_bump(
+                        source_data,
+                        "patch",
+                        has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+                    )
+                )
+                if kind == "skills"
+                else bump_index("patch")
+            )
+            manifest_meta = self._update_manifest(
+                kind,
+                source,
+                name,
+                None,
+                version_bump_index=publish_bump_index,
+                set_prototype=False,
+            )
+            if kind == "scenarios":
+                _sync_scenario_content_metadata(source, name, manifest_meta)
+
+            build_artifact_package(
+                source,
+                kind=kind.rstrip("s"),  # type: ignore[arg-type]
+                source_ref=ArtifactSourceRef(
+                    forge="checkpoint-preflight",
+                    repository="local-dev",
+                    revision="0" * 40,
+                    path_scope=(f"{kind}/{name}/",),
+                ),
+            )
+            try:
+                upsert_workspace_registry_entry(
+                    workspace,
+                    kind,
+                    source,
+                    version=(manifest_meta or {}).get("version"),
+                    updated_at=(manifest_meta or {}).get("updated_at"),
+                    extra={
+                        "publisher": {
+                            "owner_id": owner_id,
+                            "node_id": node_id,
+                        }
+                    },
+                )
+            except Exception:
+                _log.debug(
+                    "failed to update local workspace registry after push kind=%s name=%s",
+                    kind,
+                    name,
+                    exc_info=True,
+                )
+            archive_bytes = create_zip_bytes(source)
+            archive_b64 = archive_bytes_to_b64(archive_bytes)
+            digest = hashlib.sha256(archive_bytes).hexdigest()
+            push_method = (
+                client.push_skill_draft if kind == "skills" else client.push_scenario_draft
+            )
+            response = push_method(
+                name=name,
+                archive_b64=archive_b64,
+                node_id=node_id,
+                verify=verify,
+                cert=(cert_path, key_path),
+                sha256=digest,
+                message=commit_message,
+                metadata=commit_metadata,
+            )
+            remote_committed = True
+            stored = str(response.get("stored_path") or "").strip()
+            commit = str(response.get("commit") or "").strip()
+            if not stored:
+                raise RootServiceError("Root did not return stored_path")
+            if not commit:
+                raise RootServiceError(
+                    "Root stored the draft archive but did not confirm a Forge commit"
+                )
+            response_metadata = _normalize_draft_metadata(
+                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            )
+            if commit_metadata and response_metadata != commit_metadata:
+                raise RootServiceError("Root returned stale Forge commit metadata for the draft archive")
+            source_ref = ArtifactSourceRef(
+                forge="adaos-root",
+                repository=str(
+                    getattr(cfg.dev_settings, "forge_repo", None)
+                    or "inimatic/adaos-registry"
+                ),
+                revision=commit,
+                path_scope=(stored.rstrip("/") + "/",),
+            )
+            pushed_source = publication.record_push(
+                kind=kind.rstrip("s"),
+                artifact_id=name,
+                artifact_dir=source,
+                source_ref=source_ref,
+                change_ids=(change_id,) if change_id else (),
+            )
+            return result_from_checkpoint(
+                source_ref=source_ref,
+                stored_path=stored,
+                pushed_source=pushed_source,
+                response_metadata=response_metadata or commit_metadata,
+                archive_bytes=archive_bytes,
+            )
+        except Exception:
+            if not remote_committed:
+                for path, content in snapshots.items():
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        temporary = path.with_name(f".{path.name}.rollback-{uuid4().hex}")
+                        temporary.write_bytes(content)
+                        os.replace(temporary, path)
+            raise
 
     def _update_artifact(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"], name: str) -> ArtifactUpdateResult:
         assert_safe_name(name)

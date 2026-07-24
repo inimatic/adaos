@@ -401,6 +401,8 @@ class BuilderWorkspaceService:
             "commit": getattr(result, "commit", None),
             "message": getattr(result, "message", None) or " ".join(str(message or "").split()).strip() or None,
             "metadata": dict(getattr(result, "metadata", None) or metadata or {}),
+            "package_digest": getattr(result, "package_digest", None),
+            "source_revision": getattr(result, "source_revision", None),
         }
 
     def create_draft(

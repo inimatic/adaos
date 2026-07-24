@@ -222,6 +222,11 @@ def build_artifact_package(
     if len(archive_bytes) > limits.max_archive_bytes:
         raise PackageBuildError(f"package exceeds archive size limit {limits.max_archive_bytes}")
     package_digest = sha256_digest(archive_bytes)
+    verify_artifact_package(
+        archive_bytes,
+        expected_digest=package_digest,
+        limits=limits,
+    )
     try:
         ref = ArtifactPackageRef(
             kind=kind,
@@ -316,7 +321,8 @@ def verify_artifact_package(
             raise PackageVerificationError(f"package file set mismatch: missing={missing} extra={extra}")
         for name, record in expected_files.items():
             raw = archive.read(name)
-            if int(record.get("size") or -1) != len(raw):
+            recorded_size = record.get("size")
+            if recorded_size is None or int(recorded_size) != len(raw):
                 raise PackageVerificationError(f"package file size mismatch: {name}")
             expected_file_digest = str(record.get("digest") or "").strip().lower()
             if sha256_digest(raw) != expected_file_digest:

@@ -206,6 +206,15 @@ class ArtifactPublicationService:
             )
         return current
 
+    def verify_pushed_source(
+        self,
+        record: PushedSourceRecord,
+        artifact_dir: Path,
+    ) -> BuiltArtifactPackage:
+        """Verify that a recorded checkpoint still matches its DEV source."""
+
+        return self._verify_current_source(record, artifact_dir)
+
     @staticmethod
     def _manifest(artifact_dir: Path, kind: str) -> Mapping[str, Any]:
         path = artifact_dir / ("skill.yaml" if kind == "skill" else "scenario.yaml")

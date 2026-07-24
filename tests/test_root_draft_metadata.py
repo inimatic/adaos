@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import json
 import io
+import hashlib
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
+from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services import conversation_store
+from adaos.services.artifact_pipeline import ArtifactPublicationService
 from adaos.services.root.service import (
     RootDeveloperService,
     RootServiceError,
+    create_zip_bytes,
     _extract_zip_bytes,
     _normalize_draft_metadata,
     _parse_draft_commit_metadata,
@@ -201,3 +209,132 @@ def test_default_template_alias_resolves_to_the_builtin_default(tmp_path) -> Non
     assert path == expected
     assert prototype == "default"
 
+
+class _UnusedPublicationRemote:
+    def __getattr__(self, name):
+        raise AssertionError(f"publication remote must not be called: {name}")
+
+
+def _checkpoint_service(tmp_path: Path):
+    workspace = tmp_path / "dev"
+    skill = workspace / "skills" / "recipe_skill"
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: recipe_skill\nversion: 1.0.0\ndependencies: []\n",
+        encoding="utf-8",
+    )
+    publication = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "installed",
+        remote=_UnusedPublicationRemote(),
+    )
+    service = object.__new__(RootDeveloperService)
+    config = SimpleNamespace(
+        owner_id="owner",
+        node_id="node",
+        node_settings=SimpleNamespace(id="node"),
+        dev_settings=SimpleNamespace(forge_repo="inimatic/registry"),
+    )
+    service._load_config = lambda: config
+    service._owner_workspace = lambda _cfg: ("owner", workspace)
+    service._validate_artifact_preflight = lambda *_args: None
+    service._artifact_publication_service = lambda _cfg: publication
+    service._mtls_material_for_role = lambda *_args: ("cert", "key", True)
+    return service, publication, skill, workspace
+
+
+def test_checkpoint_reuses_completed_change_without_version_bump_or_remote_write(tmp_path) -> None:
+    service, publication, skill, _workspace = _checkpoint_service(tmp_path)
+    change_id = "builder-checkpoint-1"
+    source_ref = ArtifactSourceRef(
+        forge="adaos-root",
+        repository="inimatic/registry",
+        revision="1" * 40,
+        path_scope=("subnets/dev/nodes/node/skills/recipe_skill/",),
+    )
+    publication.record_push(
+        kind="skill",
+        artifact_id="recipe_skill",
+        artifact_dir=skill,
+        source_ref=source_ref,
+        change_ids=(change_id,),
+    )
+
+    class _Client:
+        def __getattr__(self, name):
+            raise AssertionError(f"Root client must not be called: {name}")
+
+    service._client = lambda _cfg: _Client()
+    result = service._push_artifact(
+        "skills",
+        "recipe_skill",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    assert result.version == "1.0.0"
+    assert result.commit == "1" * 40
+    assert result.package_digest
+    assert "version: 1.0.0" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+
+def test_checkpoint_rolls_back_local_manifest_and_registry_when_remote_write_fails(
+    tmp_path,
+) -> None:
+    service, _publication, skill, workspace = _checkpoint_service(tmp_path)
+    registry = workspace / "registry.json"
+    registry.write_text('{"version": 1, "skills": [], "scenarios": []}\n', encoding="utf-8")
+    original_manifest = (skill / "skill.yaml").read_bytes()
+    original_registry = registry.read_bytes()
+
+    class _FailingClient:
+        def get_draft_info(self, **_kwargs):
+            raise FileNotFoundError("no previous checkpoint")
+
+        def push_skill_draft(self, **_kwargs):
+            raise RuntimeError("remote unavailable")
+
+    service._client = lambda _cfg: _FailingClient()
+
+    with pytest.raises(RuntimeError, match="remote unavailable"):
+        service._push_artifact(
+            "skills",
+            "recipe_skill",
+            message="checkpoint",
+            metadata={"change_id": "builder-checkpoint-2"},
+        )
+
+    assert (skill / "skill.yaml").read_bytes() == original_manifest
+    assert registry.read_bytes() == original_registry
+
+
+def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tmp_path) -> None:
+    service, publication, skill, _workspace = _checkpoint_service(tmp_path)
+    change_id = "builder-checkpoint-recover"
+    archive = create_zip_bytes(skill)
+
+    class _RecoveryClient:
+        def get_draft_info(self, **_kwargs):
+            return {
+                "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
+                "commit": "2" * 40,
+                "sha256": hashlib.sha256(archive).hexdigest(),
+                "metadata": {"change_id": change_id},
+            }
+
+        def push_skill_draft(self, **_kwargs):
+            raise AssertionError("recovery must not create a second Forge commit")
+
+    service._client = lambda _cfg: _RecoveryClient()
+    result = service._push_artifact(
+        "skills",
+        "recipe_skill",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    recorded = publication.load_pushed_source("skill", "recipe_skill")
+    assert result.version == "1.0.0"
+    assert result.commit == "2" * 40
+    assert recorded.source_ref.revision == "2" * 40
+    assert recorded.change_ids == (change_id,)
