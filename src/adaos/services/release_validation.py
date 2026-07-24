@@ -33,6 +33,7 @@ _POSIX_PATH_RE = re.compile(r"^/[a-zA-Z0-9_./-]+$")
 _SLOT_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _MAX_EVENTS = 500
+_SSH_TRANSPORT_ATTEMPTS = 2
 
 
 def _now() -> str:
@@ -273,6 +274,12 @@ class SshObserveRunner:
             "-o",
             "ConnectTimeout=10",
             "-o",
+            "ConnectionAttempts=2",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=2",
+            "-o",
             "StrictHostKeyChecking=yes",
             f"{node.ssh_user}@{node.host}",
             command,
@@ -336,22 +343,41 @@ class SshObserveRunner:
 
         for check_id in suite.checks:
             started = time.monotonic()
-            try:
-                result = self._execute(node, commands[check_id], timeout_s)
-            except subprocess.TimeoutExpired:
-                checks.append(self._check(check_id, started, "error", "ssh_timeout"))
-                if check_id == "ssh_connect":
-                    return {"state": "inconclusive", "reason": "ssh_connect_timed_out", "checks": checks}
-                return {"state": "timed_out", "reason": f"{check_id}_timed_out", "checks": checks}
-            except (OSError, ValueError) as exc:
-                checks.append(self._check(check_id, started, "error", f"runner_unavailable:{type(exc).__name__}"))
-                return {"state": "inconclusive", "reason": "runner_unavailable", "checks": checks}
+            result: subprocess.CompletedProcess[str] | None = None
+            transport_timeout = False
+            for attempt in range(1, _SSH_TRANSPORT_ATTEMPTS + 1):
+                try:
+                    candidate = self._execute(node, commands[check_id], timeout_s)
+                except subprocess.TimeoutExpired:
+                    transport_timeout = True
+                    if attempt < _SSH_TRANSPORT_ATTEMPTS:
+                        continue
+                    checks.append(self._check(check_id, started, "error", "ssh_transport_timeout"))
+                    return {
+                        "state": "inconclusive",
+                        "reason": f"{check_id}_transport_timed_out",
+                        "checks": checks,
+                    }
+                except (OSError, ValueError) as exc:
+                    checks.append(self._check(check_id, started, "error", f"runner_unavailable:{type(exc).__name__}"))
+                    return {"state": "inconclusive", "reason": "runner_unavailable", "checks": checks}
+                if candidate.returncode == 255:
+                    if attempt < _SSH_TRANSPORT_ATTEMPTS:
+                        continue
+                    checks.append(self._transport_error(check_id, started, candidate))
+                    return {"state": "inconclusive", "reason": "ssh_transport_error", "checks": checks}
+                result = candidate
+                if attempt > 1 or transport_timeout:
+                    transport_timeout = True
+                break
 
-            if result.returncode == 255:
-                checks.append(self._transport_error(check_id, started, result))
+            if result is None:
+                checks.append(self._check(check_id, started, "error", "ssh_transport_unclassified"))
                 return {"state": "inconclusive", "reason": "ssh_transport_error", "checks": checks}
 
             check = self._evaluate(check_id, started, result, target_build)
+            if transport_timeout:
+                check["transport_attempts"] = _SSH_TRANSPORT_ATTEMPTS
             checks.append(check)
             if check["status"] != "passed":
                 return {"state": "failed", "reason": f"{check_id}_failed", "checks": checks}

@@ -207,9 +207,10 @@ def test_ssh_transport_failure_is_inconclusive_not_defective(tmp_path: Path) -> 
 def test_ssh_connect_timeout_is_inconclusive_with_bounded_budget(tmp_path: Path) -> None:
     identity = tmp_path / "id"
     identity.write_text("test", encoding="utf-8")
-    observed: dict[str, object] = {}
+    observed: dict[str, object] = {"calls": 0}
 
     def timeout(argv: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        observed["calls"] = int(observed["calls"]) + 1
         observed["argv"] = argv
         observed["timeout_s"] = timeout_s
         raise subprocess.TimeoutExpired(argv, timeout_s)
@@ -234,6 +235,41 @@ def test_ssh_connect_timeout_is_inconclusive_with_bounded_budget(tmp_path: Path)
     assert result["state"] == "inconclusive"
     assert result["result"]["failed"] == 0
     assert result["result"]["timed_out"] == 0
-    assert result["assignments"][0]["result"]["reason"] == "ssh_connect_timed_out"
+    assert result["assignments"][0]["result"]["reason"] == "ssh_connect_transport_timed_out"
+    assert observed["calls"] == 2
     assert float(observed["timeout_s"]) >= 15.0
     assert "ConnectTimeout=10" in observed["argv"]
+    assert "ConnectionAttempts=2" in observed["argv"]
+
+
+def test_transient_ssh_timeout_is_retried_once(tmp_path: Path) -> None:
+    identity = tmp_path / "id"
+    identity.write_text("test", encoding="utf-8")
+    calls = 0
+
+    def transient(argv: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.TimeoutExpired(argv, timeout_s)
+        return _successful_executor(argv, timeout_s)
+
+    service = ReleaseValidationService(
+        state_path=tmp_path / "state.json",
+        runner=SshObserveRunner(executor=transient),
+    )
+    service.register_node(_node(identity))
+    service.register_suite(_suite())
+    service.create_campaign(
+        ValidationCampaign(
+            campaign_id="manual-transient-timeout-01",
+            suite_id="adaos-observe-smoke",
+            target_build=TARGET_BUILD,
+            node_ids=("linux-exp-01",),
+        )
+    )
+
+    result = service.run_campaign("manual-transient-timeout-01")
+
+    assert result["state"] == "passed"
+    assert result["assignments"][0]["checks"][0]["transport_attempts"] == 2
