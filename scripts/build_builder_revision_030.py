@@ -539,12 +539,11 @@ def build() -> None:
         "area": "main",
         "id": "publication-actions",
         "type": "ui.actions",
-        "title": "Forge и публикация",
+        "title": "Версионирование и публикация",
         "inputs": {
             "variant": "toolbar",
             "buttons": [
                 _button("checkpoint", "Checkpoint", "git-commit-outline"),
-                _button("update", "Обновить", "sync-outline"),
                 _button("dry-run", "Проверить релиз", "checkmark-circle-outline"),
                 _button("publish", "Опубликовать", "rocket-outline"),
                 _button("delete", "Удалить", "trash-outline", kind="danger"),
@@ -552,7 +551,6 @@ def build() -> None:
         },
         "actions": [
             _call("click:checkpoint", "push_project", **project_identity),
-            _call("click:update", "update_project", **project_identity),
             _call("click:dry-run", "publish_project", bump="$state.releaseBump", dry_run=True, **project_identity),
             {"on": "click:publish", "type": "openModal", "params": {"modalId": "confirm-publish"}},
             {"on": "click:delete", "type": "openModal", "params": {"modalId": "confirm-delete"}},
