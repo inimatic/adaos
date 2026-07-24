@@ -596,6 +596,41 @@ def test_root_dev_scenario_manifest_update_only_updates_scenario_yaml(tmp_path: 
     assert json_payload == {"id": "builder_scene", "name": "builder_scene", "version": "0.1.0", "ui": {"application": {}}}
 
 
+def test_root_dev_scenario_create_rewrites_the_complete_default_template(tmp_path: Path) -> None:
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "scenario_templates"
+        / "scenario_default"
+    )
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: object()
+    service._owner_workspace = lambda _cfg: ("owner-1", tmp_path / "dev")
+    service._resolve_template = lambda _kind, _template: (template, "default")
+
+    result = service._create_artifact("scenarios", "recipe_book", template=None)
+
+    root = Path(result.path)
+    manifest = yaml.safe_load((root / "scenario.yaml").read_text(encoding="utf-8"))
+    content = json.loads((root / "scenario.json").read_text(encoding="utf-8"))
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    draft = json.loads((root / "builder.draft.json").read_text(encoding="utf-8"))
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+
+    assert manifest["id"] == manifest["name"] == "recipe_book"
+    assert manifest["version"] == "0.2.0"
+    assert manifest["ui"] == {"manifest": "webui.json"}
+    assert content["id"] == content["name"] == "recipe_book"
+    assert content["version"] == manifest["version"]
+    assert content["updated_at"] == manifest["updated_at"]
+    assert content["ui"] == {"manifest": "webui.json"}
+    assert page["id"] == "recipe_book"
+    assert page["title"] == "Recipe Book"
+    assert page["widgets"] == []
+    assert draft["artifact"]["id"] == "recipe_book"
+
+
 def test_dev_scenario_loader_rejects_builder_json_manifest(tmp_path: Path) -> None:
     scenario_dir = tmp_path / "dev" / "sn_test" / "scenarios" / "json_scene"
     scenario_dir.mkdir(parents=True)

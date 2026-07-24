@@ -461,6 +461,23 @@ def test_scenario_schema_accepts_default_builder_template_manifest() -> None:
     Draft7Validator(schema).validate(payload)
 
 
+def test_default_scenario_template_exposes_a_valid_empty_builder_canvas() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "adaos"
+    template = root / "scenario_templates" / "scenario_default"
+    scenario = json.loads((template / "scenario.json").read_text(encoding="utf-8"))
+    webui = json.loads((template / "webui.json").read_text(encoding="utf-8"))
+    draft = json.loads((template / "builder.draft.json").read_text(encoding="utf-8"))
+
+    Draft202012Validator(_load_schema("webui.v1.schema.json")).validate(webui)
+
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    declared_files = {item["path"] for item in draft["artifact"]["files"]}
+    assert scenario["ui"] == {"manifest": "webui.json"}
+    assert page["id"] == "template-id"
+    assert page["widgets"] == []
+    assert {"scenario.yaml", "scenario.json", "webui.json"}.issubset(declared_files)
+
+
 def test_nlu_teacher_schema_accepts_contract_bundle() -> None:
     schema = _load_schema("nlu.teacher.v1.schema.json")
     payload = {

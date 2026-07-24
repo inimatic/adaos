@@ -1,0 +1,30 @@
+{
+  "schema": "adaos.webui.v1",
+  "generated_by": "scenario_default",
+  "ui": {
+    "application": {
+      "desktop": {
+        "pageSchema": {
+          "id": "template-id",
+          "title": "New Scenario",
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "widgets": [],
+          "meta": {
+            "builder": {
+              "empty_canvas": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

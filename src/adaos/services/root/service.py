@@ -786,6 +786,43 @@ def _rewrite_skill_template_identity(root: Path, name: str) -> None:
             path.write_text(rewritten, encoding="utf-8")
 
 
+def _rewrite_scenario_template_identity(root: Path, name: str) -> None:
+    """Replace identity placeholders in a freshly copied scenario template."""
+
+    label = name.replace("_", " ").replace("-", " ").title()
+    text_suffixes = {".yaml", ".yml", ".json", ".md", ".txt"}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        text = path.read_text(encoding="utf-8")
+        rewritten = text.replace("template-id", name).replace("New Scenario", label)
+        if rewritten != text:
+            path.write_text(rewritten, encoding="utf-8")
+
+
+def _sync_scenario_content_metadata(
+    root: Path,
+    name: str,
+    manifest_meta: Mapping[str, Any] | None,
+) -> None:
+    """Keep runtime scenario content aligned with the canonical YAML manifest."""
+
+    content_path = root / "scenario.json"
+    if not content_path.is_file():
+        return
+    payload = _load_manifest(content_path)
+    payload["id"] = name
+    payload["name"] = name
+    metadata = dict(manifest_meta or {})
+    version = str(metadata.get("version") or "").strip()
+    updated_at = str(metadata.get("updated_at") or "").strip()
+    if version:
+        payload["version"] = version
+    if updated_at:
+        payload["updated_at"] = updated_at
+    _write_manifest(content_path, payload)
+
+
 def _ensure_keep_file(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     keep = directory / ".keep"
@@ -2059,6 +2096,8 @@ class RootDeveloperService:
         _copy_template(template_path, target)
         if kind == "skills":
             _rewrite_skill_template_identity(target, name)
+        else:
+            _rewrite_scenario_template_identity(target, name)
         manifest_meta = self._update_manifest(
             kind,
             target,
@@ -2067,6 +2106,8 @@ class RootDeveloperService:
             version_bump_index=1,
             set_prototype=True,
         )
+        if kind == "scenarios":
+            _sync_scenario_content_metadata(target, name, manifest_meta)
 
         return ArtifactCreateResult(
             kind=kind.rstrip("s"),
