@@ -78,6 +78,25 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _run_test_command(command: list[str]) -> dict[str, object]:
+    completed = subprocess.run(
+        command,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return {
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "returncode": completed.returncode,
+        "command": command,
+        "stdout": completed.stdout[-4000:],
+        "stderr": completed.stderr[-4000:],
+    }
+
+
 def main() -> int:
     args = _arguments()
     dev_root = args.dev_root.expanduser().resolve()
@@ -119,24 +138,28 @@ def main() -> int:
     if args.skip_tests:
         test_result = {"status": "skipped", "command": test_command}
     else:
-        completed = subprocess.run(
-            test_command,
-            cwd=Path.cwd(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        test_result = {
-            "status": "passed" if completed.returncode == 0 else "failed",
-            "returncode": completed.returncode,
-            "command": test_command,
-            "stdout": completed.stdout[-4000:],
-            "stderr": completed.stderr[-4000:],
-        }
-        if completed.returncode:
-            raise RuntimeError(f"representative contract tests failed: {completed.stdout}")
+        test_result = _run_test_command(test_command)
+        if test_result["status"] != "passed":
+            raise RuntimeError(f"representative contract tests failed: {test_result['stdout']}")
+
+    resilience_command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_artifact_publication_service.py::test_moved_base_creates_reapply_plan_and_requires_new_trial",
+        "tests/test_artifact_publication_service.py::test_remote_stable_subscription_updates_from_packages_after_success_only",
+        "tests/test_artifact_release_resolver.py::test_release_rejects_missing_ambiguous_incompatible_and_cyclic_dependencies",
+        "tests/test_artifact_workspace_activation.py::test_failure_at_each_activation_phase_leaves_no_partial_first_install",
+        "tests/test_artifact_workspace_activation.py::test_explicit_recovery_rolls_back_interrupted_journal_without_replaying",
+        "tests/test_root_draft_metadata.py::test_checkpoint_reconciles_unknown_remote_outcome_without_second_write",
+    ]
+    if args.skip_tests:
+        resilience_result = {"status": "skipped", "command": resilience_command}
+    else:
+        resilience_result = _run_test_command(resilience_command)
+        if resilience_result["status"] != "passed":
+            raise RuntimeError(f"pipeline resilience tests failed: {resilience_result['stdout']}")
 
     service.record_push(
         kind="skill",
@@ -198,6 +221,11 @@ def main() -> int:
             "prototype_revision": "015",
         },
         "tests": test_result,
+        "resilience_tests": resilience_result,
+        "source_verification": {
+            "mode": "local_commit_witness",
+            "note": "Live promotion uses the backend Forge tree verification endpoint.",
+        },
         "source": {
             "scenario": scenario_source.to_dict(),
             "skill": skill_source.to_dict(),
