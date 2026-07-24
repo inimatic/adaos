@@ -812,21 +812,33 @@ def _sync_scenario_content_metadata(
     name: str,
     manifest_meta: Mapping[str, Any] | None,
 ) -> None:
-    """Keep runtime scenario content aligned with the canonical YAML manifest."""
+    """Materialize the derived runtime descriptor from canonical YAML and WebUI sources."""
 
     content_path = root / "scenario.json"
     if not content_path.is_file():
         return
     payload = _load_manifest(content_path)
+    yaml_path = root / "scenario.yaml"
+    canonical = _load_manifest(yaml_path) if yaml_path.is_file() else {}
+    canonical.update(
+        {
+            key: value
+            for key, value in dict(manifest_meta or {}).items()
+            if key in {"version", "updated_at"} and value is not None
+        }
+    )
+    for key, value in canonical.items():
+        payload[key] = value
     payload["id"] = name
     payload["name"] = name
-    metadata = dict(manifest_meta or {})
-    version = str(metadata.get("version") or "").strip()
-    updated_at = str(metadata.get("updated_at") or "").strip()
-    if version:
-        payload["version"] = version
-    if updated_at:
-        payload["updated_at"] = updated_at
+
+    webui_path = root / "webui.json"
+    if webui_path.is_file():
+        webui = _load_manifest(webui_path)
+        ui = webui.get("ui")
+        if not isinstance(ui, Mapping):
+            raise RootServiceError(f"Scenario WebUI at {webui_path} must contain an object ui")
+        payload["ui"] = dict(ui)
     _write_manifest(content_path, payload)
 
 
@@ -2619,6 +2631,8 @@ class RootDeveloperService:
             version_bump_index=publish_bump_index,
             set_prototype=False,
         )
+        if kind == "scenarios":
+            _sync_scenario_content_metadata(source, name, manifest_meta)
         try:
             upsert_workspace_registry_entry(
                 workspace,
