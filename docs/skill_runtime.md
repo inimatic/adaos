@@ -2,6 +2,13 @@
 
 AdaOS provisions an isolated runtime per skill with versioned A/B slots. Each installation produces a fully self-contained copy of the skill sources, dependencies, resolved manifest, and metadata that can be activated atomically.
 
+For package-backed project publication, A/B preparation is a runtime projection
+of an immutable component package selected by `ProjectRelease` and
+`WorkspaceLock`; it is not the publication source of truth. Permission and
+migration plans are admitted before the lock switch, and an unknown
+state-changing outcome is reconciled explicitly rather than replayed. See
+[Artifact Source, Package, and Activation Architecture](architecture/artifact-source-package-activation.md).
+
 ## Directory layout
 
 Every skill lives under `skills/<name>` in the workspace. Runtime artefacts are stored separately:

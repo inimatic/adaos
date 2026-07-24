@@ -84,6 +84,8 @@ Validated-local implementation now provides:
   trial;
 - a durable Forge checkpoint intent/receipt journal that never automatically
   repeats an unknown state-changing write;
+- a unique Builder change identity per Automation iteration and an explicit,
+  checkpoint-only recovery path that refuses partially committed artifact sets;
 - content-addressed Builder task inputs with compare-and-switch DEV result
   activation, transactional backup, and rollback;
 - explicit permission, migration, checkpoint, health-verify, and commit phases,
@@ -94,11 +96,16 @@ The reproducible result and exact digests are recorded in
 
 Remaining acceptance blockers:
 
-- backend package and Forge-tree routes are committed locally but cannot be
-  pushed or deployed until GitHub CLI authentication is available;
 - a live stand/second-machine run is required before package-only activation is
   the default or legacy sparse Workspace compatibility is retired;
 - delayed post-activation observation remains a `[should]` operational gate.
+
+The backend route slice is no longer a blocker: PR
+[inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
+was merged at `1329ecb` and deployed as `0.1.137`; live Forge tree lookups match
+the locally persisted checkpoint trees. Builder itself subsequently completed
+DEV `0.2.20` → isolated trial → accepted Workspace publication with companion
+skill `0.1.28`.
 
 ## Delivery Snapshot
 
@@ -114,9 +121,9 @@ stand or production acceptance.
 | AP2 | validated-local | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs |
 | AP3 | validated-local | all 13 activation phases, atomic WorkspaceLock, permission admission, reversible migration/reconciliation, package projection, interruption recovery, runtime and health rollback | delayed health observation and stand validation |
 | AP4 | validated-local | exact candidate identity, isolated package trial, data policy, acceptance evidence, immutable Builder task snapshot, concurrent-DEV compare-and-switch | stand validation before legacy task materialization retirement |
-| AP5 | validated-local | freshness, stale/rebase plan, renewed trial, Forge tree gate, receipt recovery | deploy backend tree verification and exercise it live |
+| AP5 | validated-local + production-route-verified | freshness, stale/rebase plan, renewed trial, Forge tree gate, receipt recovery, deployed backend `0.1.137` and live exact-tree lookup | clean stand promotion using the external route |
 | AP6 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | Builder/operator update-plan UI |
-| AP7 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, and 161 focused regressions | live backend/stand run and cross-document synchronization |
+| AP7 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run and final cross-document synchronization |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -348,28 +355,28 @@ machine and produces durable proof for broader documentation updates.
 source-to-trial-to-stable-to-subscriber update pipeline, including stale-base,
 dependency-conflict, interruption, and rollback cases.
 
-- [ ] `[must]` `AP7-01` Select and record the representative scenario, shared
+- [x] `[must]` `AP7-01` Select and record the representative scenario, shared
   skill, initial stable release, and source revision.
-- [ ] `[must]` `AP7-02` Install an empty Workspace from packages only.
-- [ ] `[must]` `AP7-03` Create, validate, and trial a user-requested candidate
+- [x] `[must]` `AP7-02` Install an empty Workspace from packages only.
+- [x] `[must]` `AP7-03` Create, validate, and trial a user-requested candidate
   through Builder and the built-in implementation model.
-- [ ] `[must]` `AP7-04` Exercise unchanged-base stable promotion of the accepted
+- [x] `[must]` `AP7-04` Exercise unchanged-base stable promotion of the accepted
   digest.
-- [ ] `[must]` `AP7-05` Exercise moved-base migration, rebuilt candidate, renewed
+- [x] `[must]` `AP7-05` Exercise moved-base migration, rebuilt candidate, renewed
   trial, and promotion.
-- [ ] `[must]` `AP7-06` Exercise compatible shared-skill update and incompatible
+- [x] `[must]` `AP7-06` Exercise compatible shared-skill update and incompatible
   dependency rejection.
-- [ ] `[must]` `AP7-07` Exercise interruption at every activation phase and prove
+- [x] `[must]` `AP7-07` Exercise interruption at every activation phase and prove
   no unknown side effect is replayed.
-- [ ] `[must]` `AP7-08` Exercise stable subscription discovery, update, health
+- [x] `[must]` `AP7-08` Exercise stable subscription discovery, update, health
   verification, and rollback.
-- [ ] `[must]` `AP7-09` Record commands, commits, package digests, WorkspaceLock
+- [x] `[must]` `AP7-09` Record commands, commits, package digests, WorkspaceLock
   revisions, operation ids, validation results, and acceptance decision.
-- [ ] `[must]` `AP7-10` Update Builder, registry, operations, runtime, and governed
+- [x] `[must]` `AP7-10` Update Builder, registry, operations, runtime, and governed
   evolution documentation only from the recorded implementation evidence.
 - [ ] `[should]` `AP7-11` Repeat the proof on a clean stand or second machine
   before defaulting new installs to package-only mode.
-- [ ] `[could]` `AP7-12` Compare local package storage with an external immutable
+- [x] `[could]` `AP7-12` Compare local package storage with an external immutable
   release backend.
 - [ ] `[deferred]` `AP7-13` Claim production acceptance or marketplace readiness
   from the single-machine proof.

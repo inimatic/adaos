@@ -17,6 +17,16 @@ This note fixes the target architecture for three related tracks:
 
 It is intentionally evolutionary and tied to the AdaOS codebase as it exists today.
 
+Implementation alignment (2026-07-24): the single-user artifact path now has
+content-addressed scenario/skill packages, dependency-locked ProjectRelease
+records, isolated candidates and trials, stable channel records, subscriptions,
+and transactional WorkspaceLock activation. Backend PR
+[inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
+is deployed as `0.1.137`, and live Forge tree lookup matches persisted source
+trees. This closes the local contract and production-route slices, not the
+clean-stand or marketplace UX gates. See
+[Artifact Pipeline Local Evidence](artifact-pipeline-local-evidence-2026-07-24.md).
+
 The governing rule is:
 
 > Yjs is a live projection layer for clients, not the execution transport and not the source of truth for orchestration.
@@ -107,6 +117,13 @@ under runtime state, atomically rewrites it on every transition, restores
 terminal history, and reclassifies interrupted active work as `recoverable`
 with `retryable=true` and an operator notification. It never auto-retries an
 unknown side effect after restart.
+
+The 2026-07-24 activation slice extends that rule to Forge checkpoints,
+permission admission, migrations, package materialization, runtime reload, and
+health verification. Unknown outcomes require explicit one-shot
+reconciliation. Builder Automation also uses one change identity per iteration;
+a complete pre-commit checkpoint failure can be reconciled without rerunning
+Codex, while a partially committed pair fails closed for manual recovery.
 
 The same slice now exposes authenticated `GET /api/operations`, operation
 detail, `POST /api/operations/{operation_id}/cancel`, and

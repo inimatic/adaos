@@ -8,6 +8,14 @@ English documents are the primary planning surface. Russian documents and
 older concept notes may provide useful context, but they do not override the
 owners listed here.
 
+Current cross-domain implementation evidence for source → package → trial →
+publication → activation is recorded in
+[Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
+The target contracts and remaining clean-stand/deferred collaboration work are
+owned by the
+[Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
+and [roadmap](artifact-source-package-activation-roadmap.md).
+
 ## Planning Authority
 
 When documents disagree, use the narrowest authoritative source in this table.

@@ -7,6 +7,15 @@ human-signal -> Issue -> Builder -> release -> runtime-evidence loop is defined
 by [Governed Evolution](governed-evolution.md); its cross-domain proof order is
 tracked in the [Governed Evolution Roadmap](governed-evolution-roadmap.md).
 
+Implementation alignment (2026-07-24): the single-user Builder delivery path
+now uses immutable source checkpoints, component packages, a dependency-locked
+project release, an isolated candidate trial, explicit acceptance, and
+transactional Workspace activation. Builder assigns a distinct `change_id` to
+every Automation iteration and never automatically repeats an uncertain
+state-changing phase. See the
+[Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
+and its [local evidence](artifact-pipeline-local-evidence-2026-07-24.md).
+
 AdaOS Builder is the role and workflow that turns an idea into governed AdaOS
 artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests, and
 runtime-ready changes.
@@ -54,7 +63,8 @@ The Builder owns the development path for:
 - new scenarios
 - updates to scenario flows, bindings, and desktop surfaces
 - `webui.json` UI descriptors and browser-facing data contracts
-- `skill.yaml` and `scenario.json` / `scenario.yaml` metadata
+- `skill.yaml` and canonical `scenario.yaml` metadata; `scenario.json` is a
+  derived compatibility projection and is never the version authority
 - NLU hints, examples, aliases, and descriptor fixes
 - tests, smoke checks, runtime validation evidence, and release notes
 
