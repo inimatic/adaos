@@ -10569,6 +10569,37 @@ async def reload_webspace_from_scenario(
     return result
 
 
+def _builder_empty_canvas_widget() -> dict[str, Any]:
+    return {
+        "id": "builder-empty-canvas",
+        "type": "ui.form",
+        "area": "main",
+        "inputs": {
+            "fields": [
+                {
+                    "id": "builder-empty-canvas-message",
+                    "type": "staticContent",
+                    "title": "Empty prototype canvas",
+                    "content": "Describe the interface in Builder to create the first prototype revision.",
+                }
+            ]
+        },
+    }
+
+
+def _ensure_builder_empty_canvas_widget(page: dict[str, Any], scenario_id: str) -> None:
+    meta = page.get("meta") if isinstance(page.get("meta"), Mapping) else {}
+    builder_meta = meta.get("builder") if isinstance(meta.get("builder"), Mapping) else {}
+    widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
+    if not bool(builder_meta.get("empty_canvas")) or widgets:
+        return
+    page["id"] = scenario_id
+    page["widgets"] = [_builder_empty_canvas_widget()]
+    builder_meta["placeholder_injected"] = True
+    meta["builder"] = builder_meta
+    page["meta"] = meta
+
+
 def _builder_preview_content_override(
     scenario_id: str,
     *,
@@ -10640,13 +10671,15 @@ def _builder_preview_content_override(
                 "pattern": "stack",
                 "areas": [{"id": "main", "role": "main"}],
             },
-            "widgets": [],
+            "widgets": [_builder_empty_canvas_widget()],
             "meta": {"builder": {"empty_canvas": True, "compatibility_fallback": True}},
         }
         desktop["pageSchema"] = page
         application["desktop"] = desktop
         ui["application"] = application
         override["ui"] = ui
+    if stage_token == "prototype" and page:
+        _ensure_builder_empty_canvas_widget(page, scenario_id)
     if page:
         existing_title = str(page.get("title") or scenario_id).strip() or scenario_id
         prefix = {

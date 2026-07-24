@@ -4564,9 +4564,52 @@ def test_builder_prototype_preview_synthesizes_an_empty_canvas_for_legacy_defaul
     assert source_space == "dev"
     assert page["id"] == "test01_recipes"
     assert page["title"] == "proto:current Recipe Book"
-    assert page["widgets"] == []
+    assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
     assert page["meta"]["builder"]["compatibility_fallback"] is True
     assert "ui" not in legacy_content
+
+
+def test_builder_prototype_preview_repairs_an_existing_zero_widget_empty_canvas(monkeypatch) -> None:
+    empty_canvas = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "template-id",
+                        "title": "New Scenario",
+                        "layout": {
+                            "type": "single",
+                            "pattern": "stack",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [],
+                        "meta": {"builder": {"empty_canvas": True}},
+                    }
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: empty_canvas,
+    )
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "test02_recipes",
+        stage="prototype",
+        revision=None,
+        label="proto: test02_recipes · current",
+    )
+
+    page = content["ui"]["application"]["desktop"]["pageSchema"]
+    assert source_space == "dev"
+    assert page["id"] == "test02_recipes"
+    assert page["title"] == "proto: test02_recipes · current"
+    assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
+    assert page["meta"]["builder"]["placeholder_injected"] is True
+    assert empty_canvas["ui"]["application"]["desktop"]["pageSchema"]["widgets"] == []
 
 
 def test_legacy_automation_preview_falls_back_to_current_dev_descriptor(monkeypatch, tmp_path: Path) -> None:

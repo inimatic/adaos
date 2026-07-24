@@ -627,7 +627,7 @@ def test_root_dev_scenario_create_rewrites_the_complete_default_template(tmp_pat
     assert content["ui"] == {"manifest": "webui.json"}
     assert page["id"] == "recipe_book"
     assert page["title"] == "Recipe Book"
-    assert page["widgets"] == []
+    assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
     assert draft["artifact"]["id"] == "recipe_book"
 
 

@@ -474,7 +474,8 @@ def test_default_scenario_template_exposes_a_valid_empty_builder_canvas() -> Non
     declared_files = {item["path"] for item in draft["artifact"]["files"]}
     assert scenario["ui"] == {"manifest": "webui.json"}
     assert page["id"] == "template-id"
-    assert page["widgets"] == []
+    assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
+    assert page["widgets"][0]["type"] == "ui.form"
     assert {"scenario.yaml", "scenario.json", "webui.json"}.issubset(declared_files)
 
 

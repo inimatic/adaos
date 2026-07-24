@@ -2314,6 +2314,8 @@ class RootDeveloperService:
 
         if isinstance(template, str):
             template = template.strip() or None
+        if isinstance(template, str) and template.lower() == "default":
+            template = None
 
         template_name = template or default_name
 

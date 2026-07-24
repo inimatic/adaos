@@ -188,6 +188,22 @@ def test_root_draft_archive_rolls_back_when_staged_activation_fails(tmp_path, mo
     assert not list(tmp_path.glob(".artifact.backup-*"))
 
 
+def test_default_template_alias_resolves_to_the_builtin_default(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    builtin = tmp_path / "builtin"
+    expected = builtin / "scenario_default"
+    expected.mkdir(parents=True)
+    service = object.__new__(RootDeveloperService)
+    service._workspace_templates_dir = lambda _kind: workspace
+    service._builtin_templates_dir = lambda _kind: builtin
+    service._default_template_name = lambda _kind: "scenario_default"
+
+    path, prototype = service._resolve_template("scenarios", "default")
+
+    assert path == expected
+    assert prototype == "default"
+
+
 def test_transient_draft_push_retries_the_same_operation() -> None:
     calls: list[int] = []
     sleeps: list[float] = []
