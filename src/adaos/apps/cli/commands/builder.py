@@ -71,6 +71,10 @@ def _push_result_payload(result: ArtifactPushResult) -> dict[str, Any]:
         "bytes_uploaded": result.bytes_uploaded,
         "version": result.version,
         "updated_at": result.updated_at,
+        "commit": getattr(result, "commit", None),
+        "package_digest": getattr(result, "package_digest", None),
+        "source_revision": getattr(result, "source_revision", None),
+        "source_tree": getattr(result, "source_tree", None),
     }
 
 

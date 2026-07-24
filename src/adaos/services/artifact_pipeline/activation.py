@@ -16,7 +16,7 @@ from adaos.domain.artifact_release import (
 )
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
-from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.services.artifact_pipeline.storage import atomic_write_json, replace_with_retry
 
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
@@ -213,7 +213,7 @@ class WorkspaceActivationManager:
                 if target.exists():
                     shutil.rmtree(target)
                 backup.parent.mkdir(parents=True, exist_ok=True)
-                backup.replace(target)
+                replace_with_retry(backup, target)
             elif not had_target and target.exists():
                 shutil.rmtree(target)
         previous = operation.get("previous_lock")
@@ -350,8 +350,8 @@ class WorkspaceActivationManager:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists():
                     backup.parent.mkdir(parents=True, exist_ok=True)
-                    target.replace(backup)
-                staged_path.replace(target)
+                    replace_with_retry(target, backup)
+                replace_with_retry(staged_path, target)
             self._write_lock(desired)
 
             self._phase(operation, "reload", phase_hook=phase_hook)

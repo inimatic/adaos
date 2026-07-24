@@ -17,6 +17,7 @@ class _Remote:
     def __init__(self, root: Path) -> None:
         self.releases = ReleaseRepository(root / "releases")
         self.archives: dict[str, bytes] = {}
+        self.tree = "f" * 40
 
     def put_release(self, plan: ReleasePlan, archives: dict[str, bytes]) -> None:
         self.archives.update(archives)
@@ -38,6 +39,9 @@ class _Remote:
 
     def fetch_package(self, package: ArtifactPackageRef) -> bytes:
         return self.archives[package.digest]
+
+    def tree_revision(self, source_ref: ArtifactSourceRef) -> str:
+        return self.tree
 
 
 def _source() -> ArtifactSourceRef:
@@ -140,6 +144,37 @@ def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:
             change_ids=("change-after-push",),
             validation_evidence={"status": "passed"},
         )
+
+
+def test_promotion_rechecks_persisted_public_source_tree(tmp_path: Path) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-source-tree",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    remote.tree = "0" * 40
+
+    with pytest.raises(PublicationError, match="public source tree changed"):
+        service.promote(prepared.candidate.candidate_id)
+
+    with pytest.raises(FileNotFoundError):
+        remote.get_channel("recipes", "stable")
 
 
 def test_scenario_candidate_locks_and_materializes_stable_skill_dependency(

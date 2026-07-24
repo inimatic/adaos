@@ -403,6 +403,7 @@ class BuilderWorkspaceService:
             "metadata": dict(getattr(result, "metadata", None) or metadata or {}),
             "package_digest": getattr(result, "package_digest", None),
             "source_revision": getattr(result, "source_revision", None),
+            "source_tree": getattr(result, "source_tree", None),
         }
 
     def create_draft(

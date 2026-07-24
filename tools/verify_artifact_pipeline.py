@@ -50,6 +50,15 @@ class LocalProofRemote:
     def fetch_package(self, package: ArtifactPackageRef) -> bytes:
         return self.packages.read(package.digest)
 
+    def tree_revision(self, source_ref) -> str:
+        # The bounded local proof has no Forge transport. The immutable commit
+        # identity is used as its deterministic source-verification witness;
+        # live promotion verifies the Forge tree through RemoteReleaseRepository.
+        revision = str(source_ref.revision or "").strip().lower()
+        if len(revision) not in {40, 64}:
+            raise RuntimeError("local proof source revision is not an immutable Git object id")
+        return revision
+
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

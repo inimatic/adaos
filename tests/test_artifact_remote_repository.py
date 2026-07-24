@@ -63,15 +63,33 @@ class _Client:
     def get_artifact_channel(self, *, project_id: str, channel: str, **kwargs: Any) -> dict:
         return {"ok": True, "pointer": self.channels[(project_id, channel)]}
 
+    def get_draft_source_tree(
+        self,
+        *,
+        kind: str,
+        name: str,
+        revision: str,
+        node_id: str,
+        **kwargs: Any,
+    ) -> dict:
+        assert (kind, name, node_id) == ("scenarios", "recipes", "node")
+        return {
+            "ok": True,
+            "stored_path": "subnets/dev/nodes/node/scenarios/recipes",
+            "commit": revision,
+            "tree_sha": "f" * 40,
+        }
+
 
 def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> None:
     scenario = tmp_path / "recipes"
     scenario.mkdir()
     (scenario / "scenario.yaml").write_text("id: recipes\nversion: 1.0.0\n", encoding="utf-8")
     source = ArtifactSourceRef(
-        forge="github",
+        forge="adaos-root",
         repository="inimatic/adaos-registry",
         revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("subnets/dev/nodes/node/scenarios/recipes/",),
     )
     built = build_artifact_package(scenario, kind="scenario", source_ref=source)
     plan = build_project_release(
@@ -90,3 +108,4 @@ def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> N
     assert remote.get_release("recipes", plan.release.release_digest) == plan
     pointer = remote.set_channel(plan)
     assert remote.get_channel("recipes") == pointer
+    assert remote.tree_revision(source) == "f" * 40

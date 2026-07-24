@@ -55,6 +55,7 @@ from adaos.services.artifact_pipeline import (
     RemoteReleaseRepository,
     build_artifact_package,
 )
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -555,6 +556,7 @@ class ArtifactPushResult:
     metadata: dict[str, Any] | None = None
     package_digest: str | None = None
     source_revision: str | None = None
+    source_tree: str | None = None
 
 
 @dataclass(slots=True)
@@ -2551,6 +2553,38 @@ class RootDeveloperService:
         cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
+        intent_path: Path | None = None
+        intent_archive_path: Path | None = None
+        intent: dict[str, Any] = {}
+        if change_id:
+            intent_key = hashlib.sha256(change_id.encode("utf-8")).hexdigest()
+            intent_root = publication.state_root / "checkpoint-intents" / kind / name
+            intent_path = intent_root / f"{intent_key}.json"
+            intent_archive_path = intent_root / f"{intent_key}.zip"
+            if intent_path.is_file():
+                try:
+                    loaded_intent = json.loads(intent_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise RootServiceError("Checkpoint intent journal is unreadable") from exc
+                if not isinstance(loaded_intent, dict) or loaded_intent.get("change_id") != change_id:
+                    raise RootServiceError("Checkpoint intent journal identity mismatch")
+                intent = loaded_intent
+
+        def write_intent(status: str, **extra: Any) -> None:
+            nonlocal intent
+            if not change_id or intent_path is None:
+                return
+            intent = {
+                **intent,
+                "schema": "adaos.artifact.checkpoint_intent.v1",
+                "kind": kind.rstrip("s"),
+                "artifact_id": name,
+                "change_id": change_id,
+                "status": status,
+                "updated_at": _current_timestamp(),
+                **extra,
+            }
+            atomic_write_json(intent_path, intent)
 
         def result_from_checkpoint(
             *,
@@ -2574,7 +2608,30 @@ class RootDeveloperService:
                 metadata=_normalize_draft_metadata(response_metadata),
                 package_digest=pushed_source.package.digest,
                 source_revision=source_ref.revision,
+                source_tree=pushed_source.source_tree,
             )
+
+        def verified_source_tree(
+            response: Mapping[str, Any],
+            *,
+            revision: str,
+        ) -> str:
+            tree = str(response.get("tree_sha") or "").strip().lower()
+            if not tree:
+                verified = client.get_draft_source_tree(
+                    kind=kind,
+                    name=name,
+                    revision=revision,
+                    node_id=node_id,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                )
+                tree = str(verified.get("tree_sha") or "").strip().lower()
+            if len(tree) not in {40, 64} or any(
+                char not in "0123456789abcdef" for char in tree
+            ):
+                raise RootServiceError("Root did not return a verifiable Forge source tree")
+            return tree
 
         if change_id and publication.pushed_source_path(kind.rstrip("s"), name).is_file():
             recorded = publication.load_pushed_source(kind.rstrip("s"), name)
@@ -2596,27 +2653,45 @@ class RootDeveloperService:
                 )
 
         if change_id:
+            draft_info: Mapping[str, Any] = {}
+            if intent.get("status") == "remote_confirmed" and isinstance(intent.get("receipt"), Mapping):
+                draft_info = dict(intent["receipt"])
             try:
-                draft_info = client.get_draft_info(
-                    kind=kind,
-                    name=name,
-                    node_id=node_id,
-                    verify=verify,
-                    cert=(cert_path, key_path),
-                )
-            except Exception:
+                if not draft_info:
+                    draft_info = client.get_draft_info(
+                        kind=kind,
+                        name=name,
+                        node_id=node_id,
+                        verify=verify,
+                        cert=(cert_path, key_path),
+                    )
+            except Exception as exc:
+                missing = isinstance(exc, FileNotFoundError) or getattr(exc, "status_code", None) == 404
+                if not missing:
+                    if intent:
+                        raise RootServiceError(
+                            "Checkpoint outcome is unresolved; Forge reconciliation must succeed before another write"
+                        ) from exc
+                    raise RootServiceError(
+                        "Forge checkpoint preflight is unavailable; state-changing write was not started"
+                    ) from exc
                 draft_info = {}
             draft_metadata = _normalize_draft_metadata(
                 draft_info.get("metadata") if isinstance(draft_info.get("metadata"), Mapping) else {}
             )
             if str(draft_metadata.get("change_id") or "").strip() == change_id:
-                archive_bytes = create_zip_bytes(source)
+                if intent_archive_path is not None and intent_archive_path.is_file():
+                    archive_bytes = intent_archive_path.read_bytes()
+                else:
+                    archive_bytes = create_zip_bytes(source)
                 digest = hashlib.sha256(archive_bytes).hexdigest()
                 expected_digest = str(draft_info.get("sha256") or "").strip().lower()
                 if expected_digest and expected_digest != digest:
                     raise RootServiceError(
                         f"checkpoint id {change_id} was already used for different content"
                     )
+                if intent_archive_path is not None and intent_archive_path.is_file():
+                    _extract_zip_bytes(archive_bytes, source)
                 stored = str(draft_info.get("stored_path") or "").strip()
                 commit = str(draft_info.get("commit") or "").strip()
                 if not stored or not commit:
@@ -2636,6 +2711,14 @@ class RootDeveloperService:
                     artifact_dir=source,
                     source_ref=source_ref,
                     change_ids=(change_id,),
+                    source_tree=verified_source_tree(draft_info, revision=commit),
+                )
+                write_intent(
+                    "completed",
+                    archive_sha256=digest,
+                    receipt=dict(draft_info),
+                    package_digest=pushed_source.package.digest,
+                    source_tree=pushed_source.source_tree,
                 )
                 return result_from_checkpoint(
                     source_ref=source_ref,
@@ -2643,6 +2726,10 @@ class RootDeveloperService:
                     pushed_source=pushed_source,
                     response_metadata=draft_metadata,
                     archive_bytes=archive_bytes,
+                )
+            if intent.get("status") in {"dispatching", "uncertain", "remote_confirmed"}:
+                raise RootServiceError(
+                    "Checkpoint outcome is unresolved and does not match the current Forge receipt; refusing a duplicate write"
                 )
 
         rollback_paths = [
@@ -2656,30 +2743,48 @@ class RootDeveloperService:
             for path in rollback_paths
         }
         remote_committed = False
+        dispatch_started = False
         try:
-            source_payload = self._manifest_payload(source, kind)
-            source_data = source_payload[1] if source_payload else {}
-            publish_bump_index = (
-                bump_index(
-                    effective_skill_bump(
-                        source_data,
-                        "patch",
-                        has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+            resume_archive = (
+                intent.get("status") == "prepared"
+                and intent_archive_path is not None
+                and intent_archive_path.is_file()
+            )
+            if resume_archive:
+                archive_bytes = intent_archive_path.read_bytes()
+                expected_archive_sha = str(intent.get("archive_sha256") or "").strip().lower()
+                if hashlib.sha256(archive_bytes).hexdigest() != expected_archive_sha:
+                    raise RootServiceError("Prepared checkpoint archive does not match its journal")
+                _extract_zip_bytes(archive_bytes, source)
+                _, resumed_version, resumed_updated_at = self._artifact_manifest_info(source, kind)
+                manifest_meta = {
+                    "version": resumed_version,
+                    "updated_at": resumed_updated_at,
+                }
+            else:
+                source_payload = self._manifest_payload(source, kind)
+                source_data = source_payload[1] if source_payload else {}
+                publish_bump_index = (
+                    bump_index(
+                        effective_skill_bump(
+                            source_data,
+                            "patch",
+                            has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+                        )
                     )
+                    if kind == "skills"
+                    else bump_index("patch")
                 )
-                if kind == "skills"
-                else bump_index("patch")
-            )
-            manifest_meta = self._update_manifest(
-                kind,
-                source,
-                name,
-                None,
-                version_bump_index=publish_bump_index,
-                set_prototype=False,
-            )
-            if kind == "scenarios":
-                _sync_scenario_content_metadata(source, name, manifest_meta)
+                manifest_meta = self._update_manifest(
+                    kind,
+                    source,
+                    name,
+                    None,
+                    version_bump_index=publish_bump_index,
+                    set_prototype=False,
+                )
+                if kind == "scenarios":
+                    _sync_scenario_content_metadata(source, name, manifest_meta)
 
             build_artifact_package(
                 source,
@@ -2712,12 +2817,18 @@ class RootDeveloperService:
                     name,
                     exc_info=True,
                 )
-            archive_bytes = create_zip_bytes(source)
+            if not resume_archive:
+                archive_bytes = create_zip_bytes(source)
             archive_b64 = archive_bytes_to_b64(archive_bytes)
             digest = hashlib.sha256(archive_bytes).hexdigest()
+            if change_id and intent_archive_path is not None:
+                atomic_write_bytes(intent_archive_path, archive_bytes)
+                write_intent("prepared", archive_sha256=digest)
             push_method = (
                 client.push_skill_draft if kind == "skills" else client.push_scenario_draft
             )
+            write_intent("dispatching", archive_sha256=digest)
+            dispatch_started = True
             response = push_method(
                 name=name,
                 archive_b64=archive_b64,
@@ -2729,6 +2840,11 @@ class RootDeveloperService:
                 metadata=commit_metadata,
             )
             remote_committed = True
+            write_intent(
+                "remote_confirmed",
+                archive_sha256=digest,
+                receipt=dict(response),
+            )
             stored = str(response.get("stored_path") or "").strip()
             commit = str(response.get("commit") or "").strip()
             if not stored:
@@ -2751,12 +2867,21 @@ class RootDeveloperService:
                 revision=commit,
                 path_scope=(stored.rstrip("/") + "/",),
             )
+            source_tree = verified_source_tree(response, revision=commit)
             pushed_source = publication.record_push(
                 kind=kind.rstrip("s"),
                 artifact_id=name,
                 artifact_dir=source,
                 source_ref=source_ref,
                 change_ids=(change_id,) if change_id else (),
+                source_tree=source_tree,
+            )
+            write_intent(
+                "completed",
+                archive_sha256=digest,
+                receipt=dict(response),
+                package_digest=pushed_source.package.digest,
+                source_tree=source_tree,
             )
             return result_from_checkpoint(
                 source_ref=source_ref,
@@ -2765,7 +2890,17 @@ class RootDeveloperService:
                 response_metadata=response_metadata or commit_metadata,
                 archive_bytes=archive_bytes,
             )
-        except Exception:
+        except Exception as exc:
+            if dispatch_started and not remote_committed:
+                write_intent(
+                    "uncertain",
+                    archive_sha256=(
+                        hashlib.sha256(archive_bytes).hexdigest()
+                        if "archive_bytes" in locals()
+                        else None
+                    ),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             if not remote_committed:
                 for path, content in snapshots.items():
                     if content is None:

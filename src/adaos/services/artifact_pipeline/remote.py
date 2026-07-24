@@ -4,7 +4,7 @@ import base64
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
-from adaos.domain.artifact_release import ArtifactPackageRef
+from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef
 from adaos.services.artifact_pipeline.channels import (
     RELEASE_PLAN_SCHEMA,
     ChannelPointer,
@@ -25,6 +25,8 @@ class ArtifactRegistryClient(Protocol):
     def set_artifact_channel(self, **kwargs: Any) -> dict: ...
 
     def get_artifact_channel(self, **kwargs: Any) -> dict: ...
+
+    def get_draft_source_tree(self, **kwargs: Any) -> dict: ...
 
 
 @dataclass(slots=True)
@@ -120,6 +122,37 @@ class RemoteReleaseRepository:
         if not isinstance(pointer, Mapping):
             raise ValueError("artifact registry returned no channel pointer")
         return ChannelPointer.from_mapping(pointer)
+
+    def tree_revision(self, source_ref: ArtifactSourceRef) -> str:
+        if source_ref.forge != "adaos-root":
+            raise ValueError(f"unsupported remote source forge: {source_ref.forge}")
+        if len(source_ref.path_scope) != 1:
+            raise ValueError("remote source verification requires one exact artifact path")
+        parts = [item for item in source_ref.path_scope[0].replace("\\", "/").split("/") if item]
+        try:
+            node_index = parts.index("nodes")
+            node_id = parts[node_index + 1]
+            kind = parts[node_index + 2]
+            name = parts[node_index + 3]
+        except (ValueError, IndexError) as exc:
+            raise ValueError("remote SourceRef path does not identify a node artifact") from exc
+        if kind not in {"skills", "scenarios"} or node_index + 4 != len(parts):
+            raise ValueError("remote SourceRef path is not an exact skill or scenario path")
+        response = self.client.get_draft_source_tree(
+            kind=kind,
+            name=name,
+            revision=source_ref.revision,
+            node_id=node_id,
+            **self._transport(),
+        )
+        tree = str(response.get("tree_sha") or "").strip().lower()
+        if len(tree) not in {40, 64} or any(char not in "0123456789abcdef" for char in tree):
+            raise ValueError("Forge returned an invalid source tree identity")
+        expected_path = source_ref.path_scope[0].rstrip("/").replace("\\", "/")
+        actual_path = str(response.get("stored_path") or "").rstrip("/").replace("\\", "/")
+        if actual_path and actual_path != expected_path:
+            raise ValueError("Forge verified a different source path")
+        return tree
 
 
 __all__ = ["ArtifactRegistryClient", "RemoteReleaseRepository"]

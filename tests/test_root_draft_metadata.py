@@ -287,11 +287,14 @@ def test_checkpoint_rolls_back_local_manifest_and_registry_when_remote_write_fai
     original_manifest = (skill / "skill.yaml").read_bytes()
     original_registry = registry.read_bytes()
 
+    calls = {"push": 0}
+
     class _FailingClient:
         def get_draft_info(self, **_kwargs):
             raise FileNotFoundError("no previous checkpoint")
 
         def push_skill_draft(self, **_kwargs):
+            calls["push"] += 1
             raise RuntimeError("remote unavailable")
 
     service._client = lambda _cfg: _FailingClient()
@@ -307,6 +310,17 @@ def test_checkpoint_rolls_back_local_manifest_and_registry_when_remote_write_fai
     assert (skill / "skill.yaml").read_bytes() == original_manifest
     assert registry.read_bytes() == original_registry
 
+    with pytest.raises(RootServiceError, match="unresolved"):
+        service._push_artifact(
+            "skills",
+            "recipe_skill",
+            message="checkpoint",
+            metadata={"change_id": "builder-checkpoint-2"},
+        )
+
+    assert calls["push"] == 1
+    assert (skill / "skill.yaml").read_bytes() == original_manifest
+
 
 def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tmp_path) -> None:
     service, publication, skill, _workspace = _checkpoint_service(tmp_path)
@@ -318,6 +332,7 @@ def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tm
             return {
                 "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
                 "commit": "2" * 40,
+                "tree_sha": "3" * 40,
                 "sha256": hashlib.sha256(archive).hexdigest(),
                 "metadata": {"change_id": change_id},
             }
@@ -337,4 +352,54 @@ def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tm
     assert result.version == "1.0.0"
     assert result.commit == "2" * 40
     assert recorded.source_ref.revision == "2" * 40
+    assert recorded.source_tree == "3" * 40
     assert recorded.change_ids == (change_id,)
+
+
+def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_path) -> None:
+    service, publication, skill, _workspace = _checkpoint_service(tmp_path)
+    change_id = "builder-checkpoint-timeout"
+    state: dict[str, object] = {"pushes": 0}
+
+    class _CommitThenTimeoutClient:
+        def get_draft_info(self, **_kwargs):
+            receipt = state.get("receipt")
+            if isinstance(receipt, dict):
+                return receipt
+            raise FileNotFoundError("no previous checkpoint")
+
+        def push_skill_draft(self, **kwargs):
+            state["pushes"] = int(state["pushes"]) + 1
+            state["receipt"] = {
+                "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
+                "commit": "4" * 40,
+                "tree_sha": "5" * 40,
+                "sha256": kwargs["sha256"],
+                "metadata": {"change_id": change_id},
+            }
+            raise TimeoutError("response was lost after commit")
+
+    service._client = lambda _cfg: _CommitThenTimeoutClient()
+
+    with pytest.raises(TimeoutError, match="response was lost"):
+        service._push_artifact(
+            "skills",
+            "recipe_skill",
+            message="checkpoint",
+            metadata={"change_id": change_id},
+        )
+
+    assert "version: 1.0.0" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+    result = service._push_artifact(
+        "skills",
+        "recipe_skill",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    recorded = publication.load_pushed_source("skill", "recipe_skill")
+    assert state["pushes"] == 1
+    assert result.commit == "4" * 40
+    assert recorded.source_tree == "5" * 40
+    assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")

@@ -569,6 +569,31 @@ class RootHttpClient:
         kw["kind"] = "scenarios"
         return self.get_draft_info(**kw)
 
+    def get_draft_source_tree(
+        self,
+        *,
+        kind: str,
+        name: str,
+        revision: str,
+        node_id: str | None,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+        timeout: float = 15.0,
+    ) -> dict:
+        params: dict[str, Any] = {"name": name, "revision": revision}
+        if node_id:
+            params["node_id"] = node_id
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/{kind}/draft/tree",
+                params=params,
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=timeout,
+            )
+        )
+
     def get_draft_archive(
         self,
         *,

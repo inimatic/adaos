@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -68,9 +68,20 @@ class PublicationRemote(Protocol):
 
     def fetch_package(self, package: ArtifactPackageRef) -> bytes: ...
 
+    def tree_revision(self, source_ref: ArtifactSourceRef) -> str: ...
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _source_tree(value: Any, *, required: bool = False) -> str | None:
+    tree = str(value or "").strip().lower()
+    if not tree and not required:
+        return None
+    if len(tree) not in {40, 64} or any(char not in "0123456789abcdef" for char in tree):
+        raise PublicationError("source tree must be an immutable Git object id")
+    return tree
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +92,10 @@ class PushedSourceRecord:
     package: ArtifactPackageRef
     pushed_at: str
     change_ids: tuple[str, ...] = ()
+    source_tree: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema": PUSHED_SOURCE_SCHEMA,
             "kind": self.kind,
             "artifact_id": self.artifact_id,
@@ -92,6 +104,9 @@ class PushedSourceRecord:
             "pushed_at": self.pushed_at,
             "change_ids": list(self.change_ids),
         }
+        if self.source_tree:
+            payload["source_tree"] = self.source_tree
+        return payload
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "PushedSourceRecord":
@@ -114,6 +129,7 @@ class PushedSourceRecord:
                     }
                 )
             ),
+            source_tree=_source_tree(value.get("source_tree")),
         )
 
 
@@ -161,6 +177,7 @@ class ArtifactPublicationService:
         artifact_dir: Path,
         source_ref: ArtifactSourceRef,
         change_ids: tuple[str, ...] = (),
+        source_tree: str | None = None,
     ) -> PushedSourceRecord:
         built = build_artifact_package(
             artifact_dir,
@@ -175,6 +192,7 @@ class ArtifactPublicationService:
             package=built.ref,
             pushed_at=_now(),
             change_ids=tuple(sorted({str(item).strip() for item in change_ids if str(item).strip()})),
+            source_tree=_source_tree(source_tree),
         )
         atomic_write_json(self.pushed_source_path(kind, artifact_id), record.to_dict())
         return record
@@ -380,12 +398,21 @@ class ArtifactPublicationService:
         change_ids: tuple[str, ...],
         validation_evidence: Mapping[str, Any],
         current_stable: ReleasePlan | None = None,
-        source_tree: str | None = None,
         audience: str = "owner",
         data_mode: str = "snapshot",
     ) -> PreparedCandidate:
         record = self.load_pushed_source(kind, artifact_id)
         built = self._verify_current_source(record, artifact_dir)
+        if not record.source_tree:
+            verified_tree = _source_tree(
+                self.remote.tree_revision(record.source_ref),
+                required=True,
+            )
+            record = replace(record, source_tree=verified_tree)
+            atomic_write_json(
+                self.pushed_source_path(kind, artifact_id),
+                record.to_dict(),
+            )
         stable = current_stable if current_stable is not None else self.current_stable(artifact_id)
         catalog, requirements_by_package, dependency_archives = self._dependency_inputs(
             kind=kind,
@@ -414,7 +441,7 @@ class ArtifactPublicationService:
             base_release=stable.release if stable is not None else None,
             package_digest=built.ref.digest,
             change_ids=change_ids,
-            source_tree=source_tree,
+            source_tree=record.source_tree,
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
@@ -472,6 +499,14 @@ class ArtifactPublicationService:
         plan = self.release_cache.get_release(candidate.project_id, candidate.release_digest)
         stable = self.current_stable(candidate.project_id)
         assert_promotable(candidate, plan.release, stable.release if stable is not None else None)
+
+        if not candidate.source_tree:
+            raise PublicationError("candidate has no verified public source tree identity")
+        actual_tree = self.remote.tree_revision(candidate.source_ref)
+        if actual_tree != candidate.source_tree:
+            raise PublicationError(
+                f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
+            )
 
         pointer = self.remote.set_channel(plan, "stable")
         activation = WorkspaceActivationManager(
