@@ -2145,11 +2145,19 @@ class RootDeveloperService:
             "replaces_candidate_id": stale_candidate_id,
         }
 
-    def promote_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
+    def promote_artifact_candidate(
+        self,
+        candidate_id: str,
+        *,
+        permission_decision: bool | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
         try:
-            promoted = publication.promote(candidate_id)
+            promoted = publication.promote(
+                candidate_id,
+                permission_decision=permission_decision,
+            )
         except PublicationStaleError as exc:
             return {
                 "ok": False,
@@ -2196,11 +2204,13 @@ class RootDeveloperService:
         project_id: str,
         *,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         updated = self._artifact_publication_service(cfg).activate_subscription_update(
             project_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
         return {
             "ok": True,

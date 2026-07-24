@@ -290,6 +290,9 @@ class ArtifactPublicationService:
         idempotency_key: str | None = None,
         health_check=None,
         reload_runtime=None,
+        permission_decision=None,
+        migration_executor=None,
+        migration_rollback=None,
     ) -> SubscriptionUpdateResult:
         notice = self.check_subscription(project_id)
         if not notice.available:
@@ -310,6 +313,9 @@ class ArtifactPublicationService:
             fetch_package=self.remote.fetch_package,
             reload_runtime=reload_runtime,
             health_check=health_check,
+            permission_decision=permission_decision,
+            migration_executor=migration_executor,
+            migration_rollback=migration_rollback,
         )
         self.release_cache.put_release(plan)
         self._record_workspace_projection(plan)
@@ -689,6 +695,9 @@ class ArtifactPublicationService:
         *,
         health_check=None,
         reload_runtime=None,
+        permission_decision=None,
+        migration_executor=None,
+        migration_rollback=None,
     ) -> PromotionResult:
         candidate = self.candidate_store.load(candidate_id)
         plan = self.release_cache.get_release(candidate.project_id, candidate.release_digest)
@@ -743,6 +752,9 @@ class ArtifactPublicationService:
             fetch_package=self.remote.fetch_package,
             reload_runtime=reload_runtime,
             health_check=health_check,
+            permission_decision=permission_decision,
+            migration_executor=migration_executor,
+            migration_rollback=migration_rollback,
         )
         self.release_cache.put_release(plan)
         self._record_workspace_projection(plan)

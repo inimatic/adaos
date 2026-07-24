@@ -542,11 +542,16 @@ def prepare_rebased_candidate(
     return result
 
 
-def promote_candidate(candidate_id: str) -> dict[str, Any]:
+def promote_candidate(
+    candidate_id: str,
+    *,
+    permission_decision: bool | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     token = str(candidate_id or "").strip()
     if not token:
         raise DeveloperProjectError("candidate_id is required")
-    result = _jsonable(_service().promote_artifact_candidate(token))
+    kwargs = {"permission_decision": permission_decision} if permission_decision is not None else {}
+    result = _jsonable(_service().promote_artifact_candidate(token, **kwargs))
     kind = str(result.get("kind") or "").strip()
     project_id = str(result.get("name") or "").strip()
     if kind and project_id:
@@ -564,15 +569,14 @@ def activate_subscription(
     project_id: str,
     *,
     idempotency_key: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)
-    result = _jsonable(
-        _service().activate_artifact_subscription(
-            normalized_id,
-            idempotency_key=idempotency_key,
-        )
-    )
+    kwargs: dict[str, Any] = {"idempotency_key": idempotency_key}
+    if permission_decision is not None:
+        kwargs["permission_decision"] = permission_decision
+    result = _jsonable(_service().activate_artifact_subscription(normalized_id, **kwargs))
     _publish_content_changed(normalized_kind, normalized_id, reason="subscription_activated")
     return result
 

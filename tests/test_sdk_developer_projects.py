@@ -189,24 +189,32 @@ class _DeveloperService:
             },
         }
 
-    def promote_artifact_candidate(self, candidate_id):
+    def promote_artifact_candidate(self, candidate_id, *, permission_decision=None):
         return {
             "ok": True,
             "candidate_id": candidate_id,
             "kind": "scenario",
             "name": "builder",
             "release": "builder@1.0.0",
+            "permission_decision": permission_decision,
         }
 
     def check_artifact_subscription(self, project_id):
         return {"ok": True, "project_id": project_id, "available": True}
 
-    def activate_artifact_subscription(self, project_id, *, idempotency_key=None):
+    def activate_artifact_subscription(
+        self,
+        project_id,
+        *,
+        idempotency_key=None,
+        permission_decision=None,
+    ):
         return {
             "ok": True,
             "project_id": project_id,
             "release": f"{project_id}@1.1.0",
             "idempotency_key": idempotency_key,
+            "permission_decision": permission_decision,
         }
 
 
@@ -240,7 +248,10 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         accepted=True,
         observations=[{"decision": "looks_good"}],
     )
-    promoted = projects.promote_candidate(prepared["candidate"]["candidate_id"])
+    promoted = projects.promote_candidate(
+        prepared["candidate"]["candidate_id"],
+        permission_decision={"approved": True, "actor": "user:test"},
+    )
     rebased = projects.prepare_rebased_candidate(
         prepared["candidate"]["candidate_id"],
         "scenario",
@@ -252,13 +263,16 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         "scenario",
         "builder",
         idempotency_key="update-builder-1",
+        permission_decision={"approved": True, "actor": "user:test"},
     )
 
     assert accepted["candidate"]["status"] == "accepted"
     assert promoted["release"] == "builder@1.0.0"
+    assert promoted["permission_decision"]["actor"] == "user:test"
     assert rebased["candidate"]["candidate_id"] == "builder-rebased"
     assert notice["available"] is True
     assert subscription_update["idempotency_key"] == "update-builder-1"
+    assert subscription_update["permission_decision"]["approved"] is True
 
     with pytest.raises(projects.DeveloperProjectError, match="at least one Builder Change"):
         projects.prepare_candidate("scenario", "builder", change_ids=[])

@@ -262,6 +262,9 @@ class SubscriptionManager:
         idempotency_key: str,
         reload_runtime=None,
         health_check=None,
+        permission_decision=None,
+        migration_executor=None,
+        migration_rollback=None,
     ) -> tuple[StableSubscription, ActivationResult]:
         notice = self.check(subscription)
         if not notice.available:
@@ -277,6 +280,9 @@ class SubscriptionManager:
             idempotency_key=idempotency_key,
             reload_runtime=reload_runtime,
             health_check=health_check,
+            permission_decision=permission_decision,
+            migration_executor=migration_executor,
+            migration_rollback=migration_rollback,
         )
         updated = replace(
             subscription,
