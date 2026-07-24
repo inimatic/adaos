@@ -19,6 +19,7 @@ TrialStatus = Literal["running", "accepted", "rejected", "failed"]
 TrialDataMode = Literal["mock", "snapshot", "read_only", "real"]
 CANDIDATE_SCHEMA = "adaos.artifact.candidate.v1"
 TRIAL_SCHEMA = "adaos.artifact.trial.v1"
+GENESIS_RELEASE_DIGEST = "sha256:" + "0" * 64
 
 
 class CandidateError(RuntimeError):
@@ -211,7 +212,7 @@ def candidate_from_release(
     *,
     candidate_id: str,
     release: ProjectRelease,
-    base_release: ProjectRelease,
+    base_release: ProjectRelease | None,
     package_digest: str,
     change_ids: tuple[str, ...],
     source_tree: str | None = None,
@@ -223,9 +224,17 @@ def candidate_from_release(
         project_id=release.project_id,
         version=release.version,
         source_ref=release.source_ref,
-        base_release=f"{base_release.project_id}@{base_release.version}",
-        base_release_digest=base_release.release_digest or base_release.computed_digest(),
-        base_source_ref=base_release.source_ref,
+        base_release=(
+            f"{base_release.project_id}@{base_release.version}"
+            if base_release is not None
+            else "unpublished"
+        ),
+        base_release_digest=(
+            base_release.release_digest or base_release.computed_digest()
+            if base_release is not None
+            else GENESIS_RELEASE_DIGEST
+        ),
+        base_source_ref=base_release.source_ref if base_release is not None else release.source_ref,
         package_digest=package_digest,
         release_digest=release.release_digest or release.computed_digest(),
         change_ids=change_ids,
@@ -316,7 +325,14 @@ def complete_trial(
     )
 
 
-def assess_freshness(candidate: CandidateRecord, current_stable: ProjectRelease) -> tuple[bool, str | None]:
+def assess_freshness(
+    candidate: CandidateRecord,
+    current_stable: ProjectRelease | None,
+) -> tuple[bool, str | None]:
+    if current_stable is None:
+        if candidate.base_release_digest == GENESIS_RELEASE_DIGEST:
+            return True, None
+        return False, "stable_release_missing"
     current_digest = current_stable.release_digest or current_stable.computed_digest()
     if candidate.base_release_digest != current_digest:
         return False, "base_release_moved"
@@ -329,7 +345,11 @@ def mark_stale(candidate: CandidateRecord, *, reason: str, now: str) -> Candidat
     return replace(candidate, status="stale", stale_reason=reason, updated_at=now)
 
 
-def assert_promotable(candidate: CandidateRecord, release: ProjectRelease, current_stable: ProjectRelease) -> None:
+def assert_promotable(
+    candidate: CandidateRecord,
+    release: ProjectRelease,
+    current_stable: ProjectRelease | None,
+) -> None:
     if candidate.status != "accepted":
         raise CandidateError("stable promotion requires an accepted candidate")
     if candidate.release_digest != (release.release_digest or release.computed_digest()):
@@ -368,6 +388,7 @@ class CandidateStore:
 
 __all__ = [
     "CANDIDATE_SCHEMA",
+    "GENESIS_RELEASE_DIGEST",
     "TRIAL_SCHEMA",
     "CandidateError",
     "CandidateRecord",

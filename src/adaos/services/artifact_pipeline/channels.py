@@ -160,12 +160,16 @@ def promote_candidate(
     *,
     candidate: CandidateRecord,
     plan: ReleasePlan,
-    current_stable: ReleasePlan,
+    current_stable: ReleasePlan | None,
     repository: ReleaseRepository,
     source_provider: SourceProvider,
     channel: str = "stable",
 ) -> ChannelPointer:
-    assert_promotable(candidate, plan.release, current_stable.release)
+    assert_promotable(
+        candidate,
+        plan.release,
+        current_stable.release if current_stable is not None else None,
+    )
     if candidate.source_tree:
         actual_tree = source_provider.tree_revision(candidate.source_ref)
         if actual_tree != candidate.source_tree:

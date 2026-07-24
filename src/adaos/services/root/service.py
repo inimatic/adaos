@@ -49,6 +49,11 @@ from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.services.artifact_pipeline import (
+    ArtifactPublicationService,
+    RemoteReleaseRepository,
+)
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -579,6 +584,8 @@ class ArtifactPushResult:
     commit: str | None = None
     message: str | None = None
     metadata: dict[str, Any] | None = None
+    package_digest: str | None = None
+    source_revision: str | None = None
 
 
 @dataclass(slots=True)
@@ -2063,6 +2070,131 @@ class RootDeveloperService:
         hub_id = cfg.subnet_id or "pending_hub"
         return (self.ctx.paths.base_dir() / "dev" / hub_id).resolve()
 
+    def _artifact_publication_service(self, cfg: NodeConfig) -> ArtifactPublicationService:
+        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
+        remote = RemoteReleaseRepository(
+            self._client(cfg),
+            verify=verify,
+            cert=(cert_path, key_path),
+        )
+        return ArtifactPublicationService(
+            state_root=Path(self.ctx.paths.state_dir()) / "artifact_pipeline",
+            workspace_root=Path(self.ctx.paths.workspace_dir()),
+            remote=remote,
+        )
+
+    def prepare_artifact_candidate(
+        self,
+        kind: Literal["skill", "scenario"],
+        name: str,
+        *,
+        change_ids: tuple[str, ...],
+        validation_evidence: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
+        source = self._workspace_root(cfg) / plural / name
+        if not source.is_dir():
+            raise ArtifactNotFoundError(f"{kind.capitalize()} '{name}' not found at {source}")
+        self._validate_artifact_preflight(plural, name, source)
+        evidence = dict(validation_evidence or {})
+        evidence.setdefault("status", "passed")
+        evidence.setdefault("validator", f"adaos.{kind}.preflight")
+        prepared = self._artifact_publication_service(cfg).prepare_candidate(
+            kind=kind,
+            artifact_id=name,
+            artifact_dir=source,
+            change_ids=change_ids,
+            validation_evidence=evidence,
+        )
+        return {
+            "ok": True,
+            "candidate": prepared.candidate.to_dict(),
+            "release": prepared.plan.release.to_dict(),
+            "trial_workspace": str(prepared.trial_workspace),
+        }
+
+    def decide_artifact_candidate(
+        self,
+        candidate_id: str,
+        *,
+        accepted: bool,
+        observations: tuple[Mapping[str, Any], ...] = (),
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        candidate = self._artifact_publication_service(cfg).decide_candidate(
+            candidate_id,
+            accepted=accepted,
+            observations=observations,
+        )
+        return {"ok": True, "candidate": candidate.to_dict()}
+
+    def promote_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        promoted = self._artifact_publication_service(cfg).promote(candidate_id)
+        component = next(
+            (
+                item
+                for item in promoted.plan.release.components
+                if item.artifact_id == promoted.candidate.project_id
+            ),
+            None,
+        )
+        if component is None:
+            raise RootServiceError(
+                "Promoted release does not contain its project component; workspace was not reconciled"
+            )
+        commit: str | None = None
+        try:
+            if component.kind == "skill":
+                manager = SkillManager(
+                    repo=self.ctx.skills_repo,
+                    registry=SqliteSkillRegistry(self.ctx.sql),
+                    git=self.ctx.git,
+                    paths=self.ctx.paths,
+                    bus=getattr(self.ctx, "bus", None),
+                    caps=self.ctx.caps,
+                    settings=self.ctx.settings,
+                )
+                commit = manager.push(
+                    component.artifact_id,
+                    f"publish(skill): {component.artifact_id} v{component.version}",
+                    bump=False,
+                )
+            else:
+                manager = ScenarioManager(
+                    repo=self.ctx.scenarios_repo,
+                    registry=SqliteScenarioRegistry(self.ctx.sql),
+                    git=self.ctx.git,
+                    paths=self.ctx.paths,
+                    bus=getattr(self.ctx, "bus", None),
+                    caps=self.ctx.caps,
+                )
+                commit = manager.push(
+                    component.artifact_id,
+                    f"publish(scenario): {component.artifact_id} v{component.version}",
+                    bump=False,
+                )
+        except Exception as exc:
+            raise RootServiceError(
+                "Stable channel was promoted, but the workspace source commit failed; "
+                f"retry source reconciliation: {exc}"
+            ) from exc
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "kind": component.kind,
+            "name": component.artifact_id,
+            "version": component.version,
+            "release": promoted.pointer.release,
+            "release_digest": promoted.pointer.release_digest,
+            "package_digest": component.digest,
+            "source_revision": component.source_ref.revision,
+            "workspace_lock": promoted.activation.workspace_lock.to_dict(),
+            "subscription": promoted.subscription.to_dict(),
+            "commit": commit,
+        }
+
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = self._workspace_root(cfg)
         workspace_root.mkdir(parents=True, exist_ok=True)
@@ -2548,6 +2680,18 @@ class RootDeveloperService:
         )
         if commit_metadata and response_metadata != commit_metadata:
             raise RootServiceError("Root returned stale Forge commit metadata for the draft archive")
+        source_ref = ArtifactSourceRef(
+            forge="adaos-root",
+            repository=str(getattr(cfg.dev_settings, "forge_repo", None) or "inimatic/adaos-registry"),
+            revision=commit,
+            path_scope=(stored.rstrip("/") + "/",),
+        )
+        pushed_source = self._artifact_publication_service(cfg).record_push(
+            kind=kind.rstrip("s"),
+            artifact_id=name,
+            artifact_dir=source,
+            source_ref=source_ref,
+        )
         return ArtifactPushResult(
             kind=kind.rstrip("s"),
             name=name,
@@ -2561,6 +2705,8 @@ class RootDeveloperService:
             metadata=_normalize_draft_metadata(
                 response.get("metadata") if isinstance(response.get("metadata"), Mapping) else commit_metadata
             ),
+            package_digest=pushed_source.package.digest,
+            source_revision=source_ref.revision,
         )
 
     def _update_artifact(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"], name: str) -> ArtifactUpdateResult:

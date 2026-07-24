@@ -155,6 +155,31 @@ class _DeveloperService:
     def publish_scenario(self, name, **_kwargs):
         return _Result(name=name, path=Path(f"/workspace/scenarios/{name}"))
 
+    def prepare_artifact_candidate(self, kind, name, *, change_ids, validation_evidence=None):
+        return {
+            "ok": True,
+            "candidate": {"candidate_id": f"{name}-candidate", "change_ids": list(change_ids)},
+        }
+
+    def decide_artifact_candidate(self, candidate_id, *, accepted, observations=()):
+        return {
+            "ok": True,
+            "candidate": {
+                "candidate_id": candidate_id,
+                "status": "accepted" if accepted else "rejected",
+                "observations": list(observations),
+            },
+        }
+
+    def promote_artifact_candidate(self, candidate_id):
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "kind": "scenario",
+            "name": "builder",
+            "release": "builder@1.0.0",
+        }
+
 
 def test_lifecycle_results_are_plain_json_values(monkeypatch) -> None:
     monkeypatch.setattr(projects, "_service", lambda: _DeveloperService())
@@ -170,3 +195,26 @@ def test_lifecycle_results_are_plain_json_values(monkeypatch) -> None:
     assert pushed["commit"] == "abc123"
     assert updated["commit"] == "def456"
     assert Path(published["path"]).parts[-3:] == ("workspace", "scenarios", "builder")
+
+
+def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) -> None:
+    monkeypatch.setattr(projects, "_service", lambda: _DeveloperService())
+
+    prepared = projects.prepare_candidate(
+        "scenario",
+        "builder",
+        change_ids=["change-1"],
+        validation_evidence={"status": "passed"},
+    )
+    accepted = projects.decide_candidate(
+        prepared["candidate"]["candidate_id"],
+        accepted=True,
+        observations=[{"decision": "looks_good"}],
+    )
+    promoted = projects.promote_candidate(prepared["candidate"]["candidate_id"])
+
+    assert accepted["candidate"]["status"] == "accepted"
+    assert promoted["release"] == "builder@1.0.0"
+
+    with pytest.raises(projects.DeveloperProjectError, match="at least one Builder Change"):
+        projects.prepare_candidate("scenario", "builder", change_ids=[])

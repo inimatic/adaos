@@ -8,6 +8,7 @@ from .activation import (
 )
 from .candidates import (
     CANDIDATE_SCHEMA,
+    GENESIS_RELEASE_DIGEST,
     TRIAL_SCHEMA,
     CandidateError,
     CandidateRecord,
@@ -53,6 +54,14 @@ from .releases import (
     parse_artifact_requirements,
 )
 from .remote import ArtifactRegistryClient, RemoteReleaseRepository
+from .publication import (
+    PUSHED_SOURCE_SCHEMA,
+    ArtifactPublicationService,
+    PreparedCandidate,
+    PromotionResult,
+    PublicationError,
+    PushedSourceRecord,
+)
 from .sources import (
     LocalGitSourceProvider,
     MaterializedSource,
@@ -67,7 +76,9 @@ __all__ = [
     "ActivationReplayBlocked",
     "ActivationResult",
     "ArtifactRegistryClient",
+    "ArtifactPublicationService",
     "CANDIDATE_SCHEMA",
+    "GENESIS_RELEASE_DIGEST",
     "TRIAL_SCHEMA",
     "CandidateError",
     "CandidateRecord",
@@ -82,6 +93,11 @@ __all__ = [
     "PackageBuildError",
     "PackageLimits",
     "PackageVerificationError",
+    "PUSHED_SOURCE_SCHEMA",
+    "PreparedCandidate",
+    "PromotionResult",
+    "PublicationError",
+    "PushedSourceRecord",
     "LocalGitSourceProvider",
     "MaterializedSource",
     "VerifiedArtifactPackage",

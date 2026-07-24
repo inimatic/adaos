@@ -160,3 +160,19 @@ def test_candidate_store_rejects_tampered_identity(tmp_path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(CandidateError, match="digest does not match"):
         store.load(candidate.candidate_id)
+
+
+def test_first_publication_uses_explicit_genesis_base() -> None:
+    release = _release("1.0.0", "2", "b")
+    candidate = candidate_from_release(
+        candidate_id="recipes-genesis",
+        release=release,
+        base_release=None,
+        package_digest=release.components[0].digest,
+        change_ids=("create-recipes",),
+        now="2026-07-24T00:00:00Z",
+    )
+
+    assert candidate.base_release == "unpublished"
+    assert candidate.base_release_digest == "sha256:" + "0" * 64
+    assert assess_freshness(candidate, None) == (True, None)

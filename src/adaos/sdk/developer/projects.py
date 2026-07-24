@@ -476,6 +476,60 @@ def publish(
     return result
 
 
+def prepare_candidate(
+    kind: str,
+    project_id: str,
+    *,
+    change_ids: list[str] | tuple[str, ...],
+    validation_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    bounded_changes = tuple(str(item).strip() for item in change_ids if str(item).strip())
+    if not bounded_changes:
+        raise DeveloperProjectError("candidate requires at least one Builder Change id")
+    result = _jsonable(
+        _service().prepare_artifact_candidate(
+            normalized_kind,
+            normalized_id,
+            change_ids=bounded_changes,
+            validation_evidence=validation_evidence,
+        )
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="candidate_prepared")
+    return result
+
+
+def decide_candidate(
+    candidate_id: str,
+    *,
+    accepted: bool,
+    observations: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, Any]:
+    token = str(candidate_id or "").strip()
+    if not token:
+        raise DeveloperProjectError("candidate_id is required")
+    return _jsonable(
+        _service().decide_artifact_candidate(
+            token,
+            accepted=accepted,
+            observations=tuple(dict(item) for item in observations),
+        )
+    )
+
+
+def promote_candidate(candidate_id: str) -> dict[str, Any]:
+    token = str(candidate_id or "").strip()
+    if not token:
+        raise DeveloperProjectError("candidate_id is required")
+    result = _jsonable(_service().promote_artifact_candidate(token))
+    kind = str(result.get("kind") or "").strip()
+    project_id = str(result.get("name") or "").strip()
+    if kind and project_id:
+        _publish_content_changed(kind, project_id, reason="candidate_promoted")
+    return result
+
+
 def delete(kind: str, project_id: str, *, remove_local: bool = True) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)
@@ -507,6 +561,9 @@ __all__ = [
     "list_projects",
     "list_templates",
     "publish",
+    "prepare_candidate",
+    "decide_candidate",
+    "promote_candidate",
     "push",
     "read_file",
     "update",
