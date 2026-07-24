@@ -71,16 +71,50 @@ Current useful seams:
 - Scenario and skill publish flows already have DEV, validation, push, and
   Workspace projection concepts.
 
-Current blockers:
+Validated-local implementation now provides:
 
-- source, install content, and activation still share path-oriented semantics;
-- a version string is often treated as sufficient release identity;
-- dependencies are not locked into one project release plan;
-- Workspace is not reconstructed from immutable packages;
-- trial and stable activation are not separate lock slots;
-- candidate publication does not have an exact base freshness gate;
-- stable registry updates still materialize source paths rather than applying a
-  package activation plan.
+- explicit source, package, release, candidate, subscription, and WorkspaceLock
+  identities;
+- deterministic, content-addressed scenario and skill packages;
+- exact dependency locking for a scenario and companion skills;
+- package-only trial, stable, rollback, and subscription activation;
+- accepted-trial, exact-base freshness, public-source-tree, and stable-channel
+  promotion gates;
+- a bounded stale-candidate reapplication plan that requires new validation and
+  trial;
+- a durable Forge checkpoint intent/receipt journal that never automatically
+  repeats an unknown state-changing write.
+
+The reproducible result and exact digests are recorded in
+[Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
+
+Remaining acceptance blockers:
+
+- task-scoped exact-base DEV materialization is implemented as a source-provider
+  contract but is not yet the default Builder task path;
+- permission and data-migration planning still need dedicated activation phases;
+- backend package and Forge-tree routes are committed locally but cannot be
+  pushed or deployed until GitHub CLI authentication is available;
+- a live stand/second-machine run is required before package-only activation is
+  the default or legacy sparse Workspace compatibility is retired.
+
+## Delivery Snapshot
+
+This table records the highest maturity reached by the current implementation.
+Detailed task checkboxes below remain open until their whole milestone exit gate
+reaches the required environment; a local proof is not silently promoted to
+stand or production acceptance.
+
+| Milestone | Maturity | Validated task slices | Remaining must slices |
+| --- | --- | --- | --- |
+| AP0 | validated-local | identities, schemas, canonical digests, SourceProvider, registry v2 compatibility | historical migration fixture breadth |
+| AP1 | validated-local | deterministic package build/store/verify, authoring-state exclusion, corruption and zero-byte coverage | builder attestation identity and external signing |
+| AP2 | validated-local | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs |
+| AP3 | validated-local | atomic WorkspaceLock, package projection, idempotency, interruption recovery, health rollback | dedicated permission/migration phases and delayed health |
+| AP4 | integrated | exact candidate identity, isolated package trial, data policy, acceptance evidence | make isolated exact-base DEV context the Builder default |
+| AP5 | validated-local | freshness, stale/rebase plan, renewed trial, Forge tree gate, receipt recovery | deploy backend tree verification and exercise it live |
+| AP6 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | Builder/operator update-plan UI |
+| AP7 | validated-local | representative LLM/Codex scenario+skill plus 13 resilience checks and 117 focused regressions | live backend/stand run and cross-document synchronization |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
