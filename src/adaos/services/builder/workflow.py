@@ -170,6 +170,7 @@ class BuilderWorkflowService:
         prototype = _mapping(raw.get("prototype"))
         automation = _mapping(raw.get("automation"))
         publication = _mapping(raw.get("publication"))
+        delivery = _mapping(raw.get("delivery"))
         current_revision = self.current_prototype_revision(object_type, object_id)
         prototype.setdefault("head_revision", current_revision)
         if _kind(object_type) == "scenario" and active_phase == "prototype":
@@ -202,12 +203,25 @@ class BuilderWorkflowService:
         publication.setdefault("current_version", None)
         publication.setdefault("published_at", None)
 
+        if "status" not in delivery:
+            delivery["status"] = (
+                "published" if publication.get("status") == "published" else "idle"
+            )
+        delivery.setdefault("candidate_id", None)
+        delivery.setdefault("release_digest", None)
+        delivery.setdefault("package_digest", None)
+        delivery.setdefault("base_release", None)
+        delivery.setdefault("trial_workspace", None)
+        delivery.setdefault("prepared_at", None)
+        delivery.setdefault("decided_at", None)
+
         return {
             "schema": BUILDER_WORKFLOW_SCHEMA,
             "generation": max(0, int(raw.get("generation") or 0)),
             "active_phase": active_phase,
             "prototype": prototype,
             "automation": automation,
+            "delivery": delivery,
             "publication": publication,
             "pending_transition": _mapping(raw.get("pending_transition")) or None,
             "history": [
@@ -223,6 +237,7 @@ class BuilderWorkflowService:
         active = str(workflow.get("active_phase") or "prototype")
         automation = _mapping(workflow.get("automation"))
         automation_status = str(automation.get("status") or "not_started")
+        delivery_status = str(_mapping(workflow.get("delivery")).get("status") or "idle")
         retained_automation = bool(str(automation.get("snapshot_path") or "").strip())
         automation_previewable = automation_status == "completed" or (
             retained_automation and automation_status in {"adapting", "failed", "frozen"}
@@ -234,7 +249,15 @@ class BuilderWorkflowService:
             "can_handoff_to_automation": mutable and active == "prototype",
             "can_edit_automation": mutable and active == "automation" and automation_status != "adapting",
             "can_return_to_prototype": mutable and active == "automation" and automation_status == "completed",
-            "can_publish": mutable and active == "automation" and automation_status == "completed",
+            "can_prepare_candidate": mutable
+            and active == "automation"
+            and automation_status == "completed"
+            and delivery_status not in {"trial", "accepted"},
+            "can_decide_candidate": mutable and delivery_status == "trial",
+            "can_publish": mutable
+            and active == "automation"
+            and automation_status == "completed"
+            and delivery_status == "accepted",
             "can_preview_prototype": object_type == "scenario",
             "can_preview_automation": object_type == "scenario" and automation_previewable,
             "can_preview_publication": object_type == "scenario"
@@ -279,6 +302,7 @@ class BuilderWorkflowService:
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
                 "automation_status": workflow["automation"].get("status"),
+                "delivery_status": workflow["delivery"].get("status"),
                 "publication_status": workflow["publication"].get("status"),
             }
             self._apply_transition(workflow, action_token, details, changed_at=changed_at)
@@ -288,6 +312,7 @@ class BuilderWorkflowService:
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
                 "automation_status": workflow["automation"].get("status"),
+                "delivery_status": workflow["delivery"].get("status"),
                 "publication_status": workflow["publication"].get("status"),
             }
             history = list(workflow.get("history") or [])
@@ -336,7 +361,18 @@ class BuilderWorkflowService:
     ) -> None:
         prototype = workflow["prototype"]
         automation = workflow["automation"]
+        delivery = workflow["delivery"]
         publication = workflow["publication"]
+
+        def invalidate_delivery(reason: str) -> None:
+            if str(delivery.get("status") or "idle") in {"trial", "accepted"}:
+                delivery.update(
+                    {
+                        "status": "stale",
+                        "stale_reason": reason,
+                        "stale_at": changed_at,
+                    }
+                )
         if action == "stabilize_prototype":
             self._require_active(workflow, "prototype", action)
             prototype.update({"status": "working", "stable": True, "stabilized_at": changed_at})
@@ -362,6 +398,7 @@ class BuilderWorkflowService:
                     "error": None,
                 }
             )
+            invalidate_delivery("automation_started")
             workflow["pending_transition"] = None
             return
         if action == "automation_iteration_started":
@@ -386,6 +423,7 @@ class BuilderWorkflowService:
                     "error": None,
                 }
             )
+            invalidate_delivery("automation_iteration_started")
             workflow["pending_transition"] = None
             return
         if action == "automation_completed":
@@ -462,12 +500,85 @@ class BuilderWorkflowService:
                     "resumed_at": changed_at,
                 }
             )
+            invalidate_delivery("returned_to_prototype")
             workflow["pending_transition"] = None
+            return
+        if action == "checkpoint_recorded":
+            change_id = str(metadata.get("change_id") or "").strip()
+            package_digest = str(metadata.get("package_digest") or "").strip()
+            source_revision = str(metadata.get("source_revision") or "").strip()
+            if not change_id or not package_digest or not source_revision:
+                raise BuilderWorkflowError(
+                    "checkpoint requires change, package, and source identities"
+                )
+            delivery.clear()
+            delivery.update(
+                {
+                    "status": "checkpoint",
+                    "checkpoint_change_id": change_id,
+                    "package_digest": package_digest,
+                    "source_revision": source_revision,
+                    "checkpoint_at": changed_at,
+                    "candidate_id": None,
+                    "release_digest": None,
+                    "base_release": None,
+                    "trial_workspace": None,
+                    "prepared_at": None,
+                    "decided_at": None,
+                }
+            )
+            return
+        if action == "candidate_prepared":
+            self._require_active(workflow, "automation", action)
+            if str(automation.get("status") or "") != "completed":
+                raise BuilderWorkflowError("candidate preparation requires completed automation")
+            candidate_id = str(metadata.get("candidate_id") or "").strip()
+            release_digest = str(metadata.get("release_digest") or "").strip()
+            package_digest = str(metadata.get("package_digest") or "").strip()
+            if not candidate_id or not release_digest or not package_digest:
+                raise BuilderWorkflowError(
+                    "candidate preparation requires candidate, release, and package identities"
+                )
+            delivery.clear()
+            delivery.update(
+                {
+                    "status": "trial",
+                    "candidate_id": candidate_id,
+                    "release": metadata.get("release"),
+                    "release_digest": release_digest,
+                    "package_digest": package_digest,
+                    "base_release": metadata.get("base_release"),
+                    "base_release_digest": metadata.get("base_release_digest"),
+                    "trial_workspace": metadata.get("trial_workspace"),
+                    "prepared_at": changed_at,
+                    "decided_at": None,
+                    "stale_reason": None,
+                }
+            )
+            return
+        if action in {"candidate_accepted", "candidate_rejected"}:
+            if str(delivery.get("status") or "") != "trial":
+                raise BuilderWorkflowError("candidate decision requires an active trial")
+            candidate_id = str(metadata.get("candidate_id") or "").strip()
+            if candidate_id != str(delivery.get("candidate_id") or ""):
+                raise BuilderWorkflowError("candidate decision does not match the active trial")
+            delivery.update(
+                {
+                    "status": "accepted" if action == "candidate_accepted" else "rejected",
+                    "decided_at": changed_at,
+                    "decision_observations": list(metadata.get("observations") or ()),
+                }
+            )
             return
         if action == "publish":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("publication requires completed automation")
+            if str(delivery.get("status") or "") != "accepted":
+                raise BuilderWorkflowError("publication requires an accepted candidate trial")
+            candidate_id = str(metadata.get("candidate_id") or "").strip()
+            if candidate_id != str(delivery.get("candidate_id") or ""):
+                raise BuilderWorkflowError("publication candidate does not match the accepted trial")
             version = str(metadata.get("version") or "").strip()
             if not version:
                 raise BuilderWorkflowError("publication version is required")
@@ -480,6 +591,7 @@ class BuilderWorkflowService:
                     "release": metadata.get("release"),
                 }
             )
+            delivery.update({"status": "published", "published_at": changed_at})
             return
         raise BuilderWorkflowError(f"unsupported Builder workflow transition: {action}")
 

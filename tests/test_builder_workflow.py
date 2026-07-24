@@ -74,7 +74,8 @@ def test_workflow_migrates_legacy_state_without_mutating_it(
     assert workflow["prototype"]["status"] == "frozen"
     assert workflow["automation"]["status"] == "completed"
     assert workflow["publication"]["status"] == "published"
-    assert workflow["capabilities"]["can_publish"] is True
+    assert workflow["delivery"]["status"] == "published"
+    assert workflow["capabilities"]["can_publish"] is False
     assert "workflow" not in json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
 
 
@@ -126,13 +127,43 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     )["workflow"]
     assert completed["automation"]["status"] == "completed"
     assert completed["automation"]["snapshot_task_id"] == "task.1"
-    assert completed["capabilities"]["can_publish"] is True
+    assert completed["capabilities"]["can_prepare_candidate"] is True
+    assert completed["capabilities"]["can_publish"] is False
+
+    trial = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_prepared",
+        metadata={
+            "candidate_id": "recipes-0-1-1-abc",
+            "release": "recipes@0.1.1",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+            "base_release": "recipes@0.1.0",
+            "trial_workspace": "trials/recipes/workspace",
+        },
+    )["workflow"]
+    assert trial["delivery"]["status"] == "trial"
+    assert trial["capabilities"]["can_decide_candidate"] is True
+
+    accepted = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_accepted",
+        metadata={"candidate_id": "recipes-0-1-1-abc"},
+    )["workflow"]
+    assert accepted["delivery"]["status"] == "accepted"
+    assert accepted["capabilities"]["can_publish"] is True
 
     published = service.transition(
         "scenario",
         "recipes",
         "publish",
-        metadata={"version": "0.1.1", "task_id": "task.1"},
+        metadata={
+            "version": "0.1.1",
+            "task_id": "task.1",
+            "candidate_id": "recipes-0-1-1-abc",
+        },
     )["workflow"]
     assert published["active_phase"] == "automation"
     assert published["publication"]["current_version"] == "0.1.1"
@@ -143,6 +174,8 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     assert [item["action"] for item in persisted["workflow"]["history"]] == [
         "automation_started",
         "automation_completed",
+        "candidate_prepared",
+        "candidate_accepted",
         "publish",
     ]
 
@@ -241,8 +274,69 @@ def test_failed_prototype_adaptation_restores_completed_automation(
     assert recovered["automation"]["status"] == "completed"
     assert recovered["automation"]["adaptation_error"] == "unsafe binding remained"
     assert recovered["pending_transition"] is None
-    assert recovered["capabilities"]["can_publish"] is True
+    assert recovered["capabilities"]["can_prepare_candidate"] is True
+    assert recovered["capabilities"]["can_publish"] is False
     assert recovered["capabilities"]["can_return_to_prototype"] is True
+
+
+def test_new_automation_work_invalidates_an_unpublished_candidate(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_prepared",
+        metadata={
+            "candidate_id": "candidate-1",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+        },
+    )
+
+    reopened = service.transition(
+        "scenario",
+        "recipes",
+        "automation_iteration_started",
+        metadata={"task_id": "task.2"},
+    )["workflow"]
+
+    assert reopened["delivery"]["status"] == "stale"
+    assert reopened["delivery"]["stale_reason"] == "automation_iteration_started"
+    assert reopened["capabilities"]["can_publish"] is False
+
+
+def test_new_checkpoint_supersedes_candidate_identity(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    first = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-1",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )["workflow"]
+    second = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-2",
+            "package_digest": "sha256:" + "2" * 64,
+            "source_revision": "b" * 40,
+        },
+    )["workflow"]
+
+    assert first["delivery"]["checkpoint_change_id"] == "change-1"
+    assert second["delivery"]["status"] == "checkpoint"
+    assert second["delivery"]["checkpoint_change_id"] == "change-2"
+    assert second["delivery"]["candidate_id"] is None
 
 
 def test_archived_project_cannot_transition(
