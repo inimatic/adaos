@@ -21,9 +21,11 @@ from adaos.services.artifact_pipeline.candidates import (
     CandidateRecord,
     CandidateStore,
     assert_promotable,
+    assess_freshness,
     begin_trial,
     candidate_from_release,
     complete_trial,
+    mark_stale,
     record_validation,
 )
 from adaos.services.artifact_pipeline.channels import (
@@ -51,10 +53,19 @@ from adaos.services.workspace_registry import (
 
 
 PUSHED_SOURCE_SCHEMA = "adaos.artifact.pushed_source.v1"
+REBASE_PLAN_SCHEMA = "adaos.artifact.rebase_plan.v1"
 
 
 class PublicationError(RuntimeError):
     pass
+
+
+class PublicationStaleError(PublicationError):
+    def __init__(self, plan: "CandidateRebasePlan") -> None:
+        super().__init__(
+            f"candidate is stale: {plan.stale_reason}; recreate DEV on the target base and reapply its bounded changes"
+        )
+        self.plan = plan
 
 
 class PublicationRemote(Protocol):
@@ -134,6 +145,59 @@ class PushedSourceRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateRebasePlan:
+    candidate_id: str
+    project_id: str
+    stale_reason: str
+    change_ids: tuple[str, ...]
+    previous_base_release: str
+    previous_base_digest: str
+    target_base_release: str
+    target_base_digest: str
+    target_source_ref: ArtifactSourceRef
+    path_scope: tuple[str, ...]
+    created_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": REBASE_PLAN_SCHEMA,
+            "candidate_id": self.candidate_id,
+            "project_id": self.project_id,
+            "stale_reason": self.stale_reason,
+            "change_ids": list(self.change_ids),
+            "previous_base_release": self.previous_base_release,
+            "previous_base_digest": self.previous_base_digest,
+            "target_base_release": self.target_base_release,
+            "target_base_digest": self.target_base_digest,
+            "target_source_ref": self.target_source_ref.to_dict(),
+            "path_scope": list(self.path_scope),
+            "action": "recreate_dev_and_reapply",
+            "requires_new_validation": True,
+            "requires_new_trial": True,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "CandidateRebasePlan":
+        source = value.get("target_source_ref")
+        if not isinstance(source, Mapping):
+            raise PublicationError("rebase plan is missing its exact target source")
+        return cls(
+            candidate_id=str(value.get("candidate_id") or ""),
+            project_id=str(value.get("project_id") or ""),
+            stale_reason=str(value.get("stale_reason") or ""),
+            change_ids=tuple(str(item) for item in value.get("change_ids") or ()),
+            previous_base_release=str(value.get("previous_base_release") or ""),
+            previous_base_digest=str(value.get("previous_base_digest") or ""),
+            target_base_release=str(value.get("target_base_release") or ""),
+            target_base_digest=str(value.get("target_base_digest") or ""),
+            target_source_ref=ArtifactSourceRef.from_mapping(source),
+            path_scope=tuple(str(item) for item in value.get("path_scope") or ()),
+            created_at=str(value.get("created_at") or ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedCandidate:
     candidate: CandidateRecord
     plan: ReleasePlan
@@ -168,6 +232,15 @@ class ArtifactPublicationService:
     def pushed_source_path(self, kind: str, artifact_id: str) -> Path:
         plural = "skills" if kind == "skill" else "scenarios"
         return self.state_root / "pushed-sources" / plural / f"{artifact_id}.json"
+
+    def rebase_plan_path(self, candidate_id: str) -> Path:
+        return self.state_root / "rebase-plans" / f"{self.candidate_store.path(candidate_id).stem}.json"
+
+    def load_rebase_plan(self, candidate_id: str) -> CandidateRebasePlan:
+        payload = json.loads(self.rebase_plan_path(candidate_id).read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping) or payload.get("schema") != REBASE_PLAN_SCHEMA:
+            raise PublicationError("unsupported candidate rebase plan")
+        return CandidateRebasePlan.from_mapping(payload)
 
     def record_push(
         self,
@@ -488,6 +561,47 @@ class ArtifactPublicationService:
         self.candidate_store.save(candidate)
         return candidate
 
+    def prepare_rebased_candidate(
+        self,
+        stale_candidate_id: str,
+        *,
+        kind: str,
+        artifact_id: str,
+        artifact_dir: Path,
+        validation_evidence: Mapping[str, Any],
+        audience: str = "owner",
+        data_mode: str = "snapshot",
+    ) -> PreparedCandidate:
+        stale = self.candidate_store.load(stale_candidate_id)
+        if stale.status != "stale":
+            raise PublicationError("candidate must be stale before it can be reapplied")
+        plan = self.load_rebase_plan(stale_candidate_id)
+        current = self.current_stable(stale.project_id)
+        if current is None:
+            raise PublicationError("rebase target stable release is no longer available")
+        current_digest = current.release.release_digest or current.release.computed_digest()
+        if current_digest != plan.target_base_digest:
+            raise PublicationError("rebase target moved again; create a new rebase plan")
+        evidence = {
+            **dict(validation_evidence),
+            "rebase": {
+                "replaces_candidate_id": stale_candidate_id,
+                "target_base_release": plan.target_base_release,
+                "target_base_digest": plan.target_base_digest,
+                "change_ids": list(plan.change_ids),
+            },
+        }
+        return self.prepare_candidate(
+            kind=kind,
+            artifact_id=artifact_id,
+            artifact_dir=artifact_dir,
+            change_ids=plan.change_ids,
+            validation_evidence=evidence,
+            current_stable=current,
+            audience=audience,
+            data_mode=data_mode,
+        )
+
     def promote(
         self,
         candidate_id: str,
@@ -498,6 +612,35 @@ class ArtifactPublicationService:
         candidate = self.candidate_store.load(candidate_id)
         plan = self.release_cache.get_release(candidate.project_id, candidate.release_digest)
         stable = self.current_stable(candidate.project_id)
+        fresh, stale_reason = assess_freshness(
+            candidate,
+            stable.release if stable is not None else None,
+        )
+        if not fresh:
+            if stable is None:
+                raise PublicationError(
+                    f"candidate is stale but no target stable release is available: {stale_reason}"
+                )
+            reason = stale_reason or "base_release_moved"
+            candidate = mark_stale(candidate, reason=reason, now=_now())
+            self.candidate_store.save(candidate)
+            rebase_plan = CandidateRebasePlan(
+                candidate_id=candidate.candidate_id,
+                project_id=candidate.project_id,
+                stale_reason=reason,
+                change_ids=candidate.change_ids,
+                previous_base_release=candidate.base_release,
+                previous_base_digest=candidate.base_release_digest,
+                target_base_release=f"{stable.release.project_id}@{stable.release.version}",
+                target_base_digest=(
+                    stable.release.release_digest or stable.release.computed_digest()
+                ),
+                target_source_ref=stable.release.source_ref,
+                path_scope=candidate.source_ref.path_scope,
+                created_at=_now(),
+            )
+            atomic_write_json(self.rebase_plan_path(candidate.candidate_id), rebase_plan.to_dict())
+            raise PublicationStaleError(rebase_plan)
         assert_promotable(candidate, plan.release, stable.release if stable is not None else None)
 
         if not candidate.source_tree:
@@ -570,10 +713,13 @@ class ArtifactPublicationService:
 
 __all__ = [
     "PUSHED_SOURCE_SCHEMA",
+    "REBASE_PLAN_SCHEMA",
     "ArtifactPublicationService",
+    "CandidateRebasePlan",
     "PreparedCandidate",
     "PromotionResult",
     "PublicationError",
+    "PublicationStaleError",
     "PublicationRemote",
     "PushedSourceRecord",
 ]

@@ -518,6 +518,30 @@ def decide_candidate(
     )
 
 
+def prepare_rebased_candidate(
+    stale_candidate_id: str,
+    kind: str,
+    project_id: str,
+    *,
+    validation_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidate_token = str(stale_candidate_id or "").strip()
+    if not candidate_token:
+        raise DeveloperProjectError("stale_candidate_id is required")
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    result = _jsonable(
+        _service().prepare_rebased_artifact_candidate(
+            candidate_token,
+            normalized_kind,
+            normalized_id,
+            validation_evidence=validation_evidence,
+        )
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="candidate_rebased")
+    return result
+
+
 def promote_candidate(candidate_id: str) -> dict[str, Any]:
     token = str(candidate_id or "").strip()
     if not token:
@@ -562,6 +586,7 @@ __all__ = [
     "list_templates",
     "publish",
     "prepare_candidate",
+    "prepare_rebased_candidate",
     "decide_candidate",
     "promote_candidate",
     "push",

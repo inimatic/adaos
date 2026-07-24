@@ -8,6 +8,7 @@ from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
     PublicationError,
+    PublicationStaleError,
     ReleasePlan,
     ReleaseRepository,
 )
@@ -360,3 +361,85 @@ def test_scenario_candidate_does_not_mix_unrelated_dev_dependency(
 
     skill_package = next(item for item in prepared.plan.packages if item.kind == "skill")
     assert skill_package.version == "2.1.0"
+
+
+def test_moved_base_creates_reapply_plan_and_requires_new_trial(tmp_path: Path) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+
+    def checkpoint_candidate(version: str, change_id: str, marker: str):
+        (dev / "scenario.yaml").write_text(
+            f"id: recipes\nversion: {version}\ntitle: Recipes\n",
+            encoding="utf-8",
+        )
+        (dev / "webui.json").write_text(f'{{"marker": "{marker}"}}\n', encoding="utf-8")
+        service.record_push(
+            kind="scenario",
+            artifact_id="recipes",
+            artifact_dir=dev,
+            source_ref=_source(),
+            change_ids=(change_id,),
+        )
+        return service.prepare_candidate(
+            kind="scenario",
+            artifact_id="recipes",
+            artifact_dir=dev,
+            change_ids=(change_id,),
+            validation_evidence={"status": "passed", "marker": marker},
+        )
+
+    baseline = checkpoint_candidate("1.0.0", "baseline", "baseline")
+    service.decide_candidate(baseline.candidate.candidate_id, accepted=True)
+    service.promote(baseline.candidate.candidate_id)
+
+    feature = checkpoint_candidate("1.1.0", "change-favorites", "favorites")
+    service.decide_candidate(feature.candidate.candidate_id, accepted=True)
+
+    moved = checkpoint_candidate("1.0.1", "change-mainline", "mainline")
+    service.decide_candidate(moved.candidate.candidate_id, accepted=True)
+    service.promote(moved.candidate.candidate_id)
+
+    with pytest.raises(PublicationStaleError) as stale_error:
+        service.promote(feature.candidate.candidate_id)
+
+    rebase_plan = stale_error.value.plan
+    assert rebase_plan.change_ids == ("change-favorites",)
+    assert rebase_plan.target_base_release == "recipes@1.0.1"
+    assert service.candidate_store.load(feature.candidate.candidate_id).status == "stale"
+    assert service.load_rebase_plan(feature.candidate.candidate_id) == rebase_plan
+
+    (dev / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.1.1\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    (dev / "webui.json").write_text(
+        '{"marker": "mainline+favorites"}\n',
+        encoding="utf-8",
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+        change_ids=("change-favorites",),
+    )
+    rebased = service.prepare_rebased_candidate(
+        feature.candidate.candidate_id,
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        validation_evidence={"status": "passed", "suite": "rebased-contracts"},
+    )
+
+    assert rebased.candidate.status == "trial"
+    assert rebased.candidate.base_release == "recipes@1.0.1"
+    assert rebased.candidate.change_ids == ("change-favorites",)
+    assert rebased.candidate.digest != feature.candidate.digest
+    service.decide_candidate(rebased.candidate.candidate_id, accepted=True)
+    promoted = service.promote(rebased.candidate.candidate_id)
+    assert promoted.pointer.release == "recipes@1.1.1"

@@ -52,6 +52,7 @@ from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bu
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
+    PublicationStaleError,
     RemoteReleaseRepository,
     build_artifact_package,
 )
@@ -2112,9 +2113,51 @@ class RootDeveloperService:
         )
         return {"ok": True, "candidate": candidate.to_dict()}
 
+    def prepare_rebased_artifact_candidate(
+        self,
+        stale_candidate_id: str,
+        kind: Literal["skill", "scenario"],
+        name: str,
+        *,
+        validation_evidence: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
+        source = self._workspace_root(cfg) / plural / name
+        if not source.is_dir():
+            raise ArtifactNotFoundError(f"{kind.capitalize()} '{name}' not found at {source}")
+        self._validate_artifact_preflight(plural, name, source)
+        evidence = dict(validation_evidence or {})
+        evidence.setdefault("status", "passed")
+        evidence.setdefault("validator", f"adaos.{kind}.rebase-preflight")
+        prepared = self._artifact_publication_service(cfg).prepare_rebased_candidate(
+            stale_candidate_id,
+            kind=kind,
+            artifact_id=name,
+            artifact_dir=source,
+            validation_evidence=evidence,
+        )
+        return {
+            "ok": True,
+            "candidate": prepared.candidate.to_dict(),
+            "release": prepared.plan.release.to_dict(),
+            "trial_workspace": str(prepared.trial_workspace),
+            "replaces_candidate_id": stale_candidate_id,
+        }
+
     def promote_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
         cfg = self._load_config()
-        promoted = self._artifact_publication_service(cfg).promote(candidate_id)
+        publication = self._artifact_publication_service(cfg)
+        try:
+            promoted = publication.promote(candidate_id)
+        except PublicationStaleError as exc:
+            return {
+                "ok": False,
+                "status": "stale",
+                "candidate_id": candidate_id,
+                "error": "candidate_base_moved",
+                "rebase_plan": exc.plan.to_dict(),
+            }
         component = next(
             (
                 item

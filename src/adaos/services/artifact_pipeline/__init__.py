@@ -56,10 +56,13 @@ from .releases import (
 from .remote import ArtifactRegistryClient, RemoteReleaseRepository
 from .publication import (
     PUSHED_SOURCE_SCHEMA,
+    REBASE_PLAN_SCHEMA,
     ArtifactPublicationService,
+    CandidateRebasePlan,
     PreparedCandidate,
     PromotionResult,
     PublicationError,
+    PublicationStaleError,
     PushedSourceRecord,
 )
 from .sources import (
@@ -94,9 +97,12 @@ __all__ = [
     "PackageLimits",
     "PackageVerificationError",
     "PUSHED_SOURCE_SCHEMA",
+    "REBASE_PLAN_SCHEMA",
+    "CandidateRebasePlan",
     "PreparedCandidate",
     "PromotionResult",
     "PublicationError",
+    "PublicationStaleError",
     "PushedSourceRecord",
     "LocalGitSourceProvider",
     "MaterializedSource",

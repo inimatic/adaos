@@ -339,6 +339,80 @@ def test_new_checkpoint_supersedes_candidate_identity(
     assert second["delivery"]["candidate_id"] is None
 
 
+def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "task.initial", "source_prototype_revision": "001"},
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.initial", "version": "0.1.0"},
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_prepared",
+        metadata={
+            "candidate_id": "candidate-stale",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_accepted",
+        metadata={"candidate_id": "candidate-stale"},
+    )
+    stale = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_stale",
+        metadata={
+            "candidate_id": "candidate-stale",
+            "rebase_plan": {
+                "stale_reason": "base_release_moved",
+                "target_base_release": "recipes@0.1.1",
+            },
+        },
+    )["workflow"]
+    assert stale["delivery"]["status"] == "stale"
+
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_iteration_started",
+        metadata={"task_id": "task.reapply"},
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.reapply", "version": "0.1.2"},
+    )
+    checkpoint = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "checkpoint-reapply",
+            "package_digest": "sha256:" + "3" * 64,
+            "source_revision": "a" * 40,
+        },
+    )["workflow"]
+
+    assert checkpoint["delivery"]["status"] == "checkpoint"
+    assert checkpoint["delivery"]["replaces_candidate_id"] == "candidate-stale"
+    assert checkpoint["delivery"]["rebase_plan"]["target_base_release"] == "recipes@0.1.1"
+
+
 def test_archived_project_cannot_transition(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

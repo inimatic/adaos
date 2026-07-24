@@ -214,6 +214,8 @@ class BuilderWorkflowService:
         delivery.setdefault("trial_workspace", None)
         delivery.setdefault("prepared_at", None)
         delivery.setdefault("decided_at", None)
+        delivery.setdefault("replaces_candidate_id", None)
+        delivery.setdefault("rebase_plan", None)
 
         return {
             "schema": BUILDER_WORKFLOW_SCHEMA,
@@ -511,6 +513,12 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     "checkpoint requires change, package, and source identities"
                 )
+            replaces_candidate_id = (
+                delivery.get("candidate_id")
+                if str(delivery.get("status") or "") == "stale"
+                else delivery.get("replaces_candidate_id")
+            )
+            rebase_plan = delivery.get("rebase_plan")
             delivery.clear()
             delivery.update(
                 {
@@ -525,6 +533,8 @@ class BuilderWorkflowService:
                     "trial_workspace": None,
                     "prepared_at": None,
                     "decided_at": None,
+                    "replaces_candidate_id": replaces_candidate_id,
+                    "rebase_plan": rebase_plan,
                 }
             )
             return
@@ -567,6 +577,23 @@ class BuilderWorkflowService:
                     "status": "accepted" if action == "candidate_accepted" else "rejected",
                     "decided_at": changed_at,
                     "decision_observations": list(metadata.get("observations") or ()),
+                }
+            )
+            return
+        if action == "candidate_stale":
+            candidate_id = str(metadata.get("candidate_id") or "").strip()
+            if candidate_id != str(delivery.get("candidate_id") or ""):
+                raise BuilderWorkflowError("stale candidate does not match the active delivery")
+            rebase_plan = metadata.get("rebase_plan")
+            if not isinstance(rebase_plan, Mapping):
+                raise BuilderWorkflowError("stale candidate requires an exact rebase plan")
+            delivery.update(
+                {
+                    "status": "stale",
+                    "stale_reason": rebase_plan.get("stale_reason") or "base_release_moved",
+                    "stale_at": changed_at,
+                    "replaces_candidate_id": candidate_id,
+                    "rebase_plan": dict(rebase_plan),
                 }
             )
             return

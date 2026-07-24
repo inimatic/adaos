@@ -171,6 +171,24 @@ class _DeveloperService:
             },
         }
 
+    def prepare_rebased_artifact_candidate(
+        self,
+        stale_candidate_id,
+        kind,
+        name,
+        *,
+        validation_evidence=None,
+    ):
+        return {
+            "ok": True,
+            "replaces_candidate_id": stale_candidate_id,
+            "candidate": {
+                "candidate_id": f"{name}-rebased",
+                "kind": kind,
+                "validation_evidence": validation_evidence,
+            },
+        }
+
     def promote_artifact_candidate(self, candidate_id):
         return {
             "ok": True,
@@ -212,9 +230,16 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         observations=[{"decision": "looks_good"}],
     )
     promoted = projects.promote_candidate(prepared["candidate"]["candidate_id"])
+    rebased = projects.prepare_rebased_candidate(
+        prepared["candidate"]["candidate_id"],
+        "scenario",
+        "builder",
+        validation_evidence={"status": "passed"},
+    )
 
     assert accepted["candidate"]["status"] == "accepted"
     assert promoted["release"] == "builder@1.0.0"
+    assert rebased["candidate"]["candidate_id"] == "builder-rebased"
 
     with pytest.raises(projects.DeveloperProjectError, match="at least one Builder Change"):
         projects.prepare_candidate("scenario", "builder", change_ids=[])
