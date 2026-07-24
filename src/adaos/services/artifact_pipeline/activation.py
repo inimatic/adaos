@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactReleaseContractError,
+    ProjectRelease,
     WorkspaceLock,
     WorkspaceSlot,
 )
@@ -25,10 +26,14 @@ ACTIVATION_PHASES = (
     "fetch",
     "verify",
     "dependency-plan",
+    "permission-plan",
+    "migration-plan",
     "stage",
+    "checkpoint",
     "switch-lock",
     "reload",
-    "health",
+    "health-verify",
+    "commit",
 )
 
 
@@ -70,6 +75,7 @@ class WorkspaceActivationManager:
         self.staging_root = self.state_root / "artifact_pipeline" / "staging"
         self.backups_root = self.state_root / "artifact_pipeline" / "backups"
         self.lock_history_root = self.metadata_root / "lock-history"
+        self.releases_root = self.metadata_root / "releases"
 
     def load_lock(self) -> WorkspaceLock | None:
         if not self.lock_path.is_file():
@@ -147,6 +153,83 @@ class WorkspaceActivationManager:
                 raise ActivationError(
                     f"resolved dependency {dependency.key} is missing from activation plan"
                 )
+
+    def _release_path(self, release_digest: str) -> Path:
+        token = str(release_digest or "").strip().lower()
+        if not token.startswith("sha256:") or len(token) != 71:
+            raise ActivationError("release digest must be a SHA-256 digest")
+        digest = token.split(":", 1)[1]
+        if any(char not in "0123456789abcdef" for char in digest):
+            raise ActivationError("release digest must be a lowercase SHA-256 digest")
+        return self.releases_root / f"{digest}.json"
+
+    def _load_release(self, release_digest: str) -> ProjectRelease | None:
+        path = self._release_path(release_digest)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, Mapping):
+                raise ValueError("release record must contain an object")
+            release = ProjectRelease.from_mapping(payload)
+        except Exception as exc:
+            raise ActivationError(f"cannot read active ProjectRelease {release_digest}: {exc}") from exc
+        if (release.release_digest or release.computed_digest()) != release_digest:
+            raise ActivationError("active ProjectRelease record has a different digest")
+        return release
+
+    def _active_release(
+        self,
+        current: WorkspaceLock | None,
+        *,
+        slot_id: str,
+    ) -> ProjectRelease | None:
+        if current is None:
+            return None
+        slot = next((item for item in current.slots if item.slot_id == slot_id), None)
+        return self._load_release(slot.release_digest) if slot is not None else None
+
+    @staticmethod
+    def _permission_plan(
+        current_release: ProjectRelease | None,
+        desired_release: ProjectRelease,
+    ) -> dict[str, Any]:
+        current = set(current_release.permissions if current_release is not None else ())
+        desired = set(desired_release.permissions)
+        return {
+            "current": sorted(current),
+            "desired": sorted(desired),
+            "introduced": sorted(desired - current),
+            "removed": sorted(current - desired),
+            "current_release_known": current_release is not None,
+        }
+
+    @staticmethod
+    def _migration_plan(release: ProjectRelease) -> dict[str, Any]:
+        migrations = [dict(item) for item in release.migrations]
+        entries: list[dict[str, Any]] = []
+        for index, migration in enumerate(migrations):
+            rollback = migration.get("rollback")
+            rollback_contract = dict(rollback) if isinstance(rollback, Mapping) else {}
+            entries.append(
+                {
+                    "id": str(migration.get("id") or migration.get("name") or f"migration-{index + 1}"),
+                    "from_schema": migration.get("from_schema"),
+                    "to_schema": migration.get("to_schema"),
+                    "rollback_supported": rollback_contract.get("supported") is True,
+                    "rollback_procedure_ref": str(rollback_contract.get("procedure_ref") or "").strip() or None,
+                }
+            )
+        rollback_ready = all(
+            item["rollback_supported"] and item["rollback_procedure_ref"]
+            for item in entries
+        )
+        return {
+            "count": len(entries),
+            "entries": entries,
+            "rollback_ready": rollback_ready,
+            "policy": "reversible_only",
+        }
 
     def _desired_lock(
         self,
@@ -237,6 +320,14 @@ class WorkspaceActivationManager:
         fetch_package: Callable[[ArtifactPackageRef], bytes] | None = None,
         reload_runtime: Callable[[WorkspaceLock], None] | None = None,
         health_check: Callable[[WorkspaceLock], bool] | None = None,
+        permission_decision: (
+            bool
+            | Mapping[str, Any]
+            | Callable[[Mapping[str, Any]], bool | Mapping[str, Any]]
+            | None
+        ) = None,
+        migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         phase_hook: Callable[[str], None] | None = None,
     ) -> ActivationResult:
         operation_id = self.operation_id(idempotency_key)
@@ -320,6 +411,67 @@ class WorkspaceActivationManager:
                 evidence={"lock_digest": desired.to_dict()["lock_digest"]},
             )
 
+            current_release = self._active_release(current, slot_id=slot_id)
+            permission_plan = self._permission_plan(current_release, plan.release)
+            operation["permission_plan"] = permission_plan
+            self._phase(
+                operation,
+                "permission-plan",
+                phase_hook=phase_hook,
+                evidence=permission_plan,
+            )
+            introduced_permissions = list(permission_plan["introduced"])
+            if introduced_permissions:
+                if permission_decision is None:
+                    operation["permission_decision"] = {
+                        "approved": False,
+                        "reason": "explicit_permission_approval_required",
+                    }
+                    self._write_operation(operation)
+                    raise ActivationError(
+                        "activation introduces permissions but has no explicit permission decision"
+                    )
+                raw_decision = (
+                    permission_decision(dict(permission_plan))
+                    if callable(permission_decision)
+                    else permission_decision
+                )
+                if isinstance(raw_decision, Mapping):
+                    decision = dict(raw_decision)
+                    approved = decision.get("approved") is True or decision.get("allowed") is True
+                else:
+                    approved = raw_decision is True
+                    decision = {"approved": approved}
+                decision["approved"] = approved
+                operation["permission_decision"] = decision
+                self._write_operation(operation)
+                if not approved:
+                    raise ActivationError("permission plan was not approved")
+            else:
+                operation["permission_decision"] = {
+                    "approved": True,
+                    "reason": "no_introduced_permissions",
+                }
+                self._write_operation(operation)
+
+            migration_plan = self._migration_plan(plan.release)
+            operation["migration_plan"] = migration_plan
+            self._phase(
+                operation,
+                "migration-plan",
+                phase_hook=phase_hook,
+                evidence=migration_plan,
+            )
+            if migration_plan["count"]:
+                if not migration_plan["rollback_ready"]:
+                    raise ActivationError(
+                        "irreversible or unspecified migrations require a deferred attended workflow"
+                    )
+                if migration_executor is None or migration_rollback is None:
+                    raise ActivationError(
+                        "reversible migrations require one-shot executor and rollback handlers"
+                    )
+
             self._phase(operation, "stage", phase_hook=phase_hook)
             stage_root.mkdir(parents=True, exist_ok=False)
             staged: dict[str, Path] = {}
@@ -342,6 +494,81 @@ class WorkspaceActivationManager:
                     }
                 )
             operation["moves"] = moves
+            self._phase(
+                operation,
+                "checkpoint",
+                phase_hook=phase_hook,
+                evidence={
+                    "release_digest": release_digest,
+                    "migration_count": migration_plan["count"],
+                },
+            )
+            atomic_write_json(self._release_path(release_digest), plan.release.to_dict())
+            if migration_plan["count"]:
+                operation["migration_execution"] = {
+                    "status": "dispatching",
+                    "started_at": _now_iso(),
+                }
+                self._write_operation(operation)
+                migration_request = {
+                    "operation_id": operation_id,
+                    "release_digest": release_digest,
+                    "migrations": [dict(item) for item in plan.release.migrations],
+                    "previous_lock": current.to_dict() if current else None,
+                    "desired_lock": desired.to_dict(),
+                }
+                try:
+                    migration_receipt = migration_executor(migration_request)  # type: ignore[misc]
+                except Exception:
+                    operation["migration_execution"] = {
+                        "status": "uncertain",
+                        "started_at": operation["migration_execution"]["started_at"],
+                        "failed_at": _now_iso(),
+                        "reason": "executor_raised_before_a_durable_receipt",
+                    }
+                    self._write_operation(operation)
+                    raise
+                if not isinstance(migration_receipt, Mapping):
+                    operation["migration_execution"] = {
+                        "status": "uncertain",
+                        "started_at": operation["migration_execution"]["started_at"],
+                        "failed_at": _now_iso(),
+                        "reason": "executor_returned_no_receipt",
+                    }
+                    self._write_operation(operation)
+                    raise ActivationError("migration executor returned no durable receipt")
+                receipt = dict(migration_receipt)
+                if str(receipt.get("status") or "").strip().lower() != "completed":
+                    operation["migration_execution"] = {
+                        "status": "uncertain",
+                        "receipt": receipt,
+                        "failed_at": _now_iso(),
+                        "reason": "executor_receipt_not_completed",
+                    }
+                    self._write_operation(operation)
+                    raise ActivationError("migration executor did not confirm completion")
+                if not receipt.get("checkpoint"):
+                    operation["migration_execution"] = {
+                        "status": "uncertain",
+                        "receipt": receipt,
+                        "failed_at": _now_iso(),
+                        "reason": "executor_receipt_has_no_checkpoint",
+                    }
+                    self._write_operation(operation)
+                    raise ActivationError("migration executor receipt has no checkpoint identity")
+                operation["migration_execution"] = {
+                    "status": "completed",
+                    "receipt": receipt,
+                    "completed_at": _now_iso(),
+                }
+                self._write_operation(operation)
+            else:
+                operation["migration_execution"] = {
+                    "status": "not_required",
+                    "completed_at": _now_iso(),
+                }
+                self._write_operation(operation)
+
             self._phase(operation, "switch-lock", phase_hook=phase_hook)
             for move in moves:
                 target = Path(move["target"])
@@ -358,10 +585,16 @@ class WorkspaceActivationManager:
             if reload_runtime is not None:
                 reload_runtime(desired)
 
-            self._phase(operation, "health", phase_hook=phase_hook)
+            self._phase(operation, "health-verify", phase_hook=phase_hook)
             if health_check is not None and health_check(desired) is not True:
                 raise ActivationError("post-activation health check failed")
 
+            self._phase(
+                operation,
+                "commit",
+                phase_hook=phase_hook,
+                evidence={"lock_digest": desired.to_dict()["lock_digest"]},
+            )
             history = self.lock_history_root / (
                 f"{desired.lock_revision:08d}-{desired.to_dict()['lock_digest'].split(':', 1)[1]}.json"
             )
@@ -379,10 +612,56 @@ class WorkspaceActivationManager:
                 release_digest=release_digest,
             )
         except Exception as exc:
+            migration_state = operation.get("migration_execution")
+            if isinstance(migration_state, Mapping) and migration_state.get("status") == "completed":
+                rollback_request = {
+                    "operation_id": operation_id,
+                    "release_digest": release_digest,
+                    "migrations": [dict(item) for item in plan.release.migrations],
+                    "receipt": dict(migration_state.get("receipt") or {}),
+                    "previous_lock": current.to_dict() if current else None,
+                    "desired_lock": desired.to_dict() if desired else None,
+                }
+                operation["migration_rollback"] = {
+                    "status": "dispatching",
+                    "started_at": _now_iso(),
+                }
+                self._write_operation(operation)
+                try:
+                    rollback_receipt = migration_rollback(rollback_request)  # type: ignore[misc]
+                    if not isinstance(rollback_receipt, Mapping) or str(
+                        rollback_receipt.get("status") or ""
+                    ).strip().lower() not in {"completed", "rolled_back"}:
+                        raise ActivationError("migration rollback returned no durable completion receipt")
+                    operation["migration_rollback"] = {
+                        "status": "completed",
+                        "receipt": dict(rollback_receipt),
+                        "completed_at": _now_iso(),
+                    }
+                except Exception as rollback_exc:
+                    operation["migration_rollback"] = {
+                        "status": "uncertain",
+                        "error": f"{type(rollback_exc).__name__}: {rollback_exc}",
+                        "failed_at": _now_iso(),
+                    }
+                    operation["rollback_error"] = operation["migration_rollback"]["error"]
             try:
                 self._rollback(operation)
             except Exception as rollback_exc:
                 operation["rollback_error"] = f"{type(rollback_exc).__name__}: {rollback_exc}"
+            if reload_runtime is not None and current is not None:
+                try:
+                    reload_runtime(current)
+                    operation["runtime_rollback"] = {
+                        "status": "completed",
+                        "lock_digest": current.to_dict()["lock_digest"],
+                    }
+                except Exception as rollback_exc:
+                    operation["runtime_rollback"] = {
+                        "status": "failed",
+                        "error": f"{type(rollback_exc).__name__}: {rollback_exc}",
+                    }
+                    operation["rollback_error"] = operation["runtime_rollback"]["error"]
             operation["status"] = "failed"
             operation["error"] = f"{type(exc).__name__}: {exc}"
             operation["failed_at"] = _now_iso()
@@ -391,12 +670,88 @@ class WorkspaceActivationManager:
                 raise
             raise ActivationError(str(exc)) from exc
 
-    def recover_interrupted(self, operation_id: str) -> dict[str, Any]:
+    def recover_interrupted(
+        self,
+        operation_id: str,
+        *,
+        migration_reconciler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         operation = self._read_operation(operation_id)
         if operation is None:
             raise FileNotFoundError(f"activation operation not found: {operation_id}")
         if operation.get("status") == "completed":
             raise ActivationReplayBlocked("completed activation does not need recovery")
+        migration_state = operation.get("migration_execution")
+        migration_status = (
+            str(migration_state.get("status") or "").strip().lower()
+            if isinstance(migration_state, Mapping)
+            else ""
+        )
+        migration_rollback_state = operation.get("migration_rollback")
+        migration_rollback_status = (
+            str(migration_rollback_state.get("status") or "").strip().lower()
+            if isinstance(migration_rollback_state, Mapping)
+            else ""
+        )
+        if migration_status in {"dispatching", "uncertain"}:
+            if migration_reconciler is None:
+                raise ActivationReplayBlocked(
+                    "migration outcome is unknown; explicit one-shot reconciliation is required"
+                )
+            operation["migration_reconciliation"] = {
+                "status": "dispatching",
+                "started_at": _now_iso(),
+            }
+            self._write_operation(operation)
+            receipt = migration_reconciler(dict(operation))
+            if not isinstance(receipt, Mapping) or str(receipt.get("status") or "").strip().lower() not in {
+                "not_applied",
+                "rolled_back",
+            }:
+                operation["migration_reconciliation"] = {
+                    "status": "uncertain",
+                    "receipt": dict(receipt) if isinstance(receipt, Mapping) else None,
+                    "failed_at": _now_iso(),
+                }
+                self._write_operation(operation)
+                raise ActivationReplayBlocked(
+                    "migration reconciliation did not prove a safe rolled-back state"
+                )
+            operation["migration_reconciliation"] = {
+                "status": "completed",
+                "receipt": dict(receipt),
+                "completed_at": _now_iso(),
+            }
+            self._write_operation(operation)
+        elif migration_status == "completed" and migration_rollback_status != "completed":
+            if migration_rollback is None:
+                raise ActivationReplayBlocked(
+                    "completed migration requires explicit rollback before operation recovery"
+                )
+            operation["migration_rollback"] = {
+                "status": "dispatching",
+                "started_at": _now_iso(),
+            }
+            self._write_operation(operation)
+            receipt = migration_rollback(dict(operation))
+            if not isinstance(receipt, Mapping) or str(receipt.get("status") or "").strip().lower() not in {
+                "completed",
+                "rolled_back",
+            }:
+                operation["migration_rollback"] = {
+                    "status": "uncertain",
+                    "receipt": dict(receipt) if isinstance(receipt, Mapping) else None,
+                    "failed_at": _now_iso(),
+                }
+                self._write_operation(operation)
+                raise ActivationReplayBlocked("migration rollback was not durably confirmed")
+            operation["migration_rollback"] = {
+                "status": "completed",
+                "receipt": dict(receipt),
+                "completed_at": _now_iso(),
+            }
+            self._write_operation(operation)
         self._rollback(operation)
         operation["status"] = "recovered"
         operation["recovered_at"] = _now_iso()
