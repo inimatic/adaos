@@ -1,0 +1,369 @@
+from __future__ import annotations
+
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from typing import Any, Iterable, Mapping
+
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
+
+from adaos.domain.artifact_release import (
+    ArtifactKind,
+    ArtifactPackageRef,
+    ArtifactSourceRef,
+    DependencyBinding,
+    ProjectRelease,
+    ResolvedDependency,
+)
+
+
+class DependencyResolutionError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyRequirement:
+    kind: ArtifactKind
+    artifact_id: str
+    version_spec: str = ""
+    optional: bool = False
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"scenario", "skill"}:
+            raise DependencyResolutionError("dependency kind must be scenario or skill")
+        artifact_id = str(self.artifact_id or "").strip()
+        if not artifact_id:
+            raise DependencyResolutionError("dependency id must not be empty")
+        object.__setattr__(self, "artifact_id", artifact_id)
+        object.__setattr__(self, "version_spec", normalize_version_spec(self.version_spec))
+
+    @property
+    def key(self) -> str:
+        return f"{self.kind}:{self.artifact_id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "kind": self.kind,
+            "id": self.artifact_id,
+            "optional": self.optional,
+        }
+        if self.version_spec:
+            payload["version"] = self.version_spec
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class ReleasePlan:
+    release: ProjectRelease
+    packages: tuple[ArtifactPackageRef, ...]
+    bindings: tuple[DependencyBinding, ...]
+    reverse_consumers: Mapping[str, tuple[str, ...]]
+
+    def explain(self) -> dict[str, Any]:
+        return {
+            "release": self.release.to_dict(),
+            "packages": [item.to_dict() for item in self.packages],
+            "bindings": [item.to_dict() for item in self.bindings],
+            "reverse_consumers": {
+                key: list(value) for key, value in sorted(self.reverse_consumers.items())
+            },
+        }
+
+
+def _semver_triplet(value: str) -> tuple[int, int, int]:
+    try:
+        parsed = Version(value)
+    except InvalidVersion as exc:
+        raise DependencyResolutionError(f"invalid semantic version: {value!r}") from exc
+    release = tuple(parsed.release) + (0, 0, 0)
+    return int(release[0]), int(release[1]), int(release[2])
+
+
+def normalize_version_spec(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw or raw == "*":
+        return ""
+    if raw.startswith("^"):
+        base = raw[1:].strip()
+        major, minor, patch = _semver_triplet(base)
+        if major > 0:
+            ceiling = f"{major + 1}.0.0"
+        elif minor > 0:
+            ceiling = f"0.{minor + 1}.0"
+        else:
+            ceiling = f"0.0.{patch + 1}"
+        raw = f">={base},<{ceiling}"
+    elif raw.startswith("~") and not raw.startswith("~="):
+        base = raw[1:].strip()
+        major, minor, _ = _semver_triplet(base)
+        raw = f">={base},<{major}.{minor + 1}.0"
+    elif "*" in raw and not raw.startswith(("==", "!=")):
+        raw = f"=={raw}"
+    elif not raw.startswith(("<", ">", "=", "!", "~")):
+        raw = f"=={raw}"
+    try:
+        SpecifierSet(raw)
+    except InvalidSpecifier as exc:
+        raise DependencyResolutionError(f"invalid dependency version range: {value!r}") from exc
+    return raw
+
+
+def _requirement_from_value(
+    value: Any,
+    *,
+    default_kind: ArtifactKind,
+    optional: bool,
+) -> DependencyRequirement | None:
+    if isinstance(value, str):
+        artifact_id = value.strip()
+        if not artifact_id:
+            return None
+        return DependencyRequirement(default_kind, artifact_id, optional=optional)
+    if not isinstance(value, Mapping):
+        return None
+    artifact_id = str(value.get("id") or value.get("name") or "").strip()
+    if not artifact_id:
+        return None
+    kind = str(value.get("kind") or default_kind).strip().lower()
+    return DependencyRequirement(
+        kind=kind,  # type: ignore[arg-type]
+        artifact_id=artifact_id,
+        version_spec=value.get("version") or value.get("version_spec") or "",
+        optional=value.get("optional") is True or optional,
+    )
+
+
+def parse_artifact_requirements(
+    manifest: Mapping[str, Any],
+    *,
+    kind: ArtifactKind,
+) -> tuple[DependencyRequirement, ...]:
+    """Read canonical ranged dependencies while preserving legacy declarations."""
+
+    result: list[DependencyRequirement] = []
+
+    def append(value: Any, *, default_kind: ArtifactKind, optional: bool = False) -> None:
+        requirement = _requirement_from_value(
+            value,
+            default_kind=default_kind,
+            optional=optional,
+        )
+        if requirement is None:
+            return
+        previous = next((item for item in result if item.key == requirement.key), None)
+        if previous is None:
+            result.append(requirement)
+            return
+        if previous.version_spec != requirement.version_spec or previous.optional != requirement.optional:
+            raise DependencyResolutionError(
+                f"conflicting duplicate dependency declaration for {requirement.key}"
+            )
+
+    legacy = manifest.get("depends")
+    if isinstance(legacy, (list, tuple)):
+        for value in legacy:
+            append(value, default_kind="skill")
+
+    dependencies = manifest.get("dependencies")
+    if isinstance(dependencies, (list, tuple)):
+        for value in dependencies:
+            append(value, default_kind="skill")
+
+    runtime = manifest.get("runtime")
+    if isinstance(runtime, Mapping):
+        skills = runtime.get("skills")
+        if isinstance(skills, Mapping):
+            for value in skills.get("required") or ():
+                append(value, default_kind="skill")
+            for value in skills.get("optional") or ():
+                append(value, default_kind="skill", optional=True)
+
+    return tuple(sorted(result, key=lambda item: item.key))
+
+
+class PackageCatalog:
+    def __init__(self, packages: Iterable[ArtifactPackageRef] = ()) -> None:
+        self._packages: dict[str, list[ArtifactPackageRef]] = defaultdict(list)
+        for package in packages:
+            self.add(package)
+
+    def add(self, package: ArtifactPackageRef) -> None:
+        if all(item.digest != package.digest for item in self._packages[package.key]):
+            self._packages[package.key].append(package)
+
+    def versions(self, key: str) -> tuple[ArtifactPackageRef, ...]:
+        return tuple(
+            sorted(
+                self._packages.get(key, ()),
+                key=lambda item: (Version(item.version), item.digest),
+                reverse=True,
+            )
+        )
+
+    def resolve(
+        self,
+        key: str,
+        requirements: Iterable[DependencyRequirement],
+    ) -> ArtifactPackageRef | None:
+        constraints = tuple(requirements)
+        candidates = self.versions(key)
+        matches = [
+            item
+            for item in candidates
+            if all(
+                not requirement.version_spec
+                or Version(item.version) in SpecifierSet(requirement.version_spec)
+                for requirement in constraints
+            )
+        ]
+        if not matches:
+            if constraints and all(item.optional for item in constraints):
+                return None
+            requested = ", ".join(item.version_spec or "*" for item in constraints) or "*"
+            available = ", ".join(item.version for item in candidates) or "none"
+            raise DependencyResolutionError(
+                f"no compatible package for {key}; requested={requested}; available={available}"
+            )
+        highest = matches[0].version
+        top = [item for item in matches if item.version == highest]
+        if len({item.digest for item in top}) != 1:
+            raise DependencyResolutionError(
+                f"ambiguous package for {key}@{highest}: multiple content digests"
+            )
+        return top[0]
+
+
+def _assert_acyclic(graph: Mapping[str, set[str]]) -> None:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(key: str, path: tuple[str, ...]) -> None:
+        if key in visiting:
+            start = path.index(key) if key in path else 0
+            cycle = path[start:] + (key,)
+            raise DependencyResolutionError(f"dependency cycle detected: {' -> '.join(cycle)}")
+        if key in visited:
+            return
+        visiting.add(key)
+        for dependency in sorted(graph.get(key, ())):
+            visit(dependency, path + (key,))
+        visiting.remove(key)
+        visited.add(key)
+
+    for node in sorted(graph):
+        visit(node, ())
+
+
+def build_project_release(
+    *,
+    project_id: str,
+    version: str,
+    source_ref: ArtifactSourceRef,
+    components: Iterable[ArtifactPackageRef],
+    catalog: PackageCatalog,
+    requirements_by_package: Mapping[str, Iterable[DependencyRequirement]] | None = None,
+    permissions: Iterable[str] = (),
+    migrations: Iterable[Mapping[str, Any]] = (),
+    validation_evidence: Iterable[Mapping[str, Any]] = (),
+) -> ReleasePlan:
+    owned = tuple(components)
+    if not owned:
+        raise DependencyResolutionError("project release requires at least one component")
+    requirements_by_package = requirements_by_package or {}
+    selected: dict[str, ArtifactPackageRef] = {item.key: item for item in owned}
+    if len(selected) != len(owned):
+        raise DependencyResolutionError("project components must have unique identities")
+
+    constraints: dict[str, list[DependencyRequirement]] = defaultdict(list)
+    graph: dict[str, set[str]] = defaultdict(set)
+    bindings: dict[tuple[str, str], DependencyBinding] = {}
+    pending: deque[ArtifactPackageRef] = deque(owned)
+    expanded: set[str] = set()
+
+    while pending:
+        consumer = pending.popleft()
+        consumer_token = f"{consumer.key}@{consumer.digest}"
+        if consumer_token in expanded:
+            continue
+        expanded.add(consumer_token)
+        for requirement in requirements_by_package.get(consumer.digest, ()):
+            graph[consumer.key].add(requirement.key)
+            constraints[requirement.key].append(requirement)
+            resolved = catalog.resolve(requirement.key, constraints[requirement.key])
+            if resolved is None:
+                continue
+            previous = selected.get(requirement.key)
+            if previous is not None and previous.digest != resolved.digest:
+                if requirement.key in {item.key for item in owned}:
+                    raise DependencyResolutionError(
+                        f"owned component {requirement.key}@{previous.version} conflicts with "
+                        f"dependency constraints"
+                    )
+                selected[requirement.key] = resolved
+                pending.append(resolved)
+            elif previous is None:
+                selected[requirement.key] = resolved
+                pending.append(resolved)
+            bindings[(consumer.key, requirement.key)] = DependencyBinding(
+                consumer=consumer.key,
+                dependency=requirement.key,
+                package_digest=resolved.digest,
+            )
+
+    _assert_acyclic(graph)
+    owned_keys = {item.key for item in owned}
+    resolved_dependencies = tuple(
+        ResolvedDependency(
+            kind=package.kind,
+            artifact_id=package.artifact_id,
+            version=package.version,
+            package_digest=package.digest,
+            version_spec=",".join(
+                sorted(
+                    {
+                        item.version_spec
+                        for item in constraints.get(key, ())
+                        if item.version_spec
+                    }
+                )
+            ),
+            optional=bool(constraints.get(key))
+            and all(item.optional for item in constraints[key]),
+        )
+        for key, package in sorted(selected.items())
+        if key not in owned_keys
+    )
+    release = ProjectRelease(
+        project_id=project_id,
+        version=version,
+        source_ref=source_ref,
+        components=owned,
+        resolved_dependencies=resolved_dependencies,
+        permissions=tuple(permissions),
+        migrations=tuple(migrations),
+        validation_evidence=tuple(validation_evidence),
+    ).seal()
+    reverse: dict[str, set[str]] = defaultdict(set)
+    for binding in bindings.values():
+        reverse[binding.dependency].add(binding.consumer)
+    return ReleasePlan(
+        release=release,
+        packages=tuple(sorted(selected.values(), key=lambda item: item.key)),
+        bindings=tuple(
+            sorted(bindings.values(), key=lambda item: (item.consumer, item.dependency))
+        ),
+        reverse_consumers={
+            key: tuple(sorted(values)) for key, values in sorted(reverse.items())
+        },
+    )
+
+
+__all__ = [
+    "DependencyRequirement",
+    "DependencyResolutionError",
+    "PackageCatalog",
+    "ReleasePlan",
+    "build_project_release",
+    "normalize_version_spec",
+    "parse_artifact_requirements",
+]
