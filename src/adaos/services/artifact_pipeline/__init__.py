@@ -52,6 +52,7 @@ from .releases import (
     normalize_version_spec,
     parse_artifact_requirements,
 )
+from .remote import ArtifactRegistryClient, RemoteReleaseRepository
 from .sources import (
     LocalGitSourceProvider,
     MaterializedSource,
@@ -65,6 +66,7 @@ __all__ = [
     "ActivationError",
     "ActivationReplayBlocked",
     "ActivationResult",
+    "ArtifactRegistryClient",
     "CANDIDATE_SCHEMA",
     "TRIAL_SCHEMA",
     "CandidateError",
@@ -91,6 +93,7 @@ __all__ = [
     "PackageCatalog",
     "ReleasePlan",
     "ReleaseRepository",
+    "RemoteReleaseRepository",
     "SourceProvider",
     "SourceProviderError",
     "SubscriptionManager",

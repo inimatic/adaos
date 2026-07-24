@@ -11,6 +11,7 @@ import time
 import json
 import hashlib
 import uuid
+from urllib.parse import quote
 
 
 class RootHttpError(RuntimeError):
@@ -816,6 +817,128 @@ class RootHttpClient:
         return dict(
             self._request(
                 "POST", "/v1/scenarios/draft", json=payload, verify=(self.verify if verify is None else verify), cert=(self.cert if cert is None else cert), timeout=120.0
+            )
+        )
+
+    def put_artifact_package(
+        self,
+        *,
+        digest: str,
+        archive_b64: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "POST",
+                "/v1/artifacts/packages",
+                json={"digest": digest, "archive_b64": archive_b64},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def get_artifact_package(
+        self,
+        *,
+        digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/artifacts/packages/{quote(digest, safe='')}",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def put_project_release(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        release_plan: Mapping[str, Any],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        return dict(
+            self._request(
+                "POST",
+                f"/v1/artifacts/projects/{project}/releases",
+                json={
+                    "release_digest": release_digest,
+                    "release_plan": dict(release_plan),
+                },
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def get_project_release(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        digest = quote(release_digest, safe="")
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/artifacts/projects/{project}/releases/{digest}",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def set_artifact_channel(
+        self,
+        *,
+        project_id: str,
+        channel: str,
+        release_digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        channel_id = quote(channel, safe="")
+        return dict(
+            self._request(
+                "PUT",
+                f"/v1/artifacts/projects/{project}/channels/{channel_id}",
+                json={"release_digest": release_digest},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def get_artifact_channel(
+        self,
+        *,
+        project_id: str,
+        channel: str = "stable",
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        channel_id = quote(channel, safe="")
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/artifacts/projects/{project}/channels/{channel_id}",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
             )
         )
 
