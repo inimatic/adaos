@@ -2125,42 +2125,6 @@ class RootDeveloperService:
             raise RootServiceError(
                 "Promoted release does not contain its project component; workspace was not reconciled"
             )
-        commit: str | None = None
-        try:
-            if component.kind == "skill":
-                manager = SkillManager(
-                    repo=self.ctx.skills_repo,
-                    registry=SqliteSkillRegistry(self.ctx.sql),
-                    git=self.ctx.git,
-                    paths=self.ctx.paths,
-                    bus=getattr(self.ctx, "bus", None),
-                    caps=self.ctx.caps,
-                    settings=self.ctx.settings,
-                )
-                commit = manager.push(
-                    component.artifact_id,
-                    f"publish(skill): {component.artifact_id} v{component.version}",
-                    bump=False,
-                )
-            else:
-                manager = ScenarioManager(
-                    repo=self.ctx.scenarios_repo,
-                    registry=SqliteScenarioRegistry(self.ctx.sql),
-                    git=self.ctx.git,
-                    paths=self.ctx.paths,
-                    bus=getattr(self.ctx, "bus", None),
-                    caps=self.ctx.caps,
-                )
-                commit = manager.push(
-                    component.artifact_id,
-                    f"publish(scenario): {component.artifact_id} v{component.version}",
-                    bump=False,
-                )
-        except Exception as exc:
-            raise RootServiceError(
-                "Stable channel was promoted, but the workspace source commit failed; "
-                f"retry source reconciliation: {exc}"
-            ) from exc
         return {
             "ok": True,
             "candidate_id": candidate_id,
@@ -2173,7 +2137,8 @@ class RootDeveloperService:
             "source_revision": component.source_ref.revision,
             "workspace_lock": promoted.activation.workspace_lock.to_dict(),
             "subscription": promoted.subscription.to_dict(),
-            "commit": commit,
+            "commit": None,
+            "activation_mode": "package_lock",
         }
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
