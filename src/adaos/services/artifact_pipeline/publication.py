@@ -213,6 +213,32 @@ class PromotionResult:
     subscription: StableSubscription
 
 
+@dataclass(frozen=True, slots=True)
+class SubscriptionUpdateNotice:
+    subscription: StableSubscription
+    pointer: ChannelPointer
+    available: bool
+    activation_allowed: bool
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "subscription": self.subscription.to_dict(),
+            "pointer": self.pointer.to_dict(),
+            "available": self.available,
+            "activation_allowed": self.activation_allowed,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionUpdateResult:
+    subscription: StableSubscription
+    pointer: ChannelPointer
+    plan: ReleasePlan
+    activation: ActivationResult
+
+
 class ArtifactPublicationService:
     def __init__(
         self,
@@ -241,6 +267,61 @@ class ArtifactPublicationService:
         if not isinstance(payload, Mapping) or payload.get("schema") != REBASE_PLAN_SCHEMA:
             raise PublicationError("unsupported candidate rebase plan")
         return CandidateRebasePlan.from_mapping(payload)
+
+    def check_subscription(self, project_id: str) -> SubscriptionUpdateNotice:
+        try:
+            subscription = self.subscriptions.load()[project_id]
+        except KeyError as exc:
+            raise PublicationError(f"project has no stable subscription: {project_id}") from exc
+        pointer = self.remote.get_channel(project_id, subscription.channel)
+        available = pointer.release_digest != subscription.installed_digest
+        allowed = available and subscription.policy == "notify"
+        reason = "up_to_date"
+        if available and subscription.policy == "pinned":
+            reason = "pinned"
+        elif available:
+            reason = "channel_moved"
+        return SubscriptionUpdateNotice(subscription, pointer, available, allowed, reason)
+
+    def activate_subscription_update(
+        self,
+        project_id: str,
+        *,
+        idempotency_key: str | None = None,
+        health_check=None,
+        reload_runtime=None,
+    ) -> SubscriptionUpdateResult:
+        notice = self.check_subscription(project_id)
+        if not notice.available:
+            raise PublicationError("subscription is already up to date")
+        if not notice.activation_allowed:
+            raise PublicationError("pinned subscription cannot be activated")
+        plan = self.remote.get_release(project_id, notice.pointer.release_digest)
+        activation = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+        ).activate(
+            plan,
+            idempotency_key=(
+                str(idempotency_key or "").strip()
+                or f"subscription:{project_id}:{notice.pointer.release_digest}"
+            ),
+            fetch_package=self.remote.fetch_package,
+            reload_runtime=reload_runtime,
+            health_check=health_check,
+        )
+        self.release_cache.put_release(plan)
+        self._record_workspace_projection(plan)
+        updated = StableSubscription(
+            project_id=notice.subscription.project_id,
+            channel=notice.subscription.channel,
+            policy=notice.subscription.policy,
+            installed_release=notice.pointer.release,
+            installed_digest=notice.pointer.release_digest,
+        )
+        self.subscriptions.save(updated)
+        return SubscriptionUpdateResult(updated, notice.pointer, plan, activation)
 
     def record_push(
         self,
@@ -664,11 +745,21 @@ class ArtifactPublicationService:
             health_check=health_check,
         )
         self.release_cache.put_release(plan)
+        self._record_workspace_projection(plan)
+        subscription = StableSubscription(
+            project_id=candidate.project_id,
+            installed_release=pointer.release,
+            installed_digest=pointer.release_digest,
+        )
+        self.subscriptions.save(subscription)
+        return PromotionResult(candidate, plan, pointer, activation, subscription)
+
+    def _record_workspace_projection(self, plan: ReleasePlan) -> None:
         component = next(
             (
                 item
                 for item in plan.release.components
-                if item.artifact_id == candidate.project_id
+                if item.artifact_id == plan.release.project_id
             ),
             None,
         )
@@ -702,13 +793,6 @@ class ArtifactPublicationService:
             channel="stable",
             release=plan.release,
         )
-        subscription = StableSubscription(
-            project_id=candidate.project_id,
-            installed_release=pointer.release,
-            installed_digest=pointer.release_digest,
-        )
-        self.subscriptions.save(subscription)
-        return PromotionResult(candidate, plan, pointer, activation, subscription)
 
 
 __all__ = [
@@ -722,4 +806,6 @@ __all__ = [
     "PublicationStaleError",
     "PublicationRemote",
     "PushedSourceRecord",
+    "SubscriptionUpdateNotice",
+    "SubscriptionUpdateResult",
 ]

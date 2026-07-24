@@ -4,13 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef
+from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef, StableSubscription
 from adaos.services.artifact_pipeline import (
+    ActivationError,
     ArtifactPublicationService,
     PublicationError,
     PublicationStaleError,
     ReleasePlan,
     ReleaseRepository,
+    WorkspaceActivationManager,
 )
 
 
@@ -443,3 +445,88 @@ def test_moved_base_creates_reapply_plan_and_requires_new_trial(tmp_path: Path) 
     service.decide_candidate(rebased.candidate.candidate_id, accepted=True)
     promoted = service.promote(rebased.candidate.candidate_id)
     assert promoted.pointer.release == "recipes@1.1.1"
+
+
+def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp_path: Path) -> None:
+    remote = _Remote(tmp_path / "remote")
+    publisher_dev = _scenario(tmp_path / "publisher-dev")
+    publisher = ArtifactPublicationService(
+        state_root=tmp_path / "publisher-state",
+        workspace_root=tmp_path / "publisher-workspace",
+        remote=remote,
+    )
+
+    def publish(version: str, marker: str):
+        (publisher_dev / "scenario.yaml").write_text(
+            f"id: recipes\nversion: {version}\ntitle: Recipes\n",
+            encoding="utf-8",
+        )
+        (publisher_dev / "webui.json").write_text(
+            f'{{"marker": "{marker}"}}\n',
+            encoding="utf-8",
+        )
+        publisher.record_push(
+            kind="scenario",
+            artifact_id="recipes",
+            artifact_dir=publisher_dev,
+            source_ref=_source(),
+            change_ids=(f"publish-{version}",),
+        )
+        prepared = publisher.prepare_candidate(
+            kind="scenario",
+            artifact_id="recipes",
+            artifact_dir=publisher_dev,
+            change_ids=(f"publish-{version}",),
+            validation_evidence={"status": "passed"},
+        )
+        publisher.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+        return publisher.promote(prepared.candidate.candidate_id)
+
+    first = publish("1.0.0", "first")
+    subscriber = ArtifactPublicationService(
+        state_root=tmp_path / "subscriber-state",
+        workspace_root=tmp_path / "subscriber-workspace",
+        remote=remote,
+    )
+    WorkspaceActivationManager(
+        workspace_root=subscriber.workspace_root,
+        package_store=subscriber.package_store,
+        state_root=subscriber.state_root / "activation",
+    ).activate(
+        first.plan,
+        idempotency_key="initial-install",
+        fetch_package=remote.fetch_package,
+    )
+    subscriber.subscriptions.save(
+        StableSubscription(
+            project_id="recipes",
+            installed_release=first.pointer.release,
+            installed_digest=first.pointer.release_digest,
+        )
+    )
+
+    second = publish("1.1.0", "second")
+    notice = subscriber.check_subscription("recipes")
+    assert notice.available is True
+    assert notice.pointer.release_digest == second.pointer.release_digest
+
+    with pytest.raises(ActivationError, match="health check failed"):
+        subscriber.activate_subscription_update(
+            "recipes",
+            health_check=lambda _lock: False,
+        )
+    unchanged = subscriber.subscriptions.load()["recipes"]
+    assert unchanged.installed_digest == first.pointer.release_digest
+    assert (subscriber.workspace_root / "scenarios" / "recipes" / "webui.json").read_text(
+        encoding="utf-8"
+    ).strip() == '{"marker": "first"}'
+
+    updated = subscriber.activate_subscription_update(
+        "recipes",
+        idempotency_key="subscription-retry-after-health-fix",
+        health_check=lambda _lock: True,
+    )
+    assert updated.subscription.installed_digest == second.pointer.release_digest
+    assert (subscriber.workspace_root / "scenarios" / "recipes" / "webui.json").read_text(
+        encoding="utf-8"
+    ).strip() == '{"marker": "second"}'

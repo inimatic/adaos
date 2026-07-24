@@ -2186,6 +2186,32 @@ class RootDeveloperService:
             "activation_mode": "package_lock",
         }
 
+    def check_artifact_subscription(self, project_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        notice = self._artifact_publication_service(cfg).check_subscription(project_id)
+        return {"ok": True, **notice.to_dict()}
+
+    def activate_artifact_subscription(
+        self,
+        project_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        updated = self._artifact_publication_service(cfg).activate_subscription_update(
+            project_id,
+            idempotency_key=idempotency_key,
+        )
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "release": updated.pointer.release,
+            "release_digest": updated.pointer.release_digest,
+            "workspace_lock": updated.activation.workspace_lock.to_dict(),
+            "subscription": updated.subscription.to_dict(),
+            "activation_mode": "package_lock",
+        }
+
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = self._workspace_root(cfg)
         workspace_root.mkdir(parents=True, exist_ok=True)

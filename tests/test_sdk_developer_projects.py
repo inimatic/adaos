@@ -198,6 +198,17 @@ class _DeveloperService:
             "release": "builder@1.0.0",
         }
 
+    def check_artifact_subscription(self, project_id):
+        return {"ok": True, "project_id": project_id, "available": True}
+
+    def activate_artifact_subscription(self, project_id, *, idempotency_key=None):
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "release": f"{project_id}@1.1.0",
+            "idempotency_key": idempotency_key,
+        }
+
 
 def test_lifecycle_results_are_plain_json_values(monkeypatch) -> None:
     monkeypatch.setattr(projects, "_service", lambda: _DeveloperService())
@@ -236,10 +247,18 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         "builder",
         validation_evidence={"status": "passed"},
     )
+    notice = projects.check_subscription("builder")
+    subscription_update = projects.activate_subscription(
+        "scenario",
+        "builder",
+        idempotency_key="update-builder-1",
+    )
 
     assert accepted["candidate"]["status"] == "accepted"
     assert promoted["release"] == "builder@1.0.0"
     assert rebased["candidate"]["candidate_id"] == "builder-rebased"
+    assert notice["available"] is True
+    assert subscription_update["idempotency_key"] == "update-builder-1"
 
     with pytest.raises(projects.DeveloperProjectError, match="at least one Builder Change"):
         projects.prepare_candidate("scenario", "builder", change_ids=[])

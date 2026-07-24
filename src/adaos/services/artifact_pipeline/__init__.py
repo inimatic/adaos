@@ -64,6 +64,8 @@ from .publication import (
     PublicationError,
     PublicationStaleError,
     PushedSourceRecord,
+    SubscriptionUpdateNotice,
+    SubscriptionUpdateResult,
 )
 from .sources import (
     LocalGitSourceProvider,
@@ -104,6 +106,8 @@ __all__ = [
     "PublicationError",
     "PublicationStaleError",
     "PushedSourceRecord",
+    "SubscriptionUpdateNotice",
+    "SubscriptionUpdateResult",
     "LocalGitSourceProvider",
     "MaterializedSource",
     "VerifiedArtifactPackage",

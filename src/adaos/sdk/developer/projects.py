@@ -554,6 +554,29 @@ def promote_candidate(candidate_id: str) -> dict[str, Any]:
     return result
 
 
+def check_subscription(project_id: str) -> dict[str, Any]:
+    normalized_id = _project_id(project_id)
+    return _jsonable(_service().check_artifact_subscription(normalized_id))
+
+
+def activate_subscription(
+    kind: str,
+    project_id: str,
+    *,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    result = _jsonable(
+        _service().activate_artifact_subscription(
+            normalized_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="subscription_activated")
+    return result
+
+
 def delete(kind: str, project_id: str, *, remove_local: bool = True) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)
@@ -578,6 +601,8 @@ __all__ = [
     "DeveloperProjectError",
     "ProjectNotFoundError",
     "create",
+    "check_subscription",
+    "activate_subscription",
     "delete",
     "describe",
     "find_scenario_root",
