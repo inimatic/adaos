@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+import yaml
+
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
@@ -35,9 +37,11 @@ from adaos.services.artifact_pipeline.packages import (
     build_artifact_package,
 )
 from adaos.services.artifact_pipeline.releases import (
+    DependencyRequirement,
     PackageCatalog,
     ReleasePlan,
     build_project_release,
+    parse_artifact_requirements,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.workspace_registry import (
@@ -189,6 +193,100 @@ class ArtifactPublicationService:
             )
         return current
 
+    @staticmethod
+    def _manifest(artifact_dir: Path, kind: str) -> Mapping[str, Any]:
+        path = artifact_dir / ("skill.yaml" if kind == "skill" else "scenario.yaml")
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise PublicationError(f"cannot read canonical manifest {path}: {exc}") from exc
+        if not isinstance(payload, Mapping):
+            raise PublicationError(f"canonical manifest {path} must contain an object")
+        return payload
+
+    def _dependency_inputs(
+        self,
+        *,
+        kind: str,
+        artifact_dir: Path,
+        own_package: ArtifactPackageRef,
+    ) -> tuple[
+        PackageCatalog,
+        dict[str, tuple[DependencyRequirement, ...]],
+        dict[str, bytes],
+    ]:
+        requirements = parse_artifact_requirements(
+            self._manifest(artifact_dir, kind),
+            kind=kind,  # type: ignore[arg-type]
+        )
+        catalog = PackageCatalog()
+        requirements_by_package: dict[str, list[DependencyRequirement]] = {
+            own_package.digest: list(requirements)
+        }
+        archives: dict[str, bytes] = {}
+        loaded_releases: set[str] = set()
+
+        for requirement in requirements:
+            try:
+                pointer = self.remote.get_channel(requirement.artifact_id, "stable")
+                dependency_plan = self.remote.get_release(
+                    requirement.artifact_id,
+                    pointer.release_digest,
+                )
+            except Exception as exc:
+                status = getattr(exc, "status_code", None)
+                code = str(getattr(exc, "error_code", "") or "")
+                missing = status == 404 or code in {"channel_not_found", "release_not_found"} or isinstance(
+                    exc, FileNotFoundError
+                )
+                if missing and requirement.optional:
+                    continue
+                if missing:
+                    raise PublicationError(
+                        f"required stable dependency is unavailable: {requirement.key}"
+                    ) from exc
+                raise
+
+            release_digest = (
+                dependency_plan.release.release_digest
+                or dependency_plan.release.computed_digest()
+            )
+            if release_digest in loaded_releases:
+                continue
+            loaded_releases.add(release_digest)
+            package_by_key = {item.key: item for item in dependency_plan.packages}
+            component = package_by_key.get(requirement.key)
+            if component is None:
+                raise PublicationError(
+                    f"stable release for {requirement.key} does not own the requested component"
+                )
+            for package in dependency_plan.packages:
+                catalog.add(package)
+                archives.setdefault(package.digest, self.remote.fetch_package(package))
+            for binding in dependency_plan.bindings:
+                consumer = package_by_key.get(binding.consumer)
+                dependency = package_by_key.get(binding.dependency)
+                if consumer is None or dependency is None:
+                    raise PublicationError(
+                        f"dependency release has an incomplete binding: {binding.consumer} -> {binding.dependency}"
+                    )
+                requirements_by_package.setdefault(consumer.digest, []).append(
+                    DependencyRequirement(
+                        kind=dependency.kind,
+                        artifact_id=dependency.artifact_id,
+                        version_spec=f"=={dependency.version}",
+                    )
+                )
+
+        return (
+            catalog,
+            {
+                digest: tuple(values)
+                for digest, values in requirements_by_package.items()
+            },
+            archives,
+        )
+
     def current_stable(self, project_id: str) -> ReleasePlan | None:
         try:
             pointer = self.remote.get_channel(project_id, "stable")
@@ -216,16 +314,25 @@ class ArtifactPublicationService:
         record = self.load_pushed_source(kind, artifact_id)
         built = self._verify_current_source(record, artifact_dir)
         stable = current_stable if current_stable is not None else self.current_stable(artifact_id)
+        catalog, requirements_by_package, dependency_archives = self._dependency_inputs(
+            kind=kind,
+            artifact_dir=artifact_dir,
+            own_package=built.ref,
+        )
         plan = build_project_release(
             project_id=artifact_id,
             version=built.ref.version,
             source_ref=record.source_ref,
             components=(built.ref,),
-            catalog=PackageCatalog(),
+            catalog=catalog,
+            requirements_by_package=requirements_by_package,
             validation_evidence=(validation_evidence,),
         )
         self.release_cache.put_release(plan)
-        self.remote.put_release(plan, {built.ref.digest: built.archive_bytes})
+        self.remote.put_release(
+            plan,
+            {built.ref.digest: built.archive_bytes, **dependency_archives},
+        )
         candidate_id = f"{artifact_id}-{built.ref.version.replace('.', '-')}-{built.ref.digest[-12:]}"
         candidate = candidate_from_release(
             candidate_id=candidate_id,
@@ -246,6 +353,7 @@ class ArtifactPublicationService:
             plan,
             idempotency_key=f"candidate-trial:{candidate.digest}",
             audience=audience,
+            fetch_package=self.remote.fetch_package,
         )
         candidate = begin_trial(
             candidate,
@@ -304,8 +412,18 @@ class ArtifactPublicationService:
             health_check=health_check,
         )
         self.release_cache.put_release(plan)
-        plural = "skills" if plan.release.components[0].kind == "skill" else "scenarios"
-        artifact_dir = self.workspace_root / plural / plan.release.components[0].artifact_id
+        component = next(
+            (
+                item
+                for item in plan.release.components
+                if item.artifact_id == candidate.project_id
+            ),
+            None,
+        )
+        if component is None:
+            raise PublicationError("release does not contain the candidate project component")
+        plural = "skills" if component.kind == "skill" else "scenarios"
+        artifact_dir = self.workspace_root / plural / component.artifact_id
         upsert_workspace_registry_entry(
             self.workspace_root,
             plural,  # type: ignore[arg-type]
@@ -314,7 +432,7 @@ class ArtifactPublicationService:
         set_workspace_registry_channel(
             self.workspace_root,
             plural,  # type: ignore[arg-type]
-            plan.release.components[0].artifact_id,
+            component.artifact_id,
             channel="stable",
             release=plan.release,
         )

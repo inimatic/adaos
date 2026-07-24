@@ -60,6 +60,17 @@ def _scenario(root: Path) -> Path:
     return scenario
 
 
+def _skill(root: Path) -> Path:
+    skill = root / "shopping_skill"
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: shopping_skill\nversion: 2.1.0\n",
+        encoding="utf-8",
+    )
+    (skill / "handlers.py").write_text("def run(): return True\n", encoding="utf-8")
+    return skill
+
+
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     workspace = tmp_path / "workspace"
@@ -129,3 +140,64 @@ def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:
             change_ids=("change-after-push",),
             validation_evidence={"status": "passed"},
         )
+
+
+def test_scenario_candidate_locks_and_materializes_stable_skill_dependency(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    skill_dir = _skill(tmp_path / "dev")
+    skill_service = ArtifactPublicationService(
+        state_root=tmp_path / "skill-state",
+        workspace_root=tmp_path / "skill-workspace",
+        remote=remote,
+    )
+    skill_service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+    )
+    skill_candidate = skill_service.prepare_candidate(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        change_ids=("change-skill",),
+        validation_evidence={"status": "passed"},
+    )
+    skill_service.decide_candidate(skill_candidate.candidate.candidate_id, accepted=True)
+    skill_service.promote(skill_candidate.candidate.candidate_id)
+
+    scenario_dir = _scenario(tmp_path / "dev")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "scenario-state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+    )
+
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("change-recipes",),
+        validation_evidence={"status": "passed"},
+    )
+
+    assert [(item.kind, item.artifact_id, item.version) for item in prepared.plan.packages] == [
+        ("scenario", "recipes", "1.0.0"),
+        ("skill", "shopping_skill", "2.1.0"),
+    ]
+    assert (
+        prepared.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
+    ).is_file()

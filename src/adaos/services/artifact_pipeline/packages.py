@@ -131,7 +131,9 @@ def _load_canonical_manifest(root: Path, kind: ArtifactKind) -> tuple[str, str, 
         raise PackageBuildError(f"cannot parse {manifest_path.name}: {exc}") from exc
     if not isinstance(payload, dict):
         raise PackageBuildError(f"{manifest_path.name} must contain an object")
-    artifact_id = str(payload.get("id") or "").strip()
+    artifact_id = str(
+        payload.get("name") if kind == "skill" else payload.get("id")
+    ).strip()
     version = str(payload.get("version") or "").strip()
     if not artifact_id:
         raise PackageBuildError(f"{manifest_path.name} must declare canonical id")
