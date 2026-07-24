@@ -59,6 +59,19 @@ The latest durable local record for this run is:
 .adaos/state/artifact_pipeline/proofs/20260724T175229863192Z/evidence.json
 ```
 
+After the live Builder publication, the same verifier was run against Builder's
+exact checkpoint. Its isolated durable record is:
+
+```text
+.adaos/state/artifact_pipeline/proofs/20260724T191213720879Z/evidence.json
+```
+
+That run passed 30 project tests and 21 bounded resilience tests and produced a
+package-only WorkspaceLock for Builder `0.2.20` plus
+`builder_sdk_control_skill` `0.1.28`. Proof candidates, channels, and Workspace
+state live entirely below the run directory; the command reads only immutable
+checkpoint records from the working pipeline state.
+
 The record is intentionally machine-local because it contains resolved local
 paths. The command is committed and reproducible; this page retains the
 redacted identities and conclusions required for review.
