@@ -159,6 +159,8 @@ nav:
       - Overview: architecture/index.md
       - Governed Evolution: architecture/governed-evolution.md
       - Governed Evolution Roadmap: architecture/governed-evolution-roadmap.md
+      - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
+      - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
       - Roadmap Inventory and Authority Map: architecture/roadmap-inventory.md
       - Developer Surface Map: architecture/developer-surface-map.md
       - MVP Release Evidence: architecture/mvp-release-evidence.md
