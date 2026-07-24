@@ -80,6 +80,7 @@ class PushedSourceRecord:
     source_ref: ArtifactSourceRef
     package: ArtifactPackageRef
     pushed_at: str
+    change_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +90,7 @@ class PushedSourceRecord:
             "source_ref": self.source_ref.to_dict(),
             "package": self.package.to_dict(),
             "pushed_at": self.pushed_at,
+            "change_ids": list(self.change_ids),
         }
 
     @classmethod
@@ -103,6 +105,15 @@ class PushedSourceRecord:
             source_ref=ArtifactSourceRef.from_mapping(source),
             package=ArtifactPackageRef.from_mapping(package),
             pushed_at=str(value.get("pushed_at") or ""),
+            change_ids=tuple(
+                sorted(
+                    {
+                        str(item).strip()
+                        for item in value.get("change_ids") or ()
+                        if str(item).strip()
+                    }
+                )
+            ),
         )
 
 
@@ -149,6 +160,7 @@ class ArtifactPublicationService:
         artifact_id: str,
         artifact_dir: Path,
         source_ref: ArtifactSourceRef,
+        change_ids: tuple[str, ...] = (),
     ) -> PushedSourceRecord:
         built = build_artifact_package(
             artifact_dir,
@@ -162,6 +174,7 @@ class ArtifactPublicationService:
             source_ref=source_ref,
             package=built.ref,
             pushed_at=_now(),
+            change_ids=tuple(sorted({str(item).strip() for item in change_ids if str(item).strip()})),
         )
         atomic_write_json(self.pushed_source_path(kind, artifact_id), record.to_dict())
         return record
@@ -210,6 +223,7 @@ class ArtifactPublicationService:
         kind: str,
         artifact_dir: Path,
         own_package: ArtifactPackageRef,
+        checkpoint_change_ids: tuple[str, ...],
     ) -> tuple[
         PackageCatalog,
         dict[str, tuple[DependencyRequirement, ...]],
@@ -226,7 +240,57 @@ class ArtifactPublicationService:
         archives: dict[str, bytes] = {}
         loaded_releases: set[str] = set()
 
-        for requirement in requirements:
+        pending_requirements = list(requirements)
+        processed_requirements: set[tuple[str, str, str]] = set()
+        dev_root = artifact_dir.parent.parent
+        checkpoint_group = {item for item in checkpoint_change_ids if item}
+
+        while pending_requirements:
+            requirement = pending_requirements.pop(0)
+            requirement_token = (
+                requirement.kind,
+                requirement.artifact_id,
+                requirement.version_spec,
+            )
+            if requirement_token in processed_requirements:
+                continue
+            processed_requirements.add(requirement_token)
+
+            local_record: PushedSourceRecord | None = None
+            local_built: BuiltArtifactPackage | None = None
+            dependency_dir = (
+                dev_root
+                / ("skills" if requirement.kind == "skill" else "scenarios")
+                / requirement.artifact_id
+            )
+            if checkpoint_group and dependency_dir.is_dir():
+                try:
+                    candidate_record = self.load_pushed_source(
+                        requirement.kind,
+                        requirement.artifact_id,
+                    )
+                except PublicationError:
+                    candidate_record = None
+                if (
+                    candidate_record is not None
+                    and checkpoint_group.intersection(candidate_record.change_ids)
+                ):
+                    local_record = candidate_record
+                    local_built = self._verify_current_source(local_record, dependency_dir)
+
+            if local_built is not None:
+                catalog.add(local_built.ref)
+                archives[local_built.ref.digest] = local_built.archive_bytes
+                local_requirements = parse_artifact_requirements(
+                    self._manifest(dependency_dir, requirement.kind),
+                    kind=requirement.kind,  # type: ignore[arg-type]
+                )
+                requirements_by_package.setdefault(local_built.ref.digest, []).extend(
+                    local_requirements
+                )
+                pending_requirements.extend(local_requirements)
+                continue
+
             try:
                 pointer = self.remote.get_channel(requirement.artifact_id, "stable")
                 dependency_plan = self.remote.get_release(
@@ -318,6 +382,7 @@ class ArtifactPublicationService:
             kind=kind,
             artifact_dir=artifact_dir,
             own_package=built.ref,
+            checkpoint_change_ids=record.change_ids,
         )
         plan = build_project_release(
             project_id=artifact_id,

@@ -2669,6 +2669,13 @@ class RootDeveloperService:
             artifact_id=name,
             artifact_dir=source,
             source_ref=source_ref,
+            change_ids=tuple(
+                item
+                for item in (
+                    str(commit_metadata.get("change_id") or "").strip(),
+                )
+                if item
+            ),
         )
         return ArtifactPushResult(
             kind=kind.rstrip("s"),
