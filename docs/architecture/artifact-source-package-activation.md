@@ -147,7 +147,12 @@ Required invariants:
 - A task cannot implicitly mutate another task's DEV context.
 - Sparse checkout may reduce materialized files, but it is not the isolation
   boundary.
-- The target implementation uses a task-scoped Git worktree or isolated clone.
+- Materialization from a public `SourceRef` uses a task-scoped Git worktree or
+  isolated clone at the exact revision.
+- Handoff of an approved but not yet published DEV revision to Codex captures a
+  content-addressed task snapshot before queueing. Applying the result requires
+  the DEV source digest to remain unchanged; otherwise the result is retained
+  for explicit reapplication and current DEV is not overwritten.
 - Runtime Workspace files are never used as an untracked source of changes.
 - A DEV context may be deleted after its source commits, package references,
   and evidence are durable.
@@ -421,6 +426,14 @@ No unknown state-changing phase is automatically repeated after interruption.
 Recovery resumes only a phase proven idempotent or performs rollback from the
 durable checkpoint.
 
+For the single-user slice, introduced permissions fail closed until an
+explicit serializable approval is attached to the operation. A non-empty
+migration plan is admitted only when every migration declares a rollback
+procedure and runtime supplies one-shot execute and rollback handlers. The
+executor is called once after the durable checkpoint. A timeout or missing
+receipt becomes `uncertain`; it is never retried as activation and requires a
+separate one-shot reconciliation that proves `not_applied` or `rolled_back`.
+
 ## Stateful Data And Migration
 
 Package rollback does not imply data rollback. Every stateful release declares:
@@ -601,7 +614,10 @@ shared skill demonstrate:
 10. stable promotion of the exact accepted package digest;
 11. stable subscription detection and package-backed update;
 12. recovery from an interrupted activation without replaying an unknown side
-    effect.
+    effect;
+13. exact Builder task input and concurrent DEV conflict preservation;
+14. permission fail-closed behavior and reversible/uncertain migration
+    recovery across all activation phases.
 
 Only after this proof should the broader Builder, registry, marketplace, and
 governed-evolution documents be updated to report the new pipeline as current.

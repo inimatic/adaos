@@ -83,20 +83,22 @@ Validated-local implementation now provides:
 - a bounded stale-candidate reapplication plan that requires new validation and
   trial;
 - a durable Forge checkpoint intent/receipt journal that never automatically
-  repeats an unknown state-changing write.
+  repeats an unknown state-changing write;
+- content-addressed Builder task inputs with compare-and-switch DEV result
+  activation, transactional backup, and rollback;
+- explicit permission, migration, checkpoint, health-verify, and commit phases,
+  with fail-closed permission admission and one-shot migration reconciliation.
 
 The reproducible result and exact digests are recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
 
 Remaining acceptance blockers:
 
-- task-scoped exact-base DEV materialization is implemented as a source-provider
-  contract but is not yet the default Builder task path;
-- permission and data-migration planning still need dedicated activation phases;
 - backend package and Forge-tree routes are committed locally but cannot be
   pushed or deployed until GitHub CLI authentication is available;
 - a live stand/second-machine run is required before package-only activation is
-  the default or legacy sparse Workspace compatibility is retired.
+  the default or legacy sparse Workspace compatibility is retired;
+- delayed post-activation observation remains a `[should]` operational gate.
 
 ## Delivery Snapshot
 
@@ -105,16 +107,16 @@ Detailed task checkboxes below remain open until their whole milestone exit gate
 reaches the required environment; a local proof is not silently promoted to
 stand or production acceptance.
 
-| Milestone | Maturity | Validated task slices | Remaining must slices |
+| Milestone | Maturity | Validated task slices | Remaining broader gates |
 | --- | --- | --- | --- |
 | AP0 | validated-local | identities, schemas, canonical digests, SourceProvider, registry v2 compatibility | historical migration fixture breadth |
 | AP1 | validated-local | deterministic package build/store/verify, authoring-state exclusion, corruption and zero-byte coverage | builder attestation identity and external signing |
 | AP2 | validated-local | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs |
-| AP3 | validated-local | atomic WorkspaceLock, package projection, idempotency, interruption recovery, health rollback | dedicated permission/migration phases and delayed health |
-| AP4 | integrated | exact candidate identity, isolated package trial, data policy, acceptance evidence | make isolated exact-base DEV context the Builder default |
+| AP3 | validated-local | all 13 activation phases, atomic WorkspaceLock, permission admission, reversible migration/reconciliation, package projection, interruption recovery, runtime and health rollback | delayed health observation and stand validation |
+| AP4 | validated-local | exact candidate identity, isolated package trial, data policy, acceptance evidence, immutable Builder task snapshot, concurrent-DEV compare-and-switch | stand validation before legacy task materialization retirement |
 | AP5 | validated-local | freshness, stale/rebase plan, renewed trial, Forge tree gate, receipt recovery | deploy backend tree verification and exercise it live |
 | AP6 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | Builder/operator update-plan UI |
-| AP7 | validated-local | representative LLM/Codex scenario+skill plus 13 resilience checks and 117 focused regressions | live backend/stand run and cross-document synchronization |
+| AP7 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, and 161 focused regressions | live backend/stand run and cross-document synchronization |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
