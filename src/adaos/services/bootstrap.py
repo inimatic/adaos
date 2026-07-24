@@ -2175,6 +2175,64 @@ class BootstrapService:
                 await asyncio.sleep(_control_lifecycle_heartbeat_s)
                 await _report_control_lifecycle("heartbeat")
 
+        async def _run_release_validation_autorun(trigger: str) -> None:
+            try:
+                from adaos.services.release_validation_autorun import (
+                    autonomous_release_validation_delay_s,
+                    run_autonomous_release_validation,
+                )
+
+                await asyncio.sleep(autonomous_release_validation_delay_s())
+                report = await asyncio.to_thread(
+                    run_autonomous_release_validation,
+                    conf,
+                    trigger=trigger,
+                )
+                if not isinstance(report, dict):
+                    return
+                await bus.emit(
+                    "release_validation.autonomous.finished",
+                    report,
+                    source="release_validation.autorun",
+                    actor="system",
+                )
+                state = str(report.get("state") or "unknown").upper()
+                await bus.emit(
+                    "ui.notify",
+                    {
+                        "text": (
+                            f"AdaOS autonomous validation {state}: "
+                            f"{report.get('build_identity') or 'unknown build'}\n"
+                            f"{report.get('reason') or 'no result reason'}"
+                        ),
+                        "_meta": {
+                            "source": "release_validation.autorun",
+                            "report_id": report.get("report_id"),
+                            "severity": "info" if report.get("state") == "passed" else "critical",
+                        },
+                    },
+                    source="release_validation.autorun",
+                    actor="system",
+                )
+                if str(getattr(conf, "role", "") or "").strip().lower() == "hub":
+                    from adaos.services.root.core_update_sync import report_hub_core_update_state
+
+                    await asyncio.to_thread(report_hub_core_update_state, conf)
+            except Exception:
+                self._log.warning("autonomous release validation failed trigger=%s", trigger, exc_info=True)
+
+        def _schedule_release_validation_autorun(trigger: str) -> None:
+            try:
+                from adaos.services.release_validation_autorun import autonomous_release_validation_enabled
+
+                if autonomous_release_validation_enabled():
+                    self._start_boot_task_once(
+                        "adaos-release-validation-autorun",
+                        lambda: _run_release_validation_autorun(trigger),
+                    )
+            except Exception:
+                self._log.debug("failed to schedule autonomous release validation", exc_info=True)
+
         try:
             from adaos.services.system_model.service import (
                 current_node_status_push_payload as _current_node_status_push_payload,
@@ -2772,6 +2830,7 @@ class BootstrapService:
                     _finalize_runtime_boot_status()
             except Exception:
                 self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
+            _schedule_release_validation_autorun("sys.ready")
             _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
             await _report_control_lifecycle("sys.ready")
             _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
@@ -2804,6 +2863,7 @@ class BootstrapService:
                         _finalize_runtime_boot_status()
                 except Exception:
                     self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
+                _schedule_release_validation_autorun("sys.ready")
 
             task = await self._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
             if task:
