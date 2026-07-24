@@ -513,12 +513,13 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     "checkpoint requires change, package, and source identities"
                 )
-            replaces_candidate_id = (
-                delivery.get("candidate_id")
-                if str(delivery.get("status") or "") == "stale"
-                else delivery.get("replaces_candidate_id")
-            )
             rebase_plan = delivery.get("rebase_plan")
+            has_rebase_plan = isinstance(rebase_plan, Mapping)
+            replaces_candidate_id = (
+                delivery.get("candidate_id") or delivery.get("replaces_candidate_id")
+                if has_rebase_plan
+                else None
+            )
             delivery.clear()
             delivery.update(
                 {
@@ -534,7 +535,7 @@ class BuilderWorkflowService:
                     "prepared_at": None,
                     "decided_at": None,
                     "replaces_candidate_id": replaces_candidate_id,
-                    "rebase_plan": rebase_plan,
+                    "rebase_plan": dict(rebase_plan) if has_rebase_plan else None,
                 }
             )
             return

@@ -121,4 +121,16 @@ def get_state(
     return result
 
 
-__all__ = ["get_state", "return_to_prototype", "start", "submit"]
+def reconcile_checkpoint(*, object_type: str, object_id: str) -> dict[str, Any]:
+    """Explicitly recover a failed post-Codex Forge checkpoint without rerunning Codex."""
+
+    return dict(
+        _service().reconcile_checkpoint(
+            object_type=object_type,
+            object_id=object_id,
+        )
+        or {}
+    )
+
+
+__all__ = ["get_state", "reconcile_checkpoint", "return_to_prototype", "start", "submit"]

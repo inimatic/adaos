@@ -142,6 +142,13 @@ class BuilderAutomationService:
             )
         return self.workflow_service
 
+    @staticmethod
+    def _change_id(*, session_id: str, iteration: int, seed: str) -> str:
+        identity = f"{session_id}:{max(0, int(iteration))}:{seed}"
+        return "builder_change_automation_" + hashlib.sha256(
+            identity.encode("utf-8")
+        ).hexdigest()[:16]
+
     def start_from_execute(
         self,
         *,
@@ -209,9 +216,11 @@ class BuilderAutomationService:
                 "created_at": _now_iso(),
                 "updated_at": _now_iso(),
             }
-            session["change_id"] = "builder_change_automation_" + hashlib.sha256(
-                f"{session['session_id']}:{session['created_at']}".encode("utf-8")
-            ).hexdigest()[:16]
+            session["change_id"] = self._change_id(
+                session_id=str(session["session_id"]),
+                iteration=0,
+                seed=str(session["created_at"]),
+            )
             submitted = self._submit(session, iteration_instruction="")
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
@@ -352,8 +361,17 @@ class BuilderAutomationService:
                     "automation": self.project_session(session),
                 }
             session["iteration"] = int(session.get("iteration") or 0) + 1
+            changed_at = _now_iso()
+            previous_change_id = str(session.get("change_id") or "").strip()
+            if previous_change_id:
+                session.setdefault("change_history", []).append(previous_change_id)
+            session["change_id"] = self._change_id(
+                session_id=str(session.get("session_id") or ""),
+                iteration=int(session["iteration"]),
+                seed=changed_at,
+            )
             session.setdefault("turns", []).append(
-                {"iteration": session["iteration"], "text": instruction, "created_at": _now_iso()}
+                {"iteration": session["iteration"], "text": instruction, "created_at": changed_at}
             )
             transition_token = str(workflow_transition or "").strip() or None
             if transition_token == "return_to_prototype":
@@ -430,6 +448,85 @@ class BuilderAutomationService:
             "session": session,
             "task": submitted["task"],
             "automation": self.project_session(session),
+        }
+
+    def reconcile_checkpoint(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+        """Explicitly repeat only a failed Forge checkpoint for a validated task.
+
+        This recovery never submits or runs Codex.  It is intentionally limited
+        to a completed task whose entire paired checkpoint failed, so a partially
+        committed artifact set cannot be advanced under a new identity.
+        """
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            current = self.refresh_session(session)
+            failure = (
+                current.get("last_failure")
+                if isinstance(current.get("last_failure"), Mapping)
+                else {}
+            )
+            readiness = (
+                current.get("completion_readiness")
+                if isinstance(current.get("completion_readiness"), Mapping)
+                else {}
+            )
+            checkpoints = [
+                dict(item)
+                for item in readiness.get("vcs_checkpoints") or []
+                if isinstance(item, Mapping)
+            ]
+            task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
+            result = current.get("last_result") if isinstance(current.get("last_result"), Mapping) else {}
+            if str(current.get("status") or "") != "failed" or str(failure.get("stage") or "") != "forge_checkpoint":
+                raise ValueError("checkpoint reconciliation requires a Forge checkpoint failure")
+            if str(task.get("status") or "") != "completed" or not result:
+                raise ValueError("checkpoint reconciliation requires a validated completed Codex result")
+            if not checkpoints or any(bool(item.get("ok")) for item in checkpoints):
+                raise ValueError(
+                    "checkpoint reconciliation requires a complete pre-commit failure; "
+                    "partially committed artifact sets require manual recovery"
+                )
+
+            task_id = str(current.get("current_task_id") or "").strip()
+            reconciliation_id = self._change_id(
+                session_id=str(current.get("session_id") or ""),
+                iteration=int(current.get("iteration") or 0),
+                seed=f"{task_id}:checkpoint-reconcile",
+            )
+            previous_change_id = str(current.get("change_id") or "").strip()
+            history = [
+                dict(item)
+                for item in current.get("reconciliation_history") or []
+                if isinstance(item, Mapping)
+            ]
+            history.append(
+                {
+                    "stage": "forge_checkpoint",
+                    "task_id": task_id,
+                    "previous_change_id": previous_change_id or None,
+                    "change_id": reconciliation_id,
+                    "requested_at": _now_iso(),
+                }
+            )
+            current["reconciliation_history"] = history[-20:]
+            current["change_id"] = reconciliation_id
+            current["status"] = "commit_ready"
+            current["finalizing_task_id"] = task_id or None
+            current.pop("last_failure", None)
+            current["updated_at"] = _now_iso()
+            self._save_session(current)
+
+        self._finalize_completed_session(current)
+        reconciled = self.get_session(object_type, object_id) or current
+        return {
+            "ok": str(reconciled.get("status") or "") == "completed",
+            "reconciled": True,
+            "change_id": reconciliation_id,
+            "session": reconciled,
+            "automation": self.project_session(reconciled),
         }
 
     def status(self, *, object_type: str, object_id: str) -> dict[str, Any]:
@@ -863,6 +960,7 @@ class BuilderAutomationService:
             "vcs_checkpoints": [],
             "completed_at": None,
         }
+        failed_checkpoints: list[Mapping[str, Any]] = []
         try:
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
             if pending_transition == "return_to_prototype":
@@ -1023,7 +1121,7 @@ class BuilderAutomationService:
             current.pop("finalizing_task_id", None)
             current.pop("pending_workflow_transition", None)
             current["last_failure"] = {
-                "stage": "live_readiness",
+                "stage": "forge_checkpoint" if failed_checkpoints else "live_readiness",
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }

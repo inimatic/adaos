@@ -339,6 +339,46 @@ def test_new_checkpoint_supersedes_candidate_identity(
     assert second["delivery"]["candidate_id"] is None
 
 
+def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_prepared",
+        metadata={
+            "candidate_id": "candidate-obsolete",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_iteration_started",
+        metadata={"task_id": "task.2"},
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.2"})
+
+    checkpoint = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-new-result",
+            "package_digest": "sha256:" + "3" * 64,
+            "source_revision": "a" * 40,
+        },
+    )["workflow"]
+
+    assert checkpoint["delivery"]["status"] == "checkpoint"
+    assert checkpoint["delivery"]["replaces_candidate_id"] is None
+    assert checkpoint["delivery"]["rebase_plan"] is None
+
+
 def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
