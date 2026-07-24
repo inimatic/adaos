@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping
+from uuid import uuid4
 from fastapi import APIRouter, Depends
 import yaml
 from adaos.services.agent_context import AgentContext, get_ctx
@@ -677,11 +678,54 @@ def archive_bytes_to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def _replace_directory_transactionally(staged: Path, target: Path) -> None:
+    """Activate a staged artifact without deleting the current copy first."""
+
+    staged = staged.expanduser().resolve()
+    target = target.expanduser().resolve()
+    if staged.parent != target.parent:
+        raise RootServiceError("Staged artifact must be on the same filesystem as its target")
+
+    backup = target.parent / f".{target.name}.backup-{os.getpid()}-{uuid4().hex}"
+    target_moved = False
+    activated = False
+    try:
+        if target.exists():
+            target.replace(backup)
+            target_moved = True
+        try:
+            staged.replace(target)
+            activated = True
+        except Exception as activation_error:
+            if target_moved:
+                try:
+                    backup.replace(target)
+                    target_moved = False
+                except Exception as rollback_error:
+                    raise RootServiceError(
+                        "Artifact activation failed and rollback could not restore the previous copy; "
+                        f"backup retained at {backup}: {type(rollback_error).__name__}: {rollback_error}"
+                    ) from activation_error
+            raise
+
+        if target_moved:
+            try:
+                shutil.rmtree(backup)
+                target_moved = False
+            except OSError as cleanup_error:
+                _log.warning(
+                    "Artifact update succeeded but previous-copy cleanup failed; backup retained at %s: %s",
+                    backup,
+                    cleanup_error,
+                )
+    finally:
+        if not activated and staged.exists():
+            shutil.rmtree(staged, ignore_errors=True)
+
+
 def _extract_zip_bytes(data: bytes, target: Path) -> None:
     target = target.expanduser().resolve()
-    temporary = target.parent / f".{target.name}.update-{os.getpid()}-{int(time.time() * 1000)}"
-    if temporary.exists():
-        shutil.rmtree(temporary)
+    temporary = target.parent / f".{target.name}.update-{os.getpid()}-{uuid4().hex}"
     temporary.mkdir(parents=True, exist_ok=False)
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -693,9 +737,7 @@ def _extract_zip_bytes(data: bytes, target: Path) -> None:
                 if temporary not in destination.parents and destination != temporary:
                     raise RootServiceError(f"Archive entry escapes artifact root: {entry.filename}")
             archive.extractall(temporary)
-        if target.exists():
-            shutil.rmtree(target)
-        temporary.replace(target)
+        _replace_directory_transactionally(temporary, target)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -2538,9 +2580,13 @@ class RootDeveloperService:
             checkout_source = repo_dir / relative
             if not checkout_source.exists():
                 raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found in forge repository (expected at {relative})")
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(checkout_source, target)
+            temporary = target.parent / f".{target.name}.update-{os.getpid()}-{uuid4().hex}"
+            try:
+                shutil.copytree(checkout_source, temporary)
+                _replace_directory_transactionally(temporary, target)
+            except Exception:
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise
             source = checkout_source
             try:
                 commit_info = dict(self.ctx.git.latest_commit_for_path(str(repo_dir), relative.as_posix()) or {})

@@ -860,8 +860,12 @@ def _hub_route_should_retry_http_upstream_error(
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     method_norm = str(method or "").strip().upper()
     kind = str(error_kind or "").strip()
+    if path_norm == "/api/tools/call":
+        # The tool may already have committed a side effect before the route
+        # observed a connection failure. Execution is at-most-once here.
+        return False
     if kind == "ReadTimeout" and (
-        method_norm not in {"GET", "HEAD"} or path_norm == "/api/tools/call"
+        method_norm not in {"GET", "HEAD"}
     ):
         return False
     return True

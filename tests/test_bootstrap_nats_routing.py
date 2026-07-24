@@ -605,7 +605,7 @@ def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> No
     )
 
 
-def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
+def test_hub_route_tools_call_never_retries_after_upstream_error() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
@@ -614,6 +614,11 @@ def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
+        error_kind="ConnectionError",
+    ) is False
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="GET",
+        path="/api/ping",
         error_kind="ConnectionError",
     ) is True
 

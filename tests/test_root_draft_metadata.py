@@ -114,6 +114,80 @@ def test_root_draft_archive_extraction_rejects_path_traversal(tmp_path) -> None:
         raise AssertionError("path traversal archive must be rejected")
 
 
+def test_root_draft_archive_replaces_existing_artifact_transactionally(tmp_path) -> None:
+    target = tmp_path / "artifact"
+    target.mkdir()
+    (target / "previous.txt").write_text("previous", encoding="utf-8")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("current.txt", "current")
+
+    _extract_zip_bytes(buffer.getvalue(), target)
+
+    assert (target / "current.txt").read_text(encoding="utf-8") == "current"
+    assert not (target / "previous.txt").exists()
+    assert not list(tmp_path.glob(".artifact.update-*"))
+    assert not list(tmp_path.glob(".artifact.backup-*"))
+
+
+def test_root_draft_archive_keeps_existing_artifact_when_backup_rename_fails(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "artifact"
+    target.mkdir()
+    (target / "previous.txt").write_text("previous", encoding="utf-8")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("current.txt", "current")
+    original_replace = type(target).replace
+
+    def locked_replace(path, destination):
+        if path == target:
+            raise PermissionError("target is locked")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(type(target), "replace", locked_replace)
+
+    try:
+        _extract_zip_bytes(buffer.getvalue(), target)
+    except PermissionError as exc:
+        assert "target is locked" in str(exc)
+    else:
+        raise AssertionError("locked target must reject the update")
+
+    assert (target / "previous.txt").read_text(encoding="utf-8") == "previous"
+    assert not (target / "current.txt").exists()
+    assert not list(tmp_path.glob(".artifact.update-*"))
+    assert not list(tmp_path.glob(".artifact.backup-*"))
+
+
+def test_root_draft_archive_rolls_back_when_staged_activation_fails(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "artifact"
+    target.mkdir()
+    (target / "previous.txt").write_text("previous", encoding="utf-8")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("current.txt", "current")
+    original_replace = type(target).replace
+
+    def failing_activation(path, destination):
+        if path.name.startswith(".artifact.update-"):
+            raise OSError("activation failed")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(type(target), "replace", failing_activation)
+
+    try:
+        _extract_zip_bytes(buffer.getvalue(), target)
+    except OSError as exc:
+        assert "activation failed" in str(exc)
+    else:
+        raise AssertionError("failed activation must propagate")
+
+    assert (target / "previous.txt").read_text(encoding="utf-8") == "previous"
+    assert not (target / "current.txt").exists()
+    assert not list(tmp_path.glob(".artifact.update-*"))
+    assert not list(tmp_path.glob(".artifact.backup-*"))
+
+
 def test_transient_draft_push_retries_the_same_operation() -> None:
     calls: list[int] = []
     sleeps: list[float] = []
