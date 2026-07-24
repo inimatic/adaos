@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 import yaml
+from packaging.version import InvalidVersion, Version
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
@@ -549,6 +550,39 @@ class ArtifactPublicationService:
             raise
         return self.remote.get_release(project_id, pointer.release_digest)
 
+    def _installed_workspace_version(self, kind: str, artifact_id: str) -> str | None:
+        plural = "skills" if kind == "skill" else "scenarios"
+        manifest_name = "skill.yaml" if kind == "skill" else "scenario.yaml"
+        manifest_path = self.workspace_root / plural / artifact_id / manifest_name
+        if not manifest_path.is_file():
+            return None
+        try:
+            payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise PublicationError(
+                f"installed workspace manifest is unreadable: {manifest_path}"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise PublicationError(
+                f"installed workspace manifest must contain an object: {manifest_path}"
+            )
+        return str(payload.get("version") or "").strip() or None
+
+    @staticmethod
+    def _require_forward_version(candidate: str, base: str, *, source: str) -> None:
+        try:
+            candidate_version = Version(candidate)
+            base_version = Version(base)
+        except InvalidVersion as exc:
+            raise PublicationError(
+                f"candidate and {source} versions must be valid: {candidate!r}, {base!r}"
+            ) from exc
+        if candidate_version <= base_version:
+            raise PublicationError(
+                f"candidate version {candidate} must be newer than {source} version {base}; "
+                "rebase DEV on the installed/stable release before creating a trial"
+            )
+
     def prepare_candidate(
         self,
         *,
@@ -574,6 +608,20 @@ class ArtifactPublicationService:
                 record.to_dict(),
             )
         stable = current_stable if current_stable is not None else self.current_stable(artifact_id)
+        if stable is not None:
+            self._require_forward_version(
+                built.ref.version,
+                stable.release.version,
+                source="stable",
+            )
+        else:
+            installed_version = self._installed_workspace_version(kind, artifact_id)
+            if installed_version:
+                self._require_forward_version(
+                    built.ref.version,
+                    installed_version,
+                    source="installed Workspace",
+                )
         catalog, requirements_by_package, dependency_archives = self._dependency_inputs(
             kind=kind,
             artifact_dir=artifact_dir,

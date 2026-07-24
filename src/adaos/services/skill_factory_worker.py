@@ -529,7 +529,8 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
 6. Run relevant bounded checks. Fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {allowed_paths}.
-8. Do not access secrets, production data, other AdaOS runtime state, or external APIs."""
+8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
+9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -617,6 +618,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
+        self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -725,6 +727,46 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    @staticmethod
+    def _validate_checkpoint_owned_manifest_metadata(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        for path in sorted(
+            [
+                *workspace.glob("scenarios/*/scenario.yaml"),
+                *workspace.glob("skills/*/skill.yaml"),
+            ]
+        ):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                baseline_text = _git(["show", f"HEAD:{relative}"], cwd=workspace)
+            except Exception:
+                # A manifest created by the task has no checkpoint-owned baseline yet.
+                continue
+            try:
+                baseline = yaml.safe_load(baseline_text) or {}
+                current = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                errors.append(f"{relative}: checkpoint metadata validation failed: {type(exc).__name__}: {exc}")
+                continue
+            if not isinstance(baseline, Mapping) or not isinstance(current, Mapping):
+                continue
+            changed = [
+                key
+                for key in ("version", "updated_at")
+                if current.get(key) != baseline.get(key)
+            ]
+            if changed:
+                errors.append(
+                    f"{relative}: Automation may not change checkpoint-owned metadata: {', '.join(changed)}"
+                )
+            else:
+                checks.append(
+                    {"kind": "checkpoint_metadata", "path": relative, "ok": True}
+                )
 
     @staticmethod
     def _validate_safe_prototype(

@@ -110,6 +110,41 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     assert task["result"]["provenance"]["runner_version"].startswith("adaos-local-codex-worker/")
 
 
+def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace / "scenarios", "recipe_book")
+    skill = _core_created_skill_fixture(repo_root, workspace / "skills", "recipe_book_skill")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    worker._init_git_workspace(workspace, "test/checkpoint-metadata")
+
+    scenario_manifest = yaml.safe_load((scenario / "scenario.yaml").read_text(encoding="utf-8"))
+    scenario_manifest["version"] = "9.9.9"
+    (scenario / "scenario.yaml").write_text(
+        yaml.safe_dump(scenario_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    skill_manifest = yaml.safe_load((skill / "skill.yaml").read_text(encoding="utf-8"))
+    skill_manifest["updated_at"] = "2099-01-01T00:00:00Z"
+    (skill / "skill.yaml").write_text(
+        yaml.safe_dump(skill_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
+
+    assert any("scenario.yaml" in item and "version" in item for item in errors)
+    assert any("skill.yaml" in item and "updated_at" in item for item in errors)
+
+
 def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"

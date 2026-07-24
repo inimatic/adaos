@@ -124,6 +124,39 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert '"stable"' in registry
 
 
+def test_candidate_rejects_legacy_workspace_downgrade_before_trial(tmp_path: Path) -> None:
+    dev = _scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    installed = _scenario(workspace / "scenarios")
+    (installed / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.1\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+
+    with pytest.raises(PublicationError, match="newer than installed Workspace version 1.0.1"):
+        service.prepare_candidate(
+            kind="scenario",
+            artifact_id="recipes",
+            artifact_dir=dev,
+            change_ids=("change-downgrade",),
+            validation_evidence={"status": "passed"},
+        )
+
+    assert remote.archives == {}
+
+
 def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     service = ArtifactPublicationService(
