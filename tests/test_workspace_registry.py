@@ -9,13 +9,20 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
+from adaos.domain.artifact_release import (
+    ArtifactPackageRef,
+    ArtifactSourceRef,
+    ProjectRelease,
+)
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
 from adaos.services.workspace_registry import (
     list_workspace_registry_entries,
     load_workspace_registry,
     rebuild_workspace_registry,
     registry_pattern_set,
+    set_workspace_registry_channel,
     upsert_workspace_registry_entry,
+    write_workspace_registry,
     workspace_registry_path,
 )
 
@@ -65,7 +72,7 @@ def test_rebuild_workspace_registry_reads_skill_and_scenario_manifests(tmp_path:
 
     payload = rebuild_workspace_registry(workspace)
 
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert payload["skills"][0]["name"] == "weather_skill"
     assert payload["skills"][0]["id"] == "weather_skill"
     assert payload["skills"][0]["title"] == "Weather"
@@ -418,6 +425,92 @@ def test_registry_pattern_set_keeps_registry_json_first():
     patterns = registry_pattern_set(["skills/weather_skill", "registry.json", "scenarios/greet_on_boot"])
     assert patterns[0] == "registry.json"
     assert patterns.count("registry.json") == 1
+
+
+def test_registry_v1_is_readable_and_rewritten_as_v2_without_losing_fields(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = workspace_registry_path(workspace)
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-07-20T00:00:00Z",
+                "skills": [],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "recipes",
+                        "name": "recipes",
+                        "version": "1.2.3",
+                        "path": "scenarios/recipes",
+                        "manifest": "scenarios/recipes/scenario.yaml",
+                        "custom_legacy_field": "preserve-me",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_workspace_registry(workspace, fallback_to_scan=False)
+    assert loaded["version"] == 2
+    assert loaded["scenarios"][0]["custom_legacy_field"] == "preserve-me"
+
+    write_workspace_registry(workspace, loaded)
+    rewritten = json.loads(registry.read_text(encoding="utf-8"))
+    assert rewritten["version"] == 2
+    assert rewritten["scenarios"][0]["custom_legacy_field"] == "preserve-me"
+
+
+def test_registry_channel_points_to_sealed_immutable_release(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "recipes"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    upsert_workspace_registry_entry(workspace, "scenarios", scenario_dir)
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("scenarios/recipes/",),
+    )
+    package = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="recipes",
+        version="1.2.3",
+        digest="sha256:" + "a" * 64,
+        manifest_digest="sha256:" + "b" * 64,
+        source_ref=source,
+    )
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=source,
+        components=(package,),
+    ).seal()
+
+    set_workspace_registry_channel(
+        workspace,
+        "scenarios",
+        "recipes",
+        channel="stable",
+        release=release,
+    )
+
+    entry = load_workspace_registry(workspace, fallback_to_scan=False)["scenarios"][0]
+    assert entry["channels"]["stable"] == {
+        "release": "recipes@1.2.3",
+        "release_digest": release.release_digest,
+        "source_revision": source.revision,
+        "package_digest": package.digest,
+        "version": "1.2.3",
+    }
+    assert entry["source"]["path"] == "scenarios/recipes"
+    assert entry["source"]["revision"] == source.revision
 
 
 class _Sql:

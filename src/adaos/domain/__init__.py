@@ -97,6 +97,20 @@ from .project_events import (
     legacy_project_event_topic,
     normalize_project_kind,
 )
+from .artifact_release import (
+    ArtifactKind,
+    ArtifactPackageRef,
+    ArtifactReleaseContractError,
+    ArtifactSourceRef,
+    DependencyBinding,
+    ProjectRef,
+    ProjectRelease,
+    ResolvedDependency,
+    StableSubscription,
+    SubscriptionPolicy,
+    WorkspaceLock,
+    WorkspaceSlot,
+)
 
 __all__ = [
     "ClientSubscriptionRecord",
@@ -187,4 +201,16 @@ __all__ = [
     "validate_capability",
     "validate_actor_id",
     "widget_projection_key",
+    "ArtifactKind",
+    "ArtifactPackageRef",
+    "ArtifactReleaseContractError",
+    "ArtifactSourceRef",
+    "DependencyBinding",
+    "ProjectRef",
+    "ProjectRelease",
+    "ResolvedDependency",
+    "StableSubscription",
+    "SubscriptionPolicy",
+    "WorkspaceLock",
+    "WorkspaceSlot",
 ]

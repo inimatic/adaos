@@ -8,6 +8,7 @@ from typing import Any, Iterable, Literal
 
 import yaml
 
+from adaos.domain.artifact_release import ProjectRelease
 from adaos.domain.workspace_manifest import (
     parse_scenario_skill_bindings,
     parse_skill_activation_policy,
@@ -15,7 +16,7 @@ from adaos.domain.workspace_manifest import (
 
 
 REGISTRY_FILE_NAME = "registry.json"
-REGISTRY_FORMAT_VERSION = 1
+REGISTRY_FORMAT_VERSION = 2
 RegistryKind = Literal["skills", "scenarios"]
 _LOG = logging.getLogger("adaos.workspace_registry")
 _REQUIRED_MANIFEST_BY_KIND: dict[RegistryKind, str] = {
@@ -120,6 +121,82 @@ def upsert_workspace_registry_entry(
     payload["updated_at"] = entry.get("updated_at") or _now_iso()
     write_workspace_registry(workspace_root, payload)
     return entry
+
+
+def set_workspace_registry_channel(
+    workspace_root: Path,
+    kind: RegistryKind,
+    name_or_id: str,
+    *,
+    channel: str,
+    release: ProjectRelease,
+) -> dict[str, Any]:
+    """Point one registry artifact channel at an immutable project release.
+
+    Registry v1 entries remain readable. The first channel update rewrites the
+    local catalog as v2 while preserving legacy path/install fields.
+    """
+
+    channel_id = _clean_text(channel)
+    if not channel_id:
+        raise ValueError("channel must not be empty")
+    payload = load_workspace_registry(workspace_root, fallback_to_scan=False)
+    items = list(payload.get(kind) or [])
+    needle = _clean_text(name_or_id).lower()
+    matched_index: int | None = None
+    for index, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            continue
+        names = {
+            value.lower()
+            for value in (_clean_text(raw.get("name")), _clean_text(raw.get("id")))
+            if value
+        }
+        if needle and needle in names:
+            matched_index = index
+            break
+    if matched_index is None:
+        raise FileNotFoundError(f"{kind[:-1]} '{name_or_id}' is not listed in workspace registry.json")
+
+    entry = dict(items[matched_index])
+    artifact_id = _clean_text(entry.get("id")) or _clean_text(entry.get("name"))
+    component = next(
+        (
+            item
+            for item in release.components
+            if item.kind == kind[:-1] and item.artifact_id == artifact_id
+        ),
+        None,
+    )
+    if component is None:
+        raise ValueError(
+            f"release {release.project_id}@{release.version} does not contain {kind[:-1]} '{artifact_id}'"
+        )
+
+    channels = dict(entry.get("channels") or {}) if isinstance(entry.get("channels"), dict) else {}
+    channels[channel_id] = {
+        "release": f"{release.project_id}@{release.version}",
+        "release_digest": release.release_digest or release.computed_digest(),
+        "source_revision": release.source_ref.revision,
+        "package_digest": component.digest,
+        "version": component.version,
+    }
+    entry["channels"] = {key: channels[key] for key in sorted(channels)}
+    source = dict(entry.get("source") or {}) if isinstance(entry.get("source"), dict) else {}
+    source.update(
+        {
+            "forge": release.source_ref.forge,
+            "repository": release.source_ref.repository,
+            "revision": release.source_ref.revision,
+            "path_scope": list(release.source_ref.path_scope),
+        }
+    )
+    entry["source"] = source
+    items[matched_index] = entry
+    payload[kind] = _normalize_entries(kind, items)
+    payload["updated_at"] = _now_iso()
+    write_workspace_registry(workspace_root, payload)
+    return dict(entry)
 
 
 def list_workspace_registry_entries(
@@ -504,6 +581,7 @@ __all__ = [
     "load_workspace_registry",
     "rebuild_workspace_registry",
     "registry_pattern_set",
+    "set_workspace_registry_channel",
     "upsert_workspace_registry_entry",
     "workspace_registry_path",
     "write_workspace_registry",
