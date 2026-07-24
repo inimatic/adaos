@@ -361,6 +361,16 @@ class WorkspaceSlot:
             payload["audience"] = self.audience
         return payload
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any], *, slot_id: str) -> "WorkspaceSlot":
+        return cls(
+            slot_id=slot_id,
+            project_id=value.get("project_id"),
+            release=value.get("release"),
+            release_digest=value.get("release_digest"),
+            audience=value.get("audience"),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DependencyBinding:
@@ -379,6 +389,14 @@ class DependencyBinding:
             "dependency": self.dependency,
             "package_digest": self.package_digest,
         }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "DependencyBinding":
+        return cls(
+            consumer=value.get("consumer"),
+            dependency=value.get("dependency"),
+            package_digest=value.get("package_digest"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +450,40 @@ class WorkspaceLock:
         payload["lock_digest"] = canonical_payload_digest(payload)
         return payload
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "WorkspaceLock":
+        raw_slots = value.get("slots") or {}
+        if not isinstance(raw_slots, Mapping):
+            raise ArtifactReleaseContractError("WorkspaceLock slots must be an object")
+        raw_components = value.get("components") or []
+        raw_bindings = value.get("bindings") or []
+        if not isinstance(raw_components, list) or not isinstance(raw_bindings, list):
+            raise ArtifactReleaseContractError("WorkspaceLock components and bindings must be lists")
+        lock = cls(
+            lock_revision=value.get("lock_revision"),
+            previous_lock_revision=value.get("previous_lock_revision"),
+            updated_at=value.get("updated_at"),
+            slots=tuple(
+                WorkspaceSlot.from_mapping(item, slot_id=str(slot_id))
+                for slot_id, item in raw_slots.items()
+                if isinstance(item, Mapping)
+            ),
+            components=tuple(
+                ArtifactPackageRef.from_mapping(item)
+                for item in raw_components
+                if isinstance(item, Mapping)
+            ),
+            bindings=tuple(
+                DependencyBinding.from_mapping(item)
+                for item in raw_bindings
+                if isinstance(item, Mapping)
+            ),
+        )
+        expected = value.get("lock_digest")
+        if expected is not None and _digest(expected, field="lock_digest") != lock.to_dict()["lock_digest"]:
+            raise ArtifactReleaseContractError("lock_digest does not match WorkspaceLock content")
+        return lock
+
 
 @dataclass(frozen=True, slots=True)
 class StableSubscription:
@@ -463,6 +515,16 @@ class StableSubscription:
         if self.installed_digest:
             payload["installed_digest"] = self.installed_digest
         return payload
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "StableSubscription":
+        return cls(
+            project_id=value.get("project_id"),
+            channel=value.get("channel") or "stable",
+            policy=value.get("policy") or "notify",
+            installed_release=value.get("installed_release"),
+            installed_digest=value.get("installed_digest"),
+        )
 
 
 __all__ = [

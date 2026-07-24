@@ -150,6 +150,12 @@ def test_workspace_lock_requires_binding_to_active_package() -> None:
     payload = lock.to_dict()
     assert payload["schema"] == "adaos.workspace.lock.v1"
     assert payload["lock_digest"].startswith("sha256:")
+    assert WorkspaceLock.from_mapping(payload) == lock
+
+    tampered = dict(payload)
+    tampered["updated_at"] = "2026-07-25T00:00:00Z"
+    with pytest.raises(ArtifactReleaseContractError, match="lock_digest does not match"):
+        WorkspaceLock.from_mapping(tampered)
 
     with pytest.raises(ArtifactReleaseContractError, match="inactive package"):
         WorkspaceLock(

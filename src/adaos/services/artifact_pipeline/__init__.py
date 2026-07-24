@@ -1,3 +1,11 @@
+from .activation import (
+    ACTIVATION_OPERATION_SCHEMA,
+    ACTIVATION_PHASES,
+    ActivationError,
+    ActivationReplayBlocked,
+    ActivationResult,
+    WorkspaceActivationManager,
+)
 from .packages import (
     BuiltArtifactPackage,
     ContentAddressedPackageStore,
@@ -19,6 +27,11 @@ from .releases import (
 )
 
 __all__ = [
+    "ACTIVATION_OPERATION_SCHEMA",
+    "ACTIVATION_PHASES",
+    "ActivationError",
+    "ActivationReplayBlocked",
+    "ActivationResult",
     "BuiltArtifactPackage",
     "ContentAddressedPackageStore",
     "PackageBuildError",
@@ -27,6 +40,7 @@ __all__ = [
     "VerifiedArtifactPackage",
     "build_artifact_package",
     "verify_artifact_package",
+    "WorkspaceActivationManager",
     "DependencyRequirement",
     "DependencyResolutionError",
     "PackageCatalog",

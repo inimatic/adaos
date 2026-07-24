@@ -405,21 +405,12 @@ class ContentAddressedPackageStore:
         return verify_artifact_package(self.read(digest), expected_digest=digest, limits=self.limits)
 
     def materialize(self, digest: str, target: Path) -> VerifiedArtifactPackage:
-        data = self.read(digest)
-        verified = verify_artifact_package(data, expected_digest=digest, limits=self.limits)
         target = Path(target).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         staged = target.parent / f".{target.name}.stage-{uuid4().hex}"
         backup = target.parent / f".{target.name}.backup-{uuid4().hex}"
-        staged.mkdir(parents=True, exist_ok=False)
         try:
-            with zipfile.ZipFile(io.BytesIO(data), mode="r") as archive:
-                for name in verified.file_names:
-                    destination = (staged / Path(name)).resolve()
-                    if staged != destination and staged not in destination.parents:
-                        raise PackageVerificationError(f"package entry escapes materialization root: {name}")
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(archive.read(name))
+            verified = self.extract_to_directory(digest, staged)
             target_moved = False
             try:
                 if target.exists():
@@ -435,6 +426,28 @@ class ContentAddressedPackageStore:
         finally:
             if staged.exists():
                 shutil.rmtree(staged, ignore_errors=True)
+        return verified
+
+    def extract_to_directory(self, digest: str, target: Path) -> VerifiedArtifactPackage:
+        """Verify and extract a package into a new directory without switching it live."""
+
+        data = self.read(digest)
+        verified = verify_artifact_package(data, expected_digest=digest, limits=self.limits)
+        target = Path(target).expanduser().resolve()
+        if target.exists():
+            raise FileExistsError(f"package extraction target already exists: {target}")
+        target.mkdir(parents=True, exist_ok=False)
+        try:
+            with zipfile.ZipFile(io.BytesIO(data), mode="r") as archive:
+                for name in verified.file_names:
+                    destination = (target / Path(name)).resolve()
+                    if target != destination and target not in destination.parents:
+                        raise PackageVerificationError(f"package entry escapes materialization root: {name}")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(archive.read(name))
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
         return verified
 
     def quarantine(self, digest: str, *, reason: str) -> Path:
