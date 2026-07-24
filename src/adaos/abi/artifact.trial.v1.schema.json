@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.trial.v1.schema.json",
+  "title": "AdaOS Artifact Trial Evidence v1",
+  "type": "object",
+  "required": ["schema", "trial_id", "candidate_digest", "audience", "data_mode", "lock_digest", "started_at", "status", "observations"],
+  "properties": {
+    "schema": {"const": "adaos.artifact.trial.v1"},
+    "trial_id": {"type": "string", "minLength": 1},
+    "candidate_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "audience": {"type": "string", "minLength": 1},
+    "data_mode": {"enum": ["mock", "snapshot", "read_only", "real"]},
+    "lock_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "started_at": {"type": "string", "minLength": 1},
+    "ended_at": {"type": "string", "minLength": 1},
+    "status": {"enum": ["running", "accepted", "rejected", "failed"]},
+    "observations": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false
+}

@@ -6,6 +6,21 @@ from .activation import (
     ActivationResult,
     WorkspaceActivationManager,
 )
+from .candidates import (
+    CANDIDATE_SCHEMA,
+    TRIAL_SCHEMA,
+    CandidateError,
+    CandidateRecord,
+    CandidateStore,
+    TrialEvidence,
+    assert_promotable,
+    assess_freshness,
+    begin_trial,
+    candidate_from_release,
+    complete_trial,
+    mark_stale,
+    record_validation,
+)
 from .packages import (
     BuiltArtifactPackage,
     ContentAddressedPackageStore,
@@ -25,6 +40,12 @@ from .releases import (
     normalize_version_spec,
     parse_artifact_requirements,
 )
+from .sources import (
+    LocalGitSourceProvider,
+    MaterializedSource,
+    SourceProvider,
+    SourceProviderError,
+)
 
 __all__ = [
     "ACTIVATION_OPERATION_SCHEMA",
@@ -32,11 +53,18 @@ __all__ = [
     "ActivationError",
     "ActivationReplayBlocked",
     "ActivationResult",
+    "CANDIDATE_SCHEMA",
+    "TRIAL_SCHEMA",
+    "CandidateError",
+    "CandidateRecord",
+    "CandidateStore",
     "BuiltArtifactPackage",
     "ContentAddressedPackageStore",
     "PackageBuildError",
     "PackageLimits",
     "PackageVerificationError",
+    "LocalGitSourceProvider",
+    "MaterializedSource",
     "VerifiedArtifactPackage",
     "build_artifact_package",
     "verify_artifact_package",
@@ -45,7 +73,17 @@ __all__ = [
     "DependencyResolutionError",
     "PackageCatalog",
     "ReleasePlan",
+    "SourceProvider",
+    "SourceProviderError",
+    "TrialEvidence",
+    "assert_promotable",
+    "assess_freshness",
+    "begin_trial",
     "build_project_release",
+    "candidate_from_release",
+    "complete_trial",
+    "mark_stale",
     "normalize_version_spec",
     "parse_artifact_requirements",
+    "record_validation",
 ]
