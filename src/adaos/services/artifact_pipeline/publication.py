@@ -496,13 +496,27 @@ class ArtifactPublicationService:
         )
         if component is None:
             raise PublicationError("release does not contain the candidate project component")
+        for package in plan.packages:
+            package_plural = "skills" if package.kind == "skill" else "scenarios"
+            package_dir = self.workspace_root / package_plural / package.artifact_id
+            upsert_workspace_registry_entry(
+                self.workspace_root,
+                package_plural,  # type: ignore[arg-type]
+                package_dir,
+                extra={
+                    "activation": {
+                        "mode": "package_lock",
+                        "project_id": plan.release.project_id,
+                        "release": f"{plan.release.project_id}@{plan.release.version}",
+                        "release_digest": (
+                            plan.release.release_digest
+                            or plan.release.computed_digest()
+                        ),
+                        "package_digest": package.digest,
+                    }
+                },
+            )
         plural = "skills" if component.kind == "skill" else "scenarios"
-        artifact_dir = self.workspace_root / plural / component.artifact_id
-        upsert_workspace_registry_entry(
-            self.workspace_root,
-            plural,  # type: ignore[arg-type]
-            artifact_dir,
-        )
         set_workspace_registry_channel(
             self.workspace_root,
             plural,  # type: ignore[arg-type]

@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Mapping
+
+from adaos.domain.artifact_release import ArtifactPackageRef
+from adaos.services.artifact_pipeline import (
+    ArtifactPublicationService,
+    ContentAddressedPackageStore,
+    ReleasePlan,
+    ReleaseRepository,
+)
+from adaos.services.artifact_pipeline.storage import atomic_write_json
+
+
+class LocalProofRemote:
+    """Package-verifying registry used only by the bounded local proof."""
+
+    def __init__(self, root: Path) -> None:
+        self.releases = ReleaseRepository(root / "releases")
+        self.packages = ContentAddressedPackageStore(root / "packages")
+
+    def put_release(self, plan: ReleasePlan, archives: Mapping[str, bytes]) -> None:
+        for package in plan.packages:
+            archive = archives.get(package.digest)
+            if archive is None:
+                raise RuntimeError(f"release omitted package archive {package.digest}")
+            self.packages.put(archive, expected_digest=package.digest)
+        self.releases.put_release(plan)
+
+    def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
+        return self.releases.get_release(project_id, release_digest)
+
+    def set_channel(self, plan: ReleasePlan, channel: str = "stable"):
+        self.releases.put_release(plan)
+        return self.releases.set_channel(
+            plan.release.project_id,
+            channel,
+            plan.release.release_digest,
+        )
+
+    def get_channel(self, project_id: str, channel: str = "stable"):
+        return self.releases.get_channel(project_id, channel)
+
+    def fetch_package(self, package: ArtifactPackageRef) -> bytes:
+        return self.packages.read(package.digest)
+
+
+def _arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the representative exact-source to WorkspaceLock proof."
+    )
+    parser.add_argument("--dev-root", type=Path, required=True)
+    parser.add_argument("--pipeline-state", type=Path, required=True)
+    parser.add_argument("--scenario", required=True)
+    parser.add_argument("--skill", required=True)
+    parser.add_argument("--change-id", required=True)
+    parser.add_argument(
+        "--proof-root",
+        type=Path,
+        default=Path(".adaos/state/artifact_pipeline/proofs"),
+    )
+    parser.add_argument("--skip-tests", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _arguments()
+    dev_root = args.dev_root.expanduser().resolve()
+    pipeline_state = args.pipeline_state.expanduser().resolve()
+    source_service = ArtifactPublicationService(
+        state_root=pipeline_state,
+        workspace_root=args.proof_root.resolve() / "source-placeholder",
+        remote=LocalProofRemote(args.proof_root.resolve() / "source-remote-placeholder"),
+    )
+    scenario_source = source_service.load_pushed_source("scenario", args.scenario)
+    skill_source = source_service.load_pushed_source("skill", args.skill)
+    if args.change_id not in scenario_source.change_ids:
+        raise RuntimeError("scenario checkpoint does not belong to the requested change set")
+    if args.change_id not in skill_source.change_ids:
+        raise RuntimeError("skill checkpoint does not belong to the requested change set")
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    run_root = args.proof_root.expanduser().resolve() / run_id
+    state_root = run_root / "state"
+    workspace_root = run_root / "workspace"
+    remote = LocalProofRemote(run_root / "remote")
+    service = ArtifactPublicationService(
+        state_root=state_root,
+        workspace_root=workspace_root,
+        remote=remote,
+    )
+    skill_dir = dev_root / "skills" / args.skill
+    scenario_dir = dev_root / "scenarios" / args.scenario
+
+    test_command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        str(skill_dir / "tests"),
+        str(scenario_dir / "tests"),
+    ]
+    test_result: dict[str, object]
+    if args.skip_tests:
+        test_result = {"status": "skipped", "command": test_command}
+    else:
+        completed = subprocess.run(
+            test_command,
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        test_result = {
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "returncode": completed.returncode,
+            "command": test_command,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+        }
+        if completed.returncode:
+            raise RuntimeError(f"representative contract tests failed: {completed.stdout}")
+
+    service.record_push(
+        kind="skill",
+        artifact_id=args.skill,
+        artifact_dir=skill_dir,
+        source_ref=skill_source.source_ref,
+        change_ids=(args.change_id,),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id=args.scenario,
+        artifact_dir=scenario_dir,
+        source_ref=scenario_source.source_ref,
+        change_ids=(args.change_id,),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id=args.scenario,
+        artifact_dir=scenario_dir,
+        change_ids=(args.change_id,),
+        validation_evidence={
+            "status": "passed",
+            "validator": "representative.local.contracts",
+            "tests": test_result,
+        },
+    )
+    package_ids = {(item.kind, item.artifact_id) for item in prepared.plan.packages}
+    expected_ids = {("scenario", args.scenario), ("skill", args.skill)}
+    if not expected_ids.issubset(package_ids):
+        raise RuntimeError(f"candidate omitted companion artifacts: {package_ids}")
+    accepted = service.decide_candidate(
+        prepared.candidate.candidate_id,
+        accepted=True,
+        observations=(
+            {
+                "actor": "local-pipeline-proof",
+                "decision": "accepted",
+                "prototype_revision": "015",
+            },
+        ),
+    )
+    promoted = service.promote(
+        accepted.candidate_id,
+        health_check=lambda _lock: (
+            (workspace_root / "scenarios" / args.scenario / "scenario.yaml").is_file()
+            and (workspace_root / "skills" / args.skill / "skill.yaml").is_file()
+        ),
+    )
+    registry = json.loads((workspace_root / "registry.json").read_text(encoding="utf-8"))
+    lock = promoted.activation.workspace_lock.to_dict()
+    evidence = {
+        "schema": "adaos.artifact.pipeline_proof.v1",
+        "status": "passed",
+        "run_id": run_id,
+        "representative": {
+            "scenario": args.scenario,
+            "skill": args.skill,
+            "change_id": args.change_id,
+            "prototype_revision": "015",
+        },
+        "tests": test_result,
+        "source": {
+            "scenario": scenario_source.to_dict(),
+            "skill": skill_source.to_dict(),
+        },
+        "candidate": prepared.candidate.to_dict(),
+        "accepted_candidate": accepted.to_dict(),
+        "release": prepared.plan.release.to_dict(),
+        "packages": [item.to_dict() for item in prepared.plan.packages],
+        "bindings": [item.to_dict() for item in prepared.plan.bindings],
+        "stable_channel": promoted.pointer.to_dict(),
+        "workspace_lock": lock,
+        "subscription": promoted.subscription.to_dict(),
+        "workspace": {
+            "root": str(workspace_root),
+            "scenario_materialized": (
+                workspace_root / "scenarios" / args.scenario / "scenario.yaml"
+            ).is_file(),
+            "skill_materialized": (
+                workspace_root / "skills" / args.skill / "skill.yaml"
+            ).is_file(),
+            "registry_skill_count": len(registry.get("skills") or []),
+            "registry_scenario_count": len(registry.get("scenarios") or []),
+        },
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    output = run_root / "evidence.json"
+    atomic_write_json(output, evidence)
+    print(json.dumps({**evidence, "evidence_path": str(output)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

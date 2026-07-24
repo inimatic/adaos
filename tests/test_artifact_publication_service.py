@@ -202,6 +202,12 @@ def test_scenario_candidate_locks_and_materializes_stable_skill_dependency(
         prepared.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
     ).is_file()
 
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    service.promote(prepared.candidate.candidate_id)
+    registry = (workspace / "registry.json").read_text(encoding="utf-8")
+    assert '"shopping_skill"' in registry
+    assert '"package_lock"' in registry
+
 
 def test_scenario_candidate_includes_companion_skill_from_same_change_set(
     tmp_path: Path,
