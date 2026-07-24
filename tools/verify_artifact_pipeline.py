@@ -152,6 +152,10 @@ def main() -> int:
         "tests/test_artifact_release_resolver.py::test_release_rejects_missing_ambiguous_incompatible_and_cyclic_dependencies",
         "tests/test_artifact_workspace_activation.py::test_failure_at_each_activation_phase_leaves_no_partial_first_install",
         "tests/test_artifact_workspace_activation.py::test_explicit_recovery_rolls_back_interrupted_journal_without_replaying",
+        "tests/test_artifact_workspace_activation.py::test_introduced_permissions_require_an_explicit_approval",
+        "tests/test_artifact_workspace_activation.py::test_reversible_migration_executes_once_and_rolls_back_after_health_failure",
+        "tests/test_artifact_workspace_activation.py::test_unknown_migration_result_is_not_replayed_and_requires_reconciliation",
+        "tests/test_skill_factory_worker.py::test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot",
         "tests/test_root_draft_metadata.py::test_checkpoint_reconciles_unknown_remote_outcome_without_second_write",
     ]
     if args.skip_tests:
