@@ -1106,12 +1106,31 @@ class WorkspaceActivationManager:
                 )
 
             self._phase(operation, "verify", phase_hook=phase_hook)
+            stage_root.mkdir(parents=True, exist_ok=False)
+            staged: dict[str, Path] = {}
+            verified_packages: list[dict[str, Any]] = []
             for package in plan.packages:
-                verified = self.package_store.verify(package.digest)
+                path = stage_root / package.kind / package.artifact_id
+                verified = self.package_store.extract_to_directory(package.digest, path)
                 if verified.ref != package:
                     raise ActivationError(
                         f"stored package reference differs from release: {package.key}"
                     )
+                staged[package.key] = path
+                verified_packages.append(
+                    {
+                        "package": package.key,
+                        "digest": package.digest,
+                        "file_count": len(verified.file_names),
+                        "uncompressed_bytes": verified.uncompressed_bytes,
+                    }
+                )
+            operation["package_verification"] = {
+                "status": "completed",
+                "mode": "verify_and_extract_once",
+                "packages": verified_packages,
+            }
+            self._write_operation(operation)
 
             desired = self._desired_lock(
                 current=current,
@@ -1199,13 +1218,15 @@ class WorkspaceActivationManager:
             if health_check is None:
                 self._approved_skip(health_policy, phase="health verification")
 
-            self._phase(operation, "stage", phase_hook=phase_hook)
-            stage_root.mkdir(parents=True, exist_ok=False)
-            staged: dict[str, Path] = {}
-            for package in plan.packages:
-                path = stage_root / package.kind / package.artifact_id
-                self.package_store.extract_to_directory(package.digest, path)
-                staged[package.key] = path
+            self._phase(
+                operation,
+                "stage",
+                phase_hook=phase_hook,
+                evidence={
+                    "mode": "verified_private_staging",
+                    "package_count": len(staged),
+                },
+            )
 
             moves: list[dict[str, Any]] = []
             for package in plan.packages:

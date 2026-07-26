@@ -272,17 +272,57 @@ def test_store_verify_and_extract_each_use_one_verification_pass(
 
     import adaos.services.artifact_pipeline.packages as package_module
 
-    original = package_module.verify_artifact_package
+    original = package_module._verify_artifact_package
     calls: list[str | None] = []
 
-    def counted(data, *, expected_digest=None, limits=None):
+    def counted(data, *, expected_digest=None, limits=None, extract_to=None):
         calls.append(expected_digest)
-        return original(data, expected_digest=expected_digest, limits=limits)
+        return original(
+            data,
+            expected_digest=expected_digest,
+            limits=limits,
+            extract_to=extract_to,
+        )
 
-    monkeypatch.setattr(package_module, "verify_artifact_package", counted)
+    monkeypatch.setattr(package_module, "_verify_artifact_package", counted)
     store.verify(built.ref.digest)
     assert calls == [built.ref.digest]
 
     calls.clear()
+    archive_reads: list[str] = []
+    original_read = package_module.zipfile.ZipFile.read
+
+    def counted_read(archive, name, pwd=None):
+        archive_reads.append(str(name))
+        return original_read(archive, name, pwd=pwd)
+
+    monkeypatch.setattr(package_module.zipfile.ZipFile, "read", counted_read)
     store.extract_to_directory(built.ref.digest, tmp_path / "extracted")
     assert calls == [built.ref.digest]
+    assert len(archive_reads) == len(built.package_manifest["files"]) + 1
+
+
+def test_extraction_io_failure_preserves_verified_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(tmp_path / "source")
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    store.put(built.archive_bytes)
+    target = tmp_path / "extracted"
+    original_write_bytes = Path.write_bytes
+
+    def fail_staging_write(path: Path, data: bytes) -> int:
+        if target == path or target in path.parents:
+            raise OSError("simulated staging disk failure")
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", fail_staging_write)
+
+    with pytest.raises(OSError, match="simulated staging disk failure"):
+        store.extract_to_directory(built.ref.digest, target)
+
+    assert store.has(built.ref.digest)
+    assert not target.exists()
+    assert not (tmp_path / "packages" / "quarantine").exists()

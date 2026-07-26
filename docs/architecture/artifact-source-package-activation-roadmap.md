@@ -139,7 +139,7 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
-| AP1 | 6/9 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission | external signing and package-store lifecycle diagnostics |
+| AP1 | 7/10 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, and single-pass verified extraction for cached activation | external signing and package-store lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 10/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, and fail-closed retention | stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
@@ -213,6 +213,8 @@ symlink, size, and corruption tests.
   diagnostics.
 - [ ] `[deferred]` `AP1-09` Add commercial license and entitlement payloads to
   package admission policy.
+- [x] `[should]` `AP1-10` Verify and extract each cached activation package in
+  one archive/file-hash traversal into rollback-owned private staging.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
@@ -226,6 +228,10 @@ packaged schema digests, source revision, and manifest digest. ProjectRelease
 now stores canonical validation-evidence digest references. Historical records
 without the complete additive field group retain their original digest; partial
 groups fail closed, and every new package/release write emits the group.
+`AP1-10` is closed by package-store read-count instrumentation and an activation
+regression that records one `verify_and_extract_once` receipt per cached
+component. Extraction I/O failures clean staging without quarantining a valid
+immutable package.
 
 ## Milestone AP2: Dependency-Locked Project Releases
 

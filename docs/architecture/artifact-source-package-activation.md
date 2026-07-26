@@ -190,6 +190,8 @@ Package requirements:
 - validation result references;
 - no credentials, user runtime data, or unrelated DEV files;
 - safe extraction rules and bounded size;
+- one verification/file-hash traversal when a cached package enters
+  operation-private activation staging;
 - content-addressed local storage;
 - atomic write and verification before visibility.
 
@@ -425,6 +427,14 @@ resolve
 Failure before `switch-lock` removes staged state and leaves the active lock
 unchanged. Failure after `switch-lock` restores the previous lock and reloads
 the previous component set when rollback is supported.
+
+For a cached package, `verify` performs safe extraction into the operation's
+private staging tree while it validates the archive, manifest, and every file
+digest. The later `stage` phase records admission of that verified tree and
+does not traverse the archive again. Nothing from this private tree becomes
+live before `switch-lock`; permission or migration rejection and interruption
+remove it through the same rollback path. A newly fetched remote package is
+still verified at the remote/store trust boundary before this activation pass.
 
 Before a user-approved update, the same planner runs without writes and emits a
 canonical plan digest. The plan is bound to both the immutable target release

@@ -56,7 +56,7 @@ Run from the AdaOS repository root:
 The latest durable local record for this run is:
 
 ```text
-.adaos/state/artifact_pipeline/proofs/20260726T230230545555Z/evidence.json
+.adaos/state/artifact_pipeline/proofs/20260726T231714188104Z/evidence.json
 ```
 
 This rerun uses the post-audit package policy. Before any new proof package is
@@ -118,6 +118,7 @@ redacted identities and conclusions required for review.
 | Delayed activation verification | passed | 137 focused core regressions; every new activation records an exact lock digest/revision and a bounded pending marker; delayed pass, materialized-file tamper, moved-lock supersession, terminal marker cleanup, and API worker diagnostics are covered without automatic activation replay or rollback |
 | Artifact retention safety | passed | 143 focused core regressions; dry-run/apply preserve active packages and running or uncertain recovery trees, collect old unreferenced packages and proven orphan staging, fail closed on a corrupt journal, and keep nonterminal candidate packages; the live machine dry-run reported zero candidates |
 | Post-audit verifier contract | passed | 2 dedicated verifier regressions plus a complete rerun; channel promotion uses compare-and-swap, runtime reload absence requires an explicit isolated-stand skip, and mutable DEV cannot be relabelled as an older checkpoint |
+| Single-pass cached activation | passed | 130 focused artifact/Root/worker regressions plus the complete representative proof; each cached package is verified and extracted in one ZIP/file-hash traversal, and staging I/O failure preserves the valid immutable package |
 
 Original checkpoint-package identities retained as the source inventory
 witness:
@@ -138,7 +139,7 @@ Post-audit rebuild identities under package policy
 scenario package  sha256:5a007b582c50ec2c8a6ad2662bb1853da6272bccec54f513ce52ce391d67be20
 skill package     sha256:e751d9ecde3222373c6d38c7a4959ad740a207656a1838da94bf44e26e9160bb
 project release   sha256:afb87148014ba1aee8d308842d1ff6937a7fc495bb18b5ba0505e113fb848f11
-workspace lock    sha256:5fc2aa5270151f24162129477280f01bbce1911bf370f90ad11ccafa2155b49c
+workspace lock    sha256:66647f76e5c1bf51d34165d2636f6b4736bb20979166c953ba4aaca343a35b5c
 ```
 
 Live Builder publication identities:

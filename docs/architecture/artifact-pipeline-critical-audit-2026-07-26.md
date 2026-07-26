@@ -47,7 +47,8 @@ pipeline becomes the default.
 | B9 runtime/trial evidence | corrected, validated-local | activation requires reload/health receipts or named policy skips; trial slots enforce data identity/isolation and acceptance requires healthy rollback-complete evidence |
 | B10 backend release admission | corrected, validated-local | backend recomputes release identity and verifies package references before visibility |
 | B11 operator retry identity | corrected, validated-local | Builder binds confirmation and idempotency to the exact reviewed plan digest |
-| R1 repeated verification | improved, open | cached activation reduced from four archive traversals to two; carry one verified receipt into extraction |
+| B12 verifier source fidelity | corrected, validated-local | proof adapter tracks current CAS/reload contracts and rejects DEV content that differs from the exact checkpoint inventory |
+| R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | open (`should`) | add streaming transport behind the existing adapter |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
 | R4 filesystem durability | open | add directory sync and terminal history states |
@@ -265,15 +266,19 @@ checkpoint.
 
 ## Reliability And Performance Gaps
 
-### R1. Cached activation verifies each archive four times
+### R1. Cached activation verified each archive repeatedly
 
 Instrumentation recorded four complete verification passes for one cached
 package during activation. `verify`, `read`, and `extract_to_directory` repeat
 the same ZIP traversal and hashes.
 
-Correction: pass one verified archive handle/result through the verify and
-stage boundary, or use a verified immutable-store receipt. Re-read only when a
-trust boundary or file identity changed.
+Current correction: the activation `verify` phase verifies and extracts each
+cached archive in one ZIP/file-hash traversal directly into operation-private
+staging. The later `stage` phase admits that already verified tree; it does not
+read the archive again. Permission or migration rejection and any interruption
+still remove the private tree before live switch. A package fetched across a
+remote trust boundary is intentionally verified once before store visibility
+and once when it enters activation staging.
 
 ### R2. Package and release transport is base64 JSON
 

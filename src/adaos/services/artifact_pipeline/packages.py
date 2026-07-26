@@ -452,11 +452,12 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
     return value, raw
 
 
-def verify_artifact_package(
+def _verify_artifact_package(
     data: bytes,
     *,
     expected_digest: str | None = None,
     limits: PackageLimits | None = None,
+    extract_to: Path | None = None,
 ) -> VerifiedArtifactPackage:
     limits = limits or PackageLimits()
     if len(data) > limits.max_archive_bytes:
@@ -519,6 +520,14 @@ def verify_artifact_package(
             expected_file_digest = str(record.get("digest") or "").strip().lower()
             if sha256_digest(raw) != expected_file_digest:
                 raise PackageVerificationError(f"package file digest mismatch: {name}")
+            if extract_to is not None:
+                destination = (extract_to / Path(name)).resolve()
+                if extract_to != destination and extract_to not in destination.parents:
+                    raise PackageVerificationError(
+                        f"package entry escapes materialization root: {name}"
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(raw)
 
         if package_manifest.get("builder_id") is not None:
             if (
@@ -575,6 +584,19 @@ def verify_artifact_package(
             file_names=tuple(sorted(expected_files)),
             uncompressed_bytes=sum(int(item.get("size") or 0) for item in expected_files.values()),
         )
+
+
+def verify_artifact_package(
+    data: bytes,
+    *,
+    expected_digest: str | None = None,
+    limits: PackageLimits | None = None,
+) -> VerifiedArtifactPackage:
+    return _verify_artifact_package(
+        data,
+        expected_digest=expected_digest,
+        limits=limits,
+    )
 
 
 class ContentAddressedPackageStore:
@@ -672,21 +694,27 @@ class ContentAddressedPackageStore:
     def extract_to_directory(self, digest: str, target: Path) -> VerifiedArtifactPackage:
         """Verify and extract a package into a new directory without switching it live."""
 
-        data, verified = self._read_verified(digest)
+        path = self.package_path(digest)
+        if not path.is_file():
+            raise FileNotFoundError(f"package not found: {digest}")
+        data = path.read_bytes()
         target = Path(target).expanduser().resolve()
         if target.exists():
             raise FileExistsError(f"package extraction target already exists: {target}")
         target.mkdir(parents=True, exist_ok=False)
         try:
-            with zipfile.ZipFile(io.BytesIO(data), mode="r") as archive:
-                for name in verified.file_names:
-                    destination = (target / Path(name)).resolve()
-                    if target != destination and target not in destination.parents:
-                        raise PackageVerificationError(f"package entry escapes materialization root: {name}")
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(archive.read(name))
+            verified = _verify_artifact_package(
+                data,
+                expected_digest=digest,
+                limits=self.limits,
+                extract_to=target,
+            )
+        except OSError:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
         except Exception:
             shutil.rmtree(target, ignore_errors=True)
+            self._quarantine_path(path, reason="verification-failed")
             raise
         return verified
 

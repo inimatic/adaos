@@ -443,6 +443,46 @@ def test_activation_fetches_missing_package_once_and_verifies_reference(tmp_path
     assert store.has(built.ref.digest)
 
 
+def test_cached_activation_verifies_and_extracts_each_package_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = _built_scenario(tmp_path, version="1.0.0", marker="single-pass")
+    store, manager = _manager(tmp_path)
+    store.put(built.archive_bytes)
+
+    import adaos.services.artifact_pipeline.packages as package_module
+
+    original = package_module._verify_artifact_package
+    calls: list[str | None] = []
+
+    def counted(data, *, expected_digest=None, limits=None, extract_to=None):
+        calls.append(expected_digest)
+        return original(
+            data,
+            expected_digest=expected_digest,
+            limits=limits,
+            extract_to=extract_to,
+        )
+
+    monkeypatch.setattr(package_module, "_verify_artifact_package", counted)
+
+    result = _activate(manager, _plan(built), idempotency_key="single-pass")
+
+    assert result.status == "completed"
+    assert calls == [built.ref.digest]
+    operation = json.loads(
+        manager.operation_path(result.operation_id).read_text(encoding="utf-8")
+    )
+    verification = operation["package_verification"]
+    assert verification["status"] == "completed"
+    assert verification["mode"] == "verify_and_extract_once"
+    assert verification["packages"][0]["package"] == "scenario:recipes"
+    assert verification["packages"][0]["digest"] == built.ref.digest
+    assert verification["packages"][0]["file_count"] == 2
+    assert verification["packages"][0]["uncompressed_bytes"] > 0
+
+
 def test_introduced_permissions_require_an_explicit_approval(tmp_path: Path) -> None:
     built = _built_scenario(tmp_path, version="1.0.0", marker="permission")
     store, manager = _manager(tmp_path)
