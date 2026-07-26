@@ -1,6 +1,7 @@
 from .activation import (
     ACTIVATION_OPERATION_SCHEMA,
     ACTIVATION_PHASES,
+    ActivationConflictError,
     ActivationError,
     ActivationReplayBlocked,
     ActivationResult,
@@ -78,6 +79,7 @@ from .sources import (
 __all__ = [
     "ACTIVATION_OPERATION_SCHEMA",
     "ACTIVATION_PHASES",
+    "ActivationConflictError",
     "ActivationError",
     "ActivationReplayBlocked",
     "ActivationResult",

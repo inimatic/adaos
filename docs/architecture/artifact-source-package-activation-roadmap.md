@@ -135,7 +135,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 5/9 | validated-local (bounded) | deterministic package build/store/verify, secret and authoring-state exclusion, portable path admission, corruption and zero-byte coverage | builder attestation identity and external signing |
 | AP2 | 6/10 | validated-local (bounded) | exact dependency ranges/digests, complete-set fixed-point selection, consistent bindings, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs plus diagnostics |
-| AP3 | 4/11 | validated-local (bounded) | phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and rollback injection | writer lease/CAS, orphan removal, mandatory reload/health policy, delayed observation, and stand validation |
+| AP3 | 6/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, phase journal, permission admission, reversible migration/reconciliation, and interruption recovery | mandatory reload/health policy, delayed observation, retention, operator diff, and stand validation |
 | AP4 | 6/10 | validated-local (bounded) | exact candidate identity, isolated package materialization, acceptance record, immutable Builder task snapshot, concurrent-DEV compare-and-switch | enforced data isolation and health/rollback trial evidence; stand validation |
 | AP5 | 6/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, and local/backend atomic channel CAS | merge/deploy backend hardening, durable promotion continuation, and clean stand promotion |
 | AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
@@ -270,14 +270,14 @@ transition with health verification and rollback.
 switches the lock atomically, and injected failures before and after lock switch
 leave either the old or the new complete release active.
 
-- [ ] `[must]` `AP3-01` Implement durable WorkspaceLock storage with a
+- [x] `[must]` `AP3-01` Implement durable WorkspaceLock storage with a
   workspace-wide writer lease, compare-and-switch revision, and previous-lock
   linkage.
 - [ ] `[must]` `AP3-02` Implement activation phases: resolve, fetch, verify,
   dependency plan, permission plan, migration plan, stage, checkpoint,
   switch-lock, reload, health verify, and commit; reload and health must record
   either a durable receipt or an explicit policy-approved skip.
-- [ ] `[must]` `AP3-03` Make filesystem materialization and runtime bindings
+- [x] `[must]` `AP3-03` Make filesystem materialization and runtime bindings
   projections of WorkspaceLock, including transactional removal of components
   no longer reachable from any active slot.
 - [x] `[must]` `AP3-04` Add idempotency keys and durable phase evidence to the
@@ -298,8 +298,13 @@ leave either the old or the new complete release active.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and Workspace activation regressions in
 `tests/test_artifact_workspace_activation.py`.
-`AP3-01` through `AP3-03` were reopened for writer serialization, explicit
-reload/health policy, and transactional removal of unreachable components.
+`AP3-01` and `AP3-03` were reclosed after activation and explicit recovery
+began sharing a cross-process Workspace writer lease, recording and
+rechecking the expected lock digest before filesystem mutation, rebuilding
+components from all active slot roots, and transactionally removing or
+restoring unreachable packages. Immutable remote package fetch is performed
+before the Workspace writer lease when a fetch adapter is supplied. `AP3-02`
+remains open for mandatory reload and health receipts or a named policy skip.
 
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 

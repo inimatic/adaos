@@ -17,7 +17,12 @@ from adaos.domain.artifact_release import (
 )
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
-from adaos.services.artifact_pipeline.storage import atomic_write_json, replace_with_retry
+from adaos.services.artifact_pipeline.storage import (
+    MutationLockTimeout,
+    atomic_write_json,
+    mutation_lock,
+    replace_with_retry,
+)
 
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
@@ -35,6 +40,7 @@ ACTIVATION_PHASES = (
     "health-verify",
     "commit",
 )
+_CAPTURE_CURRENT_LOCK = object()
 
 
 class ActivationError(RuntimeError):
@@ -42,6 +48,10 @@ class ActivationError(RuntimeError):
 
 
 class ActivationReplayBlocked(ActivationError):
+    pass
+
+
+class ActivationConflictError(ActivationError):
     pass
 
 
@@ -76,6 +86,7 @@ class WorkspaceActivationManager:
         self.backups_root = self.state_root / "artifact_pipeline" / "backups"
         self.lock_history_root = self.metadata_root / "lock-history"
         self.releases_root = self.metadata_root / "releases"
+        self.writer_lock_path = self.metadata_root / ".workspace-writer.lock"
 
     def load_lock(self) -> WorkspaceLock | None:
         if not self.lock_path.is_file():
@@ -153,6 +164,33 @@ class WorkspaceActivationManager:
                 raise ActivationError(
                     f"resolved dependency {dependency.key} is missing from activation plan"
                 )
+        bindings_by_consumer: dict[str, list[Any]] = {}
+        for binding in plan.bindings:
+            dependency = packages.get(binding.dependency)
+            if binding.consumer not in packages:
+                raise ActivationError(
+                    f"dependency binding has unknown consumer {binding.consumer}"
+                )
+            if dependency is None or dependency.digest != binding.package_digest:
+                raise ActivationError(
+                    f"dependency binding selects an inconsistent package {binding.dependency}"
+                )
+            bindings_by_consumer.setdefault(binding.consumer, []).append(binding)
+        reachable: set[str] = set()
+        pending = [item.key for item in plan.release.components]
+        while pending:
+            key = pending.pop()
+            if key in reachable:
+                continue
+            reachable.add(key)
+            pending.extend(
+                binding.dependency for binding in bindings_by_consumer.get(key, ())
+            )
+        unreachable = sorted(set(packages) - reachable)
+        if unreachable:
+            raise ActivationError(
+                f"activation plan contains unreachable packages: {', '.join(unreachable)}"
+            )
 
     def _release_path(self, release_digest: str) -> Path:
         token = str(release_digest or "").strip().lower()
@@ -248,11 +286,11 @@ class WorkspaceActivationManager:
             release_digest=release_digest,
             audience=audience,
         )
-        components = {item.key: item for item in (current.components if current else ())}
+        current_components = {item.key: item for item in (current.components if current else ())}
+        components = dict(current_components)
         for package in plan.packages:
             components[package.key] = package
-        plan_consumers = {item.key for item in plan.release.components}
-        plan_consumers.update(item.consumer for item in plan.bindings)
+        plan_consumers = {item.key for item in plan.packages}
         bindings = {
             (item.consumer, item.dependency): item
             for item in (current.bindings if current else ())
@@ -260,6 +298,51 @@ class WorkspaceActivationManager:
         }
         for binding in plan.bindings:
             bindings[(binding.consumer, binding.dependency)] = binding
+
+        roots: set[str] = set()
+        for slot in slots.values():
+            if slot.slot_id == slot_id:
+                slot_release = plan.release
+            else:
+                slot_release = self._load_release(slot.release_digest)
+                if slot_release is None:
+                    raise ActivationError(
+                        f"cannot rebuild WorkspaceLock: release record is missing for slot {slot.slot_id}"
+                    )
+            for component in slot_release.components:
+                active = components.get(component.key)
+                if active != component:
+                    raise ActivationError(
+                        f"active slots require incompatible packages for {component.key}"
+                    )
+                roots.add(component.key)
+
+        bindings_by_consumer: dict[str, list[Any]] = {}
+        for binding in bindings.values():
+            bindings_by_consumer.setdefault(binding.consumer, []).append(binding)
+        reachable: set[str] = set()
+        pending = list(sorted(roots))
+        while pending:
+            key = pending.pop()
+            if key in reachable:
+                continue
+            if key not in components:
+                raise ActivationError(f"WorkspaceLock root package is missing: {key}")
+            reachable.add(key)
+            for binding in bindings_by_consumer.get(key, ()):
+                dependency = components.get(binding.dependency)
+                if dependency is None or dependency.digest != binding.package_digest:
+                    raise ActivationError(
+                        f"binding for {key} selects an unavailable package {binding.dependency}"
+                    )
+                pending.append(binding.dependency)
+
+        components = {key: package for key, package in components.items() if key in reachable}
+        bindings = {
+            key: binding
+            for key, binding in bindings.items()
+            if binding.consumer in reachable and binding.dependency in reachable
+        }
         revision = (current.lock_revision if current else 0) + 1
         try:
             return WorkspaceLock(
@@ -276,6 +359,28 @@ class WorkspaceActivationManager:
     def _write_lock(self, lock: WorkspaceLock) -> None:
         atomic_write_json(self.lock_path, lock.to_dict())
 
+    @staticmethod
+    def _lock_digest(lock: WorkspaceLock | None) -> str | None:
+        return lock.to_dict()["lock_digest"] if lock is not None else None
+
+    @staticmethod
+    def _component_plan(
+        current: WorkspaceLock | None,
+        desired: WorkspaceLock,
+    ) -> dict[str, list[str]]:
+        before = {item.key: item for item in (current.components if current else ())}
+        after = {item.key: item for item in desired.components}
+        return {
+            "added": sorted(key for key in after if key not in before),
+            "changed": sorted(
+                key for key in after if key in before and after[key].digest != before[key].digest
+            ),
+            "retained": sorted(
+                key for key in after if key in before and after[key].digest == before[key].digest
+            ),
+            "removed": sorted(key for key in before if key not in after),
+        }
+
     def _target_for(self, package: ArtifactPackageRef) -> Path:
         plural = "skills" if package.kind == "skill" else "scenarios"
         target = (self.workspace_root / plural / package.artifact_id).resolve()
@@ -284,26 +389,32 @@ class WorkspaceActivationManager:
         return target
 
     def _rollback(self, operation: dict[str, Any]) -> None:
-        for raw in reversed(operation.get("moves") or []):
-            if not isinstance(raw, Mapping):
-                continue
-            target = Path(str(raw.get("target") or "")).resolve()
-            backup = Path(str(raw.get("backup") or "")).resolve()
-            had_target = raw.get("had_target") is True
-            if self.workspace_root not in target.parents:
-                raise ActivationError(f"refusing rollback outside Workspace: {target}")
-            if backup.exists():
-                if target.exists():
+        mutation = operation.get("workspace_mutation")
+        mutated = isinstance(mutation, Mapping) and mutation.get("status") in {
+            "dispatching",
+            "completed",
+        }
+        if mutated:
+            for raw in reversed(operation.get("moves") or []):
+                if not isinstance(raw, Mapping):
+                    continue
+                target = Path(str(raw.get("target") or "")).resolve()
+                backup = Path(str(raw.get("backup") or "")).resolve()
+                had_target = raw.get("had_target") is True
+                if self.workspace_root not in target.parents:
+                    raise ActivationError(f"refusing rollback outside Workspace: {target}")
+                if backup.exists():
+                    if target.exists():
+                        shutil.rmtree(target)
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    replace_with_retry(backup, target)
+                elif not had_target and target.exists():
                     shutil.rmtree(target)
-                backup.parent.mkdir(parents=True, exist_ok=True)
-                replace_with_retry(backup, target)
-            elif not had_target and target.exists():
-                shutil.rmtree(target)
-        previous = operation.get("previous_lock")
-        if isinstance(previous, Mapping):
-            atomic_write_json(self.lock_path, previous)
-        else:
-            self.lock_path.unlink(missing_ok=True)
+            previous = operation.get("previous_lock")
+            if isinstance(previous, Mapping):
+                atomic_write_json(self.lock_path, previous)
+            else:
+                self.lock_path.unlink(missing_ok=True)
         stage = self.staging_root / str(operation["operation_id"])
         backup_root = self.backups_root / str(operation["operation_id"])
         shutil.rmtree(stage, ignore_errors=True)
@@ -329,6 +440,56 @@ class WorkspaceActivationManager:
         migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         phase_hook: Callable[[str], None] | None = None,
+        expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
+    ) -> ActivationResult:
+        self._assert_plan(plan)
+        if fetch_package is not None:
+            for package in plan.packages:
+                if self.package_store.has(package.digest):
+                    continue
+                self.package_store.put(
+                    fetch_package(package),
+                    expected_digest=package.digest,
+                )
+        try:
+            with mutation_lock(self.writer_lock_path):
+                return self._activate_under_writer_lease(
+                    plan,
+                    idempotency_key=idempotency_key,
+                    slot_id=slot_id,
+                    audience=audience,
+                    fetch_package=fetch_package,
+                    reload_runtime=reload_runtime,
+                    health_check=health_check,
+                    permission_decision=permission_decision,
+                    migration_executor=migration_executor,
+                    migration_rollback=migration_rollback,
+                    phase_hook=phase_hook,
+                    expected_lock_digest=expected_lock_digest,
+                )
+        except MutationLockTimeout as exc:
+            raise ActivationError("Workspace writer lease is busy") from exc
+
+    def _activate_under_writer_lease(
+        self,
+        plan: ReleasePlan,
+        *,
+        idempotency_key: str,
+        slot_id: str = "primary",
+        audience: str | None = None,
+        fetch_package: Callable[[ArtifactPackageRef], bytes] | None = None,
+        reload_runtime: Callable[[WorkspaceLock], None] | None = None,
+        health_check: Callable[[WorkspaceLock], bool] | None = None,
+        permission_decision: (
+            bool
+            | Mapping[str, Any]
+            | Callable[[Mapping[str, Any]], bool | Mapping[str, Any]]
+            | None
+        ) = None,
+        migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        phase_hook: Callable[[str], None] | None = None,
+        expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
     ) -> ActivationResult:
         operation_id = self.operation_id(idempotency_key)
         release_digest = plan.release.release_digest or plan.release.computed_digest()
@@ -357,6 +518,16 @@ class WorkspaceActivationManager:
             )
 
         current = self.load_lock()
+        observed_lock_digest = self._lock_digest(current)
+        if (
+            expected_lock_digest is not _CAPTURE_CURRENT_LOCK
+            and expected_lock_digest != observed_lock_digest
+        ):
+            raise ActivationConflictError(
+                "WorkspaceLock compare-and-switch conflict: "
+                f"expected {expected_lock_digest or '<absent>'}, "
+                f"observed {observed_lock_digest or '<absent>'}"
+            )
         operation: dict[str, Any] = {
             "schema": ACTIVATION_OPERATION_SCHEMA,
             "operation_id": operation_id,
@@ -368,6 +539,7 @@ class WorkspaceActivationManager:
             "updated_at": _now_iso(),
             "events": [],
             "previous_lock": current.to_dict() if current else None,
+            "expected_lock_digest": observed_lock_digest,
             "moves": [],
         }
         self._write_operation(operation)
@@ -404,11 +576,16 @@ class WorkspaceActivationManager:
                 audience=audience,
             )
             operation["desired_lock"] = desired.to_dict()
+            component_plan = self._component_plan(current, desired)
+            operation["component_plan"] = component_plan
             self._phase(
                 operation,
                 "dependency-plan",
                 phase_hook=phase_hook,
-                evidence={"lock_digest": desired.to_dict()["lock_digest"]},
+                evidence={
+                    "lock_digest": desired.to_dict()["lock_digest"],
+                    **component_plan,
+                },
             )
 
             current_release = self._active_release(current, slot_id=slot_id)
@@ -493,6 +670,22 @@ class WorkspaceActivationManager:
                         "had_target": target.exists(),
                     }
                 )
+            desired_keys = {item.key for item in desired.components}
+            for package in current.components if current else ():
+                if package.key in desired_keys:
+                    continue
+                target = self._target_for(package)
+                backup = backup_root / package.kind / package.artifact_id
+                moves.append(
+                    {
+                        "package": package.key,
+                        "target": str(target),
+                        "staged": None,
+                        "backup": str(backup),
+                        "had_target": target.exists(),
+                        "action": "remove",
+                    }
+                )
             operation["moves"] = moves
             self._phase(
                 operation,
@@ -570,16 +763,37 @@ class WorkspaceActivationManager:
                 self._write_operation(operation)
 
             self._phase(operation, "switch-lock", phase_hook=phase_hook)
+            observed_before_switch = self._lock_digest(self.load_lock())
+            if observed_before_switch != observed_lock_digest:
+                raise ActivationConflictError(
+                    "WorkspaceLock changed after activation planning: "
+                    f"expected {observed_lock_digest or '<absent>'}, "
+                    f"observed {observed_before_switch or '<absent>'}"
+                )
+            operation["workspace_mutation"] = {
+                "status": "dispatching",
+                "expected_lock_digest": observed_lock_digest,
+                "started_at": _now_iso(),
+            }
+            self._write_operation(operation)
             for move in moves:
                 target = Path(move["target"])
-                staged_path = Path(move["staged"])
+                staged_value = move.get("staged")
                 backup = Path(move["backup"])
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists():
                     backup.parent.mkdir(parents=True, exist_ok=True)
                     replace_with_retry(target, backup)
-                replace_with_retry(staged_path, target)
+                if staged_value:
+                    replace_with_retry(Path(str(staged_value)), target)
             self._write_lock(desired)
+            operation["workspace_mutation"] = {
+                "status": "completed",
+                "expected_lock_digest": observed_lock_digest,
+                "lock_digest": desired.to_dict()["lock_digest"],
+                "completed_at": _now_iso(),
+            }
+            self._write_operation(operation)
 
             self._phase(operation, "reload", phase_hook=phase_hook)
             if reload_runtime is not None:
@@ -649,7 +863,11 @@ class WorkspaceActivationManager:
                 self._rollback(operation)
             except Exception as rollback_exc:
                 operation["rollback_error"] = f"{type(rollback_exc).__name__}: {rollback_exc}"
-            if reload_runtime is not None and current is not None:
+            workspace_mutation = operation.get("workspace_mutation")
+            workspace_was_mutated = isinstance(
+                workspace_mutation, Mapping
+            ) and workspace_mutation.get("status") in {"dispatching", "completed"}
+            if reload_runtime is not None and current is not None and workspace_was_mutated:
                 try:
                     reload_runtime(current)
                     operation["runtime_rollback"] = {
@@ -671,6 +889,23 @@ class WorkspaceActivationManager:
             raise ActivationError(str(exc)) from exc
 
     def recover_interrupted(
+        self,
+        operation_id: str,
+        *,
+        migration_reconciler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            with mutation_lock(self.writer_lock_path):
+                return self._recover_interrupted_under_writer_lease(
+                    operation_id,
+                    migration_reconciler=migration_reconciler,
+                    migration_rollback=migration_rollback,
+                )
+        except MutationLockTimeout as exc:
+            raise ActivationError("Workspace writer lease is busy") from exc
+
+    def _recover_interrupted_under_writer_lease(
         self,
         operation_id: str,
         *,
@@ -752,6 +987,29 @@ class WorkspaceActivationManager:
                 "completed_at": _now_iso(),
             }
             self._write_operation(operation)
+        workspace_mutation = operation.get("workspace_mutation")
+        if isinstance(workspace_mutation, Mapping) and workspace_mutation.get("status") in {
+            "dispatching",
+            "completed",
+        }:
+            previous = operation.get("previous_lock")
+            desired = operation.get("desired_lock")
+            previous_digest = (
+                str(previous.get("lock_digest") or "")
+                if isinstance(previous, Mapping)
+                else None
+            )
+            desired_digest = (
+                str(desired.get("lock_digest") or "")
+                if isinstance(desired, Mapping)
+                else None
+            )
+            observed = self._lock_digest(self.load_lock())
+            if observed not in {previous_digest, desired_digest}:
+                raise ActivationReplayBlocked(
+                    "interrupted activation no longer owns the observed WorkspaceLock; "
+                    "manual reconciliation is required"
+                )
         self._rollback(operation)
         operation["status"] = "recovered"
         operation["recovered_at"] = _now_iso()
@@ -763,6 +1021,7 @@ __all__ = [
     "ACTIVATION_OPERATION_SCHEMA",
     "ACTIVATION_PHASES",
     "ActivationError",
+    "ActivationConflictError",
     "ActivationReplayBlocked",
     "ActivationResult",
     "WorkspaceActivationManager",

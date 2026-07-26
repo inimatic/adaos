@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.domain.artifact_release import ArtifactSourceRef, WorkspaceLock
 from adaos.services.artifact_pipeline import (
     ACTIVATION_PHASES,
+    ActivationConflictError,
     ActivationError,
     ActivationReplayBlocked,
     ContentAddressedPackageStore,
+    DependencyRequirement,
     PackageCatalog,
     WorkspaceActivationManager,
     build_artifact_package,
@@ -50,6 +54,32 @@ def _plan(built, *, permissions=(), migrations=()):
         catalog=PackageCatalog(),
         permissions=permissions,
         migrations=migrations,
+    )
+
+
+def _built_skill(root: Path, *, version: str, marker: str):
+    skill = root / f"skill-{marker}"
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        f"name: shopping\nversion: {version}\n",
+        encoding="utf-8",
+    )
+    (skill / "handler.py").write_text(f"MARKER = {marker!r}\n", encoding="utf-8")
+    return build_artifact_package(skill, kind="skill", source_ref=_source())
+
+
+def _plan_with_skill(scenario, skill):
+    return build_project_release(
+        project_id="recipes",
+        version=scenario.ref.version,
+        source_ref=_source(),
+        components=(scenario.ref,),
+        catalog=PackageCatalog((skill.ref,)),
+        requirements_by_package={
+            scenario.ref.digest: (
+                DependencyRequirement("skill", "shopping", skill.ref.version),
+            )
+        },
     )
 
 
@@ -111,6 +141,143 @@ def test_failed_health_rolls_back_files_and_lock_and_cannot_auto_replay(tmp_path
 
     with pytest.raises(ActivationReplayBlocked, match="explicitly new idempotency key"):
         manager.activate(_plan(second), idempotency_key="upgrade-fails")
+
+
+def test_removed_dependency_is_pruned_from_lock_and_workspace(tmp_path: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="with-skill")
+    second = _built_scenario(tmp_path, version="1.1.0", marker="without-skill")
+    skill = _built_skill(tmp_path, version="1.0.0", marker="shared")
+    store, manager = _manager(tmp_path)
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    store.put(skill.archive_bytes)
+    manager.activate(_plan_with_skill(first, skill), idempotency_key="with-skill")
+    skill_target = tmp_path / "workspace" / "skills" / "shopping"
+    assert skill_target.is_dir()
+
+    result = manager.activate(_plan(second), idempotency_key="without-skill")
+
+    assert {item.key for item in result.workspace_lock.components} == {"scenario:recipes"}
+    assert result.workspace_lock.bindings == ()
+    assert not skill_target.exists()
+    operation = json.loads(manager.operation_path(result.operation_id).read_text(encoding="utf-8"))
+    assert operation["component_plan"]["removed"] == ["skill:shopping"]
+
+
+def test_removed_dependency_is_restored_when_post_switch_health_fails(tmp_path: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="rollback-with-skill")
+    second = _built_scenario(tmp_path, version="1.1.0", marker="rollback-without-skill")
+    skill = _built_skill(tmp_path, version="1.0.0", marker="rollback-shared")
+    store, manager = _manager(tmp_path)
+    for built in (first, second, skill):
+        store.put(built.archive_bytes)
+    initial = manager.activate(_plan_with_skill(first, skill), idempotency_key="rollback-base")
+
+    with pytest.raises(ActivationError, match="health check failed"):
+        manager.activate(
+            _plan(second),
+            idempotency_key="rollback-remove",
+            health_check=lambda _lock: False,
+        )
+
+    assert manager.load_lock() == initial.workspace_lock
+    assert (tmp_path / "workspace" / "skills" / "shopping" / "handler.py").is_file()
+
+
+def test_workspace_lock_compare_and_switch_preserves_newer_observed_lock(tmp_path: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="cas-one")
+    second = _built_scenario(tmp_path, version="1.1.0", marker="cas-two")
+    store, manager = _manager(tmp_path)
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    initial = manager.activate(_plan(first), idempotency_key="cas-base")
+    current = initial.workspace_lock
+    foreign = WorkspaceLock(
+        lock_revision=current.lock_revision + 1,
+        previous_lock_revision=current.lock_revision,
+        updated_at="2026-07-26T00:00:00Z",
+        slots=current.slots,
+        components=current.components,
+        bindings=current.bindings,
+    )
+
+    def inject_foreign_writer(phase: str) -> None:
+        if phase == "switch-lock":
+            manager._write_lock(foreign)
+
+    with pytest.raises(ActivationConflictError, match="changed after activation planning"):
+        manager.activate(
+            _plan(second),
+            idempotency_key="cas-conflict",
+            phase_hook=inject_foreign_writer,
+        )
+
+    assert manager.load_lock() == foreign
+    assert json.loads(
+        (tmp_path / "workspace" / "scenarios" / "recipes" / "webui.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {"marker": "cas-one"}
+
+
+def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="lease-one")
+    second = _built_scenario(tmp_path, version="1.1.0", marker="lease-two")
+    store, first_manager = _manager(tmp_path)
+    second_manager = WorkspaceActivationManager(
+        workspace_root=tmp_path / "workspace",
+        package_store=store,
+        state_root=tmp_path / "state",
+    )
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    errors: list[BaseException] = []
+
+    def hold_first(phase: str) -> None:
+        if phase == "fetch":
+            first_inside.set()
+            if not release_first.wait(timeout=5):
+                raise TimeoutError("test did not release first activation")
+
+    def run_first() -> None:
+        try:
+            first_manager.activate(
+                _plan(first),
+                idempotency_key="lease-first",
+                phase_hook=hold_first,
+            )
+        except BaseException as exc:  # pragma: no cover - assertion reports the exception
+            errors.append(exc)
+
+    def run_second() -> None:
+        try:
+            second_manager.activate(_plan(second), idempotency_key="lease-second")
+        except BaseException as exc:  # pragma: no cover - assertion reports the exception
+            errors.append(exc)
+
+    first_thread = threading.Thread(target=run_first)
+    second_thread = threading.Thread(target=run_second)
+    first_thread.start()
+    assert first_inside.wait(timeout=2)
+    second_thread.start()
+    time.sleep(0.1)
+    assert second_thread.is_alive()
+    assert not second_manager.operation_path(
+        second_manager.operation_id("lease-second")
+    ).exists()
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert errors == []
+    final = second_manager.load_lock()
+    assert final is not None
+    assert final.lock_revision == 2
+    assert final.slots[0].release == "recipes@1.1.0"
 
 
 @pytest.mark.parametrize("failed_phase", ACTIVATION_PHASES)
