@@ -104,6 +104,67 @@ def test_project_release_digest_is_canonical_and_detects_tampering() -> None:
         ProjectRelease.from_mapping(tampered)
 
 
+@pytest.mark.parametrize(
+    ("factory", "payload"),
+    [
+        (ProjectRef.from_mapping, {"schema": "adaos.artifact.project_ref.v999", "project_id": "recipes"}),
+        (
+            ArtifactSourceRef.from_mapping,
+            {
+                **_source().to_dict(),
+                "schema": "adaos.artifact.source_ref.v999",
+            },
+        ),
+        (
+            ArtifactPackageRef.from_mapping,
+            {
+                **_package().to_dict(),
+                "schema": "adaos.artifact.package_ref.v999",
+            },
+        ),
+        (
+            ProjectRelease.from_mapping,
+            {
+                **ProjectRelease(
+                    project_id="recipes",
+                    version="1.2.3",
+                    source_ref=_source(),
+                    components=(_package(),),
+                ).seal().to_dict(),
+                "schema": "adaos.artifact.project_release.v999",
+            },
+        ),
+        (
+            StableSubscription.from_mapping,
+            {
+                **StableSubscription(project_id="recipes").to_dict(),
+                "schema": "adaos.artifact.subscription.v999",
+            },
+        ),
+    ],
+)
+def test_contract_readers_reject_unknown_schemas(factory, payload) -> None:
+    with pytest.raises(ArtifactReleaseContractError, match="unsupported .* schema"):
+        factory(payload)
+
+
+def test_contract_readers_reject_unknown_fields_and_missing_digests() -> None:
+    package = _package().to_dict()
+    package["future_field"] = True
+    with pytest.raises(ArtifactReleaseContractError, match="unsupported fields"):
+        ArtifactPackageRef.from_mapping(package)
+
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(_package(),),
+    ).seal().to_dict()
+    release.pop("release_digest")
+    with pytest.raises(ArtifactReleaseContractError, match="missing required fields"):
+        ProjectRelease.from_mapping(release)
+
+
 def test_workspace_lock_rejects_two_active_versions_of_same_skill() -> None:
     one = _package(kind="skill", artifact_id="shopping_list", version="1.0.0", digest=_DIGEST_A)
     two = _package(kind="skill", artifact_id="shopping_list", version="2.0.0", digest=_DIGEST_B)

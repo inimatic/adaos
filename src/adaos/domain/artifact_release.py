@@ -96,6 +96,34 @@ def _unique_texts(values: Iterable[Any], *, field: str) -> tuple[str, ...]:
     return tuple(merged)
 
 
+def _require_mapping_contract(
+    value: Mapping[str, Any],
+    *,
+    schema: str | None,
+    allowed: Iterable[str],
+    required: Iterable[str],
+    field: str,
+) -> None:
+    allowed_keys = set(allowed)
+    required_keys = set(required)
+    if schema is not None:
+        actual_schema = value.get("schema")
+        if actual_schema != schema:
+            raise ArtifactReleaseContractError(
+                f"unsupported {field} schema: {actual_schema!r}; expected {schema!r}"
+            )
+    unknown = sorted(str(key) for key in set(value) - allowed_keys)
+    if unknown:
+        raise ArtifactReleaseContractError(
+            f"{field} contains unsupported fields: {', '.join(unknown)}"
+        )
+    missing = sorted(required_keys - set(value))
+    if missing:
+        raise ArtifactReleaseContractError(
+            f"{field} is missing required fields: {', '.join(missing)}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectRef:
     project_id: str
@@ -108,6 +136,13 @@ class ProjectRef:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ProjectRef":
+        _require_mapping_contract(
+            value,
+            schema=PROJECT_REF_SCHEMA,
+            allowed={"schema", "project_id"},
+            required={"schema", "project_id"},
+            field="ProjectRef",
+        )
         return cls(project_id=value.get("project_id"))
 
 
@@ -140,6 +175,13 @@ class ArtifactSourceRef:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ArtifactSourceRef":
+        _require_mapping_contract(
+            value,
+            schema=SOURCE_REF_SCHEMA,
+            allowed={"schema", "forge", "repository", "revision", "path_scope"},
+            required={"schema", "forge", "repository", "revision", "path_scope"},
+            field="SourceRef",
+        )
         return cls(
             forge=value.get("forge"),
             repository=value.get("repository"),
@@ -184,6 +226,29 @@ class ArtifactPackageRef:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ArtifactPackageRef":
+        _require_mapping_contract(
+            value,
+            schema=PACKAGE_REF_SCHEMA,
+            allowed={
+                "schema",
+                "kind",
+                "artifact_id",
+                "version",
+                "digest",
+                "manifest_digest",
+                "source_ref",
+            },
+            required={
+                "schema",
+                "kind",
+                "artifact_id",
+                "version",
+                "digest",
+                "manifest_digest",
+                "source_ref",
+            },
+            field="PackageRef",
+        )
         source = value.get("source_ref")
         if not isinstance(source, Mapping):
             raise ArtifactReleaseContractError("source_ref must be an object")
@@ -232,6 +297,20 @@ class ResolvedDependency:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ResolvedDependency":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={
+                "kind",
+                "artifact_id",
+                "version",
+                "package_digest",
+                "version_spec",
+                "optional",
+            },
+            required={"kind", "artifact_id", "version", "package_digest", "optional"},
+            field="ResolvedDependency",
+        )
         return cls(
             kind=value.get("kind"),
             artifact_id=value.get("artifact_id"),
@@ -302,6 +381,35 @@ class ProjectRelease:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ProjectRelease":
+        _require_mapping_contract(
+            value,
+            schema=PROJECT_RELEASE_SCHEMA,
+            allowed={
+                "schema",
+                "project_id",
+                "version",
+                "source_ref",
+                "components",
+                "resolved_dependencies",
+                "permissions",
+                "migrations",
+                "validation_evidence",
+                "release_digest",
+            },
+            required={
+                "schema",
+                "project_id",
+                "version",
+                "source_ref",
+                "components",
+                "resolved_dependencies",
+                "permissions",
+                "migrations",
+                "validation_evidence",
+                "release_digest",
+            },
+            field="ProjectRelease",
+        )
         source = value.get("source_ref")
         if not isinstance(source, Mapping):
             raise ArtifactReleaseContractError("source_ref must be an object")
@@ -309,8 +417,25 @@ class ProjectRelease:
         if not isinstance(components, list):
             raise ArtifactReleaseContractError("components must be a list")
         dependencies = value.get("resolved_dependencies") or []
+        permissions = value.get("permissions")
+        migrations = value.get("migrations")
+        validation_evidence = value.get("validation_evidence")
         if not isinstance(dependencies, list):
             raise ArtifactReleaseContractError("resolved_dependencies must be a list")
+        if not isinstance(permissions, list):
+            raise ArtifactReleaseContractError("permissions must be a list")
+        if not isinstance(migrations, list):
+            raise ArtifactReleaseContractError("migrations must be a list")
+        if not isinstance(validation_evidence, list):
+            raise ArtifactReleaseContractError("validation_evidence must be a list")
+        if any(not isinstance(item, Mapping) for item in components):
+            raise ArtifactReleaseContractError("components must contain only objects")
+        if any(not isinstance(item, Mapping) for item in dependencies):
+            raise ArtifactReleaseContractError("resolved_dependencies must contain only objects")
+        if any(not isinstance(item, Mapping) for item in migrations):
+            raise ArtifactReleaseContractError("migrations must contain only objects")
+        if any(not isinstance(item, Mapping) for item in validation_evidence):
+            raise ArtifactReleaseContractError("validation_evidence must contain only objects")
         release = cls(
             project_id=value.get("project_id"),
             version=value.get("version"),
@@ -325,11 +450,9 @@ class ProjectRelease:
                 for item in dependencies
                 if isinstance(item, Mapping)
             ),
-            permissions=tuple(value.get("permissions") or ()),
-            migrations=tuple(item for item in value.get("migrations") or () if isinstance(item, Mapping)),
-            validation_evidence=tuple(
-                item for item in value.get("validation_evidence") or () if isinstance(item, Mapping)
-            ),
+            permissions=tuple(permissions),
+            migrations=tuple(migrations),
+            validation_evidence=tuple(validation_evidence),
             release_digest=value.get("release_digest"),
         )
         return release.seal()
@@ -363,6 +486,13 @@ class WorkspaceSlot:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any], *, slot_id: str) -> "WorkspaceSlot":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={"project_id", "release", "release_digest", "audience"},
+            required={"project_id", "release", "release_digest"},
+            field="WorkspaceSlot",
+        )
         return cls(
             slot_id=slot_id,
             project_id=value.get("project_id"),
@@ -392,6 +522,13 @@ class DependencyBinding:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "DependencyBinding":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={"consumer", "dependency", "package_digest"},
+            required={"consumer", "dependency", "package_digest"},
+            field="DependencyBinding",
+        )
         return cls(
             consumer=value.get("consumer"),
             dependency=value.get("dependency"),
@@ -452,6 +589,30 @@ class WorkspaceLock:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "WorkspaceLock":
+        _require_mapping_contract(
+            value,
+            schema=WORKSPACE_LOCK_SCHEMA,
+            allowed={
+                "schema",
+                "lock_revision",
+                "previous_lock_revision",
+                "updated_at",
+                "slots",
+                "components",
+                "bindings",
+                "lock_digest",
+            },
+            required={
+                "schema",
+                "lock_revision",
+                "updated_at",
+                "slots",
+                "components",
+                "bindings",
+                "lock_digest",
+            },
+            field="WorkspaceLock",
+        )
         raw_slots = value.get("slots") or {}
         if not isinstance(raw_slots, Mapping):
             raise ArtifactReleaseContractError("WorkspaceLock slots must be an object")
@@ -459,6 +620,12 @@ class WorkspaceLock:
         raw_bindings = value.get("bindings") or []
         if not isinstance(raw_components, list) or not isinstance(raw_bindings, list):
             raise ArtifactReleaseContractError("WorkspaceLock components and bindings must be lists")
+        if any(not isinstance(item, Mapping) for item in raw_slots.values()):
+            raise ArtifactReleaseContractError("WorkspaceLock slots must contain only objects")
+        if any(not isinstance(item, Mapping) for item in raw_components):
+            raise ArtifactReleaseContractError("WorkspaceLock components must contain only objects")
+        if any(not isinstance(item, Mapping) for item in raw_bindings):
+            raise ArtifactReleaseContractError("WorkspaceLock bindings must contain only objects")
         lock = cls(
             lock_revision=value.get("lock_revision"),
             previous_lock_revision=value.get("previous_lock_revision"),
@@ -518,6 +685,20 @@ class StableSubscription:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "StableSubscription":
+        _require_mapping_contract(
+            value,
+            schema=SUBSCRIPTION_SCHEMA,
+            allowed={
+                "schema",
+                "project_id",
+                "channel",
+                "policy",
+                "installed_release",
+                "installed_digest",
+            },
+            required={"schema", "project_id", "channel", "policy"},
+            field="StableSubscription",
+        )
         return cls(
             project_id=value.get("project_id"),
             channel=value.get("channel") or "stable",

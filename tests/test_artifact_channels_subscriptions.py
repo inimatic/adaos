@@ -118,6 +118,20 @@ def test_promotion_persists_immutable_release_before_moving_channel(tmp_path: Pa
     assert repository.release_path("recipes", next_plan.release.release_digest).is_file()
 
 
+def test_release_repository_rejects_same_version_with_different_digest(tmp_path: Path) -> None:
+    first = _plan(_built(tmp_path, version="1.0.0", token="1"))
+    second = _plan(_built(tmp_path, version="1.0.0", token="2"))
+    repository = ReleaseRepository(tmp_path / "registry-packages")
+
+    repository.put_release(first)
+    repository.put_release(first)
+    with pytest.raises(ChannelError, match="already maps"):
+        repository.put_release(second)
+
+    assert repository.get_release("recipes", first.release.release_digest) == first
+    assert not repository.release_path("recipes", second.release.release_digest).exists()
+
+
 def test_promotion_rejects_source_tree_mismatch_and_stale_base(tmp_path: Path) -> None:
     stable = _plan(_built(tmp_path, version="1.0.0", token="1"))
     next_plan = _plan(_built(tmp_path, version="1.1.0", token="2"))

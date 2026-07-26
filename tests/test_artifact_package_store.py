@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.domain.artifact_release import ArtifactSourceRef, canonical_json_bytes, sha256_digest
 from adaos.services.artifact_pipeline import (
     ContentAddressedPackageStore,
+    PackageBuildError,
     PackageVerificationError,
     build_artifact_package,
     verify_artifact_package,
@@ -118,6 +119,91 @@ def test_package_verifier_rejects_traversal_and_symlink_entries() -> None:
         verify_artifact_package(symlink.getvalue())
 
 
+def _package_archive_with_files(files: list[tuple[str, bytes]]) -> bytes:
+    manifest = {
+        "schema": "adaos.artifact.component_package.v1",
+        "kind": "scenario",
+        "artifact_id": "recipes",
+        "version": "1.2.3",
+        "source_ref": _source().to_dict(),
+        "files": [
+            {"path": name, "size": len(data), "digest": sha256_digest(data)}
+            for name, data in files
+        ],
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in files:
+            archive.writestr(name, data)
+        archive.writestr(".adaos/package-manifest.json", canonical_json_bytes(manifest))
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "assets/file:stream",
+        "assets/CON",
+        "assets/name.",
+        "assets/name ",
+    ],
+)
+def test_package_verifier_rejects_nonportable_paths(name: str) -> None:
+    archive = _package_archive_with_files(
+        [
+            ("scenario.yaml", b"id: recipes\nversion: 1.2.3\n"),
+            (name, b"unsafe"),
+        ]
+    )
+    with pytest.raises(PackageVerificationError, match="package path"):
+        verify_artifact_package(archive)
+
+
+def test_package_verifier_rejects_casefold_collisions() -> None:
+    archive = _package_archive_with_files(
+        [
+            ("scenario.yaml", b"id: recipes\nversion: 1.2.3\n"),
+            ("assets/Icon.svg", b"one"),
+            ("assets/icon.svg", b"two"),
+        ]
+    )
+    with pytest.raises(PackageVerificationError, match="collide"):
+        verify_artifact_package(archive)
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        (".env", "TOKEN=secret\n"),
+        ("assets/private.pem", "not-even-a-key\n"),
+        ("config.txt", "-----BEGIN PRIVATE KEY-----\nsecret\n"),
+    ],
+)
+def test_package_builder_rejects_secret_like_inputs(
+    tmp_path: Path,
+    name: str,
+    content: str,
+) -> None:
+    scenario = _scenario(tmp_path)
+    target = scenario / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+    with pytest.raises(PackageBuildError, match="prohibited|private-key"):
+        build_artifact_package(scenario, kind="scenario", source_ref=_source())
+
+
+def test_package_verifier_rejects_external_secret_like_inputs() -> None:
+    archive = _package_archive_with_files(
+        [
+            ("scenario.yaml", b"id: recipes\nversion: 1.2.3\n"),
+            (".env", b"TOKEN=secret\n"),
+        ]
+    )
+    with pytest.raises(PackageVerificationError, match="prohibited"):
+        verify_artifact_package(archive)
+
+
 def test_content_addressed_store_verifies_and_materializes_atomically(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path / "source")
     built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
@@ -153,3 +239,30 @@ def test_store_quarantines_corrupt_existing_package(tmp_path: Path) -> None:
 
     assert not package_path.exists()
     assert list((tmp_path / "packages" / "quarantine").glob("*.verification-failed.*.zip"))
+
+
+def test_store_verify_and_extract_each_use_one_verification_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(tmp_path / "source")
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    store.put(built.archive_bytes)
+
+    import adaos.services.artifact_pipeline.packages as package_module
+
+    original = package_module.verify_artifact_package
+    calls: list[str | None] = []
+
+    def counted(data, *, expected_digest=None, limits=None):
+        calls.append(expected_digest)
+        return original(data, expected_digest=expected_digest, limits=limits)
+
+    monkeypatch.setattr(package_module, "verify_artifact_package", counted)
+    store.verify(built.ref.digest)
+    assert calls == [built.ref.digest]
+
+    calls.clear()
+    store.extract_to_directory(built.ref.digest, tmp_path / "extracted")
+    assert calls == [built.ref.digest]

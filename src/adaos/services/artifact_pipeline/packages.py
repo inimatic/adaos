@@ -6,6 +6,7 @@ import os
 import shutil
 import stat
 import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -58,6 +59,39 @@ _EXCLUDED_FILES = {
     "skill_prompt.md",
 }
 _EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
+_SENSITIVE_NAMES = {
+    ".npmrc",
+    ".pypirc",
+    "credentials.json",
+    "credentials.yaml",
+    "credentials.yml",
+    "id_dsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_rsa",
+    "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "service-account.json",
+}
+_SAFE_ENV_EXAMPLES = {".env.example", ".env.sample", ".env.template"}
+_SENSITIVE_SUFFIXES = {".jks", ".key", ".kdbx", ".keystore", ".p12", ".pem", ".pfx"}
+_WINDOWS_RESERVED_NAMES = {
+    "aux",
+    "con",
+    "nul",
+    "prn",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
+_PRIVATE_KEY_MARKERS = (
+    b"-----BEGIN PRIVATE KEY-----",
+    b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    b"-----BEGIN RSA PRIVATE KEY-----",
+    b"-----BEGIN DSA PRIVATE KEY-----",
+    b"-----BEGIN EC PRIVATE KEY-----",
+    b"-----BEGIN OPENSSH PRIVATE KEY-----",
+)
 _MANIFEST_BY_KIND: dict[ArtifactKind, str] = {
     "skill": "skill.yaml",
     "scenario": "scenario.yaml",
@@ -107,14 +141,76 @@ def _normalized_member_name(value: str, *, error_type: type[RuntimeError]) -> st
     path = PurePosixPath(raw)
     if not raw or raw.startswith("/") or path.is_absolute() or ".." in path.parts:
         raise error_type(f"unsafe package path: {value!r}")
-    if path.parts and ":" in path.parts[0]:
-        raise error_type(f"unsafe package path: {value!r}")
-    normalized = path.as_posix()
+    normalized_parts: list[str] = []
+    for raw_part in path.parts:
+        part = unicodedata.normalize("NFC", raw_part)
+        if not part or part in {".", ".."}:
+            raise error_type(f"unsafe package path: {value!r}")
+        if ":" in part or any(ord(char) < 32 for char in part):
+            raise error_type(f"non-portable package path: {value!r}")
+        if part.endswith((" ", ".")):
+            raise error_type(f"non-portable package path: {value!r}")
+        device_name = part.split(".", 1)[0].casefold()
+        if device_name in _WINDOWS_RESERVED_NAMES:
+            raise error_type(f"reserved package path: {value!r}")
+        normalized_parts.append(part)
+    normalized = "/".join(normalized_parts)
     while normalized.startswith("./"):
         normalized = normalized[2:]
     if not normalized or normalized == ".":
         raise error_type(f"unsafe package path: {value!r}")
     return normalized
+
+
+def _portable_member_key(value: str) -> str:
+    return "/".join(
+        unicodedata.normalize("NFC", part).casefold()
+        for part in PurePosixPath(value).parts
+    )
+
+
+def _assert_no_portable_collisions(
+    names: Iterable[str],
+    *,
+    error_type: type[RuntimeError],
+) -> None:
+    seen: dict[str, str] = {}
+    for name in names:
+        key = _portable_member_key(name)
+        previous = seen.get(key)
+        if previous is not None and previous != name:
+            raise error_type(
+                f"package paths collide on a portable filesystem: {previous!r} and {name!r}"
+            )
+        seen[key] = name
+
+
+def _sensitive_path_reason(name: str) -> str | None:
+    path = PurePosixPath(name)
+    folded_parts = tuple(part.casefold() for part in path.parts)
+    folded_name = path.name.casefold()
+    if folded_name.startswith(".env") and folded_name not in _SAFE_ENV_EXAMPLES:
+        return "environment credential file"
+    if folded_name in _SENSITIVE_NAMES or path.suffix.casefold() in _SENSITIVE_SUFFIXES:
+        return "credential or private-key file"
+    if any(part in {".secrets", "credentials", "secrets"} for part in folded_parts[:-1]):
+        return "credential directory"
+    if folded_parts and folded_parts[0] == ".adaos" and name != PACKAGE_MANIFEST_PATH:
+        return "AdaOS runtime metadata"
+    return None
+
+
+def _assert_publishable_file(
+    name: str,
+    data: bytes,
+    *,
+    error_type: type[RuntimeError],
+) -> None:
+    reason = _sensitive_path_reason(name)
+    if reason:
+        raise error_type(f"package contains prohibited {reason}: {name}")
+    if any(marker in data for marker in _PRIVATE_KEY_MARKERS):
+        raise error_type(f"package contains private-key material: {name}")
 
 
 def _excluded(relative: PurePosixPath) -> bool:
@@ -170,6 +266,7 @@ def _collect_package_files(root: Path, limits: PackageLimits) -> list[tuple[str,
             raise PackageBuildError(f"unsupported package input: {relative.as_posix()}")
         name = _normalized_member_name(relative.as_posix(), error_type=PackageBuildError)
         data = path.read_bytes()
+        _assert_publishable_file(name, data, error_type=PackageBuildError)
         total += len(data)
         if len(collected) + 1 > limits.max_files:
             raise PackageBuildError(f"package exceeds file limit {limits.max_files}")
@@ -178,6 +275,10 @@ def _collect_package_files(root: Path, limits: PackageLimits) -> list[tuple[str,
                 f"package exceeds uncompressed size limit {limits.max_uncompressed_bytes}"
             )
         collected.append((name, data))
+    _assert_no_portable_collisions(
+        (name for name, _ in collected),
+        error_type=PackageBuildError,
+    )
     return collected
 
 
@@ -299,6 +400,7 @@ def verify_artifact_package(
         names = [_normalized_member_name(item.filename, error_type=PackageVerificationError) for item in entries]
         if len(names) != len(set(names)):
             raise PackageVerificationError("package contains duplicate paths")
+        _assert_no_portable_collisions(names, error_type=PackageVerificationError)
         if len(entries) > limits.max_files + 1:
             raise PackageVerificationError(f"package exceeds file limit {limits.max_files}")
         total = 0
@@ -334,6 +436,7 @@ def verify_artifact_package(
             raise PackageVerificationError(f"package file set mismatch: missing={missing} extra={extra}")
         for name, record in expected_files.items():
             raw = archive.read(name)
+            _assert_publishable_file(name, raw, error_type=PackageVerificationError)
             recorded_size = record.get("size")
             if recorded_size is None or int(recorded_size) != len(raw):
                 raise PackageVerificationError(f"package file size mismatch: {name}")
@@ -411,20 +514,25 @@ class ContentAddressedPackageStore:
             temporary.unlink(missing_ok=True)
         return verified
 
-    def read(self, digest: str) -> bytes:
+    def _read_verified(self, digest: str) -> tuple[bytes, VerifiedArtifactPackage]:
         path = self.package_path(digest)
         if not path.is_file():
             raise FileNotFoundError(f"package not found: {digest}")
         data = path.read_bytes()
         try:
-            verify_artifact_package(data, expected_digest=digest, limits=self.limits)
+            verified = verify_artifact_package(data, expected_digest=digest, limits=self.limits)
         except Exception:
             self._quarantine_path(path, reason="verification-failed")
             raise
+        return data, verified
+
+    def read(self, digest: str) -> bytes:
+        data, _ = self._read_verified(digest)
         return data
 
     def verify(self, digest: str) -> VerifiedArtifactPackage:
-        return verify_artifact_package(self.read(digest), expected_digest=digest, limits=self.limits)
+        _, verified = self._read_verified(digest)
+        return verified
 
     def materialize(self, digest: str, target: Path) -> VerifiedArtifactPackage:
         target = Path(target).expanduser().resolve()
@@ -453,8 +561,7 @@ class ContentAddressedPackageStore:
     def extract_to_directory(self, digest: str, target: Path) -> VerifiedArtifactPackage:
         """Verify and extract a package into a new directory without switching it live."""
 
-        data = self.read(digest)
-        verified = verify_artifact_package(data, expected_digest=digest, limits=self.limits)
+        data, verified = self._read_verified(digest)
         target = Path(target).expanduser().resolve()
         if target.exists():
             raise FileExistsError(f"package extraction target already exists: {target}")

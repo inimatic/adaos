@@ -14,7 +14,7 @@ from adaos.services.artifact_pipeline.activation import (
 from adaos.services.artifact_pipeline.candidates import CandidateRecord, assert_promotable
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.sources import SourceProvider
-from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 
 RELEASE_PLAN_SCHEMA = "adaos.artifact.release_plan.v1"
@@ -82,16 +82,55 @@ class ReleaseRepository:
         project_id = ProjectRef(project_id).project_id
         return self.root / "projects" / project_id / "channels.json"
 
+    def mutation_lock_path(self, project_id: str) -> Path:
+        project_id = ProjectRef(project_id).project_id
+        return self.root / "projects" / project_id / ".mutation.lock"
+
+    def _release_digests_by_version(self, project_id: str) -> dict[str, str]:
+        project_id = ProjectRef(project_id).project_id
+        release_root = self.root / "projects" / project_id / "releases"
+        versions: dict[str, str] = {}
+        if not release_root.is_dir():
+            return versions
+        for path in sorted(release_root.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, Mapping) or payload.get("schema") != RELEASE_PLAN_SCHEMA:
+                    raise ChannelError(f"unsupported release plan record: {path}")
+                stored = ReleasePlan.from_mapping(payload)
+            except ChannelError:
+                raise
+            except Exception as exc:
+                raise ChannelError(f"cannot read immutable release record {path}: {exc}") from exc
+            if stored.release.project_id != project_id:
+                raise ChannelError(f"release record {path} belongs to a different project")
+            digest = stored.release.release_digest or stored.release.computed_digest()
+            previous = versions.get(stored.release.version)
+            if previous is not None and previous != digest:
+                raise ChannelError(
+                    f"project version {project_id}@{stored.release.version} maps to multiple release digests"
+                )
+            versions[stored.release.version] = digest
+        return versions
+
     def put_release(self, plan: ReleasePlan) -> Path:
         digest = plan.release.release_digest or plan.release.computed_digest()
         path = self.release_path(plan.release.project_id, digest)
         payload = {"schema": RELEASE_PLAN_SCHEMA, **plan.explain()}
-        if path.exists():
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            if existing != payload:
-                raise ChannelError(f"immutable release already exists with different content: {digest}")
-            return path
-        atomic_write_json(path, payload)
+        with mutation_lock(self.mutation_lock_path(plan.release.project_id)):
+            versions = self._release_digests_by_version(plan.release.project_id)
+            existing_digest = versions.get(plan.release.version)
+            if existing_digest is not None and existing_digest != digest:
+                raise ChannelError(
+                    f"project version {plan.release.project_id}@{plan.release.version} "
+                    f"already maps to {existing_digest}, not {digest}"
+                )
+            if path.exists():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if existing != payload:
+                    raise ChannelError(f"immutable release already exists with different content: {digest}")
+                return path
+            atomic_write_json(path, payload)
         return path
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
@@ -121,28 +160,34 @@ class ReleaseRepository:
         return payload
 
     def set_channel(self, project_id: str, channel: str, release_digest: str) -> ChannelPointer:
-        plan = self.get_release(project_id, release_digest)
-        channel_id = str(channel or "").strip()
-        if not channel_id or not all(char.isalnum() or char in {"-", "_", "."} for char in channel_id):
-            raise ChannelError("channel must be a safe canonical name")
-        pointer = ChannelPointer(
-            project_id=project_id,
-            channel=channel_id,
-            release=f"{project_id}@{plan.release.version}",
-            release_digest=release_digest,
-            source_revision=plan.release.source_ref.revision,
-            updated_at=_now_iso(),
-        )
-        payload = self._read_channels(project_id)
-        channels = dict(payload.get("channels") or {})
-        previous = channels.get(channel_id)
-        if isinstance(previous, Mapping) and previous.get("release_digest") == release_digest:
-            return ChannelPointer.from_mapping(previous)
-        channels[channel_id] = pointer.to_dict()
-        payload["channels"] = {key: channels[key] for key in sorted(channels)}
-        payload["updated_at"] = pointer.updated_at
-        atomic_write_json(self.channel_path(project_id), payload)
-        return pointer
+        with mutation_lock(self.mutation_lock_path(project_id)):
+            plan = self.get_release(project_id, release_digest)
+            versions = self._release_digests_by_version(project_id)
+            if versions.get(plan.release.version) != release_digest:
+                raise ChannelError(
+                    f"release {project_id}@{plan.release.version} is not the canonical digest for its version"
+                )
+            channel_id = str(channel or "").strip()
+            if not channel_id or not all(char.isalnum() or char in {"-", "_", "."} for char in channel_id):
+                raise ChannelError("channel must be a safe canonical name")
+            pointer = ChannelPointer(
+                project_id=project_id,
+                channel=channel_id,
+                release=f"{project_id}@{plan.release.version}",
+                release_digest=release_digest,
+                source_revision=plan.release.source_ref.revision,
+                updated_at=_now_iso(),
+            )
+            payload = self._read_channels(project_id)
+            channels = dict(payload.get("channels") or {})
+            previous = channels.get(channel_id)
+            if isinstance(previous, Mapping) and previous.get("release_digest") == release_digest:
+                return ChannelPointer.from_mapping(previous)
+            channels[channel_id] = pointer.to_dict()
+            payload["channels"] = {key: channels[key] for key in sorted(channels)}
+            payload["updated_at"] = pointer.updated_at
+            atomic_write_json(self.channel_path(project_id), payload)
+            return pointer
 
     def get_channel(self, project_id: str, channel: str = "stable") -> ChannelPointer:
         payload = self._read_channels(project_id)
