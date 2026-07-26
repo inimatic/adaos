@@ -220,11 +220,13 @@ reconciliation, and no automatic repeat of the modifying command.
   still a transport boundary rather than the default Workspace activation
   source; the stand proof must exercise that path end to end.
 - The pre-existing client submodule change was not modified or included.
-- The backend builder/lock admission hardening is validated on branch
-  `codex/artifact-contract-hardening` at `f109753`; git remote refs currently
-  expose only the already merged PR `#1`, and the connected GitHub API account
-  cannot see the private backend repository. Opening/merging that branch,
-  deployment, and clean-stand proof remain separate gates.
+- The backend builder/lock admission hardening was validated locally and by the
+  locked GitHub Actions artifact-contract gate, then merged through
+  [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
+  at `5570f330`. Infrastructure deployment completed as backend `0.1.142`; its
+  public health record identifies `5570f33`, and hub-mTLS rejection probes
+  confirmed channel-CAS and complete-release admission. A successful external
+  package round-trip and clean-stand proof remain separate gates.
 
 These gates keep the maturity at `validated-local`; they are not failures of the
 bounded local proof.

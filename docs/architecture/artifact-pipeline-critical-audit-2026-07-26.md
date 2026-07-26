@@ -30,9 +30,14 @@ directories.
 ## Remediation Status
 
 The status below is deliberately narrower than production acceptance. A
-corrected finding has a regression at every implemented trust boundary; remote
-changes still require merge, deployment, and a stand proof before the package
-pipeline becomes the default.
+corrected finding has a regression at every implemented trust boundary. Backend
+admission and channel-CAS hardening is merged through
+[inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
+with a required build/smoke workflow and deployed as backend `0.1.142`. Live
+health identifies commit `5570f33`, while hub-mTLS rejection probes confirm the
+new fail-closed route contracts. A successful external package round-trip and
+stand proof remain separate gates before the package pipeline becomes the
+default.
 
 | Finding | Status | Evidence or next gate |
 | --- | --- | --- |

@@ -113,21 +113,32 @@ record remains valid for its narrower stated cases.
 
 Remaining acceptance blockers:
 
-- open, merge, and deploy the remaining backend admission hardening already
-  pushed as `codex/artifact-contract-hardening` at `f109753`; only backend PR
-  `#1` is currently advertised by the remote PR refs;
+- exercise successful external package upload, release admission, channel CAS,
+  and package-only activation from an empty clean stand; backend admission
+  hardening merged by
+  [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
+  at `5570f330`, deployed as `0.1.142`, and passed fail-closed live mTLS probes;
 - a live stand/second-machine run is required before package-only activation is
   the default or legacy sparse Workspace compatibility is retired;
 - streaming package transport and full filesystem directory durability remain
   broader performance/durability gates; neither changes the current bounded
   local acceptance status.
 
-The backend route slice is no longer a blocker: PR
+The original backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
 was merged at `1329ecb` and deployed as `0.1.137`; live Forge tree lookups match
 the locally persisted checkpoint trees. Builder itself subsequently completed
 DEV `0.2.20` → isolated trial → accepted Workspace publication with companion
 skill `0.1.28`.
+
+The follow-up backend admission/CAS slice passed its local artifact smoke test,
+the same locked test in GitHub Actions, and merged through PR `#2`. The
+infrastructure deployment completed successfully, and live `0.1.142` reported
+commit `5570f33`. Hub-mTLS probes confirmed missing-channel `404`, mandatory
+channel-CAS `400`, and partial-release rejection `400` without creating state.
+Successful external package transport and clean-stand activation remain a
+separate gate; merge and rejection probes alone do not promote AP5 to broad
+production acceptance.
 
 ## Delivery Snapshot
 
@@ -143,7 +154,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 12/13 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, and terminal lock-history states | stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
-| AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
+| AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, and durable post-CAS continuation | successful external package round-trip and clean-stand promotion |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
 | AP7 | 11/13 | validated-local | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
