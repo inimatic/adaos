@@ -51,7 +51,7 @@ pipeline becomes the default.
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | open (`should`) | add streaming transport behind the existing adapter |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
-| R4 filesystem durability | improved, open | durable rename metadata is validated locally; add terminal/rolled-back lock-history states |
+| R4 filesystem durability | corrected, validated-local | durable rename metadata plus pending/active/rolled-back history sidecars prevent false successful history |
 | R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
 
 ## What Remains Sound
@@ -318,8 +318,11 @@ Current correction: every shared durable replace now uses
 `MOVEFILE_WRITE_THROUGH` on Windows. POSIX performs best-effort `fsync` for the
 target directory and, for cross-directory moves, the source directory after
 the atomic rename. The retry remains bounded to the filesystem switch and does
-not replay the enclosing mutation. Active, rolled-back, and orphan lock-history
-states remain the open part of this finding.
+not replay the enclosing mutation. Lock history now has a durable sidecar bound
+to operation id, lock revision, and digest. Commit transitions it from
+`pending` to `active`; rollback/recovery marks it `rolled_back`. Retention keeps
+pending or malformed history fail-closed, counts only active/legacy history for
+rollback retention, and expires rolled-back history without pinning packages.
 
 ### R5. Runtime code and resolved manifests have separate freshness boundaries
 

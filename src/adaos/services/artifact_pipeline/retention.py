@@ -13,6 +13,7 @@ from adaos.services.artifact_pipeline.packages import ContentAddressedPackageSto
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     mutation_lock,
+    sync_directory,
 )
 
 
@@ -191,17 +192,57 @@ class ArtifactPipelineRetentionManager:
             self.activation.lock_history_root.glob("*.json"),
             reverse=True,
         )
-        for index, path in enumerate(history_paths):
+        active_index = 0
+        for path in history_paths:
             payload = _json(path)
             age = _age_seconds(path, now)
+            status_path = path.with_suffix(".status")
+            status_exists = status_path.is_file()
+            status_payload = _json(status_path) if status_exists else None
+            if status_exists and status_payload is None:
+                if payload is not None:
+                    records.append((path, payload))
+                continue
+            status = (
+                str(status_payload.get("status") or "").strip().lower()
+                if status_payload is not None
+                else "legacy_active"
+            )
+            if status_payload is not None and (
+                status_payload.get("schema") != "adaos.artifact.lock_history_status.v1"
+                or status not in {"pending", "active", "rolled_back"}
+            ):
+                if payload is not None:
+                    records.append((path, payload))
+                continue
+            if status == "pending":
+                if payload is not None:
+                    records.append((path, payload))
+                continue
+            if status == "rolled_back":
+                if age >= self.policy.lock_history_retention_seconds:
+                    actions.append(self._file_action(path, "expired_rolled_back_history", now))
+                    actions.append(
+                        self._file_action(
+                            status_path,
+                            "expired_rolled_back_history_status",
+                            now,
+                        )
+                    )
+                continue
             keep = (
-                index < self.policy.keep_lock_histories
+                active_index < self.policy.keep_lock_histories
                 or age < self.policy.lock_history_retention_seconds
             )
+            active_index += 1
             if keep and payload is not None:
                 records.append((path, payload))
             elif not keep:
                 actions.append(self._file_action(path, "expired_lock_history", now))
+                if status_path.is_file():
+                    actions.append(
+                        self._file_action(status_path, "expired_lock_history_status", now)
+                    )
         return records, actions
 
     def _recent_reference_records(self, *, now: float) -> Iterable[dict[str, Any]]:
@@ -380,6 +421,7 @@ class ArtifactPipelineRetentionManager:
             shutil.rmtree(path)
         else:
             path.unlink()
+        sync_directory(path.parent)
         return {**dict(action), "status": "deleted"}
 
     def run(

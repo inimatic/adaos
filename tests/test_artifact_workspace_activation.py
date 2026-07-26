@@ -132,7 +132,13 @@ def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -
     assert json.loads((target / "webui.json").read_text(encoding="utf-8")) == {"marker": "one"}
     assert result.workspace_lock.lock_revision == 1
     assert manager.load_lock() == result.workspace_lock
-    assert list((tmp_path / "workspace" / ".adaos" / "lock-history").glob("*.json"))
+    histories = list((tmp_path / "workspace" / ".adaos" / "lock-history").glob("*.json"))
+    assert len(histories) == 1
+    history_status = json.loads(
+        histories[0].with_suffix(".status").read_text(encoding="utf-8")
+    )
+    assert history_status["status"] == "active"
+    assert history_status["lock_digest"] == result.workspace_lock.to_dict()["lock_digest"]
     operation = json.loads(manager.operation_path(result.operation_id).read_text(encoding="utf-8"))
     assert [event["phase"] for event in operation["events"]] == list(ACTIVATION_PHASES)
     assert operation["permission_decision"]["reason"] == "no_introduced_permissions"
@@ -144,12 +150,58 @@ def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -
     assert operation["delayed_verification"]["expected_lock_digest"] == (
         result.workspace_lock.to_dict()["lock_digest"]
     )
+    assert operation["lock_history"]["status"] == "active"
     assert result.delayed_verification_id == operation["delayed_verification"]["observation_id"]
 
+    operation["lock_history"]["status"] = "pending"
+    manager.operation_path(result.operation_id).write_text(
+        json.dumps(operation),
+        encoding="utf-8",
+    )
+    history_status["status"] = "pending"
+    histories[0].with_suffix(".status").write_text(
+        json.dumps(history_status),
+        encoding="utf-8",
+    )
     replay = _activate(manager, _plan(built), idempotency_key="install-recipes-1.0.0")
     assert replay.idempotent_replay is True
     assert replay.workspace_lock.lock_revision == 1
     assert replay.delayed_verification_id == result.delayed_verification_id
+    reconciled = json.loads(
+        histories[0].with_suffix(".status").read_text(encoding="utf-8")
+    )
+    assert reconciled["status"] == "active"
+
+
+def test_failure_after_history_write_marks_history_rolled_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = _built_scenario(tmp_path, version="1.0.0", marker="history-rollback")
+    store, manager = _manager(tmp_path)
+    store.put(built.archive_bytes)
+
+    def fail_schedule(*_args, **_kwargs):
+        raise RuntimeError("simulated failure after history write")
+
+    monkeypatch.setattr(manager, "_schedule_delayed_verification", fail_schedule)
+
+    with pytest.raises(ActivationError, match="simulated failure after history write"):
+        _activate(manager, _plan(built), idempotency_key="history-rollback")
+
+    assert manager.load_lock() is None
+    assert not (tmp_path / "workspace" / "scenarios" / "recipes").exists()
+    histories = list(manager.lock_history_root.glob("*.json"))
+    assert len(histories) == 1
+    status = json.loads(histories[0].with_suffix(".status").read_text(encoding="utf-8"))
+    assert status["status"] == "rolled_back"
+    operation = json.loads(
+        manager.operation_path(manager.operation_id("history-rollback")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert operation["status"] == "failed"
+    assert operation["lock_history"]["status"] == "rolled_back"
 
 
 def test_delayed_verification_checks_exact_lock_and_materialized_content(

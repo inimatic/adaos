@@ -141,7 +141,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 7/10 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, and single-pass verified extraction for cached activation | external signing and package-store lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
-| AP3 | 11/12 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, and durable rename metadata | terminal history states and stand validation |
+| AP3 | 12/13 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, and terminal lock-history states | stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
@@ -314,6 +314,8 @@ leave either the old or the new complete release active.
 - [ ] `[deferred]` `AP3-11` Add unattended activation of irreversible migrations.
 - [x] `[should]` `AP3-12` Persist atomic rename metadata with Windows
   write-through or POSIX directory sync without retrying the enclosing action.
+- [x] `[should]` `AP3-13` Distinguish pending, active, and rolled-back
+  WorkspaceLock history and keep incomplete history fail-closed.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and Workspace activation regressions in
@@ -357,6 +359,10 @@ cleanup candidates.
 package, trial, and Workspace switches. Windows uses write-through rename;
 POSIX syncs affected directory entries best-effort. Cross-directory sync and
 atomic JSON replacement regressions cover the boundary.
+`AP3-13` is closed by an operation-bound history sidecar. A lock becomes active
+history only after the terminal operation receipt is durable; rollback and
+explicit recovery mark it rolled back. Retention does not let rolled-back
+history pin packages and preserves pending or malformed status fail-closed.
 
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 

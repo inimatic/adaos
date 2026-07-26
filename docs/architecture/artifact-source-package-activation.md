@@ -434,6 +434,14 @@ affected directory entries best-effort after the atomic rename. Retry is
 limited to a transient sharing failure in that switch and never repeats the
 enclosing activation or remote mutation.
 
+WorkspaceLock history keeps the strict WorkspaceLock payload unchanged and
+adds an operation-bound status sidecar. History is `pending` while commit is
+in flight, becomes `active` only after the terminal operation receipt is
+durable, and becomes `rolled_back` if activation or explicit recovery restores
+the prior lock. Legacy history without a sidecar is treated as active, while a
+malformed sidecar is retained fail-closed. Rolled-back history remains auditable
+but does not indefinitely pin package reachability.
+
 For a cached package, `verify` performs safe extraction into the operation's
 private staging tree while it validates the archive, manifest, and every file
 digest. The later `stage` phase records admission of that verified tree and

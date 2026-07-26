@@ -29,6 +29,7 @@ from adaos.services.artifact_pipeline.storage import (
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
 DELAYED_VERIFICATION_SCHEMA = "adaos.artifact.delayed_verification.v1"
+LOCK_HISTORY_STATUS_SCHEMA = "adaos.artifact.lock_history_status.v1"
 ACTIVATION_PHASES = (
     "resolve",
     "fetch",
@@ -145,6 +146,58 @@ class WorkspaceActivationManager:
         if len(token) != 32 or any(char not in "0123456789abcdef" for char in token):
             raise ActivationError("operation id must be 32 lowercase hex characters")
         return self.operations_root / f"{token}.json"
+
+    def _lock_history_paths(self, history_id: str) -> tuple[Path, Path]:
+        token = str(history_id or "").strip().lower()
+        valid = (
+            len(token) == 73
+            and token[8] == "-"
+            and token[:8].isdigit()
+            and all(char in "0123456789abcdef" for char in token[9:])
+        )
+        if not valid:
+            raise ActivationError("lock history id is invalid")
+        return (
+            self.lock_history_root / f"{token}.json",
+            self.lock_history_root / f"{token}.status",
+        )
+
+    def _set_lock_history_status(
+        self,
+        operation: dict[str, Any],
+        status: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        raw = operation.get("lock_history")
+        if not isinstance(raw, Mapping):
+            return
+        normalized = str(status or "").strip().lower()
+        if normalized not in {"pending", "active", "rolled_back"}:
+            raise ActivationError("lock history status is invalid")
+        history_id = str(raw.get("history_id") or "")
+        history_path, status_path = self._lock_history_paths(history_id)
+        if normalized == "active" and not history_path.is_file():
+            raise ActivationError("active lock history has no WorkspaceLock record")
+        payload: dict[str, Any] = {
+            "schema": LOCK_HISTORY_STATUS_SCHEMA,
+            "history_id": history_id,
+            "operation_id": str(operation.get("operation_id") or ""),
+            "lock_revision": int(raw.get("lock_revision") or 0),
+            "lock_digest": str(raw.get("lock_digest") or ""),
+            "status": normalized,
+            "updated_at": _now_iso(),
+        }
+        if reason:
+            payload["reason"] = str(reason)
+        atomic_write_json(status_path, payload)
+        updated = dict(raw)
+        updated["status"] = normalized
+        updated["status_record"] = status_path.name
+        updated["updated_at"] = payload["updated_at"]
+        if reason:
+            updated["reason"] = str(reason)
+        operation["lock_history"] = updated
 
     @staticmethod
     def operation_id(idempotency_key: str) -> str:
@@ -937,6 +990,11 @@ class WorkspaceActivationManager:
         backup_root = self.backups_root / str(operation["operation_id"])
         shutil.rmtree(stage, ignore_errors=True)
         shutil.rmtree(backup_root, ignore_errors=True)
+        self._set_lock_history_status(
+            operation,
+            "rolled_back",
+            reason="activation did not reach a durable terminal commit",
+        )
         operation["rolled_back"] = True
 
     def activate(
@@ -1041,6 +1099,10 @@ class WorkspaceActivationManager:
                     raise ActivationReplayBlocked(
                         "completed activation no longer matches the active WorkspaceLock"
                     )
+                history = existing.get("lock_history")
+                if isinstance(history, Mapping) and history.get("status") != "active":
+                    self._set_lock_history_status(existing, "active")
+                    self._write_operation(existing)
                 existing_observation = (
                     existing.get("delayed_verification")
                     if isinstance(existing.get("delayed_verification"), Mapping)
@@ -1406,17 +1468,27 @@ class WorkspaceActivationManager:
                 phase_hook=phase_hook,
                 evidence={"lock_digest": desired.to_dict()["lock_digest"]},
             )
-            history = self.lock_history_root / (
-                f"{desired.lock_revision:08d}-{desired.to_dict()['lock_digest'].split(':', 1)[1]}.json"
-            )
+            lock_digest = str(desired.to_dict()["lock_digest"])
+            history_id = f"{desired.lock_revision:08d}-{lock_digest.split(':', 1)[1]}"
+            history, _history_status = self._lock_history_paths(history_id)
+            operation["lock_history"] = {
+                "history_id": history_id,
+                "lock_revision": desired.lock_revision,
+                "lock_digest": lock_digest,
+                "status": "pending",
+            }
+            self._write_operation(operation)
+            self._set_lock_history_status(operation, "pending")
             atomic_write_json(history, desired.to_dict())
             operation["status"] = "completed"
-            operation["lock_digest"] = desired.to_dict()["lock_digest"]
+            operation["lock_digest"] = lock_digest
             operation["completed_at"] = _now_iso()
             delayed_verification_id = self._schedule_delayed_verification(
                 operation,
                 desired,
             )
+            self._write_operation(operation)
+            self._set_lock_history_status(operation, "active")
             self._write_operation(operation)
             shutil.rmtree(stage_root, ignore_errors=True)
             shutil.rmtree(backup_root, ignore_errors=True)
@@ -1623,6 +1695,7 @@ __all__ = [
     "ACTIVATION_OPERATION_SCHEMA",
     "ACTIVATION_PHASES",
     "DELAYED_VERIFICATION_SCHEMA",
+    "LOCK_HISTORY_STATUS_SCHEMA",
     "ActivationError",
     "ActivationConflictError",
     "ActivationReplayBlocked",

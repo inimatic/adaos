@@ -288,6 +288,53 @@ def test_corrupt_operation_record_fails_closed_for_staging_cleanup(tmp_path: Pat
     assert str(stage.resolve()) not in {item["path"] for item in plan["actions"]}
 
 
+def test_rolled_back_history_is_audited_but_does_not_pin_packages(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "state" / "artifact_pipeline"
+    retention = ArtifactPipelineRetentionManager(
+        state_root=state_root,
+        workspace_root=tmp_path / "workspace",
+        policy=_policy(),
+    )
+    history_id = f"00000001-{'a' * 64}"
+    history = retention.activation.lock_history_root / f"{history_id}.json"
+    status = history.with_suffix(".status")
+    history.parent.mkdir(parents=True)
+    history.write_text(
+        json.dumps({"components": [{"digest": f"sha256:{'b' * 64}"}]}),
+        encoding="utf-8",
+    )
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.artifact.lock_history_status.v1",
+                "history_id": history_id,
+                "status": "rolled_back",
+            }
+        ),
+        encoding="utf-8",
+    )
+    corrupt_id = f"00000002-{'c' * 64}"
+    corrupt_history = history.parent / f"{corrupt_id}.json"
+    corrupt_status = corrupt_history.with_suffix(".status")
+    corrupt_history.write_text(json.dumps({"components": []}), encoding="utf-8")
+    corrupt_status.write_text("{not-json", encoding="utf-8")
+    now = time.time()
+    _old(history, now=now)
+    _old(status, now=now)
+    _old(corrupt_history, now=now)
+    _old(corrupt_status, now=now)
+
+    records, actions = retention._history_records(now=now)
+
+    assert records == [(corrupt_history, {"components": []})]
+    assert {item["reason"] for item in actions} == {
+        "expired_rolled_back_history",
+        "expired_rolled_back_history_status",
+    }
+
+
 def test_artifact_retention_cli_is_dry_run_by_default(cli_app, tmp_base_dir) -> None:
     result = CliRunner().invoke(
         cli_app,
