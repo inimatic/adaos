@@ -210,6 +210,32 @@ def test_default_template_alias_resolves_to_the_builtin_default(tmp_path) -> Non
     assert prototype == "default"
 
 
+def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None:
+    captured: dict[str, object] = {}
+
+    class _Publication:
+        def activate_subscription_update(self, project_id: str, **kwargs):
+            captured["project_id"] = project_id
+            captured.update(kwargs)
+            raise RuntimeError("runtime adapter required")
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+    service._artifact_publication_service = lambda _cfg: _Publication()
+
+    with pytest.raises(RuntimeError, match="runtime adapter required"):
+        service.activate_artifact_subscription(
+            "recipes",
+            expected_plan_digest="sha256:" + "a" * 64,
+        )
+
+    assert captured["project_id"] == "recipes"
+    assert captured["reload_runtime"] is None
+    assert captured["health_check"] is None
+    assert captured["reload_policy"] is None
+    assert captured["health_policy"] is None
+
+
 class _UnusedPublicationRemote:
     def __getattr__(self, name):
         raise AssertionError(f"publication remote must not be called: {name}")

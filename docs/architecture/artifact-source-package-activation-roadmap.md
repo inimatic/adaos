@@ -138,7 +138,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 8/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and digest-bound operator diff | delayed observation, retention, and stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
-| AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
+| AP6 | 7/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, and primary update-entrypoint cutover | Builder/operator update-plan UI and bounded legacy fallback retirement |
 | AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
@@ -425,7 +425,7 @@ injected failure.
   unattended stateful updates.
 - [x] `[must]` `AP6-03` Detect channel movement by release identity and digest,
   not version string alone.
-- [ ] `[must]` `AP6-04` Route current scenario and skill update entrypoints
+- [x] `[must]` `AP6-04` Route current scenario and skill update entrypoints
   through ProjectRelease planning and transactional activation.
 - [x] `[must]` `AP6-05` Preserve active release after fetch, dependency,
   permission, migration, reload, or health-check failure.
@@ -443,11 +443,15 @@ injected failure.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and channel/subscription regressions in
 `tests/test_artifact_channels_subscriptions.py`.
-`AP6-04` remains open: the package-backed subscription path is validated, but
-all legacy scenario/skill update entrypoints have not yet been cut over to it.
-The service/SDK now expose the digest-bound update-plan contract and activation
-accepts `expected_plan_digest`; AP6-08 remains open until Builder/operator UI
-renders that contract and the live runtime adapter replaces the named MVP skip.
+Primary scenario and skill REST/WebSocket update entrypoints now select the
+package-backed path for subscribed projects, require the digest of the reviewed
+plan, and execute runtime reload/projection plus health evidence inside the
+activation transaction. DEV draft update and LLM-facing scenario pull are
+retired; the bounded non-subscribed source-pull bridge is explicit in responses
+as `legacy_source_pull`. Direct subscription activation fails closed when a
+runtime adapter or an explicit policy is absent. AP6-08 remains open until the
+Builder/operator UI renders the existing plan contract. Full removal of the
+non-subscribed compatibility bridge remains part of the legacy-retirement gate.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 

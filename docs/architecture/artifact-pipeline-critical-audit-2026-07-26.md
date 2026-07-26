@@ -287,8 +287,10 @@ active, rolled-back, and orphan history records.
 4. Require explicit runtime reload, health, and trial data evidence policies.
 5. Add builder identity/attestation and typed schema/migration locks on those
    strengthened boundaries.
-6. Cut legacy scenario/skill update entrypoints over to package-backed update
-   planning and activation.
+6. **Completed locally:** cut subscribed scenario/skill REST and WebSocket
+   update entrypoints over to digest-reviewed package planning and transactional
+   activation; retire DEV update and LLM pull, while explicitly labelling the
+   bounded non-subscribed compatibility bridge.
 7. Add operator diff/update-plan UI, delayed observation, cleanup/retention,
    and then repeat the proof on a clean stand.
 

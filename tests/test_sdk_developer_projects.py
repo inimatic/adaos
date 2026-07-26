@@ -232,15 +232,15 @@ def test_lifecycle_results_are_plain_json_values(monkeypatch) -> None:
 
     created = projects.create("scenario", "builder")
     pushed = projects.push("scenario", "builder", message="checkpoint")
-    updated = projects.update("scenario", "builder")
     published = projects.publish("scenario", "builder", dry_run=True)
 
     assert created["name"] == "builder"
     assert Path(created["path"]).parts[-3:] == ("dev", "scenarios", "builder")
     assert created["commit"] is None
     assert pushed["commit"] == "abc123"
-    assert updated["commit"] == "def456"
     assert Path(published["path"]).parts[-3:] == ("workspace", "scenarios", "builder")
+    with pytest.raises(projects.DeveloperProjectError, match="DEV draft update is retired"):
+        projects.update("scenario", "builder")
 
 
 def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) -> None:

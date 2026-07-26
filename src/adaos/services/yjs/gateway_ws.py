@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Dict, Any, Mapping
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, HTTPException, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 try:
@@ -8746,11 +8746,14 @@ async def process_events_command(
         return None
 
     if kind == "skills.update":
-        # Trigger a best-effort skill source refresh (git pull / monorepo sparse pull)
-        # and acknowledge with updated version if available.
         try:
             from adaos.services.agent_context import get_ctx as _get_ctx
             from adaos.services.skill.update import SkillUpdateService
+            from adaos.apps.api.skills import (
+                UpdateReq as _SkillUpdateReq,
+                _package_subscription_service as _package_skill_update_service,
+                _update_subscribed_skill,
+            )
 
             ctx = _get_ctx()
             skill_name = str(payload.get("name") or payload.get("skill") or "").strip()
@@ -8758,9 +8761,50 @@ async def process_events_command(
             if not skill_name:
                 await _ack(False, error="name required")
                 return None
+            package_service = _package_skill_update_service(ctx, skill_name)
+            if package_service is not None:
+                result = await _update_subscribed_skill(
+                    _SkillUpdateReq(
+                        name=skill_name,
+                        dry_run=dry_run,
+                        webspace_id=str(payload.get("webspace_id") or webspace_id),
+                        defer_webspace_rebuild=bool(payload.get("defer_webspace_rebuild", False)),
+                        expected_plan_digest=(
+                            str(payload.get("expected_plan_digest") or "").strip() or None
+                        ),
+                        permission_decision=(
+                            payload.get("permission_decision")
+                            if isinstance(payload.get("permission_decision"), dict)
+                            else None
+                        ),
+                    ),
+                    ctx,
+                    package_service,
+                )
+                _publish_bus(
+                    "skills.updated",
+                    {"name": skill_name, "source": "artifact_subscription", **dict(result)},
+                )
+                await _ack(True, data=result)
+                return None
+            # Explicit compatibility fallback for installations that have not
+            # acquired a stable package subscription yet.
             result = SkillUpdateService(ctx).request_update(skill_name, dry_run=dry_run)
             _publish_bus("skills.updated", {"name": skill_name, "version": result.version, "updated": result.updated})
-            await _ack(True, data={"name": skill_name, "updated": result.updated, "version": result.version})
+            await _ack(
+                True,
+                data={
+                    "name": skill_name,
+                    "updated": result.updated,
+                    "version": result.version,
+                    "mode": "legacy_source_pull",
+                    "legacy_materialization": True,
+                    "warning": "no stable package subscription; compatibility git pull was used",
+                },
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            await _ack(False, error=(detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)))
         except FileNotFoundError:
             await _ack(False, error="skill_not_installed")
         except PermissionError as exc:

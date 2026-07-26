@@ -104,6 +104,7 @@ redacted identities and conclusions required for review.
 | Builder checkpoint identity per iteration | passed | 113 focused regressions; explicit checkpoint-only reconciliation, no Codex replay |
 | Builder/schema/migration/evidence lock admission | passed | 95 artifact-pipeline regressions plus backend TypeScript build/package smoke; partial and content-mismatched lock sets rejected |
 | Operator activation diff and review binding | passed | read-only component/dependency/permission/schema/migration/rollback plan; canonical plan digest and WorkspaceLock CAS guard activation |
+| Update entrypoint cutover | passed | 125 focused regressions; subscribed scenario/skill REST and WebSocket paths require a reviewed package plan and transactional runtime evidence; DEV update and LLM pull are retired; non-subscribed fallback is labelled legacy |
 
 Exact immutable identities from the proof:
 

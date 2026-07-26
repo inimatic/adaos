@@ -568,13 +568,14 @@ Forge commits contain:
 - allowlisted `AdaOS-Change-Id`, conversation/topic/thread, revision, model,
   request/result, and source-message trailers.
 
-Forge never stores the full transcript as commit metadata. During
-`adaos dev scenario|skill update`, core resolves the latest commit for the
-artifact path, parses these trailers, and reconciles the local Builder Change.
-If the referenced project thread is empty, core may recover a request/result
-pair from `ui_revisions/NNN.json`; recovered messages are explicitly marked
-`source=forge_recovery` and are idempotent. Existing chat always wins over this
-fallback.
+Forge never stores the full transcript as commit metadata. The former
+`adaos dev scenario|skill update` draft pull is retired: it replaced the DEV
+tree from a mutable remote draft and could erase unrelated local work. Builder
+reconciliation now occurs at an exact checkpoint or explicit exact-base
+rebase/migration boundary. Historical trailer and `ui_revisions/NNN.json`
+recovery remains available only to that bounded reconciliation path; it is not
+an implicit source update. Recovered messages are marked
+`source=forge_recovery`, are idempotent, and never replace existing chat.
 
 ## Prompt IDE And Dev Webspace
 

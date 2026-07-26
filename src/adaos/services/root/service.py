@@ -1439,58 +1439,30 @@ class RootDeveloperService:
     def update_skill(self, name: str) -> ArtifactUpdateResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
-        emit(self.ctx.bus, "root.dev.skill.update.start", {"name": name, "node_id": node_id}, "root.dev")
-        try:
-            result = self._update_artifact(cfg, "skills", name)
-        except ArtifactNotFoundError:
-            emit(self.ctx.bus, "root.dev.skill.update.missing", {"name": name, "node_id": node_id}, "root.dev")
-            raise
-        except Exception:
-            emit(self.ctx.bus, "root.dev.skill.update.error", {"name": name, "node_id": node_id}, "root.dev")
-            raise
         emit(
             self.ctx.bus,
-            "root.dev.skill.update.done",
-            {
-                "name": result.name,
-                "node_id": node_id,
-                "version": result.version,
-                "updated_at": result.updated_at,
-                "commit": result.commit,
-                "metadata": result.metadata,
-                "recovery": result.recovery,
-            },
+            "root.dev.skill.update.retired",
+            {"name": name, "node_id": node_id, "replacement": "exact_base_rebase"},
             "root.dev",
         )
-        return result
+        raise RootServiceError(
+            "DEV draft update is retired because it can overwrite local changes. "
+            "Create or migrate an exact-base DEV context, then reapply the bounded ChangeSet."
+        )
 
     def update_scenario(self, name: str) -> ArtifactUpdateResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
-        emit(self.ctx.bus, "root.dev.scenario.update.start", {"name": name, "node_id": node_id}, "root.dev")
-        try:
-            result = self._update_artifact(cfg, "scenarios", name)
-        except ArtifactNotFoundError:
-            emit(self.ctx.bus, "root.dev.scenario.update.missing", {"name": name, "node_id": node_id}, "root.dev")
-            raise
-        except Exception:
-            emit(self.ctx.bus, "root.dev.scenario.update.error", {"name": name, "node_id": node_id}, "root.dev")
-            raise
         emit(
             self.ctx.bus,
-            "root.dev.scenario.update.done",
-            {
-                "name": result.name,
-                "node_id": node_id,
-                "version": result.version,
-                "updated_at": result.updated_at,
-                "commit": result.commit,
-                "metadata": result.metadata,
-                "recovery": result.recovery,
-            },
+            "root.dev.scenario.update.retired",
+            {"name": name, "node_id": node_id, "replacement": "exact_base_rebase"},
             "root.dev",
         )
-        return result
+        raise RootServiceError(
+            "DEV draft update is retired because it can overwrite local changes. "
+            "Create or migrate an exact-base DEV context, then reapply the bounded ChangeSet."
+        )
 
     def publish_skill(
         self,
@@ -2221,6 +2193,10 @@ class RootDeveloperService:
         idempotency_key: str | None = None,
         expected_plan_digest: str | None = None,
         permission_decision: bool | Mapping[str, Any] | None = None,
+        reload_runtime=None,
+        health_check=None,
+        reload_policy: Mapping[str, Any] | None = None,
+        health_policy: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         updated = self._artifact_publication_service(cfg).activate_subscription_update(
@@ -2228,16 +2204,10 @@ class RootDeveloperService:
             idempotency_key=idempotency_key,
             expected_plan_digest=expected_plan_digest,
             permission_decision=permission_decision,
-            reload_policy={
-                "mode": "skip",
-                "approved_by": "root.artifact_subscription.mvp",
-                "reason": "live artifact reload adapter is not connected yet",
-            },
-            health_policy={
-                "mode": "skip",
-                "approved_by": "root.artifact_subscription.mvp",
-                "reason": "live artifact health adapter is not connected yet",
-            },
+            reload_runtime=reload_runtime,
+            health_check=health_check,
+            reload_policy=reload_policy,
+            health_policy=health_policy,
         )
         return {
             "ok": True,

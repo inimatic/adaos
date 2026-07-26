@@ -582,6 +582,20 @@ When the stable channel moves, AdaOS:
 7. updates the subscription observation only after success;
 8. records failure without changing the stable registry pointer.
 
+For a subscribed scenario or skill, the current REST and WebSocket update
+entrypoints implement this sequence directly. A write requires the digest of a
+freshly reviewed plan; activation rejects a changed WorkspaceLock, missing
+runtime reload adapter, or missing health evidence. Runtime reload/projection
+is part of the activation transaction so a failure restores files, data, and
+the previous lock before the subscription observation can advance.
+
+The old DEV draft `update` and LLM-facing scenario `pull` commands are retired:
+they cannot overwrite a mutable DEV tree from Workspace or a remote source.
+Projects without a subscription may temporarily use the bounded source-pull
+bridge. Such responses are marked `legacy_source_pull` and
+`legacy_materialization`; they are not equivalent to reviewed package
+activation and remain subject to the legacy-retirement gate.
+
 ## Forge And Repository Evolution
 
 The current monorepo remains supported through `SourceProvider`:
@@ -615,8 +629,9 @@ Migration uses adapters instead of a flag-day rewrite:
   complete group, and partial groups are rejected instead of inferred.
 - Existing installed artifacts receive synthesized package and release
   identities during migration.
-- New package-backed activation is selected per project until all representative
-  scenarios and skills pass the proof pipeline.
+- New package-backed activation is mandatory for subscribed projects. A
+  non-subscribed project can use only the explicitly labelled compatibility
+  bridge until it receives a subscription or the bridge is retired.
 - Runtime consumers continue reading current paths while those paths become a
   projection of WorkspaceLock.
 

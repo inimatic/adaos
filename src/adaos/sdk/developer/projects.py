@@ -449,13 +449,12 @@ def push(
 
 
 def update(kind: str, project_id: str) -> dict[str, Any]:
-    normalized_kind = _kind(kind)
-    normalized_id = _project_id(project_id)
-    service = _service()
-    method = service.update_skill if normalized_kind == "skill" else service.update_scenario
-    result = _jsonable(method(normalized_id))
-    _publish_content_changed(normalized_kind, normalized_id, reason="project_updated")
-    return result
+    _kind(kind)
+    _project_id(project_id)
+    raise DeveloperProjectError(
+        "DEV draft update is retired because it can overwrite local changes; "
+        "use an exact-base rebase/migration workflow instead"
+    )
 
 
 def publish(

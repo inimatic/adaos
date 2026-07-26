@@ -356,6 +356,67 @@ def test_scenario_api_matches_service_surface(monkeypatch) -> None:
     assert any(call.startswith("push:") for call in scenario_mgr.calls)
 
 
+def test_subscribed_scenario_update_requires_reviewed_plan_and_records_projection_health(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    client = _make_client(skill_mgr, scenario_mgr)
+    plan_digest = "sha256:" + "d" * 64
+    lock_digest = "sha256:" + "e" * 64
+    activations: list[dict[str, Any]] = []
+    rebuilds: list[dict[str, Any]] = []
+
+    class _Lock:
+        components = (
+            SimpleNamespace(
+                kind="scenario",
+                artifact_id="scene",
+                version="3.0.0",
+                digest="sha256:" + "f" * 64,
+            ),
+        )
+
+        def to_dict(self):
+            return {"lock_digest": lock_digest}
+
+    class _PackageService:
+        def plan_artifact_subscription_update(self, project_id: str):
+            return {"ok": True, "project_id": project_id, "plan_digest": plan_digest}
+
+        def activate_artifact_subscription(self, project_id: str, **kwargs):
+            activations.append({"project_id": project_id, **kwargs})
+            reload_receipt = kwargs["reload_runtime"](_Lock())
+            health_receipt = kwargs["health_check"](_Lock())
+            assert reload_receipt["status"] == "reloaded"
+            assert health_receipt["status"] == "passed"
+            return {"ok": True, "project_id": project_id, "release": "scene@3.0.0"}
+
+    async def _rebuild(*args, **kwargs):
+        rebuilds.append({"args": args, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(scenarios, "_package_subscription_service", lambda _ctx, _name: _PackageService())
+    monkeypatch.setattr(scenarios, "rebuild_webspace_from_sources", _rebuild)
+
+    planned = client.post("/api/scenarios/update", json={"name": "scene", "dry_run": True})
+    assert planned.status_code == 200
+    assert planned.json()["update_plan"]["plan_digest"] == plan_digest
+
+    blocked = client.post("/api/scenarios/update", json={"name": "scene"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "artifact_update_plan_required"
+
+    applied = client.post(
+        "/api/scenarios/update",
+        json={"name": "scene", "webspace_id": "desktop", "expected_plan_digest": plan_digest},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["mode"] == "package_activation"
+    assert activations[0]["expected_plan_digest"] == plan_digest
+    assert applied.json()["runtime_receipts"][lock_digest]["version"] == "3.0.0"
+    assert "sync_to_yjs:scene:desktop:0" in scenario_mgr.calls
+    assert rebuilds[0]["source_of_truth"] == "workspace_lock"
+
+
 def test_scenario_list_uses_active_version_and_skips_missing_scenario_yaml(monkeypatch, tmp_path) -> None:
     class _MixedScenarioManager(_FakeScenarioManager):
         def list_installed(self) -> list[_Record]:
@@ -481,6 +542,75 @@ def test_skill_installed_status_uses_registry_catalog_version(monkeypatch) -> No
     item = resp.json()["items"][0]
     assert item["remote_version"] == "2.0.0"
     assert item["update_available"] is True
+
+
+def test_subscribed_skill_update_requires_reviewed_plan_and_records_runtime_health(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    client = _make_client(skill_mgr, scenario_mgr)
+    plan_digest = "sha256:" + "a" * 64
+    lock_digest = "sha256:" + "b" * 64
+    activations: list[dict[str, Any]] = []
+
+    class _Lock:
+        components = (
+            SimpleNamespace(
+                kind="skill",
+                artifact_id="demo",
+                version="2.0.0",
+                digest="sha256:" + "c" * 64,
+            ),
+        )
+
+        def to_dict(self):
+            return {"lock_digest": lock_digest}
+
+    class _PackageService:
+        def plan_artifact_subscription_update(self, project_id: str):
+            return {"ok": True, "project_id": project_id, "plan_digest": plan_digest}
+
+        def activate_artifact_subscription(self, project_id: str, **kwargs):
+            activations.append({"project_id": project_id, **kwargs})
+            reload_receipt = kwargs["reload_runtime"](_Lock())
+            health_receipt = kwargs["health_check"](_Lock())
+            assert reload_receipt["status"] == "reloaded"
+            assert health_receipt["status"] == "passed"
+            return {"ok": True, "project_id": project_id, "release": "demo@2.0.0"}
+
+    async def _reload(_ctx, skill_name: str):
+        return {"ok": True, "skill": skill_name}
+
+    async def _rebuild(**_kwargs):
+        return {"ok": True}
+
+    monkeypatch.setattr(skills, "_package_subscription_service", lambda _ctx, _name: _PackageService())
+    monkeypatch.setattr(skills, "_get_manager", lambda _ctx: skill_mgr)
+    monkeypatch.setattr(skills, "refresh_skill_runtime", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(skills, "_reload_live_skill_handlers", _reload)
+    monkeypatch.setattr(skills, "rebuild_webspace_projection", _rebuild)
+    monkeypatch.setattr(
+        skills,
+        "invalidate_webspace_materialization_cache",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+
+    planned = client.post("/api/skills/update", json={"name": "demo", "dry_run": True})
+    assert planned.status_code == 200
+    assert planned.json()["mode"] == "package_plan"
+    assert planned.json()["update_plan"]["plan_digest"] == plan_digest
+
+    blocked = client.post("/api/skills/update", json={"name": "demo"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "artifact_update_plan_required"
+
+    applied = client.post(
+        "/api/skills/update",
+        json={"name": "demo", "expected_plan_digest": plan_digest},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["mode"] == "package_activation"
+    assert activations[0]["expected_plan_digest"] == plan_digest
+    assert applied.json()["runtime_receipts"][lock_digest]["version"] == "2.0.0"
 
 
 def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch) -> None:

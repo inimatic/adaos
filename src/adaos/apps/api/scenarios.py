@@ -22,6 +22,8 @@ from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.workspaces import index as workspace_index
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.operations import submit_install_operation, submit_update_operation
+from adaos.services.artifact_pipeline import PublicationError, SubscriptionStore
+from adaos.services.root.service import RootDeveloperService, RootServiceError
 from adaos.services.workspace_registry import list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -229,6 +231,9 @@ class UpdateReq(BaseModel):
     name: str
     async_operation: bool = False
     webspace_id: str | None = None
+    dry_run: bool = False
+    expected_plan_digest: str | None = None
+    permission_decision: dict[str, Any] | None = None
 
 
 class PushReq(BaseModel):
@@ -239,6 +244,129 @@ class PushReq(BaseModel):
 class UninstallReq(BaseModel):
     name: str
     webspace_id: str | None = None
+
+
+def _package_subscription_service(
+    ctx: AgentContext,
+    project_id: str,
+) -> RootDeveloperService | None:
+    path = Path(ctx.paths.workspace_dir()) / ".adaos" / "subscriptions.json"
+    if not path.is_file():
+        return None
+    try:
+        subscriptions = SubscriptionStore(path).load()
+    except Exception as exc:
+        raise RuntimeError(f"artifact subscription store is invalid: {exc}") from exc
+    return RootDeveloperService(ctx) if project_id in subscriptions else None
+
+
+async def _update_subscribed_scenario(
+    body: UpdateReq,
+    ctx: AgentContext,
+    mgr: ScenarioManager,
+    service: RootDeveloperService,
+) -> dict[str, Any]:
+    if body.async_operation:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "artifact_update_async_not_supported",
+                "message": "package activation already has a durable operation journal; review and activate it directly",
+            },
+        )
+    try:
+        reviewed = await asyncio.to_thread(
+            service.plan_artifact_subscription_update,
+            body.name,
+        )
+    except (PublicationError, RootServiceError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if body.dry_run:
+        return {
+            "ok": True,
+            "updated": False,
+            "mode": "package_plan",
+            "update_plan": reviewed,
+        }
+    expected = str(body.expected_plan_digest or "").strip().lower()
+    if not expected:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "artifact_update_plan_required",
+                "message": "review the package update plan and resubmit its plan_digest",
+                "update_plan": reviewed,
+            },
+        )
+    webspace_id = body.webspace_id or default_webspace_id()
+    loop = asyncio.get_running_loop()
+    runtime_receipts: dict[str, dict[str, Any]] = {}
+
+    def await_runtime(coroutine):
+        return asyncio.run_coroutine_threadsafe(coroutine, loop).result(timeout=120)
+
+    def reload_runtime(lock) -> dict[str, Any]:
+        package = next(
+            (
+                item
+                for item in lock.components
+                if item.kind == "scenario" and item.artifact_id == body.name
+            ),
+            None,
+        )
+        if package is None:
+            raise RuntimeError(f"activated WorkspaceLock has no scenario:{body.name}")
+        mgr.sync_to_yjs(body.name, webspace_id=webspace_id, emit_event=False)
+        await_runtime(
+            rebuild_webspace_from_sources(
+                webspace_id,
+                action="artifact_subscription_sync",
+                scenario_id=body.name,
+                source_of_truth="workspace_lock",
+            )
+        )
+        receipt = {
+            "status": "reloaded",
+            "scenario": body.name,
+            "version": package.version,
+            "package_digest": package.digest,
+            "webspace_id": webspace_id,
+            "projection": "completed",
+        }
+        runtime_receipts[lock.to_dict()["lock_digest"]] = receipt
+        return receipt
+
+    def health_check(lock) -> dict[str, Any]:
+        lock_digest = lock.to_dict()["lock_digest"]
+        receipt = runtime_receipts.get(lock_digest)
+        if receipt is None:
+            return {"status": "failed", "reason": "scenario_projection_receipt_missing"}
+        return {
+            "status": "passed",
+            "check": "scenario_yjs_and_webspace_projection",
+            "lock_digest": lock_digest,
+            "scenario": body.name,
+            "version": receipt["version"],
+        }
+
+    try:
+        activated = await asyncio.to_thread(
+            service.activate_artifact_subscription,
+            body.name,
+            expected_plan_digest=expected,
+            permission_decision=body.permission_decision,
+            reload_runtime=reload_runtime,
+            health_check=health_check,
+        )
+    except (PublicationError, RootServiceError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        **activated,
+        "updated": True,
+        "mode": "package_activation",
+        "reviewed_plan_digest": expected,
+        "runtime_receipts": runtime_receipts,
+    }
 
 
 @router.get("/list")
@@ -402,7 +530,17 @@ async def install(body: InstallReq, mgr: ScenarioManager = Depends(_get_manager)
 
 
 @router.post("/update")
-async def update(body: UpdateReq, mgr: ScenarioManager = Depends(_get_manager)):
+async def update(
+    body: UpdateReq,
+    mgr: ScenarioManager = Depends(_get_manager),
+    ctx: AgentContext = Depends(get_ctx),
+):
+    try:
+        package_service = _package_subscription_service(ctx, body.name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if package_service is not None:
+        return await _update_subscribed_scenario(body, ctx, mgr, package_service)
     if body.async_operation:
         operation = submit_update_operation(
             target_kind="scenario",
@@ -461,6 +599,9 @@ async def update(body: UpdateReq, mgr: ScenarioManager = Depends(_get_manager)):
             "path": str(getattr(meta, "path", "")),
         },
         "dependency_bootstrap": dependency_bootstrap,
+        "mode": "legacy_source_pull",
+        "legacy_materialization": True,
+        "warning": "no stable package subscription; compatibility workspace sync was used",
     }
 
 

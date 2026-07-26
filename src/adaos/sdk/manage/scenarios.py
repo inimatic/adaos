@@ -135,24 +135,11 @@ def uninstall(scenario_id: str) -> str:
     return scenario_id
 
 
-@tool(
-    "manage.scenarios.pull",
-    summary="pull scenario sources",
-    stability="experimental",
-)
 def pull(scenario_id: str) -> str:
-    ctx = _require_cap("scenarios.manage")
-    repo = _repo(ctx)
-    repo.ensure()
-    cache_root = _cache_root(ctx)
-    if hasattr(ctx.git, "sparse_add"):
-        try:
-            ctx.git.sparse_add(str(cache_root), f"scenarios/{scenario_id}")
-        except Exception:
-            pass
-    if hasattr(ctx.git, "pull"):
-        ctx.git.pull(str(cache_root))
-    return scenario_id
+    raise RuntimeError(
+        "manage.scenarios.pull is retired because it mutates Workspace from a mutable source; "
+        "use the stable subscription update-plan and package activation workflow"
+    )
 
 
 @tool(
