@@ -39,7 +39,7 @@ pipeline becomes the default.
 | B1 version identity | corrected, validated-local | local release regression and backend artifact smoke reject a second digest for one version |
 | B2 fail-open schemas | corrected, validated-local | explicit v1 readers reject unknown schemas, fields, and malformed collection members |
 | B3 package scrub/paths | corrected, validated-local | local and backend admission reject secrets and non-portable aliases |
-| B4 resolver consistency | open | rebuild selection from the complete constraint set |
+| B4 resolver consistency | corrected, validated-local | bounded fixed-point selection rebuilds all bindings from the final complete constraint set |
 | B5 orphan removal | open | derive materialization from active release roots and prove rollback |
 | B6 Workspace writers | open | add writer lease plus expected-lock compare-and-switch |
 | B7 channel CAS | corrected, validated-local | local and backend channel mutations use a lease, expected digest, conflict preservation, and idempotent retry |

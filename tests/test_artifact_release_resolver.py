@@ -164,3 +164,54 @@ def test_optional_missing_dependency_does_not_enter_release() -> None:
 
     assert plan.release.resolved_dependencies == ()
     assert plan.bindings == ()
+
+
+def test_release_rebuilds_all_bindings_after_complete_constraint_selection() -> None:
+    broad_consumer = _package("scenario", "broad", "1.0.0", "a")
+    narrow_consumer = _package("scenario", "narrow", "1.0.0", "b")
+    shared_v1 = _package("skill", "shared", "1.0.0", "c")
+    shared_v2 = _package("skill", "shared", "2.0.0", "d")
+
+    plan = build_project_release(
+        project_id="combined",
+        version="1.0.0",
+        source_ref=_source(),
+        components=(broad_consumer, narrow_consumer),
+        catalog=PackageCatalog((shared_v1, shared_v2)),
+        requirements_by_package={
+            broad_consumer.digest: (
+                DependencyRequirement("skill", "shared", ">=1.0.0,<3.0.0"),
+            ),
+            narrow_consumer.digest: (
+                DependencyRequirement("skill", "shared", ">=1.0.0,<2.0.0"),
+            ),
+        },
+    )
+
+    assert plan.release.resolved_dependencies[0].package_digest == shared_v1.digest
+    assert {binding.package_digest for binding in plan.bindings} == {shared_v1.digest}
+    assert plan.reverse_consumers == {
+        "skill:shared": ("scenario:broad", "scenario:narrow")
+    }
+
+
+def test_stored_release_plan_rejects_binding_outside_final_selection() -> None:
+    scenario = _package("scenario", "recipes", "1.0.0", "a")
+    shared = _package("skill", "shared", "1.0.0", "b")
+    plan = build_project_release(
+        project_id="recipes",
+        version="1.0.0",
+        source_ref=_source(),
+        components=(scenario,),
+        catalog=PackageCatalog((shared,)),
+        requirements_by_package={
+            scenario.digest: (DependencyRequirement("skill", "shared", "1.0.0"),)
+        },
+    )
+    payload = {"schema": "adaos.artifact.release_plan.v1", **plan.explain()}
+    payload["bindings"][0]["package_digest"] = "sha256:" + "e" * 64
+
+    from adaos.services.artifact_pipeline import ReleasePlan
+
+    with pytest.raises(DependencyResolutionError, match="inconsistent dependency"):
+        ReleasePlan.from_mapping(payload)

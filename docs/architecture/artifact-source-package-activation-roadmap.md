@@ -134,7 +134,7 @@ proof is not silently promoted to stand or production acceptance.
 | --- | ---: | --- | --- | --- |
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 5/9 | validated-local (bounded) | deterministic package build/store/verify, secret and authoring-state exclusion, portable path admission, corruption and zero-byte coverage | builder attestation identity and external signing |
-| AP2 | 5/10 | validated-local (bounded) | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | complete-set re-resolution plus broader schema-component and migration-lock inputs |
+| AP2 | 6/10 | validated-local (bounded) | exact dependency ranges/digests, complete-set fixed-point selection, consistent bindings, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs plus diagnostics |
 | AP3 | 4/11 | validated-local (bounded) | phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and rollback injection | writer lease/CAS, orphan removal, mandatory reload/health policy, delayed observation, and stand validation |
 | AP4 | 6/10 | validated-local (bounded) | exact candidate identity, isolated package materialization, acceptance record, immutable Builder task snapshot, concurrent-DEV compare-and-switch | enforced data isolation and health/rollback trial evidence; stand validation |
 | AP5 | 6/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, and local/backend atomic channel CAS | merge/deploy backend hardening, durable promotion continuation, and clean stand promotion |
@@ -238,7 +238,7 @@ rejected without changing active state.
   skill id in one node activation context.
 - [x] `[must]` `AP2-05` Compute reverse consumers before changing a shared skill
   binding.
-- [ ] `[must]` `AP2-06` Reject missing, ambiguous, incompatible, cyclic, or
+- [x] `[must]` `AP2-06` Reject missing, ambiguous, incompatible, cyclic, or
   internally inconsistent dependency results with an explainable plan and no
   partial mutation.
 - [x] `[must]` `AP2-07` Treat every dependency-lock change as a new release
@@ -254,9 +254,10 @@ and dependency resolver regressions in
 `tests/test_artifact_release_resolver.py`.
 `AP2-03` remains open for the broader explicit schema and migration-lock
 contract, beyond the component, permission, migration, and validation fields
-already present in the bounded release model. `AP2-06` was reopened because a
-compatible multi-consumer constraint set can currently produce inconsistent
-binding digests.
+already present in the bounded release model. `AP2-06` was reclosed after the
+resolver began rebuilding the reachable complete constraint set to a bounded
+fixed point and stored plans began rejecting any binding that differs from the
+final selected dependency digest.
 
 ## Milestone AP3: Transactional Workspace Activation
 
