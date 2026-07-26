@@ -491,6 +491,15 @@ If stable is unchanged:
 4. record publication evidence;
 5. move the stable channel pointer last.
 
+The local continuation after the registry pointer moves is a separate durable
+promotion operation. It records receipts for admission, channel CAS,
+publisher Workspace activation, registry projection, and subscription
+observation. If a response is lost after channel CAS, retry first reads the
+authoritative pointer: an already-visible candidate digest is recorded as the
+receipt and the mutation is not repeated. A later local failure pauses the
+operation and resumes only its missing idempotent phase; it does not classify
+the already-promoted candidate as stale or roll the public channel backward.
+
 If stable moved:
 
 1. mark the candidate `stale`;

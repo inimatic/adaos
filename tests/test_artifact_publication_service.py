@@ -21,6 +21,8 @@ class _Remote:
         self.releases = ReleaseRepository(root / "releases")
         self.archives: dict[str, bytes] = {}
         self.tree = "f" * 40
+        self.channel_writes = 0
+        self.fail_after_channel_once = False
 
     def put_release(self, plan: ReleasePlan, archives: dict[str, bytes]) -> None:
         self.archives.update(archives)
@@ -36,13 +38,18 @@ class _Remote:
         *,
         expected_release_digest: str | None,
     ):
+        self.channel_writes += 1
         self.releases.put_release(plan)
-        return self.releases.set_channel(
+        pointer = self.releases.set_channel(
             plan.release.project_id,
             channel,
             plan.release.release_digest,
             expected_release_digest=expected_release_digest,
         )
+        if self.fail_after_channel_once:
+            self.fail_after_channel_once = False
+            raise TimeoutError("channel outcome was not delivered")
+        return pointer
 
     def get_channel(self, project_id: str, channel: str = "stable"):
         return self.releases.get_channel(project_id, channel)
@@ -570,3 +577,104 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
     assert (subscriber.workspace_root / "scenarios" / "recipes" / "webui.json").read_text(
         encoding="utf-8"
     ).strip() == '{"marker": "second"}'
+
+
+def test_promotion_reconciles_unknown_channel_outcome_without_second_write(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-unknown-channel-outcome",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    remote.fail_after_channel_once = True
+
+    with pytest.raises(TimeoutError, match="outcome was not delivered"):
+        service.promote(prepared.candidate.candidate_id, health_check=lambda _lock: True)
+
+    paused = service.load_promotion(prepared.candidate.candidate_id)
+    assert paused is not None
+    assert paused["status"] == "paused"
+    assert "admitted" in paused["receipts"]
+    assert "channel_moved" not in paused["receipts"]
+    assert remote.get_channel("recipes").release_digest == prepared.candidate.release_digest
+
+    promoted = service.promote(
+        prepared.candidate.candidate_id,
+        health_check=lambda _lock: True,
+    )
+
+    assert promoted.pointer.release_digest == prepared.candidate.release_digest
+    assert remote.channel_writes == 1
+    completed = service.load_promotion(prepared.candidate.candidate_id)
+    assert completed is not None
+    assert completed["status"] == "completed"
+
+
+def test_promotion_continues_after_projection_failure_without_reactivation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-projection-resume",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    original_projection = service._record_workspace_projection
+    monkeypatch.setattr(
+        service,
+        "_record_workspace_projection",
+        lambda _plan: (_ for _ in ()).throw(RuntimeError("projection storage unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="projection storage unavailable"):
+        service.promote(prepared.candidate.candidate_id, health_check=lambda _lock: True)
+
+    paused = service.load_promotion(prepared.candidate.candidate_id)
+    assert paused is not None
+    assert "channel_moved" in paused["receipts"]
+    assert "workspace_activated" in paused["receipts"]
+    assert "projection_recorded" not in paused["receipts"]
+    activation_operation = paused["receipts"]["workspace_activated"]["operation_id"]
+    monkeypatch.setattr(service, "_record_workspace_projection", original_projection)
+
+    promoted = service.promote(prepared.candidate.candidate_id)
+
+    assert remote.channel_writes == 1
+    completed = service.load_promotion(prepared.candidate.candidate_id)
+    assert completed is not None
+    assert completed["status"] == "completed"
+    assert completed["receipts"]["workspace_activated"]["operation_id"] == activation_operation
+    assert promoted.activation.idempotent_replay is True

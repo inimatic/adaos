@@ -13,6 +13,7 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     StableSubscription,
+    WorkspaceLock,
 )
 from adaos.services.artifact_pipeline.activation import (
     ActivationResult,
@@ -46,7 +47,11 @@ from adaos.services.artifact_pipeline.releases import (
     build_project_release,
     parse_artifact_requirements,
 )
-from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.services.artifact_pipeline.storage import (
+    MutationLockTimeout,
+    atomic_write_json,
+    mutation_lock,
+)
 from adaos.services.workspace_registry import (
     set_workspace_registry_channel,
     upsert_workspace_registry_entry,
@@ -55,6 +60,7 @@ from adaos.services.workspace_registry import (
 
 PUSHED_SOURCE_SCHEMA = "adaos.artifact.pushed_source.v1"
 REBASE_PLAN_SCHEMA = "adaos.artifact.rebase_plan.v1"
+PROMOTION_OPERATION_SCHEMA = "adaos.artifact.promotion_operation.v1"
 
 
 class PublicationError(RuntimeError):
@@ -268,6 +274,45 @@ class ArtifactPublicationService:
 
     def rebase_plan_path(self, candidate_id: str) -> Path:
         return self.state_root / "rebase-plans" / f"{self.candidate_store.path(candidate_id).stem}.json"
+
+    def promotion_path(self, candidate_id: str) -> Path:
+        return self.state_root / "promotions" / f"{self.candidate_store.path(candidate_id).stem}.json"
+
+    def promotion_lock_path(self, candidate_id: str) -> Path:
+        return self.state_root / "promotions" / f"{self.candidate_store.path(candidate_id).stem}.lock"
+
+    def load_promotion(self, candidate_id: str) -> dict[str, Any] | None:
+        path = self.promotion_path(candidate_id)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise PublicationError(f"cannot read promotion operation: {exc}") from exc
+        if not isinstance(payload, dict) or payload.get("schema") != PROMOTION_OPERATION_SCHEMA:
+            raise PublicationError("unsupported promotion operation")
+        if payload.get("candidate_id") != candidate_id:
+            raise PublicationError("promotion operation belongs to another candidate")
+        return payload
+
+    def _write_promotion(self, operation: dict[str, Any]) -> None:
+        operation["updated_at"] = _now()
+        atomic_write_json(self.promotion_path(str(operation["candidate_id"])), operation)
+
+    def _promotion_receipt(
+        self,
+        operation: dict[str, Any],
+        phase: str,
+        receipt: Mapping[str, Any],
+    ) -> None:
+        stamped = {**dict(receipt), "recorded_at": _now()}
+        operation.setdefault("receipts", {})[phase] = stamped
+        operation.setdefault("events", []).append({"phase": phase, "at": stamped["recorded_at"]})
+        operation["phase"] = phase
+        operation["status"] = "running"
+        operation.pop("error", None)
+        operation.pop("paused_at", None)
+        self._write_promotion(operation)
 
     def load_rebase_plan(self, candidate_id: str) -> CandidateRebasePlan:
         payload = json.loads(self.rebase_plan_path(candidate_id).read_text(encoding="utf-8"))
@@ -556,6 +601,24 @@ class ArtifactPublicationService:
             raise
         return self.remote.get_release(project_id, pointer.release_digest)
 
+    def _channel_or_none(
+        self,
+        project_id: str,
+        channel: str = "stable",
+    ) -> ChannelPointer | None:
+        try:
+            return self.remote.get_channel(project_id, channel)
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            code = str(getattr(exc, "error_code", "") or "")
+            if (
+                status == 404
+                or code in {"channel_not_found", "release_not_found"}
+                or isinstance(exc, (FileNotFoundError, KeyError))
+            ):
+                return None
+            raise
+
     def _installed_workspace_version(self, kind: str, artifact_id: str) -> str | None:
         plural = "skills" if kind == "skill" else "scenarios"
         manifest_name = "skill.yaml" if kind == "skill" else "scenario.yaml"
@@ -753,80 +816,227 @@ class ArtifactPublicationService:
         migration_executor=None,
         migration_rollback=None,
     ) -> PromotionResult:
+        try:
+            with mutation_lock(self.promotion_lock_path(candidate_id)):
+                return self._promote_under_lease(
+                    candidate_id,
+                    health_check=health_check,
+                    reload_runtime=reload_runtime,
+                    permission_decision=permission_decision,
+                    migration_executor=migration_executor,
+                    migration_rollback=migration_rollback,
+                )
+        except MutationLockTimeout as exc:
+            raise PublicationError("candidate promotion is already running") from exc
+
+    def _promote_under_lease(
+        self,
+        candidate_id: str,
+        *,
+        health_check=None,
+        reload_runtime=None,
+        permission_decision=None,
+        migration_executor=None,
+        migration_rollback=None,
+    ) -> PromotionResult:
         candidate = self.candidate_store.load(candidate_id)
         plan = self.release_cache.get_release(candidate.project_id, candidate.release_digest)
-        stable = self.current_stable(candidate.project_id)
-        fresh, stale_reason = assess_freshness(
-            candidate,
-            stable.release if stable is not None else None,
-        )
-        if not fresh:
-            if stable is None:
-                raise PublicationError(
-                    f"candidate is stale but no target stable release is available: {stale_reason}"
+        operation = self.load_promotion(candidate_id)
+        if operation is not None and operation.get("release_digest") != candidate.release_digest:
+            raise PublicationError("promotion operation is bound to another release digest")
+
+        if operation is None:
+            stable = self.current_stable(candidate.project_id)
+            fresh, stale_reason = assess_freshness(
+                candidate,
+                stable.release if stable is not None else None,
+            )
+            if not fresh:
+                if stable is None:
+                    raise PublicationError(
+                        f"candidate is stale but no target stable release is available: {stale_reason}"
+                    )
+                reason = stale_reason or "base_release_moved"
+                candidate = mark_stale(candidate, reason=reason, now=_now())
+                self.candidate_store.save(candidate)
+                rebase_plan = CandidateRebasePlan(
+                    candidate_id=candidate.candidate_id,
+                    project_id=candidate.project_id,
+                    stale_reason=reason,
+                    change_ids=candidate.change_ids,
+                    previous_base_release=candidate.base_release,
+                    previous_base_digest=candidate.base_release_digest,
+                    target_base_release=f"{stable.release.project_id}@{stable.release.version}",
+                    target_base_digest=(
+                        stable.release.release_digest or stable.release.computed_digest()
+                    ),
+                    target_source_ref=stable.release.source_ref,
+                    path_scope=candidate.source_ref.path_scope,
+                    created_at=_now(),
                 )
-            reason = stale_reason or "base_release_moved"
-            candidate = mark_stale(candidate, reason=reason, now=_now())
-            self.candidate_store.save(candidate)
-            rebase_plan = CandidateRebasePlan(
-                candidate_id=candidate.candidate_id,
-                project_id=candidate.project_id,
-                stale_reason=reason,
-                change_ids=candidate.change_ids,
-                previous_base_release=candidate.base_release,
-                previous_base_digest=candidate.base_release_digest,
-                target_base_release=f"{stable.release.project_id}@{stable.release.version}",
-                target_base_digest=(
-                    stable.release.release_digest or stable.release.computed_digest()
-                ),
-                target_source_ref=stable.release.source_ref,
-                path_scope=candidate.source_ref.path_scope,
-                created_at=_now(),
+                atomic_write_json(self.rebase_plan_path(candidate.candidate_id), rebase_plan.to_dict())
+                raise PublicationStaleError(rebase_plan)
+            assert_promotable(
+                candidate,
+                plan.release,
+                stable.release if stable is not None else None,
             )
-            atomic_write_json(self.rebase_plan_path(candidate.candidate_id), rebase_plan.to_dict())
-            raise PublicationStaleError(rebase_plan)
-        assert_promotable(candidate, plan.release, stable.release if stable is not None else None)
-
-        if not candidate.source_tree:
-            raise PublicationError("candidate has no verified public source tree identity")
-        actual_tree = self.remote.tree_revision(candidate.source_ref)
-        if actual_tree != candidate.source_tree:
-            raise PublicationError(
-                f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
-            )
-
-        pointer = self.remote.set_channel(
-            plan,
-            "stable",
-            expected_release_digest=(
+            if not candidate.source_tree:
+                raise PublicationError("candidate has no verified public source tree identity")
+            actual_tree = self.remote.tree_revision(candidate.source_ref)
+            if actual_tree != candidate.source_tree:
+                raise PublicationError(
+                    f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
+                )
+            expected_base_digest = (
                 stable.release.release_digest or stable.release.computed_digest()
                 if stable is not None
                 else None
-            ),
-        )
-        activation = WorkspaceActivationManager(
-            workspace_root=self.workspace_root,
-            package_store=self.package_store,
-            state_root=self.state_root / "activation",
-        ).activate(
-            plan,
-            idempotency_key=f"stable:{candidate.release_digest}",
-            fetch_package=self.remote.fetch_package,
-            reload_runtime=reload_runtime,
-            health_check=health_check,
-            permission_decision=permission_decision,
-            migration_executor=migration_executor,
-            migration_rollback=migration_rollback,
-        )
-        self.release_cache.put_release(plan)
-        self._record_workspace_projection(plan)
-        subscription = StableSubscription(
-            project_id=candidate.project_id,
-            installed_release=pointer.release,
-            installed_digest=pointer.release_digest,
-        )
-        self.subscriptions.save(subscription)
-        return PromotionResult(candidate, plan, pointer, activation, subscription)
+            )
+            operation = {
+                "schema": PROMOTION_OPERATION_SCHEMA,
+                "candidate_id": candidate_id,
+                "project_id": candidate.project_id,
+                "release_digest": candidate.release_digest,
+                "expected_base_digest": expected_base_digest,
+                "status": "running",
+                "phase": "admitted",
+                "created_at": _now(),
+                "updated_at": _now(),
+                "events": [],
+                "receipts": {},
+            }
+            self._promotion_receipt(
+                operation,
+                "admitted",
+                {
+                    "base_release": candidate.base_release,
+                    "base_release_digest": candidate.base_release_digest,
+                    "source_revision": candidate.source_ref.revision,
+                    "source_tree": candidate.source_tree,
+                },
+            )
+
+        operation["status"] = "running"
+        operation.pop("error", None)
+        operation.pop("paused_at", None)
+        self._write_promotion(operation)
+        receipts = operation.setdefault("receipts", {})
+        try:
+            channel_receipt = receipts.get("channel_moved")
+            if isinstance(channel_receipt, Mapping):
+                pointer = ChannelPointer.from_mapping(channel_receipt["pointer"])
+                observed_pointer = self.remote.get_channel(candidate.project_id, "stable")
+                if observed_pointer.release_digest != candidate.release_digest:
+                    raise PublicationError(
+                        "stable moved again after candidate promotion; local continuation is blocked"
+                    )
+                pointer = observed_pointer
+            else:
+                observed_pointer = self._channel_or_none(candidate.project_id, "stable")
+                if (
+                    observed_pointer is not None
+                    and observed_pointer.release_digest == candidate.release_digest
+                ):
+                    pointer = observed_pointer
+                else:
+                    expected = operation.get("expected_base_digest")
+                    observed_digest = (
+                        observed_pointer.release_digest if observed_pointer is not None else None
+                    )
+                    if observed_digest != expected:
+                        raise PublicationError(
+                            "stable changed after promotion admission: "
+                            f"expected {expected or '<absent>'}, "
+                            f"observed {observed_digest or '<absent>'}"
+                        )
+                    pointer = self.remote.set_channel(
+                        plan,
+                        "stable",
+                        expected_release_digest=expected,
+                    )
+                self._promotion_receipt(
+                    operation,
+                    "channel_moved",
+                    {"pointer": pointer.to_dict()},
+                )
+
+            activation_receipt = receipts.get("workspace_activated")
+            if isinstance(activation_receipt, Mapping):
+                raw_lock = activation_receipt.get("workspace_lock")
+                if not isinstance(raw_lock, Mapping):
+                    raise PublicationError("promotion activation receipt has no WorkspaceLock")
+                activation = ActivationResult(
+                    operation_id=str(activation_receipt.get("operation_id") or ""),
+                    status="completed",
+                    workspace_lock=WorkspaceLock.from_mapping(raw_lock),
+                    release_digest=candidate.release_digest,
+                    idempotent_replay=True,
+                )
+            else:
+                activation = WorkspaceActivationManager(
+                    workspace_root=self.workspace_root,
+                    package_store=self.package_store,
+                    state_root=self.state_root / "activation",
+                ).activate(
+                    plan,
+                    idempotency_key=f"stable:{candidate.release_digest}",
+                    fetch_package=self.remote.fetch_package,
+                    reload_runtime=reload_runtime,
+                    health_check=health_check,
+                    permission_decision=permission_decision,
+                    migration_executor=migration_executor,
+                    migration_rollback=migration_rollback,
+                )
+                self._promotion_receipt(
+                    operation,
+                    "workspace_activated",
+                    {
+                        "operation_id": activation.operation_id,
+                        "lock_digest": activation.workspace_lock.to_dict()["lock_digest"],
+                        "workspace_lock": activation.workspace_lock.to_dict(),
+                    },
+                )
+
+            if not isinstance(receipts.get("projection_recorded"), Mapping):
+                self.release_cache.put_release(plan)
+                self._record_workspace_projection(plan)
+                self._promotion_receipt(
+                    operation,
+                    "projection_recorded",
+                    {"release_digest": candidate.release_digest},
+                )
+
+            subscription_receipt = receipts.get("subscription_saved")
+            if isinstance(subscription_receipt, Mapping):
+                raw_subscription = subscription_receipt.get("subscription")
+                if not isinstance(raw_subscription, Mapping):
+                    raise PublicationError("promotion receipt has no stable subscription")
+                subscription = StableSubscription.from_mapping(raw_subscription)
+            else:
+                subscription = StableSubscription(
+                    project_id=candidate.project_id,
+                    installed_release=pointer.release,
+                    installed_digest=pointer.release_digest,
+                )
+                self.subscriptions.save(subscription)
+                self._promotion_receipt(
+                    operation,
+                    "subscription_saved",
+                    {"subscription": subscription.to_dict()},
+                )
+
+            operation["status"] = "completed"
+            operation["phase"] = "completed"
+            operation["completed_at"] = _now()
+            self._write_promotion(operation)
+            return PromotionResult(candidate, plan, pointer, activation, subscription)
+        except Exception as exc:
+            operation["status"] = "paused"
+            operation["error"] = f"{type(exc).__name__}: {exc}"
+            operation["paused_at"] = _now()
+            self._write_promotion(operation)
+            raise
 
     def _record_workspace_projection(self, plan: ReleasePlan) -> None:
         component = next(
@@ -871,6 +1081,7 @@ class ArtifactPublicationService:
 
 __all__ = [
     "PUSHED_SOURCE_SCHEMA",
+    "PROMOTION_OPERATION_SCHEMA",
     "REBASE_PLAN_SCHEMA",
     "ArtifactPublicationService",
     "CandidateRebasePlan",

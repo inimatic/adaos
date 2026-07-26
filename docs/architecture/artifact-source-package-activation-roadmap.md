@@ -137,7 +137,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP2 | 6/10 | validated-local (bounded) | exact dependency ranges/digests, complete-set fixed-point selection, consistent bindings, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs plus diagnostics |
 | AP3 | 6/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, phase journal, permission admission, reversible migration/reconciliation, and interruption recovery | mandatory reload/health policy, delayed observation, retention, operator diff, and stand validation |
 | AP4 | 6/10 | validated-local (bounded) | exact candidate identity, isolated package materialization, acceptance record, immutable Builder task snapshot, concurrent-DEV compare-and-switch | enforced data isolation and health/rollback trial evidence; stand validation |
-| AP5 | 6/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, and local/backend atomic channel CAS | merge/deploy backend hardening, durable promotion continuation, and clean stand promotion |
+| AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
 | AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
 | AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
@@ -368,7 +368,7 @@ and then promoted.
   stable promotion.
 - [x] `[must]` `AP5-06` Persist source, package, release, and evidence before
   moving the stable channel pointer last.
-- [ ] `[must]` `AP5-07` Make publication idempotent and recover partial completion
+- [x] `[must]` `AP5-07` Make publication idempotent and recover partial completion
   without duplicate commits, releases, or registry entries.
 - [ ] `[should]` `AP5-08` Add policy classes for documentation-only and
   deterministic metadata rebases.
@@ -384,8 +384,11 @@ verification recorded in the proof.
 `AP5-01` was reclosed after the promotion path began passing the exact observed
 base digest into an authoritative local/backend channel compare-and-swap. The
 same-target retry is idempotent; a stale expected digest preserves the observed
-channel and returns a conflict. `AP5-07` remains open for durable continuation
-after channel movement and before publisher activation/projection completes.
+channel and returns a conflict. `AP5-07` was reclosed after promotion gained a
+candidate-scoped writer lease and durable receipts for admission, channel CAS,
+Workspace activation, registry projection, and subscription observation.
+Regressions cover both a lost channel response and a failure after successful
+activation; retry continues without a second channel write or activation.
 
 ## Milestone AP6: Stable Subscription And Package Update
 

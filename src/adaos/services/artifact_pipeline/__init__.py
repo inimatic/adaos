@@ -57,6 +57,7 @@ from .releases import (
 )
 from .remote import ArtifactRegistryClient, RemoteReleaseRepository
 from .publication import (
+    PROMOTION_OPERATION_SCHEMA,
     PUSHED_SOURCE_SCHEMA,
     REBASE_PLAN_SCHEMA,
     ArtifactPublicationService,
@@ -102,6 +103,7 @@ __all__ = [
     "PackageBuildError",
     "PackageLimits",
     "PackageVerificationError",
+    "PROMOTION_OPERATION_SCHEMA",
     "PUSHED_SOURCE_SCHEMA",
     "REBASE_PLAN_SCHEMA",
     "CandidateRebasePlan",

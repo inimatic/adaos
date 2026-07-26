@@ -43,7 +43,7 @@ pipeline becomes the default.
 | B5 orphan removal | corrected, validated-local | active slot roots define reachability; removed packages are backed up, pruned, and restored on failed health |
 | B6 Workspace writers | corrected, validated-local | activation/recovery share a cross-process lease and verify the observed lock digest before mutation |
 | B7 channel CAS | corrected, validated-local | local and backend channel mutations use a lease, expected digest, conflict preservation, and idempotent retry |
-| B8 promotion continuation | open | durable intent/receipt journal across channel move and local continuation |
+| B8 promotion continuation | corrected, validated-local | candidate-scoped receipt journal reconciles lost channel responses and resumes projection/subscription without replaying completed mutations |
 | B9 runtime/trial evidence | open | mandatory reload, health, and enforced data-mode policy |
 | B10 backend release admission | corrected, validated-local | backend recomputes release identity and verifies package references before visibility |
 | R1 repeated verification | improved, open | cached activation reduced from four archive traversals to two; carry one verified receipt into extraction |
