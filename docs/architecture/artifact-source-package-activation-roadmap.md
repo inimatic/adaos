@@ -110,11 +110,12 @@ record remains valid for its narrower stated cases.
 
 Remaining acceptance blockers:
 
-- close the correctness blockers recorded by the critical audit before routing
-  legacy update entrypoints through the package pipeline;
+- merge and deploy the remaining backend admission hardening recorded by the
+  critical audit;
 - a live stand/second-machine run is required before package-only activation is
   the default or legacy sparse Workspace compatibility is retired;
-- delayed post-activation observation remains a `[should]` operational gate.
+- bounded staging, backup, package, and operation retention remains a `[should]`
+  operational gate.
 
 The backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
@@ -135,7 +136,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 6/9 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission | external signing and package-store lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
-| AP3 | 8/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and digest-bound operator diff | delayed observation, retention, and stand validation |
+| AP3 | 9/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, and exact-lock delayed verification | retention and stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
@@ -294,7 +295,7 @@ leave either the old or the new complete release active.
   unknown side effect.
 - [x] `[must]` `AP3-07` Add transactional backup and restore coverage for current
   workspace update paths.
-- [ ] `[should]` `AP3-08` Add delayed post-activation verification linked to the
+- [x] `[should]` `AP3-08` Add delayed post-activation verification linked to the
   exact WorkspaceLock revision.
 - [ ] `[should]` `AP3-09` Add orphan staging cleanup and package retention policy.
 - [x] `[could]` `AP3-10` Add operator diff output between active and proposed
@@ -319,6 +320,16 @@ dependency changes, permission additions/removals, schema and migration locks,
 rollback availability, required runtime checks, and legacy-target warnings.
 The plan has its own canonical digest; activation rejects an obsolete reviewed
 plan and still performs WorkspaceLock CAS under the writer lease.
+`AP3-08` is closed locally by a durable post-commit observation attached to
+every new activation operation. It records the exact WorkspaceLock digest and
+revision, then a bounded background worker rechecks package-store integrity and
+the hashes of materialized package files after the configured delay. A newer
+WorkspaceLock marks the old observation `superseded`; corruption records a
+terminal `failed` receipt and event without silently rolling back or replaying
+the activation. Pending work is held in a separate bounded marker directory so
+the worker does not rescan terminal operation history on every poll. Interrupted
+read-only checks may be repeated safely; state-changing activation and migration
+rules are unchanged.
 
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 

@@ -314,6 +314,72 @@ async def _cancel_background_task(task: asyncio.Task[Any] | None, *, timeout: fl
         pass
     except Exception:
         _startup_log.warning("background startup task did not stop cleanly", exc_info=True)
+
+
+def _artifact_observation_poll_seconds() -> float:
+    try:
+        value = float(os.getenv("ADAOS_ARTIFACT_OBSERVATION_POLL_SEC", "15"))
+    except (TypeError, ValueError):
+        value = 15.0
+    return min(300.0, max(1.0, value))
+
+
+async def _artifact_delayed_verification_worker(ctx: Any) -> None:
+    from adaos.services.artifact_pipeline import (
+        ContentAddressedPackageStore,
+        WorkspaceActivationManager,
+    )
+
+    state_root = Path(ctx.paths.state_dir()) / "artifact_pipeline"
+    manager = WorkspaceActivationManager(
+        workspace_root=Path(ctx.paths.workspace_dir()),
+        package_store=ContentAddressedPackageStore(state_root / "packages"),
+        state_root=state_root / "activation",
+    )
+    interval = _artifact_observation_poll_seconds()
+    while True:
+        try:
+            results = await asyncio.to_thread(
+                manager.run_due_delayed_verifications,
+                limit=32,
+            )
+            for result in results:
+                status = str(result.get("status") or "unknown")
+                payload = {
+                    "observation_id": result.get("observation_id"),
+                    "status": status,
+                    "expected_lock_digest": result.get("expected_lock_digest"),
+                    "observed_lock_digest": result.get("observed_lock_digest"),
+                    "error": result.get("error"),
+                }
+                try:
+                    ctx.bus.publish(
+                        DomainEvent(
+                            type="artifact.activation.observed",
+                            payload=payload,
+                            source="artifact.activation",
+                        )
+                    )
+                except Exception:
+                    _startup_log.debug(
+                        "failed to emit delayed artifact verification event",
+                        exc_info=True,
+                    )
+                if status == "failed":
+                    _startup_log.warning(
+                        "delayed artifact verification failed observation_id=%s lock=%s error=%s",
+                        result.get("observation_id"),
+                        result.get("expected_lock_digest"),
+                        result.get("error"),
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _startup_log.warning(
+                "delayed artifact verification scan failed",
+                exc_info=True,
+            )
+        await asyncio.sleep(interval)
 from adaos.services.runtime_memory_profile import finish_active_runtime_memory_profile
 from adaos.services.root_mcp.logs import aggregate_subnet_logs, list_local_logs, normalize_log_category
 from adaos.services.root_mcp.service import invoke_tool as invoke_root_mcp_tool
@@ -768,6 +834,7 @@ async def lifespan(app: FastAPI):
         app.state.shutdown_stopping_emitted = False
         reset_runtime_lifecycle()
         app.state.core_update_task = None
+        app.state.artifact_delayed_verification_task = None
         app.state.restart_marker = _consume_restart_marker(os.getenv("ADAOS_SELF_BASE_URL"))
         app.state.realtime_sidecar_proc = None
         app.state.status_registry = app.state.ctx.status_registry
@@ -1121,6 +1188,17 @@ async def lifespan(app: FastAPI):
         )
 
     try:
+        app.state.artifact_delayed_verification_task = asyncio.create_task(
+            _artifact_delayed_verification_worker(get_ctx()),
+            name="artifact-delayed-verification",
+        )
+    except Exception:
+        logging.getLogger("adaos.artifact.activation").warning(
+            "failed to start delayed artifact verification worker",
+            exc_info=True,
+        )
+
+    try:
         yield
     finally:
         try:
@@ -1137,6 +1215,12 @@ async def lifespan(app: FastAPI):
             await _cancel_background_task(getattr(app.state, "runtime_event_loop_lag_task", None))
         finally:
             app.state.runtime_event_loop_lag_task = None
+        try:
+            await _cancel_background_task(
+                getattr(app.state, "artifact_delayed_verification_task", None)
+            )
+        finally:
+            app.state.artifact_delayed_verification_task = None
         try:
             conf = get_ctx().config
             if (
@@ -1583,7 +1667,31 @@ async def admin_drain(body: DrainRequest):
 
 @app.get("/api/admin/lifecycle", dependencies=[Depends(require_token)])
 async def admin_lifecycle():
-    return {"ok": True, "lifecycle": runtime_lifecycle_snapshot(), "runtime": _runtime_identity_public_payload()}
+    task = getattr(app.state, "artifact_delayed_verification_task", None)
+    if task is None:
+        observation_worker = {"status": "not_started"}
+    elif task.cancelled():
+        observation_worker = {"status": "cancelled"}
+    elif not task.done():
+        observation_worker = {
+            "status": "running",
+            "poll_seconds": _artifact_observation_poll_seconds(),
+        }
+    else:
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            error = None
+        observation_worker = {
+            "status": "failed" if error is not None else "completed",
+            "error": f"{type(error).__name__}: {error}" if error is not None else None,
+        }
+    return {
+        "ok": True,
+        "lifecycle": runtime_lifecycle_snapshot(),
+        "runtime": _runtime_identity_public_payload(),
+        "artifact_delayed_verification": observation_worker,
+    }
 
 
 @app.get("/api/admin/root_mcp/logs/{category}", dependencies=[Depends(require_token)])

@@ -325,8 +325,9 @@ operator view.
    semantics cannot drift independently.
 7. **Completed locally:** add the Builder diff/update-plan UI and bind its
    confirmation to the exact reviewed digest with deterministic idempotency.
-8. Add delayed observation and cleanup/retention, then repeat the proof on a
-   clean stand.
+8. **Completed locally:** add durable delayed verification bound to the exact
+   WorkspaceLock revision, with bounded pending markers and read-only replay.
+9. Add cleanup/retention, then repeat the proof on a clean stand.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

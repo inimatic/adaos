@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from adaos.domain.artifact_release import (
@@ -27,6 +28,7 @@ from adaos.services.artifact_pipeline.storage import (
 
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
+DELAYED_VERIFICATION_SCHEMA = "adaos.artifact.delayed_verification.v1"
 ACTIVATION_PHASES = (
     "resolve",
     "fetch",
@@ -63,10 +65,37 @@ class ActivationResult:
     workspace_lock: WorkspaceLock
     release_digest: str
     idempotent_replay: bool = False
+    delayed_verification_id: str | None = None
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _parse_iso(value: Any) -> datetime:
+    token = str(value or "").strip()
+    if not token:
+        raise ActivationError("timestamp is required")
+    try:
+        parsed = datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ActivationError(f"invalid timestamp: {token}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _observation_delay_seconds(value: float | None) -> float:
+    raw: Any = value
+    if raw is None:
+        raw = os.getenv("ADAOS_ARTIFACT_OBSERVATION_DELAY_SEC", "30")
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ActivationError("delayed verification interval must be numeric") from exc
+    if seconds < 0 or seconds > 86_400:
+        raise ActivationError("delayed verification interval must be between 0 and 86400 seconds")
+    return seconds
 
 
 class WorkspaceActivationManager:
@@ -76,6 +105,7 @@ class WorkspaceActivationManager:
         workspace_root: Path,
         package_store: ContentAddressedPackageStore,
         state_root: Path | None = None,
+        delayed_verification_seconds: float | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.package_store = package_store
@@ -88,6 +118,13 @@ class WorkspaceActivationManager:
         self.lock_history_root = self.metadata_root / "lock-history"
         self.releases_root = self.metadata_root / "releases"
         self.writer_lock_path = self.metadata_root / ".workspace-writer.lock"
+        self.observation_lock_path = self.state_root / "artifact_pipeline" / ".delayed-verification.lock"
+        self.pending_observations_root = (
+            self.state_root / "artifact_pipeline" / "pending-observations"
+        )
+        self.delayed_verification_seconds = _observation_delay_seconds(
+            delayed_verification_seconds
+        )
 
     def load_lock(self) -> WorkspaceLock | None:
         if not self.lock_path.is_file():
@@ -131,6 +168,291 @@ class WorkspaceActivationManager:
     def _write_operation(self, operation: dict[str, Any]) -> None:
         operation["updated_at"] = _now_iso()
         atomic_write_json(self.operation_path(str(operation["operation_id"])), operation)
+
+    def _schedule_delayed_verification(
+        self,
+        operation: dict[str, Any],
+        workspace_lock: WorkspaceLock,
+    ) -> str:
+        lock_payload = workspace_lock.to_dict()
+        lock_digest = str(lock_payload["lock_digest"])
+        observation_id = hashlib.sha256(
+            f"{operation['operation_id']}:{lock_digest}".encode("utf-8")
+        ).hexdigest()[:32]
+        scheduled = datetime.now(timezone.utc).replace(microsecond=0)
+        operation["delayed_verification"] = {
+            "schema": DELAYED_VERIFICATION_SCHEMA,
+            "observation_id": observation_id,
+            "status": "pending",
+            "scheduled_at": scheduled.isoformat(),
+            "due_at": (
+                scheduled + timedelta(seconds=self.delayed_verification_seconds)
+            ).isoformat(),
+            "expected_lock_digest": lock_digest,
+            "expected_lock_revision": workspace_lock.lock_revision,
+            "release_digest": operation.get("release_digest"),
+            "checks": [
+                "workspace_lock_identity",
+                "package_store_integrity",
+                "materialized_component_content",
+            ],
+            "attempts": 0,
+        }
+        atomic_write_json(
+            self._pending_observation_path(observation_id),
+            {
+                "schema": DELAYED_VERIFICATION_SCHEMA,
+                "observation_id": observation_id,
+                "operation_id": operation["operation_id"],
+                "due_at": operation["delayed_verification"]["due_at"],
+            },
+        )
+        return observation_id
+
+    def _pending_observation_path(self, observation_id: str) -> Path:
+        token = str(observation_id or "").strip().lower()
+        if len(token) != 32 or any(char not in "0123456789abcdef" for char in token):
+            raise ActivationError("observation id must be 32 lowercase hex characters")
+        return self.pending_observations_root / f"{token}.json"
+
+    def _complete_pending_observation(self, observation_id: Any) -> None:
+        token = str(observation_id or "").strip().lower()
+        if not token:
+            return
+        self._pending_observation_path(token).unlink(missing_ok=True)
+
+    @staticmethod
+    def _file_digest(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    def _verify_materialized_component(
+        self,
+        package: ArtifactPackageRef,
+    ) -> dict[str, Any]:
+        verified = self.package_store.verify(package.digest)
+        if verified.ref != package:
+            raise ActivationError(
+                f"stored package reference differs from WorkspaceLock: {package.key}"
+            )
+        target = self._target_for(package)
+        if not target.is_dir():
+            raise ActivationError(f"materialized component is missing: {package.key}")
+        raw_files = verified.package_manifest.get("files")
+        if not isinstance(raw_files, list):
+            raise ActivationError(f"package manifest has no file list: {package.key}")
+        checked_files = 0
+        checked_bytes = 0
+        for item in raw_files:
+            if not isinstance(item, Mapping):
+                raise ActivationError(f"package manifest file is invalid: {package.key}")
+            relative = PurePosixPath(str(item.get("path") or ""))
+            materialized = target.joinpath(*relative.parts).resolve()
+            if materialized != target and target not in materialized.parents:
+                raise ActivationError(
+                    f"materialized package path escapes its target: {package.key}"
+                )
+            if not materialized.is_file():
+                raise ActivationError(
+                    f"materialized package file is missing: {package.key}:{relative.as_posix()}"
+                )
+            expected_size = int(item.get("size"))
+            actual_size = materialized.stat().st_size
+            if actual_size != expected_size:
+                raise ActivationError(
+                    f"materialized package file size changed: {package.key}:{relative.as_posix()}"
+                )
+            expected_digest = str(item.get("digest") or "").strip().lower()
+            if self._file_digest(materialized) != expected_digest:
+                raise ActivationError(
+                    f"materialized package file digest changed: {package.key}:{relative.as_posix()}"
+                )
+            checked_files += 1
+            checked_bytes += actual_size
+        return {
+            "package": package.key,
+            "package_digest": package.digest,
+            "materialization_path": package.materialization_path,
+            "files": checked_files,
+            "bytes": checked_bytes,
+        }
+
+    def run_delayed_verification(
+        self,
+        operation_id: str,
+        *,
+        now: datetime | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        try:
+            with mutation_lock(self.observation_lock_path):
+                with mutation_lock(self.writer_lock_path):
+                    operation = self._read_operation(operation_id)
+                    if operation is None:
+                        raise FileNotFoundError(
+                            f"activation operation not found: {operation_id}"
+                        )
+                    raw = operation.get("delayed_verification")
+                    if not isinstance(raw, Mapping):
+                        raise ActivationError(
+                            "activation has no delayed verification record"
+                        )
+                    observation = dict(raw)
+                    if observation.get("schema") != DELAYED_VERIFICATION_SCHEMA:
+                        raise ActivationError("unsupported delayed verification schema")
+                    status = str(observation.get("status") or "").strip().lower()
+                    if status in {"passed", "failed", "superseded", "cancelled"}:
+                        self._complete_pending_observation(
+                            observation.get("observation_id")
+                        )
+                        return observation
+                    if status not in {"pending", "running"}:
+                        raise ActivationError(
+                            f"delayed verification has invalid status: {status or '<empty>'}"
+                        )
+                    if not force and _parse_iso(observation.get("due_at")) > observed_at:
+                        return observation
+                    if str(operation.get("status") or "").strip().lower() != "completed":
+                        observation.update(
+                            {
+                                "status": "cancelled",
+                                "observed_at": observed_at.replace(microsecond=0).isoformat(),
+                                "reason": "activation_not_completed",
+                            }
+                        )
+                        operation["delayed_verification"] = observation
+                        self._write_operation(operation)
+                        self._complete_pending_observation(
+                            observation.get("observation_id")
+                        )
+                        return observation
+                    observation["status"] = "running"
+                    observation["attempts"] = int(observation.get("attempts") or 0) + 1
+                    observation["started_at"] = observed_at.replace(microsecond=0).isoformat()
+                    if status == "running":
+                        observation["recovered_read_only_attempt"] = True
+                    operation["delayed_verification"] = observation
+                    self._write_operation(operation)
+
+                    current = self.load_lock()
+                    observed_digest = self._lock_digest(current)
+                    expected_digest = str(
+                        observation.get("expected_lock_digest") or ""
+                    )
+                    if current is None or observed_digest != expected_digest:
+                        observation.update(
+                            {
+                                "status": "superseded",
+                                "observed_at": observed_at.replace(microsecond=0).isoformat(),
+                                "observed_lock_digest": observed_digest,
+                                "reason": "workspace_lock_moved",
+                            }
+                        )
+                    else:
+                        expected_revision = int(
+                            observation.get("expected_lock_revision") or 0
+                        )
+                        if current.lock_revision != expected_revision:
+                            raise ActivationError(
+                                "WorkspaceLock revision differs from delayed verification"
+                            )
+                        components = [
+                            self._verify_materialized_component(package)
+                            for package in current.components
+                        ]
+                        observation.update(
+                            {
+                                "status": "passed",
+                                "observed_at": observed_at.replace(microsecond=0).isoformat(),
+                                "observed_lock_digest": observed_digest,
+                                "receipt": {
+                                    "status": "passed",
+                                    "lock_digest": observed_digest,
+                                    "lock_revision": current.lock_revision,
+                                    "components": components,
+                                },
+                            }
+                        )
+                    operation["delayed_verification"] = observation
+                    self._write_operation(operation)
+                    self._complete_pending_observation(
+                        observation.get("observation_id")
+                    )
+                    return observation
+        except MutationLockTimeout as exc:
+            raise ActivationError("delayed verification lease is busy") from exc
+        except Exception as exc:
+            try:
+                with mutation_lock(self.observation_lock_path):
+                    operation = self._read_operation(operation_id)
+                    raw = operation.get("delayed_verification") if operation else None
+                    if operation is not None and isinstance(raw, Mapping):
+                        observation = dict(raw)
+                        observation.update(
+                            {
+                                "status": "failed",
+                                "observed_at": observed_at.replace(microsecond=0).isoformat(),
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                        operation["delayed_verification"] = observation
+                        self._write_operation(operation)
+                        self._complete_pending_observation(
+                            observation.get("observation_id")
+                        )
+                        return observation
+            except Exception:
+                pass
+            if isinstance(exc, ActivationError):
+                raise
+            raise ActivationError(str(exc)) from exc
+
+    def run_due_delayed_verifications(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 32,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 256:
+            raise ActivationError("delayed verification limit must be between 1 and 256")
+        observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if not self.pending_observations_root.is_dir():
+            return []
+        results: list[dict[str, Any]] = []
+        for path in sorted(self.pending_observations_root.glob("*.json")):
+            if len(results) >= limit:
+                break
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, Mapping):
+                continue
+            operation_id = str(payload.get("operation_id") or "").strip().lower()
+            observation_id = str(payload.get("observation_id") or path.stem).strip().lower()
+            if not operation_id:
+                continue
+            try:
+                due_at = _parse_iso(payload.get("due_at"))
+            except ActivationError:
+                continue
+            if due_at > observed_at:
+                continue
+            try:
+                results.append(
+                    self.run_delayed_verification(
+                        operation_id,
+                        now=observed_at,
+                        force=True,
+                    )
+                )
+            except FileNotFoundError:
+                self._complete_pending_observation(observation_id)
+        return results
 
     def _phase(
         self,
@@ -719,12 +1041,20 @@ class WorkspaceActivationManager:
                     raise ActivationReplayBlocked(
                         "completed activation no longer matches the active WorkspaceLock"
                     )
+                existing_observation = (
+                    existing.get("delayed_verification")
+                    if isinstance(existing.get("delayed_verification"), Mapping)
+                    else {}
+                )
                 return ActivationResult(
                     operation_id=operation_id,
                     status="completed",
                     workspace_lock=lock,
                     release_digest=release_digest,
                     idempotent_replay=True,
+                    delayed_verification_id=(
+                        str(existing_observation.get("observation_id") or "") or None
+                    ),
                 )
             raise ActivationReplayBlocked(
                 f"activation {operation_id} is {existing.get('status')}; "
@@ -1059,17 +1389,22 @@ class WorkspaceActivationManager:
                 f"{desired.lock_revision:08d}-{desired.to_dict()['lock_digest'].split(':', 1)[1]}.json"
             )
             atomic_write_json(history, desired.to_dict())
-            shutil.rmtree(stage_root, ignore_errors=True)
-            shutil.rmtree(backup_root, ignore_errors=True)
             operation["status"] = "completed"
             operation["lock_digest"] = desired.to_dict()["lock_digest"]
             operation["completed_at"] = _now_iso()
+            delayed_verification_id = self._schedule_delayed_verification(
+                operation,
+                desired,
+            )
             self._write_operation(operation)
+            shutil.rmtree(stage_root, ignore_errors=True)
+            shutil.rmtree(backup_root, ignore_errors=True)
             return ActivationResult(
                 operation_id=operation_id,
                 status="completed",
                 workspace_lock=desired,
                 release_digest=release_digest,
+                delayed_verification_id=delayed_verification_id,
             )
         except Exception as exc:
             migration_state = operation.get("migration_execution")
@@ -1266,6 +1601,7 @@ class WorkspaceActivationManager:
 __all__ = [
     "ACTIVATION_OPERATION_SCHEMA",
     "ACTIVATION_PHASES",
+    "DELAYED_VERIFICATION_SCHEMA",
     "ActivationError",
     "ActivationConflictError",
     "ActivationReplayBlocked",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -83,12 +84,13 @@ def _plan_with_skill(scenario, skill):
     )
 
 
-def _manager(tmp_path: Path):
+def _manager(tmp_path: Path, *, delayed_verification_seconds: float = 30):
     store = ContentAddressedPackageStore(tmp_path / "package-store")
     manager = WorkspaceActivationManager(
         workspace_root=tmp_path / "workspace",
         package_store=store,
         state_root=tmp_path / "state",
+        delayed_verification_seconds=delayed_verification_seconds,
     )
     return store, manager
 
@@ -138,10 +140,94 @@ def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -
     assert operation["reload_receipt"]["status"] == "skipped"
     assert operation["reload_receipt"]["approved_by"] == "pytest.artifact_activation"
     assert operation["health_receipt"]["status"] == "passed"
+    assert operation["delayed_verification"]["status"] == "pending"
+    assert operation["delayed_verification"]["expected_lock_digest"] == (
+        result.workspace_lock.to_dict()["lock_digest"]
+    )
+    assert result.delayed_verification_id == operation["delayed_verification"]["observation_id"]
 
     replay = _activate(manager, _plan(built), idempotency_key="install-recipes-1.0.0")
     assert replay.idempotent_replay is True
     assert replay.workspace_lock.lock_revision == 1
+    assert replay.delayed_verification_id == result.delayed_verification_id
+
+
+def test_delayed_verification_checks_exact_lock_and_materialized_content(
+    tmp_path: Path,
+) -> None:
+    built = _built_scenario(tmp_path, version="1.0.0", marker="observed")
+    store, manager = _manager(tmp_path, delayed_verification_seconds=0)
+    store.put(built.archive_bytes)
+    result = _activate(
+        manager,
+        _plan(built),
+        idempotency_key="delayed-observation",
+    )
+
+    observations = manager.run_due_delayed_verifications(
+        now=datetime.now(timezone.utc),
+    )
+
+    assert len(observations) == 1
+    observation = observations[0]
+    assert observation["status"] == "passed"
+    assert observation["observed_lock_digest"] == result.workspace_lock.to_dict()[
+        "lock_digest"
+    ]
+    assert observation["receipt"]["components"][0]["package"] == "scenario:recipes"
+    assert observation["receipt"]["components"][0]["files"] == 2
+    assert not list(manager.pending_observations_root.glob("*.json"))
+
+
+def test_delayed_verification_records_tamper_without_automatic_rollback(
+    tmp_path: Path,
+) -> None:
+    built = _built_scenario(tmp_path, version="1.0.0", marker="tamper")
+    store, manager = _manager(tmp_path, delayed_verification_seconds=0)
+    store.put(built.archive_bytes)
+    result = _activate(
+        manager,
+        _plan(built),
+        idempotency_key="delayed-tamper",
+    )
+    target = tmp_path / "workspace" / "scenarios" / "recipes" / "webui.json"
+    target.write_text('{"marker":"changed"}\n', encoding="utf-8")
+
+    observation = manager.run_delayed_verification(
+        result.operation_id,
+        force=True,
+    )
+
+    assert observation["status"] == "failed"
+    assert "materialized package file" in observation["error"]
+    assert manager.load_lock() == result.workspace_lock
+    assert json.loads(target.read_text(encoding="utf-8")) == {"marker": "changed"}
+    assert not list(manager.pending_observations_root.glob("*.json"))
+
+
+def test_delayed_verification_marks_moved_lock_as_superseded(tmp_path: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="first-observation")
+    second = _built_scenario(tmp_path, version="2.0.0", marker="second-observation")
+    store, manager = _manager(tmp_path, delayed_verification_seconds=3600)
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    initial = _activate(manager, _plan(first), idempotency_key="observation-first")
+    current = _activate(manager, _plan(second), idempotency_key="observation-second")
+
+    observation = manager.run_delayed_verification(
+        initial.operation_id,
+        force=True,
+    )
+
+    assert observation["status"] == "superseded"
+    assert observation["reason"] == "workspace_lock_moved"
+    assert observation["observed_lock_digest"] == current.workspace_lock.to_dict()[
+        "lock_digest"
+    ]
+    assert not (
+        manager.pending_observations_root
+        / f"{initial.delayed_verification_id}.json"
+    ).exists()
 
 
 def test_activation_requires_explicit_reload_and_health_policy(tmp_path: Path) -> None:

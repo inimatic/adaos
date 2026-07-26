@@ -106,6 +106,7 @@ redacted identities and conclusions required for review.
 | Operator activation diff and review binding | passed | read-only component/dependency/permission/schema/migration/rollback plan; canonical plan digest and WorkspaceLock CAS guard activation |
 | Update entrypoint cutover | passed | 131 focused regressions; subscribed scenario/skill REST and WebSocket paths share one coordinator, require a reviewed package plan and transactional runtime evidence, reject deferred projection, and expose activation/retry identity; DEV update and LLM pull are retired; non-subscribed fallback is labelled legacy |
 | Builder subscription review surface | passed | 133 focused core regressions plus 32 DEV Builder tests; skill/scenario validators passed; live `/api/tools/call` returned the Builder subscription as `up_to_date` after DEV skill `0.1.29` activation and one explicit core reload; DEV scenario is `0.2.21`, while Workspace remains unchanged at Builder `0.2.20` and skill `0.1.28` |
+| Delayed activation verification | passed | 137 focused core regressions; every new activation records an exact lock digest/revision and a bounded pending marker; delayed pass, materialized-file tamper, moved-lock supersession, terminal marker cleanup, and API worker diagnostics are covered without automatic activation replay or rollback |
 
 Exact immutable identities from the proof:
 

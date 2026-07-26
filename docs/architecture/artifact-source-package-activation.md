@@ -450,6 +450,16 @@ No unknown state-changing phase is automatically repeated after interruption.
 Recovery resumes only a phase proven idempotent or performs rollback from the
 durable checkpoint.
 
+Commit also schedules a durable delayed verification bound to the exact
+WorkspaceLock digest and revision. The delayed check is read-only: it confirms
+that the same lock is still active, re-verifies immutable packages, and hashes
+the expected files in each materialized component. If a later activation has
+already moved the lock, the observation is `superseded`, not failed. A content
+mismatch records a terminal failure and emits an operator event; it does not
+perform an implicit rollback. Pending observations have their own marker
+directory, while terminal evidence remains on the activation operation. This
+keeps periodic work proportional to pending checks rather than total history.
+
 Reload and health phases never succeed by omission. Each stores either a
 callback completion receipt or an explicit policy skip containing both
 `approved_by` and `reason`. A completed operation without these receipts is

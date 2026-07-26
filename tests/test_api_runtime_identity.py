@@ -120,6 +120,37 @@ def test_shutdown_request_defaults_to_subnet_lifecycle() -> None:
     assert api_server.ShutdownRequest().lifecycle_scope == "subnet"
 
 
+def test_admin_lifecycle_exposes_delayed_verification_worker(monkeypatch) -> None:
+    monkeypatch.setattr(api_server, "runtime_lifecycle_snapshot", lambda: {"node_state": "ready"})
+    monkeypatch.setattr(
+        api_server,
+        "_runtime_identity_public_payload",
+        lambda: {"runtime_instance_id": "rt-test"},
+    )
+
+    async def _probe() -> dict:
+        task = asyncio.create_task(asyncio.sleep(60))
+        monkeypatch.setattr(
+            api_server.app.state,
+            "artifact_delayed_verification_task",
+            task,
+            raising=False,
+        )
+        try:
+            return await api_server.admin_lifecycle()
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    payload = asyncio.run(_probe())
+
+    assert payload["artifact_delayed_verification"] == {
+        "status": "running",
+        "poll_seconds": api_server._artifact_observation_poll_seconds(),
+    }
+
+
 def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
     monkeypatch.setenv("ENV_TYPE", "dev")
 
