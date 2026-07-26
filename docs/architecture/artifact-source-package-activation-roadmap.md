@@ -97,8 +97,18 @@ Validated-local implementation now provides:
 The reproducible result and exact digests are recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
 
+The subsequent
+[Artifact Pipeline Critical Audit — 2026-07-26](artifact-pipeline-critical-audit-2026-07-26.md)
+confirmed that the bounded proof did not cover version collisions, future
+schema rejection, portable archive aliases, complete-set dependency
+re-resolution, orphan removal, concurrent Workspace/channel writers, or
+mandatory live health evidence. Affected tasks below were reopened; the proof
+record remains valid for its narrower stated cases.
+
 Remaining acceptance blockers:
 
+- close the correctness blockers recorded by the critical audit before routing
+  legacy update entrypoints through the package pipeline;
 - a live stand/second-machine run is required before package-only activation is
   the default or legacy sparse Workspace compatibility is retired;
 - delayed post-activation observation remains a `[should]` operational gate.
@@ -119,12 +129,12 @@ proof is not silently promoted to stand or production acceptance.
 
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
-| AP0 | 6/9 | validated-local | identities, schemas, canonical digests, SourceProvider, registry v2 compatibility | historical migration fixture breadth |
-| AP1 | 5/9 | validated-local | deterministic package build/store/verify, authoring-state exclusion, corruption and zero-byte coverage | builder attestation identity and external signing |
-| AP2 | 6/10 | validated-local | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs |
-| AP3 | 7/11 | validated-local | all 13 activation phases, atomic WorkspaceLock, permission admission, reversible migration/reconciliation, package projection, interruption recovery, runtime and health rollback | delayed health observation and stand validation |
-| AP4 | 8/10 | validated-local | exact candidate identity, isolated package trial, data policy, acceptance evidence, immutable Builder task snapshot, concurrent-DEV compare-and-switch | stand validation before legacy task materialization retirement |
-| AP5 | 7/10 | validated-local + production-route-verified | freshness, stale/rebase plan, renewed trial, Forge tree gate, receipt recovery, deployed backend `0.1.137` and live exact-tree lookup | clean stand promotion using the external route |
+| AP0 | 5/9 | validated-local (bounded) | identities, schemas, canonical digests, SourceProvider, registry v2 compatibility | version collision and schema fail-open remediation; historical migration fixtures |
+| AP1 | 3/9 | validated-local (bounded) | deterministic package build/store/verify, authoring-state exclusion, corruption and zero-byte coverage | secret scrub, portable path aliases, builder attestation identity, and external signing |
+| AP2 | 5/10 | validated-local (bounded) | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | complete-set re-resolution plus broader schema-component and migration-lock inputs |
+| AP3 | 4/11 | validated-local (bounded) | phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and rollback injection | writer lease/CAS, orphan removal, mandatory reload/health policy, delayed observation, and stand validation |
+| AP4 | 6/10 | validated-local (bounded) | exact candidate identity, isolated package materialization, acceptance record, immutable Builder task snapshot, concurrent-DEV compare-and-switch | enforced data isolation and health/rollback trial evidence; stand validation |
+| AP5 | 5/10 | validated-local + production-route-verified (bounded) | sequential freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend `0.1.137` | atomic channel CAS, durable promotion continuation, and clean stand promotion |
 | AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
 | AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
@@ -140,7 +150,7 @@ remain green.
 - [x] `[must]` `AP0-01` Add versioned schemas and typed models for `ProjectRef`,
   `SourceRef`, `PackageRef`, `ProjectRelease`, `WorkspaceLock`, and stable
   `Subscription`.
-- [x] `[must]` `AP0-02` Define canonical digest serialization and reject one
+- [ ] `[must]` `AP0-02` Define canonical digest serialization and reject one
   version identity mapping to different content.
 - [x] `[must]` `AP0-03` Make canonical manifest `id` the dependency identity;
   keep display names and registry aliases outside dependency locks.
@@ -160,6 +170,8 @@ remain green.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 release contracts in `tests/test_artifact_release_contracts.py`, and registry
 v1/v2 compatibility in `tests/test_workspace_registry.py`.
+`AP0-02` was reopened after the critical audit proved that two different
+release digests can currently reuse one project version.
 
 ## Milestone AP1: Deterministic Immutable Packages
 
@@ -178,10 +190,11 @@ symlink, size, and corruption tests.
   manifest serialization for deterministic output.
 - [x] `[must]` `AP1-03` Implement a content-addressed local package store with
   atomic put, verify, get, and quarantine operations.
-- [x] `[must]` `AP1-04` Exclude DEV metadata, secrets, runtime data, caches, and
+- [ ] `[must]` `AP1-04` Exclude DEV metadata, secrets, runtime data, caches, and
   unrelated sparse paths from package inputs.
-- [x] `[must]` `AP1-05` Validate archive path traversal, links, file count,
-  decompressed size, and manifest digest before visibility.
+- [ ] `[must]` `AP1-05` Validate archive path traversal, links, portable path
+  aliases and case collisions, file count, decompressed size, and manifest
+  digest before visibility.
 - [ ] `[must]` `AP1-06` Persist source revision, builder identity, package
   manifest digest, and validation evidence references.
 - [ ] `[should]` `AP1-07` Add signed attestations and external immutable release
@@ -193,6 +206,7 @@ symlink, size, and corruption tests.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
+`AP1-04` and `AP1-05` were reopened for secret scrub and portable path aliases.
 `AP1-06` remains open because a durable builder/attestation identity is not yet
 part of the package contract.
 
@@ -217,8 +231,9 @@ rejected without changing active state.
   skill id in one node activation context.
 - [x] `[must]` `AP2-05` Compute reverse consumers before changing a shared skill
   binding.
-- [x] `[must]` `AP2-06` Reject missing, ambiguous, incompatible, or cyclic
-  dependencies with an explainable plan and no partial mutation.
+- [ ] `[must]` `AP2-06` Reject missing, ambiguous, incompatible, cyclic, or
+  internally inconsistent dependency results with an explainable plan and no
+  partial mutation.
 - [x] `[must]` `AP2-07` Treat every dependency-lock change as a new release
   digest even when component source files are unchanged.
 - [ ] `[should]` `AP2-08` Add lock explain and dependency graph diagnostics for
@@ -232,7 +247,9 @@ and dependency resolver regressions in
 `tests/test_artifact_release_resolver.py`.
 `AP2-03` remains open for the broader explicit schema and migration-lock
 contract, beyond the component, permission, migration, and validation fields
-already present in the bounded release model.
+already present in the bounded release model. `AP2-06` was reopened because a
+compatible multi-consumer constraint set can currently produce inconsistent
+binding digests.
 
 ## Milestone AP3: Transactional Workspace Activation
 
@@ -245,13 +262,16 @@ transition with health verification and rollback.
 switches the lock atomically, and injected failures before and after lock switch
 leave either the old or the new complete release active.
 
-- [x] `[must]` `AP3-01` Implement durable WorkspaceLock storage with atomic
-  revision and previous-lock linkage.
-- [x] `[must]` `AP3-02` Implement activation phases: resolve, fetch, verify,
+- [ ] `[must]` `AP3-01` Implement durable WorkspaceLock storage with a
+  workspace-wide writer lease, compare-and-switch revision, and previous-lock
+  linkage.
+- [ ] `[must]` `AP3-02` Implement activation phases: resolve, fetch, verify,
   dependency plan, permission plan, migration plan, stage, checkpoint,
-  switch-lock, reload, health verify, and commit.
-- [x] `[must]` `AP3-03` Make filesystem materialization and runtime bindings
-  projections of WorkspaceLock.
+  switch-lock, reload, health verify, and commit; reload and health must record
+  either a durable receipt or an explicit policy-approved skip.
+- [ ] `[must]` `AP3-03` Make filesystem materialization and runtime bindings
+  projections of WorkspaceLock, including transactional removal of components
+  no longer reachable from any active slot.
 - [x] `[must]` `AP3-04` Add idempotency keys and durable phase evidence to the
   existing operation manager.
 - [x] `[must]` `AP3-05` Roll back lock, materialized content, and runtime binding
@@ -270,6 +290,8 @@ leave either the old or the new complete release active.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and Workspace activation regressions in
 `tests/test_artifact_workspace_activation.py`.
+`AP3-01` through `AP3-03` were reopened for writer serialization, explicit
+reload/health policy, and transactional removal of unreachable components.
 
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 
@@ -290,11 +312,11 @@ acceptance or rollback evidence.
   isolated DEV context.
 - [x] `[must]` `AP4-04` Build candidate version, source revision, base release,
   and package digest from the DEV result.
-- [x] `[must]` `AP4-05` Add a trial WorkspaceLock slot with explicit audience and
+- [ ] `[must]` `AP4-05` Add a trial WorkspaceLock slot with explicit audience and
   data mode.
 - [x] `[must]` `AP4-06` Protect primary activation and real data from an
   incompatible candidate.
-- [x] `[must]` `AP4-07` Record deterministic validation, trial duration,
+- [ ] `[must]` `AP4-07` Record deterministic validation, trial duration,
   acceptance, health, and rollback evidence against candidate digest.
 - [x] `[should]` `AP4-08` Add clear Builder and runtime labels for stable versus
   trial activation.
@@ -307,6 +329,8 @@ Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-
 candidate publication regressions in
 `tests/test_artifact_publication_service.py`, and preview identity regressions
 in `tests/test_webspace_phase2.py`.
+`AP4-05` and `AP4-07` were reopened because data mode is not enforced by the
+trial lock and live runtime health evidence is optional.
 
 ## Milestone AP5: Freshness Gate And Stable Promotion
 
@@ -319,8 +343,8 @@ current; otherwise it returns through DEV migration and trial.
 a moved-base candidate is rejected as stale, rebuilt on the new base, retrialed,
 and then promoted.
 
-- [x] `[must]` `AP5-01` Compare candidate base version, source revision, and
-  release digest with current stable.
+- [ ] `[must]` `AP5-01` Atomically compare candidate base version, source
+  revision, and release digest with current stable when moving the channel.
 - [x] `[must]` `AP5-02` Mark moved-base candidates stale without changing source,
   package, or channel state.
 - [x] `[must]` `AP5-03` Recreate DEV on the new base and reapply the bounded
@@ -331,7 +355,7 @@ and then promoted.
   stable promotion.
 - [x] `[must]` `AP5-06` Persist source, package, release, and evidence before
   moving the stable channel pointer last.
-- [x] `[must]` `AP5-07` Make publication idempotent and recover partial completion
+- [ ] `[must]` `AP5-07` Make publication idempotent and recover partial completion
   without duplicate commits, releases, or registry entries.
 - [ ] `[should]` `AP5-08` Add policy classes for documentation-only and
   deterministic metadata rebases.
@@ -344,6 +368,8 @@ Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-
 and candidate publication regressions in
 `tests/test_artifact_publication_service.py`, including the deployed Forge tree
 verification recorded in the proof.
+`AP5-01` and `AP5-07` were reopened for authoritative channel compare-and-switch
+and durable continuation after a partially completed promotion.
 
 ## Milestone AP6: Stable Subscription And Package Update
 
