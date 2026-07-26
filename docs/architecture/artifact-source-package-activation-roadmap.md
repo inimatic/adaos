@@ -138,7 +138,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 8/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and digest-bound operator diff | delayed observation, retention, and stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
-| AP6 | 7/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, and primary update-entrypoint cutover | Builder/operator update-plan UI and bounded legacy fallback retirement |
+| AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
 | AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
@@ -433,7 +433,7 @@ injected failure.
   activation.
 - [x] `[must]` `AP6-07` Keep registry v1 source materialization as a bounded
   compatibility fallback during migration.
-- [ ] `[should]` `AP6-08` Add explicit update-plan UI with dependencies,
+- [x] `[should]` `AP6-08` Add explicit update-plan UI with dependencies,
   permissions, migrations, and rollback availability.
 - [ ] `[could]` `AP6-09` Add `auto-compatible` for stateless, policy-approved
   releases after stand evidence.
@@ -450,10 +450,20 @@ activation transaction. Both transports use one runtime coordinator; deferred
 projection is rejected instead of being reported as healthy, and success events
 are emitted only after activation commits. DEV draft update and LLM-facing
 scenario pull are retired; the bounded non-subscribed source-pull bridge is
-explicit in responses as `legacy_source_pull`. Direct subscription activation fails closed when a
-runtime adapter or an explicit policy is absent. AP6-08 remains open until the
-Builder/operator UI renders the existing plan contract. Full removal of the
-non-subscribed compatibility bridge remains part of the legacy-retirement gate.
+explicit in responses as `legacy_source_pull`. Direct subscription activation
+fails closed when a runtime adapter or an explicit policy is absent. AP6-08 is
+closed locally: the DEV Builder now loads one read-only subscription inspection,
+renders component, dependency,
+permission, schema, migration, runtime-check, warning, and rollback fields,
+and enables apply only for an allowed available plan. Confirmation submits the
+exact reviewed plan digest through the public SDK and shared runtime
+coordinator. Its idempotency key is deterministic for the project and reviewed
+plan, so a lost response does not turn a repeated click into a second logical
+operation. DEV skill `0.1.29` and scenario `0.2.21` passed 32 focused tests,
+both validators, and a live API inspection after explicit runtime activation;
+Workspace remains on Builder `0.2.20` and companion skill `0.1.28`. Full
+removal of the non-subscribed compatibility bridge remains part of the
+legacy-retirement gate.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 

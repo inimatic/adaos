@@ -46,10 +46,12 @@ pipeline becomes the default.
 | B8 promotion continuation | corrected, validated-local | candidate-scoped receipt journal reconciles lost channel responses and resumes projection/subscription without replaying completed mutations |
 | B9 runtime/trial evidence | corrected, validated-local | activation requires reload/health receipts or named policy skips; trial slots enforce data identity/isolation and acceptance requires healthy rollback-complete evidence |
 | B10 backend release admission | corrected, validated-local | backend recomputes release identity and verifies package references before visibility |
+| B11 operator retry identity | corrected, validated-local | Builder binds confirmation and idempotency to the exact reviewed plan digest |
 | R1 repeated verification | improved, open | cached activation reduced from four archive traversals to two; carry one verified receipt into extraction |
 | R2 base64 transport | open (`should`) | add streaming transport behind the existing adapter |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
 | R4 filesystem durability | open | add directory sync and terminal history states |
+| R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
 
 ## What Remains Sound
 
@@ -227,6 +229,20 @@ Required correction:
 - enforce version uniqueness and channel CAS;
 - retain client verification as defense in depth.
 
+### B11. A repeated Builder confirmation originally created a new operation
+
+The first operator UI draft generated a random idempotency key for every
+confirmation. If activation committed but the browser lost the response, a
+second click represented a new operation even though the reviewed plan had not
+changed. The activation layer already had a deterministic safe-replay contract,
+so the UI weakened the lower-level invariant.
+
+Current correction: Builder derives its default idempotency identity from the
+artifact kind, project id, and exact reviewed plan digest. The activation path
+still re-plans and compares that digest before mutation. An explicit caller key
+remains supported for recovery tooling, but the ordinary UI no longer invents
+a new logical operation on every click.
+
 ## Reliability And Performance Gaps
 
 ### R1. Cached activation verifies each archive four times
@@ -276,6 +292,20 @@ interruption that later rolls the activation back.
 Correction: add a portable best-effort directory sync helper and distinguish
 active, rolled-back, and orphan history records.
 
+### R5. Runtime code and resolved manifests have separate freshness boundaries
+
+A source push does not mutate the active DEV slot, and an active Python process
+does not hot-import a newly committed core SDK symbol. The first live Builder
+probe therefore reached the old resolved manifest, and the next probe reached
+the new handler through a process that still held the old SDK module.
+
+Current correction: validation now includes the explicit sequence `skill push`
+then DEV activation, followed by one managed core-process reload when the SDK
+boundary changed. The read surface reports `unavailable` on a stale runtime;
+it does not repeat or approximate a state-changing call. Longer term, runtime
+version diagnostics should expose source revision and loaded core build in one
+operator view.
+
 ## Corrected Implementation Order
 
 1. Harden schema admission, version uniqueness, package scrub, portable paths,
@@ -293,8 +323,10 @@ active, rolled-back, and orphan history records.
    bounded non-subscribed compatibility bridge. The transports now share one
    runtime coordinator, so reload, projection, health, and post-commit event
    semantics cannot drift independently.
-7. Add operator diff/update-plan UI, delayed observation, cleanup/retention,
-   and then repeat the proof on a clean stand.
+7. **Completed locally:** add the Builder diff/update-plan UI and bind its
+   confirmation to the exact reviewed digest with deterministic idempotency.
+8. Add delayed observation and cleanup/retention, then repeat the proof on a
+   clean stand.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

@@ -592,6 +592,16 @@ REST and WebSocket delegate to the same runtime coordinator. It does not allow
 deferred projection in this transaction and emits the public success event only
 after activation and subscription persistence complete.
 
+Builder exposes the same contract rather than a parallel updater. Overview
+performs one read-only subscription inspection and shows the current and target
+release, component and dependency changes, new and removed permissions, schema
+and migration changes, required runtime checks, warnings, and rollback
+availability. Apply is enabled only for an available plan allowed by policy.
+The confirmation submits that exact plan digest through the public developer
+SDK; activation re-plans and rejects stale review data. The default Builder
+idempotency identity is derived from artifact kind, project id, and reviewed
+plan digest, so a transport retry recovers the same logical operation.
+
 The old DEV draft `update` and LLM-facing scenario `pull` commands are retired:
 they cannot overwrite a mutable DEV tree from Workspace or a remote source.
 Projects without a subscription may temporarily use the bounded source-pull
