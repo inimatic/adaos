@@ -9,6 +9,7 @@ from adaos.domain.artifact_release import ArtifactSourceRef, StableSubscription
 from adaos.services.artifact_pipeline import (
     ActivationError,
     CandidateError,
+    ChannelConflictError,
     ChannelError,
     ContentAddressedPackageStore,
     PackageCatalog,
@@ -102,7 +103,12 @@ def test_promotion_persists_immutable_release_before_moving_channel(tmp_path: Pa
     next_plan = _plan(next_built)
     repository = ReleaseRepository(tmp_path / "registry-packages")
     repository.put_release(stable)
-    repository.set_channel("recipes", "stable", stable.release.release_digest)
+    repository.set_channel(
+        "recipes",
+        "stable",
+        stable.release.release_digest,
+        expected_release_digest=None,
+    )
     candidate = _accepted_candidate(stable, next_plan, next_built.ref.digest)
 
     pointer = promote_candidate(
@@ -130,6 +136,51 @@ def test_release_repository_rejects_same_version_with_different_digest(tmp_path:
 
     assert repository.get_release("recipes", first.release.release_digest) == first
     assert not repository.release_path("recipes", second.release.release_digest).exists()
+
+
+def test_release_repository_channel_update_is_compare_and_swap_and_retry_safe(tmp_path: Path) -> None:
+    first = _plan(_built(tmp_path, version="1.0.0", token="1"))
+    second = _plan(_built(tmp_path, version="1.1.0", token="2"))
+    repository = ReleaseRepository(tmp_path / "registry-packages")
+    repository.put_release(first)
+    repository.put_release(second)
+
+    initial = repository.set_channel(
+        "recipes",
+        "stable",
+        first.release.release_digest,
+        expected_release_digest=None,
+    )
+    assert repository.set_channel(
+        "recipes",
+        "stable",
+        first.release.release_digest,
+        expected_release_digest=None,
+    ) == initial
+
+    with pytest.raises(ChannelConflictError) as conflict:
+        repository.set_channel(
+            "recipes",
+            "stable",
+            second.release.release_digest,
+            expected_release_digest=None,
+        )
+    assert conflict.value.expected is None
+    assert conflict.value.observed == first.release.release_digest
+    assert repository.get_channel("recipes").release_digest == first.release.release_digest
+
+    moved = repository.set_channel(
+        "recipes",
+        "stable",
+        second.release.release_digest,
+        expected_release_digest=first.release.release_digest,
+    )
+    assert repository.set_channel(
+        "recipes",
+        "stable",
+        second.release.release_digest,
+        expected_release_digest=first.release.release_digest,
+    ) == moved
 
 
 def test_promotion_rejects_source_tree_mismatch_and_stale_base(tmp_path: Path) -> None:
@@ -165,7 +216,12 @@ def test_subscription_detects_channel_move_and_advances_only_after_activation(tm
     next_plan = _plan(next_built)
     repository = ReleaseRepository(tmp_path / "registry-packages")
     repository.put_release(stable)
-    repository.set_channel("recipes", "stable", stable.release.release_digest)
+    repository.set_channel(
+        "recipes",
+        "stable",
+        stable.release.release_digest,
+        expected_release_digest=None,
+    )
     subscription_store = SubscriptionStore(tmp_path / "workspace" / ".adaos" / "subscriptions.json")
     subscriptions = SubscriptionManager(repository, subscription_store)
     package_store = ContentAddressedPackageStore(tmp_path / "packages")
@@ -185,7 +241,12 @@ def test_subscription_detects_channel_move_and_advances_only_after_activation(tm
     assert initial_activation.status == "completed"
 
     repository.put_release(next_plan)
-    repository.set_channel("recipes", "stable", next_plan.release.release_digest)
+    repository.set_channel(
+        "recipes",
+        "stable",
+        next_plan.release.release_digest,
+        expected_release_digest=stable.release.release_digest,
+    )
     notice = subscriptions.check(subscription)
     assert notice.available is True
     assert notice.activation_allowed is True
@@ -216,7 +277,12 @@ def test_pinned_subscription_reports_but_does_not_activate(tmp_path: Path) -> No
     plan = _plan(_built(tmp_path, version="1.1.0", token="2"))
     repository = ReleaseRepository(tmp_path / "registry-packages")
     repository.put_release(plan)
-    repository.set_channel("recipes", "stable", plan.release.release_digest)
+    repository.set_channel(
+        "recipes",
+        "stable",
+        plan.release.release_digest,
+        expected_release_digest=None,
+    )
     store = SubscriptionStore(tmp_path / "subscriptions.json")
     manager = SubscriptionManager(repository, store)
     pinned = StableSubscription(

@@ -74,7 +74,13 @@ class PublicationRemote(Protocol):
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan: ...
 
-    def set_channel(self, plan: ReleasePlan, channel: str = "stable") -> ChannelPointer: ...
+    def set_channel(
+        self,
+        plan: ReleasePlan,
+        channel: str = "stable",
+        *,
+        expected_release_digest: str | None,
+    ) -> ChannelPointer: ...
 
     def get_channel(self, project_id: str, channel: str = "stable") -> ChannelPointer: ...
 
@@ -789,7 +795,15 @@ class ArtifactPublicationService:
                 f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
             )
 
-        pointer = self.remote.set_channel(plan, "stable")
+        pointer = self.remote.set_channel(
+            plan,
+            "stable",
+            expected_release_digest=(
+                stable.release.release_digest or stable.release.computed_digest()
+                if stable is not None
+                else None
+            ),
+        )
         activation = WorkspaceActivationManager(
             workspace_root=self.workspace_root,
             package_store=self.package_store,

@@ -26,6 +26,16 @@ class ChannelError(RuntimeError):
     pass
 
 
+class ChannelConflictError(ChannelError):
+    def __init__(self, *, expected: str | None, observed: str | None) -> None:
+        super().__init__(
+            "channel compare-and-swap conflict: "
+            f"expected {expected or '<absent>'}, observed {observed or '<absent>'}"
+        )
+        self.expected = expected
+        self.observed = observed
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -159,7 +169,14 @@ class ReleaseRepository:
             raise ChannelError("unsupported channel index")
         return payload
 
-    def set_channel(self, project_id: str, channel: str, release_digest: str) -> ChannelPointer:
+    def set_channel(
+        self,
+        project_id: str,
+        channel: str,
+        release_digest: str,
+        *,
+        expected_release_digest: str | None,
+    ) -> ChannelPointer:
         with mutation_lock(self.mutation_lock_path(project_id)):
             plan = self.get_release(project_id, release_digest)
             versions = self._release_digests_by_version(project_id)
@@ -183,6 +200,16 @@ class ReleaseRepository:
             previous = channels.get(channel_id)
             if isinstance(previous, Mapping) and previous.get("release_digest") == release_digest:
                 return ChannelPointer.from_mapping(previous)
+            observed = (
+                str(previous.get("release_digest") or "")
+                if isinstance(previous, Mapping)
+                else None
+            )
+            if observed != expected_release_digest:
+                raise ChannelConflictError(
+                    expected=expected_release_digest,
+                    observed=observed,
+                )
             channels[channel_id] = pointer.to_dict()
             payload["channels"] = {key: channels[key] for key in sorted(channels)}
             payload["updated_at"] = pointer.updated_at
@@ -223,7 +250,17 @@ def promote_candidate(
             )
     repository.put_release(plan)
     digest = plan.release.release_digest or plan.release.computed_digest()
-    return repository.set_channel(plan.release.project_id, channel, digest)
+    expected = (
+        current_stable.release.release_digest or current_stable.release.computed_digest()
+        if current_stable is not None
+        else None
+    )
+    return repository.set_channel(
+        plan.release.project_id,
+        channel,
+        digest,
+        expected_release_digest=expected,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +380,7 @@ __all__ = [
     "RELEASE_PLAN_SCHEMA",
     "SUBSCRIPTION_SET_SCHEMA",
     "ChannelError",
+    "ChannelConflictError",
     "ChannelPointer",
     "ReleaseRepository",
     "SubscriptionManager",

@@ -93,6 +93,9 @@ Validated-local implementation now provides:
   activation, transactional backup, and rollback;
 - explicit permission, migration, checkpoint, health-verify, and commit phases,
   with fail-closed permission admission and one-shot migration reconciliation.
+- fail-closed v1 contract readers, portable package-path and secret admission,
+  immutable project-version identities, and local/backend channel
+  compare-and-swap with idempotent same-target retry.
 
 The reproducible result and exact digests are recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
@@ -129,12 +132,12 @@ proof is not silently promoted to stand or production acceptance.
 
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
-| AP0 | 5/9 | validated-local (bounded) | identities, schemas, canonical digests, SourceProvider, registry v2 compatibility | version collision and schema fail-open remediation; historical migration fixtures |
-| AP1 | 3/9 | validated-local (bounded) | deterministic package build/store/verify, authoring-state exclusion, corruption and zero-byte coverage | secret scrub, portable path aliases, builder attestation identity, and external signing |
+| AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
+| AP1 | 5/9 | validated-local (bounded) | deterministic package build/store/verify, secret and authoring-state exclusion, portable path admission, corruption and zero-byte coverage | builder attestation identity and external signing |
 | AP2 | 5/10 | validated-local (bounded) | exact dependency ranges/digests, reverse consumers, conflict/cycle rejection | complete-set re-resolution plus broader schema-component and migration-lock inputs |
 | AP3 | 4/11 | validated-local (bounded) | phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and rollback injection | writer lease/CAS, orphan removal, mandatory reload/health policy, delayed observation, and stand validation |
 | AP4 | 6/10 | validated-local (bounded) | exact candidate identity, isolated package materialization, acceptance record, immutable Builder task snapshot, concurrent-DEV compare-and-switch | enforced data isolation and health/rollback trial evidence; stand validation |
-| AP5 | 5/10 | validated-local + production-route-verified (bounded) | sequential freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend `0.1.137` | atomic channel CAS, durable promotion continuation, and clean stand promotion |
+| AP5 | 6/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, and local/backend atomic channel CAS | merge/deploy backend hardening, durable promotion continuation, and clean stand promotion |
 | AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
 | AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
@@ -150,7 +153,7 @@ remain green.
 - [x] `[must]` `AP0-01` Add versioned schemas and typed models for `ProjectRef`,
   `SourceRef`, `PackageRef`, `ProjectRelease`, `WorkspaceLock`, and stable
   `Subscription`.
-- [ ] `[must]` `AP0-02` Define canonical digest serialization and reject one
+- [x] `[must]` `AP0-02` Define canonical digest serialization and reject one
   version identity mapping to different content.
 - [x] `[must]` `AP0-03` Make canonical manifest `id` the dependency identity;
   keep display names and registry aliases outside dependency locks.
@@ -170,8 +173,9 @@ remain green.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 release contracts in `tests/test_artifact_release_contracts.py`, and registry
 v1/v2 compatibility in `tests/test_workspace_registry.py`.
-`AP0-02` was reopened after the critical audit proved that two different
-release digests can currently reuse one project version.
+`AP0-02` was reclosed after local and backend regressions proved that an
+idempotent version repeat is accepted and the same project/version with a
+different release digest is rejected before visibility.
 
 ## Milestone AP1: Deterministic Immutable Packages
 
@@ -190,9 +194,9 @@ symlink, size, and corruption tests.
   manifest serialization for deterministic output.
 - [x] `[must]` `AP1-03` Implement a content-addressed local package store with
   atomic put, verify, get, and quarantine operations.
-- [ ] `[must]` `AP1-04` Exclude DEV metadata, secrets, runtime data, caches, and
+- [x] `[must]` `AP1-04` Exclude DEV metadata, secrets, runtime data, caches, and
   unrelated sparse paths from package inputs.
-- [ ] `[must]` `AP1-05` Validate archive path traversal, links, portable path
+- [x] `[must]` `AP1-05` Validate archive path traversal, links, portable path
   aliases and case collisions, file count, decompressed size, and manifest
   digest before visibility.
 - [ ] `[must]` `AP1-06` Persist source revision, builder identity, package
@@ -206,7 +210,10 @@ symlink, size, and corruption tests.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
-`AP1-04` and `AP1-05` were reopened for secret scrub and portable path aliases.
+`AP1-04` and `AP1-05` were reclosed after local and backend regressions covered
+credential/private-key scrub, Windows reserved names and alternate data
+streams, trailing-dot/space aliases, Unicode normalization, and case-fold
+collisions before package visibility.
 `AP1-06` remains open because a durable builder/attestation identity is not yet
 part of the package contract.
 
@@ -343,7 +350,7 @@ current; otherwise it returns through DEV migration and trial.
 a moved-base candidate is rejected as stale, rebuilt on the new base, retrialed,
 and then promoted.
 
-- [ ] `[must]` `AP5-01` Atomically compare candidate base version, source
+- [x] `[must]` `AP5-01` Atomically compare candidate base version, source
   revision, and release digest with current stable when moving the channel.
 - [x] `[must]` `AP5-02` Mark moved-base candidates stale without changing source,
   package, or channel state.
@@ -368,8 +375,11 @@ Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-
 and candidate publication regressions in
 `tests/test_artifact_publication_service.py`, including the deployed Forge tree
 verification recorded in the proof.
-`AP5-01` and `AP5-07` were reopened for authoritative channel compare-and-switch
-and durable continuation after a partially completed promotion.
+`AP5-01` was reclosed after the promotion path began passing the exact observed
+base digest into an authoritative local/backend channel compare-and-swap. The
+same-target retry is idempotent; a stale expected digest preserves the observed
+channel and returns a conflict. `AP5-07` remains open for durable continuation
+after channel movement and before publisher activation/projection completes.
 
 ## Milestone AP6: Stable Subscription And Package Update
 

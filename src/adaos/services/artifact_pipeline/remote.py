@@ -96,12 +96,19 @@ class RemoteReleaseRepository:
             raise ValueError("artifact registry release digest mismatch")
         return plan
 
-    def set_channel(self, plan: ReleasePlan, channel: str = "stable") -> ChannelPointer:
+    def set_channel(
+        self,
+        plan: ReleasePlan,
+        channel: str = "stable",
+        *,
+        expected_release_digest: str | None,
+    ) -> ChannelPointer:
         digest = plan.release.release_digest or plan.release.computed_digest()
         response = self.client.set_artifact_channel(
             project_id=plan.release.project_id,
             channel=channel,
             release_digest=digest,
+            expected_release_digest=expected_release_digest,
             **self._transport(),
         )
         pointer = response.get("pointer")

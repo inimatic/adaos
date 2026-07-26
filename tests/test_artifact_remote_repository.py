@@ -46,8 +46,15 @@ class _Client:
         project_id: str,
         channel: str,
         release_digest: str,
+        expected_release_digest: str | None,
         **kwargs: Any,
     ) -> dict:
+        previous = self.channels.get((project_id, channel))
+        observed = previous["release_digest"] if previous is not None else None
+        if observed == release_digest:
+            return {"ok": True, "pointer": previous}
+        if observed != expected_release_digest:
+            raise RuntimeError("channel conflict")
         plan = self.releases[(project_id, release_digest)]
         pointer = {
             "project_id": project_id,
@@ -106,6 +113,6 @@ def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> N
     assert base64.b64decode(client.packages[built.ref.digest]) == built.archive_bytes
     assert remote.fetch_package(built.ref) == built.archive_bytes
     assert remote.get_release("recipes", plan.release.release_digest) == plan
-    pointer = remote.set_channel(plan)
+    pointer = remote.set_channel(plan, expected_release_digest=None)
     assert remote.get_channel("recipes") == pointer
     assert remote.tree_revision(source) == "f" * 40

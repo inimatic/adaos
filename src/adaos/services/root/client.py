@@ -931,6 +931,7 @@ class RootHttpClient:
         project_id: str,
         channel: str,
         release_digest: str,
+        expected_release_digest: str | None,
         verify: str | bool | ssl.SSLContext = None,
         cert: tuple[str, str] | None = None,
     ) -> dict:
@@ -940,7 +941,10 @@ class RootHttpClient:
             self._request(
                 "PUT",
                 f"/v1/artifacts/projects/{project}/channels/{channel_id}",
-                json={"release_digest": release_digest},
+                json={
+                    "release_digest": release_digest,
+                    "expected_release_digest": expected_release_digest,
+                },
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
                 timeout=120.0,

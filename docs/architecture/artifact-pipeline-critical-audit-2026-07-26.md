@@ -27,6 +27,30 @@ The probes did not modify Workspace or DEV content. They created disposable
 packages, release repositories, and WorkspaceLock state below temporary
 directories.
 
+## Remediation Status
+
+The status below is deliberately narrower than production acceptance. A
+corrected finding has a regression at every implemented trust boundary; remote
+changes still require merge, deployment, and a stand proof before the package
+pipeline becomes the default.
+
+| Finding | Status | Evidence or next gate |
+| --- | --- | --- |
+| B1 version identity | corrected, validated-local | local release regression and backend artifact smoke reject a second digest for one version |
+| B2 fail-open schemas | corrected, validated-local | explicit v1 readers reject unknown schemas, fields, and malformed collection members |
+| B3 package scrub/paths | corrected, validated-local | local and backend admission reject secrets and non-portable aliases |
+| B4 resolver consistency | open | rebuild selection from the complete constraint set |
+| B5 orphan removal | open | derive materialization from active release roots and prove rollback |
+| B6 Workspace writers | open | add writer lease plus expected-lock compare-and-switch |
+| B7 channel CAS | corrected, validated-local | local and backend channel mutations use a lease, expected digest, conflict preservation, and idempotent retry |
+| B8 promotion continuation | open | durable intent/receipt journal across channel move and local continuation |
+| B9 runtime/trial evidence | open | mandatory reload, health, and enforced data-mode policy |
+| B10 backend release admission | corrected, validated-local | backend recomputes release identity and verifies package references before visibility |
+| R1 repeated verification | improved, open | cached activation reduced from four archive traversals to two; carry one verified receipt into extraction |
+| R2 base64 transport | open (`should`) | add streaming transport behind the existing adapter |
+| R3 materialization identity | open | persist or migrate the exact install target |
+| R4 filesystem durability | open | add directory sync and terminal history states |
+
 ## What Remains Sound
 
 The following foundations are worth retaining:

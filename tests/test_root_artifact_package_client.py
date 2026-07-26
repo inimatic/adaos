@@ -32,6 +32,7 @@ def test_artifact_package_registry_client_contract() -> None:
         project_id="recipes",
         channel="stable",
         release_digest=digest,
+        expected_release_digest=None,
     )
     client.get_artifact_channel(project_id="recipes")
 
@@ -47,4 +48,8 @@ def test_artifact_package_registry_client_contract() -> None:
     assert client.calls[2][2]["json"] == {
         "release_digest": digest,
         "release_plan": plan,
+    }
+    assert client.calls[4][2]["json"] == {
+        "release_digest": digest,
+        "expected_release_digest": None,
     }

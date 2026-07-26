@@ -29,12 +29,19 @@ class _Remote:
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
         return self.releases.get_release(project_id, release_digest)
 
-    def set_channel(self, plan: ReleasePlan, channel: str = "stable"):
+    def set_channel(
+        self,
+        plan: ReleasePlan,
+        channel: str = "stable",
+        *,
+        expected_release_digest: str | None,
+    ):
         self.releases.put_release(plan)
         return self.releases.set_channel(
             plan.release.project_id,
             channel,
             plan.release.release_digest,
+            expected_release_digest=expected_release_digest,
         )
 
     def get_channel(self, project_id: str, channel: str = "stable"):
