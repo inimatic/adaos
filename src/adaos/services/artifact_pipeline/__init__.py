@@ -57,6 +57,12 @@ from .releases import (
     parse_artifact_requirements,
 )
 from .remote import ArtifactRegistryClient, RemoteReleaseRepository
+from .retention import (
+    ArtifactPipelineRetentionManager,
+    ArtifactRetentionError,
+    ArtifactRetentionPolicy,
+    run_artifact_retention,
+)
 from .publication import (
     PROMOTION_OPERATION_SCHEMA,
     PUSHED_SOURCE_SCHEMA,
@@ -88,7 +94,10 @@ __all__ = [
     "ActivationReplayBlocked",
     "ActivationResult",
     "ArtifactRegistryClient",
+    "ArtifactPipelineRetentionManager",
     "ArtifactPublicationService",
+    "ArtifactRetentionError",
+    "ArtifactRetentionPolicy",
     "CANDIDATE_SCHEMA",
     "GENESIS_RELEASE_DIGEST",
     "TRIAL_SCHEMA",
@@ -123,6 +132,7 @@ __all__ = [
     "VerifiedArtifactPackage",
     "build_artifact_package",
     "verify_artifact_package",
+    "run_artifact_retention",
     "WorkspaceActivationManager",
     "DependencyRequirement",
     "DependencyResolutionError",

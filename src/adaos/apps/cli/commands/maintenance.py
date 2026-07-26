@@ -5,6 +5,8 @@ import json
 import typer
 
 import adaos.services.self_hygiene as self_hygiene
+from adaos.services.agent_context import get_ctx
+from adaos.services.artifact_pipeline import run_artifact_retention
 
 
 app = typer.Typer(help="Maintenance and self-hygiene operations.")
@@ -54,4 +56,19 @@ def run_cmd(
         pressure_only=pressure_only,
         include_pip_cache=include_pip_cache,
     )
+    _emit(payload, json_output=json_output)
+
+
+@app.command("artifact-retention")
+def artifact_retention_cmd(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the exact conservative cleanup plan; otherwise only report it.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Plan or explicitly apply artifact staging/package retention."""
+
+    payload = run_artifact_retention(get_ctx(), dry_run=not apply)
     _emit(payload, json_output=json_output)

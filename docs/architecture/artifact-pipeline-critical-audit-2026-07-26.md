@@ -327,7 +327,9 @@ operator view.
    confirmation to the exact reviewed digest with deterministic idempotency.
 8. **Completed locally:** add durable delayed verification bound to the exact
    WorkspaceLock revision, with bounded pending markers and read-only replay.
-9. Add cleanup/retention, then repeat the proof on a clean stand.
+9. **Completed locally:** add explicit dry-run-first cleanup/retention with
+   active/recovery reachability protection and exact-path revalidation.
+10. Repeat the proof on a clean stand.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

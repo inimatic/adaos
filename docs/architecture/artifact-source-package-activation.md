@@ -460,6 +460,19 @@ perform an implicit rollback. Pending observations have their own marker
 directory, while terminal evidence remains on the activation operation. This
 keeps periodic work proportional to pending checks rather than total history.
 
+Artifact retention is a separate explicit maintenance operation. Its default
+mode is a read-only plan. The protected set is rebuilt from the active
+WorkspaceLock, retained lock histories, recent and nonterminal candidate/trial/
+promotion/activation records, and pending delayed observations. Records with
+unknown mutation or rollback state are retained without an age limit. Packages
+outside that set become eligible only after a package grace period; terminal
+operation/release records and orphan staging or backup trees have separate
+retention windows. Apply rechecks the exact path root and modification identity
+under a retention lease plus the Workspace writer lease. Recursive deletion is
+limited to one immediate staging/backup operation directory. A malformed
+operation record therefore preserves recovery material rather than making it
+look orphaned.
+
 Reload and health phases never succeed by omission. Each stores either a
 callback completion receipt or an explicit policy skip containing both
 `approved_by` and `reason`. A completed operation without these receipts is

@@ -20,7 +20,16 @@ adaos maintenance apply-retention --json
 adaos maintenance apply-retention --dry-run
 adaos maintenance run --dry-run --json
 adaos maintenance run --pressure-only --json
+adaos maintenance artifact-retention --json
+adaos maintenance artifact-retention --apply --json
 ```
+
+`artifact-retention` governs the package activation store separately from OS
+and log hygiene. It is dry-run by default. The explicit `--apply` mode can
+remove only expired unreferenced packages, expired terminal records, and
+staging/backup directories proven orphaned. Active WorkspaceLock content,
+retained lock histories, pending observations, nonterminal work, and uncertain
+recovery records are always protected.
 
 `apply-retention` records the active policy under:
 
