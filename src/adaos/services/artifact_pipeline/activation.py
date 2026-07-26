@@ -155,6 +155,24 @@ class WorkspaceActivationManager:
         packages = {item.key: item for item in plan.packages}
         if len(packages) != len(plan.packages):
             raise ActivationError("activation plan has multiple package versions for one identity")
+        materialization_targets = [
+            item.materialization_path
+            or (f"skills/{item.artifact_id}" if item.kind == "skill" else f"scenarios/{item.artifact_id}")
+            for item in plan.packages
+        ]
+        if len(materialization_targets) != len(set(materialization_targets)):
+            raise ActivationError("activation plan has multiple packages for one materialization target")
+        if plan.release.contract_locks_present:
+            expected_schema_locks = tuple(
+                sorted(
+                    (lock for package in plan.packages for lock in package.schema_locks),
+                    key=lambda item: item.lock_id,
+                )
+            )
+            if plan.release.schema_locks != expected_schema_locks:
+                raise ActivationError(
+                    "ProjectRelease schema locks do not match activation packages"
+                )
         for component in plan.release.components:
             if packages.get(component.key) != component:
                 raise ActivationError(f"release component {component.key} is missing from activation plan")
@@ -448,8 +466,12 @@ class WorkspaceActivationManager:
         }
 
     def _target_for(self, package: ArtifactPackageRef) -> Path:
-        plural = "skills" if package.kind == "skill" else "scenarios"
-        target = (self.workspace_root / plural / package.artifact_id).resolve()
+        relative = package.materialization_path or (
+            f"skills/{package.artifact_id}"
+            if package.kind == "skill"
+            else f"scenarios/{package.artifact_id}"
+        )
+        target = (self.workspace_root / Path(relative)).resolve()
         if self.workspace_root not in target.parents:
             raise ActivationError(f"package target escapes Workspace: {target}")
         return target

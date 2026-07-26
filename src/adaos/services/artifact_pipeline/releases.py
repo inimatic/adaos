@@ -121,6 +121,30 @@ class ReleasePlan:
         package_by_key = {item.key: item for item in packages}
         if len(package_by_key) != len(packages):
             raise DependencyResolutionError("stored release plan has duplicate package identities")
+        materialization_targets = {
+            item.materialization_path
+            or (f"skills/{item.artifact_id}" if item.kind == "skill" else f"scenarios/{item.artifact_id}")
+            for item in packages
+        }
+        if len(materialization_targets) != len(packages):
+            raise DependencyResolutionError(
+                "stored release plan has duplicate materialization targets"
+            )
+        if release.contract_locks_present:
+            expected_schema_locks = tuple(
+                sorted(
+                    (
+                        lock
+                        for package in packages
+                        for lock in package.schema_locks
+                    ),
+                    key=lambda item: item.lock_id,
+                )
+            )
+            if release.schema_locks != expected_schema_locks:
+                raise DependencyResolutionError(
+                    "stored release schema_locks do not match selected packages"
+                )
         for component in release.components:
             if package_by_key.get(component.key) != component:
                 raise DependencyResolutionError(
@@ -490,6 +514,11 @@ def build_project_release(
         permissions=tuple(permissions),
         migrations=tuple(migrations),
         validation_evidence=tuple(validation_evidence),
+        schema_locks=tuple(
+            lock
+            for package in sorted(selected.values(), key=lambda item: item.key)
+            for lock in package.schema_locks
+        ),
     ).seal()
     reverse: dict[str, set[str]] = defaultdict(set)
     for binding in bindings.values():

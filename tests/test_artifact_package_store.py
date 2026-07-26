@@ -79,6 +79,26 @@ def test_package_digest_changes_with_content(tmp_path: Path) -> None:
     assert first.ref.manifest_digest != second.ref.manifest_digest
 
 
+def test_package_persists_builder_target_and_packaged_schema_identity(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    schema = scenario / "recipes.schema.json"
+    schema.write_text('{"type":"object"}\n', encoding="utf-8")
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert built.ref.builder_id == "adaos.package_builder.v1"
+    assert built.ref.build_policy_digest.startswith("sha256:")
+    assert built.ref.materialization_path == "scenarios/recipes"
+    assert [item.lock_id for item in built.ref.schema_locks] == [
+        "scenario:recipes:recipes.schema.json"
+    ]
+    assert verified.ref == built.ref
+    assert verified.package_manifest["schema_locks"] == [
+        built.ref.schema_locks[0].to_dict()
+    ]
+
+
 def test_package_accepts_zero_byte_files(tmp_path: Path) -> None:
     artifact = tmp_path / "empty-file-skill"
     artifact.mkdir()

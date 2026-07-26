@@ -48,7 +48,7 @@ pipeline becomes the default.
 | B10 backend release admission | corrected, validated-local | backend recomputes release identity and verifies package references before visibility |
 | R1 repeated verification | improved, open | cached activation reduced from four archive traversals to two; carry one verified receipt into extraction |
 | R2 base64 transport | open (`should`) | add streaming transport behind the existing adapter |
-| R3 materialization identity | open | persist or migrate the exact install target |
+| R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
 | R4 filesystem durability | open | add directory sync and terminal history states |
 
 ## What Remains Sound
@@ -257,6 +257,15 @@ second directory instead of replacing the active projection.
 
 Correction: resolve and persist the materialization target in the migration
 plan or WorkspaceLock v2, and reject ambiguous aliases.
+
+Current correction: all newly built PackageRefs persist a portable
+`materialization_path`; WorkspaceLock retains that PackageRef identity and
+activation uses it instead of recomputing the destination. Duplicate targets
+fail before staging in release-plan reads, WorkspaceLock construction, and
+activation admission. Historical PackageRefs remain readable with their
+canonical target so their digest is unchanged. Discovery and explicit
+reconciliation of a non-canonical historical directory is intentionally still
+open in AP0-07/AP6; it must not be guessed during activation.
 
 ### R4. Crash durability is file-atomic, not fully filesystem-durable
 

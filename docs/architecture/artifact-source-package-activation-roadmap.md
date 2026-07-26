@@ -133,8 +133,8 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
-| AP1 | 5/9 | validated-local (bounded) | deterministic package build/store/verify, secret and authoring-state exclusion, portable path admission, corruption and zero-byte coverage | builder attestation identity and external signing |
-| AP2 | 6/10 | validated-local (bounded) | exact dependency ranges/digests, complete-set fixed-point selection, consistent bindings, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs plus diagnostics |
+| AP1 | 6/9 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission | external signing and package-store lifecycle diagnostics |
+| AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 7/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, and interruption recovery | delayed observation, retention, operator diff, and stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
@@ -199,7 +199,7 @@ symlink, size, and corruption tests.
 - [x] `[must]` `AP1-05` Validate archive path traversal, links, portable path
   aliases and case collisions, file count, decompressed size, and manifest
   digest before visibility.
-- [ ] `[must]` `AP1-06` Persist source revision, builder identity, package
+- [x] `[must]` `AP1-06` Persist source revision, builder identity, package
   manifest digest, and validation evidence references.
 - [ ] `[should]` `AP1-07` Add signed attestations and external immutable release
   asset support behind a package-store adapter.
@@ -214,8 +214,12 @@ and package store regressions in `tests/test_artifact_package_store.py`.
 credential/private-key scrub, Windows reserved names and alternate data
 streams, trailing-dot/space aliases, Unicode normalization, and case-fold
 collisions before package visibility.
-`AP1-06` remains open because a durable builder/attestation identity is not yet
-part of the package contract.
+`AP1-06` was closed after package manifests and refs began persisting the
+deterministic builder id and build-policy digest, exact materialization target,
+packaged schema digests, source revision, and manifest digest. ProjectRelease
+now stores canonical validation-evidence digest references. Historical records
+without the complete additive field group retain their original digest; partial
+groups fail closed, and every new package/release write emits the group.
 
 ## Milestone AP2: Dependency-Locked Project Releases
 
@@ -232,7 +236,7 @@ rejected without changing active state.
   skill manifest handling.
 - [x] `[must]` `AP2-02` Resolve declared dependencies into exact versions and
   package digests during ProjectRelease build.
-- [ ] `[must]` `AP2-03` Store component, permission, schema, migration, and
+- [x] `[must]` `AP2-03` Store component, permission, schema, migration, and
   validation locks in ProjectRelease.
 - [x] `[must]` `AP2-04` Implement the MVP rule of one active package per canonical
   skill id in one node activation context.
@@ -252,9 +256,11 @@ rejected without changing active state.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and dependency resolver regressions in
 `tests/test_artifact_release_resolver.py`.
-`AP2-03` remains open for the broader explicit schema and migration-lock
-contract, beyond the component, permission, migration, and validation fields
-already present in the bounded release model. `AP2-06` was reclosed after the
+`AP2-03` was closed after ProjectRelease began carrying exact schema locks from
+every selected package, canonical migration locks, and validation-evidence
+digest references in addition to component, dependency, and permission locks.
+Local activation and backend admission recompute and compare these locks;
+partial or stale lock sets are rejected. `AP2-06` was reclosed after the
 resolver began rebuilding the reachable complete constraint set to a bounded
 fixed point and stored plans began rejecting any binding that differs from the
 final selected dependency digest.

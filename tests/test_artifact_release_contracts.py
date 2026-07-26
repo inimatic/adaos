@@ -7,6 +7,7 @@ import jsonschema
 import pytest
 
 from adaos.domain.artifact_release import (
+    ArtifactContractLock,
     ArtifactPackageRef,
     ArtifactReleaseContractError,
     ArtifactSourceRef,
@@ -17,6 +18,7 @@ from adaos.domain.artifact_release import (
     StableSubscription,
     WorkspaceLock,
     WorkspaceSlot,
+    canonical_payload_digest,
 )
 
 
@@ -102,6 +104,77 @@ def test_project_release_digest_is_canonical_and_detects_tampering() -> None:
     tampered["permissions"] = ["shopping.write"]
     with pytest.raises(ArtifactReleaseContractError, match="does not match"):
         ProjectRelease.from_mapping(tampered)
+
+
+def test_project_release_persists_exact_schema_migration_and_evidence_locks() -> None:
+    schema_lock = ArtifactContractLock(lock_id="scenario:recipes:recipes.schema.json", digest=_DIGEST_B)
+    component = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="recipes",
+        version="1.2.3",
+        digest=_DIGEST_A,
+        manifest_digest=_DIGEST_C,
+        source_ref=_source(),
+        builder_id="adaos.package_builder.v1",
+        build_policy_digest=_DIGEST_B,
+        materialization_path="scenarios/recipes",
+        schema_locks=(schema_lock,),
+    )
+    migration = {
+        "id": "recipes-schema-1-to-2",
+        "from_schema": 1,
+        "to_schema": 2,
+        "rollback": {"supported": True, "procedure_ref": "migration/2-to-1"},
+    }
+    evidence = {"suite": "scenario-validation", "status": "passed"}
+
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(component,),
+        migrations=(migration,),
+        validation_evidence=(evidence,),
+    ).seal()
+    payload = release.to_dict()
+
+    assert payload["schema_locks"] == [schema_lock.to_dict()]
+    assert payload["migration_locks"] == [
+        {
+            "lock_id": "recipes-schema-1-to-2",
+            "digest": canonical_payload_digest(migration),
+        }
+    ]
+    assert payload["validation_evidence_refs"] == [canonical_payload_digest(evidence)]
+    assert ProjectRelease.from_mapping(payload) == release
+
+    payload["migration_locks"][0]["digest"] = _DIGEST_A
+    payload["release_digest"] = canonical_payload_digest(
+        {key: value for key, value in payload.items() if key != "release_digest"}
+    )
+    with pytest.raises(ArtifactReleaseContractError, match="migration_locks do not match"):
+        ProjectRelease.from_mapping(payload)
+
+
+def test_legacy_release_without_contract_locks_keeps_its_original_digest() -> None:
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(_package(),),
+        validation_evidence=({"status": "passed"},),
+    ).seal()
+    legacy = release.to_dict()
+    for field in ("schema_locks", "migration_locks", "validation_evidence_refs"):
+        legacy.pop(field)
+    legacy["release_digest"] = canonical_payload_digest(
+        {key: value for key, value in legacy.items() if key != "release_digest"}
+    )
+
+    loaded = ProjectRelease.from_mapping(legacy)
+
+    assert loaded.contract_locks_present is False
+    assert loaded.to_dict() == legacy
 
 
 @pytest.mark.parametrize(

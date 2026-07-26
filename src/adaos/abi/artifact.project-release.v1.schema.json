@@ -43,7 +43,25 @@
       "type": "array",
       "items": { "type": "object" }
     },
+    "schema_locks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contractLock" }
+    },
+    "migration_locks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contractLock" }
+    },
+    "validation_evidence_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/digest" }
+    },
     "release_digest": { "$ref": "#/$defs/digest" }
+  },
+  "dependentRequired": {
+    "schema_locks": ["migration_locks", "validation_evidence_refs"],
+    "migration_locks": ["schema_locks", "validation_evidence_refs"],
+    "validation_evidence_refs": ["schema_locks", "migration_locks"]
   },
   "$defs": {
     "artifactId": {
@@ -57,6 +75,15 @@
     "digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "contractLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_id", "digest"],
+      "properties": {
+        "lock_id": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
     },
     "sourceRef": {
       "type": "object",
@@ -80,9 +107,25 @@
         "version": { "$ref": "#/$defs/version" },
         "digest": { "$ref": "#/$defs/digest" },
         "manifest_digest": { "$ref": "#/$defs/digest" },
-        "source_ref": { "$ref": "#/$defs/sourceRef" }
+        "source_ref": { "$ref": "#/$defs/sourceRef" },
+        "builder_id": { "type": "string", "minLength": 1 },
+        "build_policy_digest": { "$ref": "#/$defs/digest" },
+        "materialization_path": {
+          "type": "string",
+          "pattern": "^(scenarios|skills)/[a-z0-9][a-z0-9_.-]*$"
+        },
+        "schema_locks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contractLock" }
+        }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "dependentRequired": {
+        "builder_id": ["build_policy_digest", "materialization_path", "schema_locks"],
+        "build_policy_digest": ["builder_id", "materialization_path", "schema_locks"],
+        "materialization_path": ["builder_id", "build_policy_digest", "schema_locks"],
+        "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"]
+      }
     },
     "resolvedDependency": {
       "type": "object",

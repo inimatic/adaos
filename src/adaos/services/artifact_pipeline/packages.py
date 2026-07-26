@@ -16,11 +16,13 @@ from uuid import uuid4
 import yaml
 
 from adaos.domain.artifact_release import (
+    ArtifactContractLock,
     ArtifactKind,
     ArtifactPackageRef,
     ArtifactReleaseContractError,
     ArtifactSourceRef,
     canonical_json_bytes,
+    canonical_payload_digest,
     sha256_digest,
 )
 from adaos.services.artifact_pipeline.storage import replace_with_retry
@@ -28,6 +30,7 @@ from adaos.services.artifact_pipeline.storage import replace_with_retry
 
 PACKAGE_MANIFEST_PATH = ".adaos/package-manifest.json"
 PACKAGE_MANIFEST_SCHEMA = "adaos.artifact.component_package.v1"
+PACKAGE_BUILDER_ID = "adaos.package_builder.v1"
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _EXCLUDED_DIRS = {
     ".builder_previous_automation",
@@ -96,6 +99,38 @@ _MANIFEST_BY_KIND: dict[ArtifactKind, str] = {
     "skill": "skill.yaml",
     "scenario": "scenario.yaml",
 }
+
+
+def _build_policy_digest() -> str:
+    """Identify every deterministic/safety rule that affects package bytes."""
+
+    return canonical_payload_digest(
+        {
+            "schema": "adaos.artifact.build_policy.v1",
+            "builder_id": PACKAGE_BUILDER_ID,
+            "archive": {
+                "format": "zip",
+                "compression": "deflate-9",
+                "timestamp": list(_ZIP_TIMESTAMP),
+                "file_mode": "0644",
+                "utf8_names": True,
+            },
+            "paths": {
+                "normalization": "posix+nfc",
+                "portable_casefold_unique": True,
+                "windows_reserved_names": sorted(_WINDOWS_RESERVED_NAMES),
+            },
+            "exclusions": {
+                "directories": sorted(_EXCLUDED_DIRS),
+                "files": sorted(_EXCLUDED_FILES),
+                "suffixes": sorted(_EXCLUDED_SUFFIXES),
+            },
+            "scrub_policy": "adaos.package_scrub.v1",
+        }
+    )
+
+
+PACKAGE_BUILD_POLICY_DIGEST = _build_policy_digest()
 
 
 class PackageBuildError(RuntimeError):
@@ -305,12 +340,27 @@ def build_artifact_package(
         {"path": name, "size": len(data), "digest": sha256_digest(data)}
         for name, data in files
     ]
+    schema_locks = tuple(
+        ArtifactContractLock(
+            lock_id=f"{kind}:{artifact_id}:{record['path']}",
+            digest=str(record["digest"]),
+        )
+        for record in file_records
+        if str(record["path"]).endswith(".schema.json")
+    )
+    materialization_path = (
+        f"skills/{artifact_id}" if kind == "skill" else f"scenarios/{artifact_id}"
+    )
     package_manifest: dict[str, Any] = {
         "schema": PACKAGE_MANIFEST_SCHEMA,
         "kind": kind,
         "artifact_id": artifact_id,
         "version": version,
         "source_ref": source_ref.to_dict(),
+        "builder_id": PACKAGE_BUILDER_ID,
+        "build_policy_digest": PACKAGE_BUILD_POLICY_DIGEST,
+        "materialization_path": materialization_path,
+        "schema_locks": [item.to_dict() for item in schema_locks],
         "files": file_records,
     }
     manifest_bytes = canonical_json_bytes(package_manifest)
@@ -349,6 +399,10 @@ def build_artifact_package(
             digest=package_digest,
             manifest_digest=manifest_digest,
             source_ref=source_ref,
+            builder_id=PACKAGE_BUILDER_ID,
+            build_policy_digest=PACKAGE_BUILD_POLICY_DIGEST,
+            materialization_path=materialization_path,
+            schema_locks=schema_locks,
         )
     except ArtifactReleaseContractError as exc:
         raise PackageBuildError(str(exc)) from exc
@@ -373,6 +427,28 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
         raise PackageVerificationError("package manifest must be an object")
     if value.get("schema") != PACKAGE_MANIFEST_SCHEMA:
         raise PackageVerificationError("unsupported package manifest schema")
+    core_fields = {"schema", "kind", "artifact_id", "version", "source_ref", "files"}
+    attestation_fields = {
+        "builder_id",
+        "build_policy_digest",
+        "materialization_path",
+        "schema_locks",
+    }
+    unknown = sorted(set(value) - core_fields - attestation_fields)
+    if unknown:
+        raise PackageVerificationError(
+            f"package manifest contains unsupported fields: {', '.join(unknown)}"
+        )
+    missing = sorted(core_fields - set(value))
+    if missing:
+        raise PackageVerificationError(
+            f"package manifest is missing required fields: {', '.join(missing)}"
+        )
+    present = attestation_fields.intersection(value)
+    if present and present != attestation_fields:
+        raise PackageVerificationError(
+            "package manifest builder attestation fields must be supplied together"
+        )
     return value, raw
 
 
@@ -444,9 +520,38 @@ def verify_artifact_package(
             if sha256_digest(raw) != expected_file_digest:
                 raise PackageVerificationError(f"package file digest mismatch: {name}")
 
+        if package_manifest.get("builder_id") is not None:
+            if (
+                package_manifest.get("builder_id") == PACKAGE_BUILDER_ID
+                and package_manifest.get("build_policy_digest")
+                != PACKAGE_BUILD_POLICY_DIGEST
+            ):
+                raise PackageVerificationError(
+                    "package claims the AdaOS builder with an unknown build policy digest"
+                )
+            expected_schema_locks = [
+                {
+                    "lock_id": (
+                        f"{package_manifest.get('kind')}:{package_manifest.get('artifact_id')}:{name}"
+                    ),
+                    "digest": str(record.get("digest") or ""),
+                }
+                for name, record in sorted(expected_files.items())
+                if name.endswith(".schema.json")
+            ]
+            if package_manifest.get("schema_locks") != expected_schema_locks:
+                raise PackageVerificationError(
+                    "package schema_locks do not match packaged schema files"
+                )
+
         source = package_manifest.get("source_ref")
         if not isinstance(source, Mapping):
             raise PackageVerificationError("package manifest source_ref must be an object")
+        raw_schema_locks = package_manifest.get("schema_locks") or []
+        if not isinstance(raw_schema_locks, list) or any(
+            not isinstance(item, Mapping) for item in raw_schema_locks
+        ):
+            raise PackageVerificationError("schema_locks must be a list of objects")
         try:
             ref = ArtifactPackageRef(
                 kind=package_manifest.get("kind"),
@@ -455,6 +560,12 @@ def verify_artifact_package(
                 digest=actual_digest,
                 manifest_digest=sha256_digest(manifest_bytes),
                 source_ref=ArtifactSourceRef.from_mapping(source),
+                builder_id=package_manifest.get("builder_id"),
+                build_policy_digest=package_manifest.get("build_policy_digest"),
+                materialization_path=package_manifest.get("materialization_path"),
+                schema_locks=tuple(
+                    ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
+                ),
             )
         except ArtifactReleaseContractError as exc:
             raise PackageVerificationError(str(exc)) from exc

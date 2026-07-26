@@ -102,6 +102,7 @@ redacted identities and conclusions required for review.
 | Live Builder DEV → trial → Workspace publication | passed | Builder scenario `0.2.20`, companion skill `0.1.28`, accepted candidate `builder-0-2-20-de119269b9d4` |
 | DEV/trial/Workspace content equality | passed | SHA-256 equality for canonical manifests, `webui.json`, and skill handler |
 | Builder checkpoint identity per iteration | passed | 113 focused regressions; explicit checkpoint-only reconciliation, no Codex replay |
+| Builder/schema/migration/evidence lock admission | passed | 95 artifact-pipeline regressions plus backend TypeScript build/package smoke; partial and content-mismatched lock sets rejected |
 
 Exact immutable identities from the proof:
 
@@ -182,6 +183,9 @@ reconciliation, and no automatic repeat of the modifying command.
   still a transport boundary rather than the default Workspace activation
   source; the stand proof must exercise that path end to end.
 - The pre-existing client submodule change was not modified or included.
+- The backend builder/lock admission hardening is validated on branch
+  `codex/artifact-contract-hardening`; merge, deployment, and clean-stand proof
+  remain separate gates.
 
 These gates keep the maturity at `validated-local`; they are not failures of the
 bounded local proof.

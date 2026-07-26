@@ -170,6 +170,12 @@ package_ref:
   digest: sha256:...
   source_ref: { ... }
   manifest_digest: sha256:...
+  builder_id: adaos.package_builder.v1
+  build_policy_digest: sha256:...
+  materialization_path: scenarios/recipes
+  schema_locks:
+    - lock_id: scenario:recipes:recipes.schema.json
+      digest: sha256:...
 ```
 
 Package requirements:
@@ -177,6 +183,8 @@ Package requirements:
 - deterministic normalized content;
 - canonical manifest included in the digest;
 - exact source revision and path scope;
+- deterministic builder and build-policy identity;
+- one exact portable Workspace materialization target;
 - explicit component kind and canonical identity;
 - dependency declaration and resolved dependency lock;
 - validation result references;
@@ -380,12 +388,20 @@ project_release:
   permissions: [ ... ]
   migrations: [ ... ]
   validation_evidence: [ ... ]
-  created_at: 2026-07-24T00:00:00Z
+  schema_locks: [ ... ]
+  migration_locks: [ ... ]
+  validation_evidence_refs: [ sha256:... ]
 ```
 
 A simple standalone skill is a one-component ProjectRelease. A scenario with
 dedicated companion skills is released as one locked set. Shared skills remain
 separate packages and are pinned by digest.
+
+Schema locks are collected from every selected package. Migration locks and
+validation evidence references are recomputed from canonical payload bytes at
+every local and registry admission boundary. Raw evidence remains available
+for explanation, while the digest references make replacement or omission
+detectable without trusting labels.
 
 ## Transactional Activation
 
@@ -586,6 +602,9 @@ Migration uses adapters instead of a flag-day rewrite:
 - Existing DEV-to-Workspace copy can temporarily implement PackageBuilder and
   Activation interfaces while marked `legacy_materialization`.
 - Registry v1 entries remain readable; v2 fields are additive.
+- Historical package/release records without the complete builder/lock field
+  group preserve their original canonical digest. New writes always emit the
+  complete group, and partial groups are rejected instead of inferred.
 - Existing installed artifacts receive synthesized package and release
   identities during migration.
 - New package-backed activation is selected per project until all representative

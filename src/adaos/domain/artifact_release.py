@@ -87,6 +87,18 @@ def _relative_scope(value: Any) -> str:
     return "/".join(parts) + ("/" if raw.endswith("/") else "")
 
 
+def _materialization_path(value: Any, *, kind: ArtifactKind) -> str:
+    raw = _relative_scope(value).rstrip("/")
+    parts = raw.split("/")
+    expected_root = "skills" if kind == "skill" else "scenarios"
+    if len(parts) != 2 or parts[0] != expected_root:
+        raise ArtifactReleaseContractError(
+            f"materialization_path for {kind} must be {expected_root}/<directory>"
+        )
+    _artifact_id(parts[1], field="materialization_path directory")
+    return raw
+
+
 def _unique_texts(values: Iterable[Any], *, field: str) -> tuple[str, ...]:
     merged: list[str] = []
     for raw in values:
@@ -191,6 +203,42 @@ class ArtifactSourceRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactContractLock:
+    lock_id: str
+    digest: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "lock_id", _text(self.lock_id, field="lock_id"))
+        object.__setattr__(self, "digest", _digest(self.digest, field="lock.digest"))
+
+    def to_dict(self) -> dict[str, str]:
+        return {"lock_id": self.lock_id, "digest": self.digest}
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ArtifactContractLock":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={"lock_id", "digest"},
+            required={"lock_id", "digest"},
+            field="ArtifactContractLock",
+        )
+        return cls(lock_id=value.get("lock_id"), digest=value.get("digest"))
+
+
+def _unique_locks(
+    values: Iterable[ArtifactContractLock],
+    *,
+    field: str,
+) -> tuple[ArtifactContractLock, ...]:
+    locks = tuple(values)
+    identities = [item.lock_id for item in locks]
+    if len(identities) != len(set(identities)):
+        raise ArtifactReleaseContractError(f"{field} lock identities must be unique")
+    return tuple(sorted(locks, key=lambda item: item.lock_id))
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactPackageRef:
     kind: ArtifactKind
     artifact_id: str
@@ -198,6 +246,10 @@ class ArtifactPackageRef:
     digest: str
     manifest_digest: str
     source_ref: ArtifactSourceRef
+    builder_id: str | None = None
+    build_policy_digest: str | None = None
+    materialization_path: str | None = None
+    schema_locks: tuple[ArtifactContractLock, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in {"skill", "scenario"}:
@@ -208,13 +260,41 @@ class ArtifactPackageRef:
         object.__setattr__(self, "manifest_digest", _digest(self.manifest_digest, field="manifest_digest"))
         if not isinstance(self.source_ref, ArtifactSourceRef):
             raise ArtifactReleaseContractError("source_ref must be ArtifactSourceRef")
+        attestation = (self.builder_id, self.build_policy_digest, self.materialization_path)
+        if any(value is not None for value in attestation) and not all(
+            value is not None for value in attestation
+        ):
+            raise ArtifactReleaseContractError(
+                "builder_id, build_policy_digest, and materialization_path must be supplied together"
+            )
+        if self.builder_id is not None:
+            object.__setattr__(self, "builder_id", _text(self.builder_id, field="builder_id"))
+            object.__setattr__(
+                self,
+                "build_policy_digest",
+                _digest(self.build_policy_digest, field="build_policy_digest"),
+            )
+            object.__setattr__(
+                self,
+                "materialization_path",
+                _materialization_path(self.materialization_path, kind=self.kind),
+            )
+        if self.schema_locks and self.builder_id is None:
+            raise ArtifactReleaseContractError("schema_locks require builder attestation")
+        if any(not isinstance(item, ArtifactContractLock) for item in self.schema_locks):
+            raise ArtifactReleaseContractError("schema_locks must contain ArtifactContractLock values")
+        object.__setattr__(
+            self,
+            "schema_locks",
+            _unique_locks(self.schema_locks, field="package schema"),
+        )
 
     @property
     def key(self) -> str:
         return f"{self.kind}:{self.artifact_id}"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema": PACKAGE_REF_SCHEMA,
             "kind": self.kind,
             "artifact_id": self.artifact_id,
@@ -223,6 +303,16 @@ class ArtifactPackageRef:
             "manifest_digest": self.manifest_digest,
             "source_ref": self.source_ref.to_dict(),
         }
+        if self.builder_id is not None:
+            payload.update(
+                {
+                    "builder_id": self.builder_id,
+                    "build_policy_digest": self.build_policy_digest,
+                    "materialization_path": self.materialization_path,
+                    "schema_locks": [item.to_dict() for item in self.schema_locks],
+                }
+            )
+        return payload
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ArtifactPackageRef":
@@ -237,6 +327,10 @@ class ArtifactPackageRef:
                 "digest",
                 "manifest_digest",
                 "source_ref",
+                "builder_id",
+                "build_policy_digest",
+                "materialization_path",
+                "schema_locks",
             },
             required={
                 "schema",
@@ -252,6 +346,22 @@ class ArtifactPackageRef:
         source = value.get("source_ref")
         if not isinstance(source, Mapping):
             raise ArtifactReleaseContractError("source_ref must be an object")
+        attestation_fields = {
+            "builder_id",
+            "build_policy_digest",
+            "materialization_path",
+            "schema_locks",
+        }
+        present = attestation_fields.intersection(value)
+        if present and present != attestation_fields:
+            raise ArtifactReleaseContractError(
+                "PackageRef builder attestation fields must be supplied together"
+            )
+        raw_schema_locks = value.get("schema_locks") or []
+        if not isinstance(raw_schema_locks, list) or any(
+            not isinstance(item, Mapping) for item in raw_schema_locks
+        ):
+            raise ArtifactReleaseContractError("schema_locks must be a list of objects")
         return cls(
             kind=value.get("kind"),
             artifact_id=value.get("artifact_id"),
@@ -259,6 +369,12 @@ class ArtifactPackageRef:
             digest=value.get("digest"),
             manifest_digest=value.get("manifest_digest"),
             source_ref=ArtifactSourceRef.from_mapping(source),
+            builder_id=value.get("builder_id"),
+            build_policy_digest=value.get("build_policy_digest"),
+            materialization_path=value.get("materialization_path"),
+            schema_locks=tuple(
+                ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
+            ),
         )
 
 
@@ -331,6 +447,10 @@ class ProjectRelease:
     permissions: tuple[str, ...] = ()
     migrations: tuple[Mapping[str, Any], ...] = ()
     validation_evidence: tuple[Mapping[str, Any], ...] = ()
+    schema_locks: tuple[ArtifactContractLock, ...] = ()
+    migration_locks: tuple[ArtifactContractLock, ...] = ()
+    validation_evidence_refs: tuple[str, ...] = ()
+    contract_locks_present: bool = True
     release_digest: str | None = None
 
     def __post_init__(self) -> None:
@@ -347,11 +467,80 @@ class ProjectRelease:
         if len(dependency_keys) != len(set(dependency_keys)):
             raise ArtifactReleaseContractError("resolved dependency identities must be unique")
         object.__setattr__(self, "permissions", _unique_texts(self.permissions, field="permissions"))
+        if any(not isinstance(item, Mapping) for item in self.migrations):
+            raise ArtifactReleaseContractError("migrations must contain only objects")
+        if any(not isinstance(item, Mapping) for item in self.validation_evidence):
+            raise ArtifactReleaseContractError("validation_evidence must contain only objects")
+        if any(not isinstance(item, ArtifactContractLock) for item in self.schema_locks):
+            raise ArtifactReleaseContractError("schema_locks must contain ArtifactContractLock values")
+        if any(not isinstance(item, ArtifactContractLock) for item in self.migration_locks):
+            raise ArtifactReleaseContractError("migration_locks must contain ArtifactContractLock values")
+        supplied_schema_locks = _unique_locks(self.schema_locks, field="schema")
+        component_schema_locks = _unique_locks(
+            (
+                lock
+                for component in self.components
+                for lock in component.schema_locks
+            ),
+            field="component schema",
+        )
+        if supplied_schema_locks:
+            supplied_by_id = {item.lock_id: item for item in supplied_schema_locks}
+            for required_lock in component_schema_locks:
+                if supplied_by_id.get(required_lock.lock_id) != required_lock:
+                    raise ArtifactReleaseContractError(
+                        "schema_locks do not include exact component schema content"
+                    )
+        object.__setattr__(
+            self,
+            "schema_locks",
+            supplied_schema_locks or component_schema_locks,
+        )
+        if self.contract_locks_present:
+            derived_migration_locks = tuple(
+                ArtifactContractLock(
+                    lock_id=str(item.get("id") or f"migration:{index}"),
+                    digest=canonical_payload_digest(dict(item)),
+                )
+                for index, item in enumerate(self.migrations)
+            )
+            supplied_migration_locks = _unique_locks(self.migration_locks, field="migration")
+            if supplied_migration_locks and supplied_migration_locks != _unique_locks(
+                derived_migration_locks,
+                field="migration",
+            ):
+                raise ArtifactReleaseContractError(
+                    "migration_locks do not match canonical migration content"
+                )
+            object.__setattr__(
+                self,
+                "migration_locks",
+                supplied_migration_locks or _unique_locks(derived_migration_locks, field="migration"),
+            )
+            derived_evidence_refs = tuple(
+                sorted({canonical_payload_digest(dict(item)) for item in self.validation_evidence})
+            )
+            supplied_evidence_refs = tuple(
+                sorted({_digest(item, field="validation_evidence_ref") for item in self.validation_evidence_refs})
+            )
+            if supplied_evidence_refs and supplied_evidence_refs != derived_evidence_refs:
+                raise ArtifactReleaseContractError(
+                    "validation_evidence_refs do not match canonical validation evidence"
+                )
+            object.__setattr__(
+                self,
+                "validation_evidence_refs",
+                supplied_evidence_refs or derived_evidence_refs,
+            )
+        elif self.schema_locks or self.migration_locks or self.validation_evidence_refs:
+            raise ArtifactReleaseContractError(
+                "legacy ProjectRelease cannot carry partial contract locks"
+            )
         if self.release_digest is not None:
             object.__setattr__(self, "release_digest", _digest(self.release_digest, field="release_digest"))
 
     def unsigned_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema": PROJECT_RELEASE_SCHEMA,
             "project_id": self.project_id,
             "version": self.version,
@@ -364,6 +553,15 @@ class ProjectRelease:
             "migrations": [dict(item) for item in self.migrations],
             "validation_evidence": [dict(item) for item in self.validation_evidence],
         }
+        if self.contract_locks_present:
+            payload.update(
+                {
+                    "schema_locks": [item.to_dict() for item in self.schema_locks],
+                    "migration_locks": [item.to_dict() for item in self.migration_locks],
+                    "validation_evidence_refs": list(self.validation_evidence_refs),
+                }
+            )
+        return payload
 
     def computed_digest(self) -> str:
         return canonical_payload_digest(self.unsigned_dict())
@@ -394,6 +592,9 @@ class ProjectRelease:
                 "permissions",
                 "migrations",
                 "validation_evidence",
+                "schema_locks",
+                "migration_locks",
+                "validation_evidence_refs",
                 "release_digest",
             },
             required={
@@ -420,6 +621,15 @@ class ProjectRelease:
         permissions = value.get("permissions")
         migrations = value.get("migrations")
         validation_evidence = value.get("validation_evidence")
+        lock_fields = {"schema_locks", "migration_locks", "validation_evidence_refs"}
+        present_lock_fields = lock_fields.intersection(value)
+        if present_lock_fields and present_lock_fields != lock_fields:
+            raise ArtifactReleaseContractError(
+                "ProjectRelease contract lock fields must be supplied together"
+            )
+        raw_schema_locks = value.get("schema_locks") or []
+        raw_migration_locks = value.get("migration_locks") or []
+        raw_evidence_refs = value.get("validation_evidence_refs") or []
         if not isinstance(dependencies, list):
             raise ArtifactReleaseContractError("resolved_dependencies must be a list")
         if not isinstance(permissions, list):
@@ -428,6 +638,16 @@ class ProjectRelease:
             raise ArtifactReleaseContractError("migrations must be a list")
         if not isinstance(validation_evidence, list):
             raise ArtifactReleaseContractError("validation_evidence must be a list")
+        if not isinstance(raw_schema_locks, list) or any(
+            not isinstance(item, Mapping) for item in raw_schema_locks
+        ):
+            raise ArtifactReleaseContractError("schema_locks must be a list of objects")
+        if not isinstance(raw_migration_locks, list) or any(
+            not isinstance(item, Mapping) for item in raw_migration_locks
+        ):
+            raise ArtifactReleaseContractError("migration_locks must be a list of objects")
+        if not isinstance(raw_evidence_refs, list):
+            raise ArtifactReleaseContractError("validation_evidence_refs must be a list")
         if any(not isinstance(item, Mapping) for item in components):
             raise ArtifactReleaseContractError("components must contain only objects")
         if any(not isinstance(item, Mapping) for item in dependencies):
@@ -453,6 +673,14 @@ class ProjectRelease:
             permissions=tuple(permissions),
             migrations=tuple(migrations),
             validation_evidence=tuple(validation_evidence),
+            schema_locks=tuple(
+                ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
+            ),
+            migration_locks=tuple(
+                ArtifactContractLock.from_mapping(item) for item in raw_migration_locks
+            ),
+            validation_evidence_refs=tuple(raw_evidence_refs),
+            contract_locks_present=present_lock_fields == lock_fields,
             release_digest=value.get("release_digest"),
         )
         return release.seal()
@@ -584,6 +812,15 @@ class WorkspaceLock:
         component_keys = [item.key for item in self.components]
         if len(component_keys) != len(set(component_keys)):
             raise ArtifactReleaseContractError("WorkspaceLock supports one active package per artifact identity")
+        materialization_targets = [
+            item.materialization_path
+            or (f"skills/{item.artifact_id}" if item.kind == "skill" else f"scenarios/{item.artifact_id}")
+            for item in self.components
+        ]
+        if len(materialization_targets) != len(set(materialization_targets)):
+            raise ArtifactReleaseContractError(
+                "WorkspaceLock supports one active package per materialization target"
+            )
         packages_by_key = {item.key: item for item in self.components}
         for binding in self.bindings:
             dependency = packages_by_key.get(binding.dependency)
@@ -735,6 +972,7 @@ class StableSubscription:
 
 
 __all__ = [
+    "ArtifactContractLock",
     "ArtifactKind",
     "ArtifactPackageRef",
     "ArtifactReleaseContractError",
