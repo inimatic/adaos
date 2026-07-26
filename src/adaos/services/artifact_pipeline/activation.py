@@ -269,6 +269,68 @@ class WorkspaceActivationManager:
             "policy": "reversible_only",
         }
 
+    @staticmethod
+    def _approved_skip(policy: Mapping[str, Any] | None, *, phase: str) -> dict[str, Any]:
+        if not isinstance(policy, Mapping) or str(policy.get("mode") or "") != "skip":
+            raise ActivationError(
+                f"{phase} requires an executor/check or an explicit approved skip policy"
+            )
+        approved_by = str(policy.get("approved_by") or "").strip()
+        reason = str(policy.get("reason") or "").strip()
+        if not approved_by or not reason:
+            raise ActivationError(
+                f"{phase} skip policy requires approved_by and reason"
+            )
+        return {
+            "status": "skipped",
+            "mode": "policy_skip",
+            "approved_by": approved_by,
+            "reason": reason,
+            "recorded_at": _now_iso(),
+        }
+
+    @staticmethod
+    def _reload_receipt(
+        callback: Callable[[WorkspaceLock], Any] | None,
+        policy: Mapping[str, Any] | None,
+        lock: WorkspaceLock,
+    ) -> dict[str, Any]:
+        if callback is None:
+            return WorkspaceActivationManager._approved_skip(policy, phase="runtime reload")
+        raw = callback(lock)
+        if isinstance(raw, Mapping):
+            receipt = dict(raw)
+            status = str(receipt.get("status") or "").strip().lower()
+            if status not in {"completed", "reloaded"}:
+                raise ActivationError("runtime reload returned no completion receipt")
+        else:
+            receipt = {"status": "completed"}
+        receipt.setdefault("mode", "callback")
+        receipt.setdefault("recorded_at", _now_iso())
+        return receipt
+
+    @staticmethod
+    def _health_receipt(
+        callback: Callable[[WorkspaceLock], Any] | None,
+        policy: Mapping[str, Any] | None,
+        lock: WorkspaceLock,
+    ) -> dict[str, Any]:
+        if callback is None:
+            return WorkspaceActivationManager._approved_skip(policy, phase="health verification")
+        raw = callback(lock)
+        if isinstance(raw, Mapping):
+            receipt = dict(raw)
+            status = str(receipt.get("status") or "").strip().lower()
+            passed = status in {"completed", "healthy", "passed"}
+        else:
+            passed = raw is True
+            receipt = {"status": "passed" if passed else "failed"}
+        receipt.setdefault("mode", "callback")
+        receipt.setdefault("recorded_at", _now_iso())
+        if not passed:
+            raise ActivationError("post-activation health check failed")
+        return receipt
+
     def _desired_lock(
         self,
         *,
@@ -276,6 +338,8 @@ class WorkspaceActivationManager:
         plan: ReleasePlan,
         slot_id: str,
         audience: str | None,
+        data_mode: str | None,
+        data_ref: str | None,
     ) -> WorkspaceLock:
         release_digest = plan.release.release_digest or plan.release.computed_digest()
         slots = {item.slot_id: item for item in (current.slots if current else ())}
@@ -285,6 +349,8 @@ class WorkspaceActivationManager:
             release=f"{plan.release.project_id}@{plan.release.version}",
             release_digest=release_digest,
             audience=audience,
+            data_mode=data_mode,
+            data_ref=data_ref,
         )
         current_components = {item.key: item for item in (current.components if current else ())}
         components = dict(current_components)
@@ -428,9 +494,13 @@ class WorkspaceActivationManager:
         idempotency_key: str,
         slot_id: str = "primary",
         audience: str | None = None,
+        data_mode: str | None = None,
+        data_ref: str | None = None,
         fetch_package: Callable[[ArtifactPackageRef], bytes] | None = None,
-        reload_runtime: Callable[[WorkspaceLock], None] | None = None,
-        health_check: Callable[[WorkspaceLock], bool] | None = None,
+        reload_runtime: Callable[[WorkspaceLock], Any] | None = None,
+        health_check: Callable[[WorkspaceLock], Any] | None = None,
+        reload_policy: Mapping[str, Any] | None = None,
+        health_policy: Mapping[str, Any] | None = None,
         permission_decision: (
             bool
             | Mapping[str, Any]
@@ -458,9 +528,13 @@ class WorkspaceActivationManager:
                     idempotency_key=idempotency_key,
                     slot_id=slot_id,
                     audience=audience,
+                    data_mode=data_mode,
+                    data_ref=data_ref,
                     fetch_package=fetch_package,
                     reload_runtime=reload_runtime,
                     health_check=health_check,
+                    reload_policy=reload_policy,
+                    health_policy=health_policy,
                     permission_decision=permission_decision,
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
@@ -477,9 +551,13 @@ class WorkspaceActivationManager:
         idempotency_key: str,
         slot_id: str = "primary",
         audience: str | None = None,
+        data_mode: str | None = None,
+        data_ref: str | None = None,
         fetch_package: Callable[[ArtifactPackageRef], bytes] | None = None,
-        reload_runtime: Callable[[WorkspaceLock], None] | None = None,
-        health_check: Callable[[WorkspaceLock], bool] | None = None,
+        reload_runtime: Callable[[WorkspaceLock], Any] | None = None,
+        health_check: Callable[[WorkspaceLock], Any] | None = None,
+        reload_policy: Mapping[str, Any] | None = None,
+        health_policy: Mapping[str, Any] | None = None,
         permission_decision: (
             bool
             | Mapping[str, Any]
@@ -500,6 +578,12 @@ class WorkspaceActivationManager:
                     "idempotency key is already bound to a different ProjectRelease"
                 )
             if existing.get("status") == "completed":
+                if not isinstance(existing.get("reload_receipt"), Mapping) or not isinstance(
+                    existing.get("health_receipt"), Mapping
+                ):
+                    raise ActivationReplayBlocked(
+                        "completed activation predates mandatory reload/health receipts"
+                    )
                 lock = self.load_lock()
                 if lock is None or existing.get("lock_digest") != lock.to_dict()["lock_digest"]:
                     raise ActivationReplayBlocked(
@@ -574,6 +658,8 @@ class WorkspaceActivationManager:
                 plan=plan,
                 slot_id=slot_id,
                 audience=audience,
+                data_mode=data_mode,
+                data_ref=data_ref,
             )
             operation["desired_lock"] = desired.to_dict()
             component_plan = self._component_plan(current, desired)
@@ -648,6 +734,10 @@ class WorkspaceActivationManager:
                     raise ActivationError(
                         "reversible migrations require one-shot executor and rollback handlers"
                     )
+            if reload_runtime is None:
+                self._approved_skip(reload_policy, phase="runtime reload")
+            if health_check is None:
+                self._approved_skip(health_policy, phase="health verification")
 
             self._phase(operation, "stage", phase_hook=phase_hook)
             stage_root.mkdir(parents=True, exist_ok=False)
@@ -796,12 +886,38 @@ class WorkspaceActivationManager:
             self._write_operation(operation)
 
             self._phase(operation, "reload", phase_hook=phase_hook)
-            if reload_runtime is not None:
-                reload_runtime(desired)
+            try:
+                operation["reload_receipt"] = self._reload_receipt(
+                    reload_runtime,
+                    reload_policy,
+                    desired,
+                )
+            except Exception:
+                operation["reload_receipt"] = {
+                    "status": "failed",
+                    "mode": "callback" if reload_runtime is not None else "policy",
+                    "recorded_at": _now_iso(),
+                }
+                self._write_operation(operation)
+                raise
+            self._write_operation(operation)
 
             self._phase(operation, "health-verify", phase_hook=phase_hook)
-            if health_check is not None and health_check(desired) is not True:
-                raise ActivationError("post-activation health check failed")
+            try:
+                operation["health_receipt"] = self._health_receipt(
+                    health_check,
+                    health_policy,
+                    desired,
+                )
+            except Exception:
+                operation["health_receipt"] = {
+                    "status": "failed",
+                    "mode": "callback" if health_check is not None else "policy",
+                    "recorded_at": _now_iso(),
+                }
+                self._write_operation(operation)
+                raise
+            self._write_operation(operation)
 
             self._phase(
                 operation,

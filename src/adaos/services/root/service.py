@@ -2157,6 +2157,16 @@ class RootDeveloperService:
             promoted = publication.promote(
                 candidate_id,
                 permission_decision=permission_decision,
+                reload_policy={
+                    "mode": "skip",
+                    "approved_by": "root.artifact_publication.mvp",
+                    "reason": "live artifact reload adapter is not connected yet",
+                },
+                health_policy={
+                    "mode": "skip",
+                    "approved_by": "root.artifact_publication.mvp",
+                    "reason": "live artifact health adapter is not connected yet",
+                },
             )
         except PublicationStaleError as exc:
             return {

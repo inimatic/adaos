@@ -71,6 +71,14 @@ def test_candidate_validation_trial_and_freshness_gate() -> None:
         trial_id="trial-recipes",
         audience="owner",
         data_mode="snapshot",
+        data_ref="snapshot:recipes:2026-07-24",
+        isolation_evidence={"status": "verified", "mode": "snapshot"},
+        reload_receipt={
+            "status": "skipped",
+            "approved_by": "pytest",
+            "reason": "candidate fixture",
+        },
+        health_receipt={"status": "passed", "check": "candidate fixture"},
         lock_digest="sha256:" + "c" * 64,
         now="2026-07-24T00:20:00Z",
     )
@@ -80,10 +88,23 @@ def test_candidate_validation_trial_and_freshness_gate() -> None:
         accepted=True,
         now="2026-07-24T01:20:00Z",
         observations=({"status": "accepted", "duration_seconds": 3600},),
+        rollback_receipt={"status": "not_required", "reason": "accepted"},
     )
 
     assert candidate.digest == identity_digest
     assert candidate.status == "accepted"
+    assert candidate.trials[0].duration_seconds == 3600
+    assert candidate.trials[0].rollback_receipt["status"] == "not_required"
+    trial_schema = json.loads(
+        (
+            Path(__file__).parents[1]
+            / "src"
+            / "adaos"
+            / "abi"
+            / "artifact.trial.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    jsonschema.Draft202012Validator(trial_schema).validate(candidate.trials[0].to_dict())
     assert assess_freshness(candidate, stable) == (True, None)
     assert_promotable(candidate, release, stable)
 
@@ -118,6 +139,7 @@ def test_real_data_trial_requires_safety_proof() -> None:
             trial_id="unsafe",
             audience="owner",
             data_mode="real",
+            data_ref="dataset:recipes:live",
             lock_digest="sha256:" + "c" * 64,
             now="2026-07-24T00:02:00Z",
         )
@@ -127,11 +149,53 @@ def test_real_data_trial_requires_safety_proof() -> None:
         trial_id="safe",
         audience="owner",
         data_mode="real",
+        data_ref="dataset:recipes:live",
         lock_digest="sha256:" + "c" * 64,
         now="2026-07-24T00:02:00Z",
         real_data_read_only=True,
     )
     assert allowed.status == "trial"
+    with pytest.raises(CandidateError, match="successful health receipt"):
+        complete_trial(
+            allowed,
+            trial_id="safe",
+            accepted=True,
+            now="2026-07-24T00:03:00Z",
+        )
+
+
+def test_snapshot_trial_requires_data_identity_and_isolation_evidence() -> None:
+    stable = _release("1.0.0", "1", "a")
+    release = _release("1.1.0", "2", "b")
+    candidate = candidate_from_release(
+        candidate_id="recipes-snapshot",
+        release=release,
+        base_release=stable,
+        package_digest=release.components[0].digest,
+        change_ids=("change-snapshot",),
+        now="2026-07-24T00:00:00Z",
+    )
+    candidate = record_validation(candidate, {"status": "passed"}, now="2026-07-24T00:01:00Z")
+
+    with pytest.raises(CandidateError, match="immutable data_ref"):
+        begin_trial(
+            candidate,
+            trial_id="missing-data",
+            audience="owner",
+            data_mode="snapshot",
+            lock_digest="sha256:" + "c" * 64,
+            now="2026-07-24T00:02:00Z",
+        )
+    with pytest.raises(CandidateError, match="isolation evidence"):
+        begin_trial(
+            candidate,
+            trial_id="missing-isolation",
+            audience="owner",
+            data_mode="snapshot",
+            data_ref="snapshot:recipes:one",
+            lock_digest="sha256:" + "c" * 64,
+            now="2026-07-24T00:02:00Z",
+        )
 
 
 def test_candidate_store_rejects_tampered_identity(tmp_path: Path) -> None:

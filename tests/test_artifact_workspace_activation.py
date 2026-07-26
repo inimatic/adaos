@@ -93,12 +93,34 @@ def _manager(tmp_path: Path):
     return store, manager
 
 
+def _activate(manager: WorkspaceActivationManager, plan, **kwargs):
+    if kwargs.get("reload_runtime") is None:
+        kwargs.setdefault(
+            "reload_policy",
+            {
+                "mode": "skip",
+                "approved_by": "pytest.artifact_activation",
+                "reason": "test Workspace has no attached runtime",
+            },
+        )
+    if kwargs.get("health_check") is None:
+        kwargs.setdefault(
+            "health_policy",
+            {
+                "mode": "skip",
+                "approved_by": "pytest.artifact_activation",
+                "reason": "test case does not exercise live runtime health",
+            },
+        )
+    return manager.activate(plan, **kwargs)
+
+
 def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -> None:
     built = _built_scenario(tmp_path, version="1.0.0", marker="one")
     store, manager = _manager(tmp_path)
     store.put(built.archive_bytes)
 
-    result = manager.activate(
+    result = _activate(manager,
         _plan(built),
         idempotency_key="install-recipes-1.0.0",
         health_check=lambda lock: lock.slots[0].release == "recipes@1.0.0",
@@ -113,10 +135,25 @@ def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -
     assert [event["phase"] for event in operation["events"]] == list(ACTIVATION_PHASES)
     assert operation["permission_decision"]["reason"] == "no_introduced_permissions"
     assert operation["migration_execution"]["status"] == "not_required"
+    assert operation["reload_receipt"]["status"] == "skipped"
+    assert operation["reload_receipt"]["approved_by"] == "pytest.artifact_activation"
+    assert operation["health_receipt"]["status"] == "passed"
 
-    replay = manager.activate(_plan(built), idempotency_key="install-recipes-1.0.0")
+    replay = _activate(manager, _plan(built), idempotency_key="install-recipes-1.0.0")
     assert replay.idempotent_replay is True
     assert replay.workspace_lock.lock_revision == 1
+
+
+def test_activation_requires_explicit_reload_and_health_policy(tmp_path: Path) -> None:
+    built = _built_scenario(tmp_path, version="1.0.0", marker="policy-required")
+    store, manager = _manager(tmp_path)
+    store.put(built.archive_bytes)
+
+    with pytest.raises(ActivationError, match="runtime reload requires"):
+        manager.activate(_plan(built), idempotency_key="missing-runtime-policy")
+
+    assert manager.load_lock() is None
+    assert not (tmp_path / "workspace" / "scenarios" / "recipes").exists()
 
 
 def test_failed_health_rolls_back_files_and_lock_and_cannot_auto_replay(tmp_path: Path) -> None:
@@ -125,10 +162,10 @@ def test_failed_health_rolls_back_files_and_lock_and_cannot_auto_replay(tmp_path
     store, manager = _manager(tmp_path)
     store.put(first.archive_bytes)
     store.put(second.archive_bytes)
-    initial = manager.activate(_plan(first), idempotency_key="initial")
+    initial = _activate(manager, _plan(first), idempotency_key="initial")
 
     with pytest.raises(ActivationError, match="health check failed"):
-        manager.activate(
+        _activate(manager,
             _plan(second),
             idempotency_key="upgrade-fails",
             health_check=lambda lock: False,
@@ -140,7 +177,7 @@ def test_failed_health_rolls_back_files_and_lock_and_cannot_auto_replay(tmp_path
     assert not list((tmp_path / "state" / "artifact_pipeline" / "backups").rglob("recipes"))
 
     with pytest.raises(ActivationReplayBlocked, match="explicitly new idempotency key"):
-        manager.activate(_plan(second), idempotency_key="upgrade-fails")
+        _activate(manager, _plan(second), idempotency_key="upgrade-fails")
 
 
 def test_removed_dependency_is_pruned_from_lock_and_workspace(tmp_path: Path) -> None:
@@ -151,11 +188,11 @@ def test_removed_dependency_is_pruned_from_lock_and_workspace(tmp_path: Path) ->
     store.put(first.archive_bytes)
     store.put(second.archive_bytes)
     store.put(skill.archive_bytes)
-    manager.activate(_plan_with_skill(first, skill), idempotency_key="with-skill")
+    _activate(manager, _plan_with_skill(first, skill), idempotency_key="with-skill")
     skill_target = tmp_path / "workspace" / "skills" / "shopping"
     assert skill_target.is_dir()
 
-    result = manager.activate(_plan(second), idempotency_key="without-skill")
+    result = _activate(manager, _plan(second), idempotency_key="without-skill")
 
     assert {item.key for item in result.workspace_lock.components} == {"scenario:recipes"}
     assert result.workspace_lock.bindings == ()
@@ -171,10 +208,10 @@ def test_removed_dependency_is_restored_when_post_switch_health_fails(tmp_path: 
     store, manager = _manager(tmp_path)
     for built in (first, second, skill):
         store.put(built.archive_bytes)
-    initial = manager.activate(_plan_with_skill(first, skill), idempotency_key="rollback-base")
+    initial = _activate(manager, _plan_with_skill(first, skill), idempotency_key="rollback-base")
 
     with pytest.raises(ActivationError, match="health check failed"):
-        manager.activate(
+        _activate(manager,
             _plan(second),
             idempotency_key="rollback-remove",
             health_check=lambda _lock: False,
@@ -190,7 +227,7 @@ def test_workspace_lock_compare_and_switch_preserves_newer_observed_lock(tmp_pat
     store, manager = _manager(tmp_path)
     store.put(first.archive_bytes)
     store.put(second.archive_bytes)
-    initial = manager.activate(_plan(first), idempotency_key="cas-base")
+    initial = _activate(manager, _plan(first), idempotency_key="cas-base")
     current = initial.workspace_lock
     foreign = WorkspaceLock(
         lock_revision=current.lock_revision + 1,
@@ -206,7 +243,7 @@ def test_workspace_lock_compare_and_switch_preserves_newer_observed_lock(tmp_pat
             manager._write_lock(foreign)
 
     with pytest.raises(ActivationConflictError, match="changed after activation planning"):
-        manager.activate(
+        _activate(manager,
             _plan(second),
             idempotency_key="cas-conflict",
             phase_hook=inject_foreign_writer,
@@ -243,7 +280,7 @@ def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path) -> No
 
     def run_first() -> None:
         try:
-            first_manager.activate(
+            _activate(first_manager,
                 _plan(first),
                 idempotency_key="lease-first",
                 phase_hook=hold_first,
@@ -253,7 +290,7 @@ def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path) -> No
 
     def run_second() -> None:
         try:
-            second_manager.activate(_plan(second), idempotency_key="lease-second")
+            _activate(second_manager, _plan(second), idempotency_key="lease-second")
         except BaseException as exc:  # pragma: no cover - assertion reports the exception
             errors.append(exc)
 
@@ -294,7 +331,7 @@ def test_failure_at_each_activation_phase_leaves_no_partial_first_install(
             raise RuntimeError(f"interrupt at {phase}")
 
     with pytest.raises(ActivationError, match=f"interrupt at {failed_phase}"):
-        manager.activate(
+        _activate(manager,
             _plan(built),
             idempotency_key=f"failure-{failed_phase}",
             phase_hook=fail,
@@ -309,7 +346,7 @@ def test_activation_fetches_missing_package_once_and_verifies_reference(tmp_path
     store, manager = _manager(tmp_path)
     fetched: list[str] = []
 
-    result = manager.activate(
+    result = _activate(manager,
         _plan(built),
         idempotency_key="fetch-install",
         fetch_package=lambda ref: fetched.append(ref.digest) or built.archive_bytes,
@@ -327,9 +364,9 @@ def test_introduced_permissions_require_an_explicit_approval(tmp_path: Path) -> 
     plan = _plan(built, permissions=("shopping.read",))
 
     with pytest.raises(ActivationError, match="no explicit permission decision"):
-        manager.activate(plan, idempotency_key="permission-denied-by-default")
+        _activate(manager, plan, idempotency_key="permission-denied-by-default")
 
-    result = manager.activate(
+    result = _activate(manager,
         plan,
         idempotency_key="permission-approved",
         permission_decision={"approved": True, "actor": "user:test"},
@@ -353,7 +390,7 @@ def test_irreversible_migration_is_rejected_before_staging(tmp_path: Path) -> No
     }
 
     with pytest.raises(ActivationError, match="deferred attended workflow"):
-        manager.activate(
+        _activate(manager,
             _plan(built, migrations=(migration,)),
             idempotency_key="irreversible-migration",
         )
@@ -368,7 +405,7 @@ def test_reversible_migration_executes_once_and_rolls_back_after_health_failure(
     store, manager = _manager(tmp_path)
     store.put(first.archive_bytes)
     store.put(second.archive_bytes)
-    initial = manager.activate(_plan(first), idempotency_key="migration-initial")
+    initial = _activate(manager, _plan(first), idempotency_key="migration-initial")
     migration = {
         "id": "recipes-schema-1-to-2",
         "from_schema": 1,
@@ -380,7 +417,7 @@ def test_reversible_migration_executes_once_and_rolls_back_after_health_failure(
     reloads: list[str] = []
 
     with pytest.raises(ActivationError, match="health check failed"):
-        manager.activate(
+        _activate(manager,
             _plan(second, migrations=(migration,)),
             idempotency_key="migration-health-failure",
             migration_executor=lambda request: executions.append(dict(request))
@@ -416,7 +453,7 @@ def test_unknown_migration_result_is_not_replayed_and_requires_reconciliation(tm
         raise TimeoutError("migration outcome unavailable")
 
     with pytest.raises(ActivationError, match="migration outcome unavailable"):
-        manager.activate(
+        _activate(manager,
             _plan(built, migrations=(migration,)),
             idempotency_key="migration-uncertain",
             migration_executor=timeout_after_dispatch,
@@ -425,7 +462,7 @@ def test_unknown_migration_result_is_not_replayed_and_requires_reconciliation(tm
 
     assert len(executions) == 1
     with pytest.raises(ActivationReplayBlocked, match="explicitly new idempotency key"):
-        manager.activate(
+        _activate(manager,
             _plan(built, migrations=(migration,)),
             idempotency_key="migration-uncertain",
             migration_executor=timeout_after_dispatch,
@@ -471,7 +508,7 @@ def test_explicit_recovery_rolls_back_interrupted_journal_without_replaying(tmp_
     )
 
     with pytest.raises(ActivationReplayBlocked):
-        manager.activate(_plan(built), idempotency_key="interrupted")
+        _activate(manager, _plan(built), idempotency_key="interrupted")
 
     recovered = manager.recover_interrupted(operation_id)
     assert recovered["status"] == "recovered"

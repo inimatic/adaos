@@ -135,8 +135,8 @@ proof is not silently promoted to stand or production acceptance.
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 5/9 | validated-local (bounded) | deterministic package build/store/verify, secret and authoring-state exclusion, portable path admission, corruption and zero-byte coverage | builder attestation identity and external signing |
 | AP2 | 6/10 | validated-local (bounded) | exact dependency ranges/digests, complete-set fixed-point selection, consistent bindings, reverse consumers, conflict/cycle rejection | broader schema-component and migration-lock inputs plus diagnostics |
-| AP3 | 6/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, phase journal, permission admission, reversible migration/reconciliation, and interruption recovery | mandatory reload/health policy, delayed observation, retention, operator diff, and stand validation |
-| AP4 | 6/10 | validated-local (bounded) | exact candidate identity, isolated package materialization, acceptance record, immutable Builder task snapshot, concurrent-DEV compare-and-switch | enforced data isolation and health/rollback trial evidence; stand validation |
+| AP3 | 7/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, and interruption recovery | delayed observation, retention, operator diff, and stand validation |
+| AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
 | AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
 | AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
@@ -273,7 +273,7 @@ leave either the old or the new complete release active.
 - [x] `[must]` `AP3-01` Implement durable WorkspaceLock storage with a
   workspace-wide writer lease, compare-and-switch revision, and previous-lock
   linkage.
-- [ ] `[must]` `AP3-02` Implement activation phases: resolve, fetch, verify,
+- [x] `[must]` `AP3-02` Implement activation phases: resolve, fetch, verify,
   dependency plan, permission plan, migration plan, stage, checkpoint,
   switch-lock, reload, health verify, and commit; reload and health must record
   either a durable receipt or an explicit policy-approved skip.
@@ -304,7 +304,9 @@ rechecking the expected lock digest before filesystem mutation, rebuilding
 components from all active slot roots, and transactionally removing or
 restoring unreachable packages. Immutable remote package fetch is performed
 before the Workspace writer lease when a fetch adapter is supplied. `AP3-02`
-remains open for mandatory reload and health receipts or a named policy skip.
+was reclosed after reload and health became fail-closed phases: every success
+has a callback receipt or a named policy skip with `approved_by` and `reason`,
+and legacy completed operations without both receipts cannot replay as current.
 
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 
@@ -325,11 +327,11 @@ acceptance or rollback evidence.
   isolated DEV context.
 - [x] `[must]` `AP4-04` Build candidate version, source revision, base release,
   and package digest from the DEV result.
-- [ ] `[must]` `AP4-05` Add a trial WorkspaceLock slot with explicit audience and
+- [x] `[must]` `AP4-05` Add a trial WorkspaceLock slot with explicit audience and
   data mode.
 - [x] `[must]` `AP4-06` Protect primary activation and real data from an
   incompatible candidate.
-- [ ] `[must]` `AP4-07` Record deterministic validation, trial duration,
+- [x] `[must]` `AP4-07` Record deterministic validation, trial duration,
   acceptance, health, and rollback evidence against candidate digest.
 - [x] `[should]` `AP4-08` Add clear Builder and runtime labels for stable versus
   trial activation.
@@ -342,8 +344,12 @@ Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-
 candidate publication regressions in
 `tests/test_artifact_publication_service.py`, and preview identity regressions
 in `tests/test_webspace_phase2.py`.
-`AP4-05` and `AP4-07` were reopened because data mode is not enforced by the
-trial lock and live runtime health evidence is optional.
+`AP4-05` and `AP4-07` were reclosed after TrialEvidence and WorkspaceLock slots
+began carrying the same explicit data mode and immutable data identity. Mock
+and snapshot modes require isolation evidence, read-only/real modes require
+access safety proof, accepted trials require a successful health receipt, and
+every decision records duration and rollback disposition. Rejected isolated
+trial Workspaces are atomically detached into rollback history.
 
 ## Milestone AP5: Freshness Gate And Stable Promotion
 

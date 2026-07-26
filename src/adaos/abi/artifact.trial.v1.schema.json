@@ -9,12 +9,18 @@
     "trial_id": {"type": "string", "minLength": 1},
     "candidate_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "audience": {"type": "string", "minLength": 1},
-    "data_mode": {"enum": ["mock", "snapshot", "read_only", "real"]},
+    "data_mode": {"enum": ["empty", "mock", "snapshot", "read_only", "real"]},
+    "data_ref": {"type": "string", "minLength": 1},
+    "isolation_evidence": {"type": "object"},
     "lock_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "started_at": {"type": "string", "minLength": 1},
     "ended_at": {"type": "string", "minLength": 1},
     "status": {"enum": ["running", "accepted", "rejected", "failed"]},
-    "observations": {"type": "array", "items": {"type": "object"}}
+    "observations": {"type": "array", "items": {"type": "object"}},
+    "reload_receipt": {"type": "object"},
+    "health_receipt": {"type": "object"},
+    "rollback_receipt": {"type": "object"},
+    "duration_seconds": {"type": "integer", "minimum": 0}
   },
   "additionalProperties": false
 }

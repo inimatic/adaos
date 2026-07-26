@@ -77,6 +77,14 @@ def _accepted_candidate(base: ReleasePlan, candidate: ReleasePlan, package_diges
         trial_id="trial-one",
         audience="owner",
         data_mode="snapshot",
+        data_ref="snapshot:recipes:test-fixture",
+        isolation_evidence={"status": "verified", "mode": "snapshot"},
+        reload_receipt={
+            "status": "skipped",
+            "approved_by": "pytest",
+            "reason": "candidate fixture",
+        },
+        health_receipt={"status": "passed", "check": "candidate fixture"},
         lock_digest="sha256:" + "e" * 64,
         now="2026-07-24T00:20:00Z",
     )
@@ -85,6 +93,7 @@ def _accepted_candidate(base: ReleasePlan, candidate: ReleasePlan, package_diges
         trial_id="trial-one",
         accepted=True,
         now="2026-07-24T01:20:00Z",
+        rollback_receipt={"status": "not_required", "reason": "accepted"},
     )
 
 
@@ -232,7 +241,20 @@ def test_subscription_detects_channel_move_and_advances_only_after_activation(tm
         package_store=package_store,
         state_root=tmp_path / "state",
     )
-    initial_activation = activation.activate(stable, idempotency_key="initial-stable")
+    initial_activation = activation.activate(
+        stable,
+        idempotency_key="initial-stable",
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "test Workspace has no runtime",
+        },
+        health_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "initial fixture activation",
+        },
+    )
     subscription = subscriptions.subscribe_installed(
         project_id="recipes",
         release="recipes@1.0.0",
@@ -258,6 +280,11 @@ def test_subscription_detects_channel_move_and_advances_only_after_activation(tm
             activation,
             idempotency_key="failed-update",
             health_check=lambda lock: False,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "pytest",
+                "reason": "test Workspace has no runtime",
+            },
         )
     assert subscription_store.load()["recipes"].installed_digest == stable.release.release_digest
 
@@ -266,6 +293,11 @@ def test_subscription_detects_channel_move_and_advances_only_after_activation(tm
         activation,
         idempotency_key="accepted-update",
         health_check=lambda lock: True,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "test Workspace has no runtime",
+        },
     )
     assert result.status == "completed"
     assert updated.installed_release == "recipes@1.1.0"

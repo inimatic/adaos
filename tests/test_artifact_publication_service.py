@@ -92,6 +92,28 @@ def _skill(root: Path) -> Path:
     return skill
 
 
+def _promote(service: ArtifactPublicationService, candidate_id: str, **kwargs):
+    if kwargs.get("reload_runtime") is None:
+        kwargs.setdefault(
+            "reload_policy",
+            {
+                "mode": "skip",
+                "approved_by": "pytest.artifact_publication",
+                "reason": "test Workspace has no live runtime",
+            },
+        )
+    if kwargs.get("health_check") is None:
+        kwargs.setdefault(
+            "health_policy",
+            {
+                "mode": "skip",
+                "approved_by": "pytest.artifact_publication",
+                "reason": "test does not exercise live runtime health",
+            },
+        )
+    return service.promote(candidate_id, **kwargs)
+
+
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     workspace = tmp_path / "workspace"
@@ -120,6 +142,18 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
 
     assert pushed.package.digest == prepared.plan.packages[0].digest
     assert prepared.candidate.status == "trial"
+    trial = prepared.candidate.trials[0]
+    assert trial.data_mode == "empty"
+    assert trial.isolation_evidence["status"] == "verified"
+    assert trial.reload_receipt["status"] == "skipped"
+    assert trial.health_receipt["status"] == "passed"
+    trial_lock = WorkspaceActivationManager(
+        workspace_root=prepared.trial_workspace,
+        package_store=service.package_store,
+        state_root=service.state_root / "trials" / prepared.candidate.candidate_id / "state",
+    ).load_lock()
+    assert trial_lock is not None
+    assert trial_lock.slots[0].data_mode == "empty"
     assert (prepared.trial_workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
     assert not (workspace / "scenarios" / "recipes").exists()
     assert (workspace / "primary-marker.txt").read_text(encoding="utf-8") == "unchanged"
@@ -129,7 +163,7 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
         accepted=True,
         observations=({"user": "owner", "decision": "looks_good"},),
     )
-    result = service.promote(accepted.candidate_id, health_check=lambda lock: True)
+    result = _promote(service, accepted.candidate_id, health_check=lambda lock: True)
 
     assert result.pointer.release == "recipes@1.0.0"
     assert (workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
@@ -169,6 +203,41 @@ def test_candidate_rejects_legacy_workspace_downgrade_before_trial(tmp_path: Pat
         )
 
     assert remote.archives == {}
+
+
+def test_rejected_trial_is_detached_with_durable_rollback_evidence(tmp_path: Path) -> None:
+    dev = _scenario(tmp_path / "dev")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-rejected",),
+        validation_evidence={"status": "passed"},
+    )
+
+    rejected = service.decide_candidate(
+        prepared.candidate.candidate_id,
+        accepted=False,
+        observations=({"decision": "needs_changes"},),
+    )
+
+    trial = rejected.trials[0]
+    assert rejected.status == "rejected"
+    assert trial.rollback_receipt["status"] == "rolled_back"
+    assert trial.duration_seconds is not None
+    assert not prepared.trial_workspace.exists()
+    assert Path(trial.rollback_receipt["archive"]).is_dir()
 
 
 def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:
@@ -221,7 +290,7 @@ def test_promotion_rechecks_persisted_public_source_tree(tmp_path: Path) -> None
     remote.tree = "0" * 40
 
     with pytest.raises(PublicationError, match="public source tree changed"):
-        service.promote(prepared.candidate.candidate_id)
+        _promote(service, prepared.candidate.candidate_id)
 
     with pytest.raises(FileNotFoundError):
         remote.get_channel("recipes", "stable")
@@ -251,7 +320,7 @@ def test_scenario_candidate_locks_and_materializes_stable_skill_dependency(
         validation_evidence={"status": "passed"},
     )
     skill_service.decide_candidate(skill_candidate.candidate.candidate_id, accepted=True)
-    skill_service.promote(skill_candidate.candidate.candidate_id)
+    _promote(skill_service, skill_candidate.candidate.candidate_id)
 
     scenario_dir = _scenario(tmp_path / "dev")
     (scenario_dir / "scenario.yaml").write_text(
@@ -288,7 +357,7 @@ def test_scenario_candidate_locks_and_materializes_stable_skill_dependency(
     ).is_file()
 
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
-    service.promote(prepared.candidate.candidate_id)
+    _promote(service, prepared.candidate.candidate_id)
     registry = (workspace / "registry.json").read_text(encoding="utf-8")
     assert '"shopping_skill"' in registry
     assert '"package_lock"' in registry
@@ -369,7 +438,7 @@ def test_scenario_candidate_does_not_mix_unrelated_dev_dependency(
         validation_evidence={"status": "passed"},
     )
     skill_service.decide_candidate(stable_candidate.candidate.candidate_id, accepted=True)
-    skill_service.promote(stable_candidate.candidate.candidate_id)
+    _promote(skill_service, stable_candidate.candidate.candidate_id)
 
     (skill_dir / "skill.yaml").write_text(
         "name: shopping_skill\nversion: 3.0.0\n",
@@ -444,17 +513,17 @@ def test_moved_base_creates_reapply_plan_and_requires_new_trial(tmp_path: Path) 
 
     baseline = checkpoint_candidate("1.0.0", "baseline", "baseline")
     service.decide_candidate(baseline.candidate.candidate_id, accepted=True)
-    service.promote(baseline.candidate.candidate_id)
+    _promote(service, baseline.candidate.candidate_id)
 
     feature = checkpoint_candidate("1.1.0", "change-favorites", "favorites")
     service.decide_candidate(feature.candidate.candidate_id, accepted=True)
 
     moved = checkpoint_candidate("1.0.1", "change-mainline", "mainline")
     service.decide_candidate(moved.candidate.candidate_id, accepted=True)
-    service.promote(moved.candidate.candidate_id)
+    _promote(service, moved.candidate.candidate_id)
 
     with pytest.raises(PublicationStaleError) as stale_error:
-        service.promote(feature.candidate.candidate_id)
+        _promote(service, feature.candidate.candidate_id)
 
     rebase_plan = stale_error.value.plan
     assert rebase_plan.change_ids == ("change-favorites",)
@@ -490,7 +559,7 @@ def test_moved_base_creates_reapply_plan_and_requires_new_trial(tmp_path: Path) 
     assert rebased.candidate.change_ids == ("change-favorites",)
     assert rebased.candidate.digest != feature.candidate.digest
     service.decide_candidate(rebased.candidate.candidate_id, accepted=True)
-    promoted = service.promote(rebased.candidate.candidate_id)
+    promoted = _promote(service, rebased.candidate.candidate_id)
     assert promoted.pointer.release == "recipes@1.1.1"
 
 
@@ -527,7 +596,7 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
             validation_evidence={"status": "passed"},
         )
         publisher.decide_candidate(prepared.candidate.candidate_id, accepted=True)
-        return publisher.promote(prepared.candidate.candidate_id)
+        return _promote(publisher, prepared.candidate.candidate_id)
 
     first = publish("1.0.0", "first")
     subscriber = ArtifactPublicationService(
@@ -543,6 +612,16 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
         first.plan,
         idempotency_key="initial-install",
         fetch_package=remote.fetch_package,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "subscriber fixture has no live runtime",
+        },
+        health_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "initial subscriber fixture",
+        },
     )
     subscriber.subscriptions.save(
         StableSubscription(
@@ -561,6 +640,11 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
         subscriber.activate_subscription_update(
             "recipes",
             health_check=lambda _lock: False,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "pytest",
+                "reason": "subscriber fixture has no live runtime",
+            },
         )
     unchanged = subscriber.subscriptions.load()["recipes"]
     assert unchanged.installed_digest == first.pointer.release_digest
@@ -572,6 +656,11 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
         "recipes",
         idempotency_key="subscription-retry-after-health-fix",
         health_check=lambda _lock: True,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "subscriber fixture has no live runtime",
+        },
     )
     assert updated.subscription.installed_digest == second.pointer.release_digest
     assert (subscriber.workspace_root / "scenarios" / "recipes" / "webui.json").read_text(
@@ -606,7 +695,7 @@ def test_promotion_reconciles_unknown_channel_outcome_without_second_write(
     remote.fail_after_channel_once = True
 
     with pytest.raises(TimeoutError, match="outcome was not delivered"):
-        service.promote(prepared.candidate.candidate_id, health_check=lambda _lock: True)
+        _promote(service, prepared.candidate.candidate_id, health_check=lambda _lock: True)
 
     paused = service.load_promotion(prepared.candidate.candidate_id)
     assert paused is not None
@@ -615,7 +704,7 @@ def test_promotion_reconciles_unknown_channel_outcome_without_second_write(
     assert "channel_moved" not in paused["receipts"]
     assert remote.get_channel("recipes").release_digest == prepared.candidate.release_digest
 
-    promoted = service.promote(
+    promoted = _promote(service,
         prepared.candidate.candidate_id,
         health_check=lambda _lock: True,
     )
@@ -660,7 +749,7 @@ def test_promotion_continues_after_projection_failure_without_reactivation(
     )
 
     with pytest.raises(RuntimeError, match="projection storage unavailable"):
-        service.promote(prepared.candidate.candidate_id, health_check=lambda _lock: True)
+        _promote(service, prepared.candidate.candidate_id, health_check=lambda _lock: True)
 
     paused = service.load_promotion(prepared.candidate.candidate_id)
     assert paused is not None
@@ -670,7 +759,7 @@ def test_promotion_continues_after_projection_failure_without_reactivation(
     activation_operation = paused["receipts"]["workspace_activated"]["operation_id"]
     monkeypatch.setattr(service, "_record_workspace_projection", original_projection)
 
-    promoted = service.promote(prepared.candidate.candidate_id)
+    promoted = _promote(service, prepared.candidate.candidate_id)
 
     assert remote.channel_writes == 1
     completed = service.load_promotion(prepared.candidate.candidate_id)

@@ -51,6 +51,7 @@ from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     atomic_write_json,
     mutation_lock,
+    replace_with_retry,
 )
 from adaos.services.workspace_registry import (
     set_workspace_registry_channel,
@@ -342,6 +343,8 @@ class ArtifactPublicationService:
         idempotency_key: str | None = None,
         health_check=None,
         reload_runtime=None,
+        health_policy=None,
+        reload_policy=None,
         permission_decision=None,
         migration_executor=None,
         migration_rollback=None,
@@ -365,6 +368,8 @@ class ArtifactPublicationService:
             fetch_package=self.remote.fetch_package,
             reload_runtime=reload_runtime,
             health_check=health_check,
+            reload_policy=reload_policy,
+            health_policy=health_policy,
             permission_decision=permission_decision,
             migration_executor=migration_executor,
             migration_rollback=migration_rollback,
@@ -662,7 +667,9 @@ class ArtifactPublicationService:
         validation_evidence: Mapping[str, Any],
         current_stable: ReleasePlan | None = None,
         audience: str = "owner",
-        data_mode: str = "snapshot",
+        data_mode: str = "empty",
+        data_ref: str | None = None,
+        data_isolation_evidence: Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
         record = self.load_pushed_source(kind, artifact_id)
         built = self._verify_current_source(record, artifact_dir)
@@ -723,16 +730,41 @@ class ArtifactPublicationService:
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
         trial_workspace = self.state_root / "trials" / candidate_id / "workspace"
-        trial_activation = WorkspaceActivationManager(
+        trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / candidate_id / "state",
-        ).activate(
+        )
+        trial_activation = trial_manager.activate(
             plan,
             idempotency_key=f"candidate-trial:{candidate.digest}",
             audience=audience,
+            data_mode=data_mode,
+            data_ref=data_ref,
             fetch_package=self.remote.fetch_package,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "artifact_pipeline.isolated_trial",
+                "reason": "isolated trial Workspace is not attached to a live runtime",
+            },
+            health_check=lambda lock: {
+                "status": "passed",
+                "check": "verified_package_materialization",
+                "lock_digest": lock.to_dict()["lock_digest"],
+            },
         )
+        trial_operation = json.loads(
+            trial_manager.operation_path(trial_activation.operation_id).read_text(
+                encoding="utf-8"
+            )
+        )
+        isolation_evidence = data_isolation_evidence
+        if data_mode == "empty" and isolation_evidence is None:
+            isolation_evidence = {
+                "status": "verified",
+                "mode": "empty",
+                "reason": "isolated trial Workspace has no seeded data",
+            }
         candidate = begin_trial(
             candidate,
             trial_id=f"trial-{candidate_id}",
@@ -740,6 +772,10 @@ class ArtifactPublicationService:
             data_mode=data_mode,  # type: ignore[arg-type]
             lock_digest=trial_activation.workspace_lock.to_dict()["lock_digest"],
             now=_now(),
+            data_ref=data_ref,
+            isolation_evidence=isolation_evidence,
+            reload_receipt=trial_operation.get("reload_receipt"),
+            health_receipt=trial_operation.get("health_receipt"),
         )
         self.candidate_store.save(candidate)
         return PreparedCandidate(candidate, plan, trial_workspace)
@@ -755,14 +791,51 @@ class ArtifactPublicationService:
         running = next((item for item in candidate.trials if item.status == "running"), None)
         if running is None:
             raise PublicationError("candidate has no running trial")
-        candidate = complete_trial(
-            candidate,
-            trial_id=running.trial_id,
-            accepted=accepted,
-            now=_now(),
-            observations=observations,
-        )
-        self.candidate_store.save(candidate)
+        rollback_receipt: dict[str, Any]
+        trial_workspace: Path | None = None
+        archive: Path | None = None
+        if accepted:
+            rollback_receipt = {
+                "status": "not_required",
+                "reason": "trial accepted for promotion",
+                "recorded_at": _now(),
+            }
+        else:
+            trial_root = self.state_root / "trials" / candidate_id
+            trial_workspace = trial_root / "workspace"
+            archive = trial_root / "rollback" / running.trial_id / "workspace"
+            if not trial_workspace.is_dir():
+                raise PublicationError("rejected trial Workspace is missing before rollback")
+            if archive.exists():
+                raise PublicationError("rejected trial rollback archive already exists")
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            replace_with_retry(trial_workspace, archive)
+            rollback_receipt = {
+                "status": "rolled_back",
+                "mode": "isolated_workspace_detached",
+                "archive": str(archive),
+                "recorded_at": _now(),
+            }
+        try:
+            candidate = complete_trial(
+                candidate,
+                trial_id=running.trial_id,
+                accepted=accepted,
+                now=_now(),
+                observations=observations,
+                rollback_receipt=rollback_receipt,
+            )
+            self.candidate_store.save(candidate)
+        except Exception:
+            if (
+                not accepted
+                and archive is not None
+                and archive.exists()
+                and trial_workspace is not None
+                and not trial_workspace.exists()
+            ):
+                replace_with_retry(archive, trial_workspace)
+            raise
         return candidate
 
     def prepare_rebased_candidate(
@@ -774,7 +847,9 @@ class ArtifactPublicationService:
         artifact_dir: Path,
         validation_evidence: Mapping[str, Any],
         audience: str = "owner",
-        data_mode: str = "snapshot",
+        data_mode: str = "empty",
+        data_ref: str | None = None,
+        data_isolation_evidence: Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
         stale = self.candidate_store.load(stale_candidate_id)
         if stale.status != "stale":
@@ -804,6 +879,8 @@ class ArtifactPublicationService:
             current_stable=current,
             audience=audience,
             data_mode=data_mode,
+            data_ref=data_ref,
+            data_isolation_evidence=data_isolation_evidence,
         )
 
     def promote(
@@ -812,6 +889,8 @@ class ArtifactPublicationService:
         *,
         health_check=None,
         reload_runtime=None,
+        health_policy=None,
+        reload_policy=None,
         permission_decision=None,
         migration_executor=None,
         migration_rollback=None,
@@ -822,6 +901,8 @@ class ArtifactPublicationService:
                     candidate_id,
                     health_check=health_check,
                     reload_runtime=reload_runtime,
+                    health_policy=health_policy,
+                    reload_policy=reload_policy,
                     permission_decision=permission_decision,
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
@@ -835,6 +916,8 @@ class ArtifactPublicationService:
         *,
         health_check=None,
         reload_runtime=None,
+        health_policy=None,
+        reload_policy=None,
         permission_decision=None,
         migration_executor=None,
         migration_rollback=None,
@@ -966,6 +1049,12 @@ class ArtifactPublicationService:
                 raw_lock = activation_receipt.get("workspace_lock")
                 if not isinstance(raw_lock, Mapping):
                     raise PublicationError("promotion activation receipt has no WorkspaceLock")
+                if not isinstance(activation_receipt.get("reload_receipt"), Mapping) or not isinstance(
+                    activation_receipt.get("health_receipt"), Mapping
+                ):
+                    raise PublicationError(
+                        "promotion activation predates mandatory reload/health receipts"
+                    )
                 activation = ActivationResult(
                     operation_id=str(activation_receipt.get("operation_id") or ""),
                     status="completed",
@@ -974,19 +1063,27 @@ class ArtifactPublicationService:
                     idempotent_replay=True,
                 )
             else:
-                activation = WorkspaceActivationManager(
+                activation_manager = WorkspaceActivationManager(
                     workspace_root=self.workspace_root,
                     package_store=self.package_store,
                     state_root=self.state_root / "activation",
-                ).activate(
+                )
+                activation = activation_manager.activate(
                     plan,
                     idempotency_key=f"stable:{candidate.release_digest}",
                     fetch_package=self.remote.fetch_package,
                     reload_runtime=reload_runtime,
                     health_check=health_check,
+                    reload_policy=reload_policy,
+                    health_policy=health_policy,
                     permission_decision=permission_decision,
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
+                )
+                activation_operation = json.loads(
+                    activation_manager.operation_path(activation.operation_id).read_text(
+                        encoding="utf-8"
+                    )
                 )
                 self._promotion_receipt(
                     operation,
@@ -995,6 +1092,8 @@ class ArtifactPublicationService:
                         "operation_id": activation.operation_id,
                         "lock_digest": activation.workspace_lock.to_dict()["lock_digest"],
                         "workspace_lock": activation.workspace_lock.to_dict(),
+                        "reload_receipt": activation_operation["reload_receipt"],
+                        "health_receipt": activation_operation["health_receipt"],
                     },
                 )
 

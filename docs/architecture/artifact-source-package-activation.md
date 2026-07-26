@@ -426,6 +426,13 @@ No unknown state-changing phase is automatically repeated after interruption.
 Recovery resumes only a phase proven idempotent or performs rollback from the
 durable checkpoint.
 
+Reload and health phases never succeed by omission. Each stores either a
+callback completion receipt or an explicit policy skip containing both
+`approved_by` and `reason`. A completed operation without these receipts is
+not eligible for idempotent replay. Trial acceptance additionally requires a
+successful health receipt; a policy-skipped trial health check cannot be
+promoted as healthy evidence.
+
 For the single-user slice, introduced permissions fail closed until an
 explicit serializable approval is attached to the operation. A non-empty
 migration plan is admitted only when every migration declares a rollback
@@ -449,6 +456,14 @@ migration:
     procedure_ref: migration/3-to-2
 ```
 
+Trial data modes are explicit in both TrialEvidence and its WorkspaceLock slot:
+
+- `empty`: an isolated Workspace with no seeded data;
+- `mock`: a fixture identified by immutable `data_ref` plus isolation evidence;
+- `snapshot`: an immutable snapshot identity plus verified isolation evidence;
+- `read_only`: a named data source with a proven read-only adapter;
+- `real`: a named source admitted only with read-only or reversible behavior.
+
 The first slice permits real-data trial only when policy proves one of:
 
 - read-only candidate behavior;
@@ -458,6 +473,11 @@ The first slice permits real-data trial only when policy proves one of:
 
 Irreversible migrations cannot use automatic trial or unattended stable
 activation.
+
+Trial completion records start/end time, computed duration, health and reload
+receipts, observations, and rollback disposition. Rejection atomically detaches
+the isolated trial Workspace into bounded rollback history before the
+candidate record changes; acceptance records `rollback:not_required`.
 
 ## Candidate And Trial Flow
 

@@ -252,6 +252,7 @@ def test_contract_payloads_validate_against_abi_schemas() -> None:
                 project_id="recipes",
                 release="recipes@1.2.3",
                 release_digest=release.release_digest,
+                data_mode="empty",
             ),
         ),
         components=(package,),

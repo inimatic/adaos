@@ -465,6 +465,8 @@ class WorkspaceSlot:
     release: str
     release_digest: str
     audience: str | None = None
+    data_mode: str | None = None
+    data_ref: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "slot_id", _artifact_id(self.slot_id, field="slot_id"))
@@ -473,6 +475,17 @@ class WorkspaceSlot:
         object.__setattr__(self, "release_digest", _digest(self.release_digest, field="release_digest"))
         if self.audience is not None:
             object.__setattr__(self, "audience", _text(self.audience, field="audience"))
+        if self.data_mode is not None:
+            mode = _text(self.data_mode, field="data_mode")
+            if mode not in {"empty", "mock", "snapshot", "read_only", "real"}:
+                raise ArtifactReleaseContractError("unsupported Workspace slot data_mode")
+            object.__setattr__(self, "data_mode", mode)
+        if self.data_ref is not None:
+            object.__setattr__(self, "data_ref", _text(self.data_ref, field="data_ref"))
+        if self.data_mode in {"mock", "snapshot", "read_only", "real"} and not self.data_ref:
+            raise ArtifactReleaseContractError(
+                f"Workspace slot data_mode {self.data_mode} requires data_ref"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -482,6 +495,10 @@ class WorkspaceSlot:
         }
         if self.audience:
             payload["audience"] = self.audience
+        if self.data_mode:
+            payload["data_mode"] = self.data_mode
+        if self.data_ref:
+            payload["data_ref"] = self.data_ref
         return payload
 
     @classmethod
@@ -489,7 +506,14 @@ class WorkspaceSlot:
         _require_mapping_contract(
             value,
             schema=None,
-            allowed={"project_id", "release", "release_digest", "audience"},
+            allowed={
+                "project_id",
+                "release",
+                "release_digest",
+                "audience",
+                "data_mode",
+                "data_ref",
+            },
             required={"project_id", "release", "release_digest"},
             field="WorkspaceSlot",
         )
@@ -499,6 +523,8 @@ class WorkspaceSlot:
             release=value.get("release"),
             release_digest=value.get("release_digest"),
             audience=value.get("audience"),
+            data_mode=value.get("data_mode"),
+            data_ref=value.get("data_ref"),
         )
 
 
