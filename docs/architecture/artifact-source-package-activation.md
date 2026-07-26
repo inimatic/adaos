@@ -428,6 +428,12 @@ Failure before `switch-lock` removes staged state and leaves the active lock
 unchanged. Failure after `switch-lock` restores the previous lock and reloads
 the previous component set when rollback is supported.
 
+Every durable file or directory switch uses one shared filesystem primitive.
+On Windows it requests write-through rename semantics; on POSIX it fsyncs the
+affected directory entries best-effort after the atomic rename. Retry is
+limited to a transient sharing failure in that switch and never repeats the
+enclosing activation or remote mutation.
+
 For a cached package, `verify` performs safe extraction into the operation's
 private staging tree while it validates the archive, manifest, and every file
 digest. The later `stage` phase records admission of that verified tree and

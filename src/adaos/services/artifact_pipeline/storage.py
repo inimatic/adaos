@@ -18,6 +18,8 @@ class MutationLockTimeout(TimeoutError):
 
 _MUTATION_LOCKS_GUARD = threading.Lock()
 _MUTATION_LOCKS: dict[str, threading.RLock] = {}
+_MOVEFILE_REPLACE_EXISTING = 0x1
+_MOVEFILE_WRITE_THROUGH = 0x8
 
 
 def _thread_lock_for(path: Path) -> threading.RLock:
@@ -86,15 +88,68 @@ def mutation_lock(path: Path, *, timeout_s: float = 10.0) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def sync_directory(path: Path) -> bool:
+    """Best-effort persistence barrier for directory metadata.
+
+    POSIX exposes directory fsync directly. Windows directory handles are not
+    portable through ``os.open``; durable renames use MoveFileExW with
+    MOVEFILE_WRITE_THROUGH instead.
+    """
+
+    if os.name == "nt":
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(Path(path), flags)
+    except OSError:
+        return False
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    return True
+
+
+def _replace_once(source: Path, target: Path) -> None:
+    if os.name != "nt":
+        os.replace(source, target)
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    move_file = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
+    move_file.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+    move_file.restype = wintypes.BOOL
+    if not move_file(
+        str(source),
+        str(target),
+        _MOVEFILE_REPLACE_EXISTING | _MOVEFILE_WRITE_THROUGH,
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def replace_with_retry(source: Path, target: Path, *, attempts: int = 8) -> None:
     """Retry only the filesystem switch, never the enclosing stateful operation."""
 
+    source = Path(source)
+    target = Path(target)
+    source_parent = source.parent.resolve()
+    target_parent = target.parent.resolve()
     for attempt in range(attempts):
         try:
-            os.replace(source, target)
+            _replace_once(source, target)
+            sync_directory(target_parent)
+            if source_parent != target_parent:
+                sync_directory(source_parent)
             return
-        except PermissionError:
-            if attempt + 1 >= attempts:
+        except OSError as exc:
+            retryable = isinstance(exc, PermissionError) or getattr(
+                exc, "winerror", None
+            ) in {5, 32, 33}
+            if not retryable or attempt + 1 >= attempts:
                 raise
             time.sleep(min(0.01 * (2**attempt), 0.25))
 
@@ -134,4 +189,5 @@ __all__ = [
     "atomic_write_json",
     "mutation_lock",
     "replace_with_retry",
+    "sync_directory",
 ]
