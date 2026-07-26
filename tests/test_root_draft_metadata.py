@@ -276,6 +276,40 @@ def test_subscription_activation_exposes_operation_identity() -> None:
     assert result["idempotent_replay"] is True
 
 
+def test_subscription_inspection_reuses_one_channel_notice() -> None:
+    notice = SimpleNamespace(
+        available=True,
+        to_dict=lambda: {
+            "available": True,
+            "activation_allowed": True,
+            "subscription": {"project_id": "recipes", "policy": "notify"},
+        },
+    )
+    calls: list[object] = []
+
+    class _Plan:
+        def to_dict(self):
+            return {"plan_digest": "sha256:" + "a" * 64, "activation": {"target_release": "recipes@2.0.0"}}
+
+    class _Publication:
+        def check_subscription(self, project_id: str):
+            calls.append(("check", project_id))
+            return notice
+
+        def plan_subscription_update(self, project_id: str, *, notice=None):
+            calls.append(("plan", project_id, notice))
+            return _Plan()
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+    service._artifact_publication_service = lambda _cfg: _Publication()
+
+    result = service.inspect_artifact_subscription_update("recipes")
+
+    assert result["update_plan"]["activation"]["target_release"] == "recipes@2.0.0"
+    assert calls == [("check", "recipes"), ("plan", "recipes", notice)]
+
+
 class _UnusedPublicationRemote:
     def __getattr__(self, name):
         raise AssertionError(f"publication remote must not be called: {name}")

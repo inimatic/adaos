@@ -2187,6 +2187,18 @@ class RootDeveloperService:
         plan = self._artifact_publication_service(cfg).plan_subscription_update(project_id)
         return {"ok": True, **plan.to_dict()}
 
+    def inspect_artifact_subscription_update(self, project_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        publication = self._artifact_publication_service(cfg)
+        notice = publication.check_subscription(project_id)
+        payload: dict[str, Any] = {"ok": True, **notice.to_dict(), "update_plan": None}
+        if notice.available:
+            payload["update_plan"] = publication.plan_subscription_update(
+                project_id,
+                notice=notice,
+            ).to_dict()
+        return payload
+
     def activate_artifact_subscription(
         self,
         project_id: str,

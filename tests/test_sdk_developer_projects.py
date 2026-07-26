@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -209,6 +210,18 @@ class _DeveloperService:
             "plan_digest": "sha256:" + "a" * 64,
         }
 
+    def inspect_artifact_subscription_update(self, project_id):
+        return {
+            "ok": True,
+            "subscription": {"project_id": project_id, "policy": "notify"},
+            "available": True,
+            "activation_allowed": True,
+            "update_plan": {
+                "plan_digest": "sha256:" + "a" * 64,
+                "activation": {"target_release": f"{project_id}@1.1.0"},
+            },
+        }
+
     def activate_artifact_subscription(
         self,
         project_id,
@@ -268,6 +281,7 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         validation_evidence={"status": "passed"},
     )
     notice = projects.check_subscription("builder")
+    inspection = projects.inspect_subscription_update("builder")
     update_plan = projects.plan_subscription_update("builder")
     subscription_update = projects.activate_subscription(
         "scenario",
@@ -282,6 +296,7 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
     assert promoted["permission_decision"]["actor"] == "user:test"
     assert rebased["candidate"]["candidate_id"] == "builder-rebased"
     assert notice["available"] is True
+    assert inspection["update_plan"]["activation"]["target_release"] == "builder@1.1.0"
     assert update_plan["plan_digest"].startswith("sha256:")
     assert subscription_update["idempotency_key"] == "update-builder-1"
     assert subscription_update["expected_plan_digest"] == update_plan["plan_digest"]
@@ -289,3 +304,34 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
 
     with pytest.raises(projects.DeveloperProjectError, match="at least one Builder Change"):
         projects.prepare_candidate("scenario", "builder", change_ids=[])
+
+
+def test_apply_subscription_update_uses_runtime_coordinator(monkeypatch) -> None:
+    from adaos.services import artifact_subscription_update as update_service
+
+    calls: list[dict] = []
+    ctx = object()
+
+    class _Coordinator:
+        def __init__(self, value) -> None:
+            assert value is ctx
+
+        async def update(self, kind: str, project_id: str, **kwargs):
+            calls.append({"kind": kind, "project_id": project_id, **kwargs})
+            return {"ok": True, "mode": "package_activation", "updated": True}
+
+    monkeypatch.setattr(projects, "require_ctx", lambda _capability: ctx)
+    monkeypatch.setattr(update_service, "ArtifactSubscriptionUpdateCoordinator", _Coordinator)
+    result = asyncio.run(
+        projects.apply_subscription_update(
+            "scenario",
+            "builder",
+            expected_plan_digest="sha256:" + "a" * 64,
+            idempotency_key="builder-update-1",
+            webspace_id="desktop",
+        )
+    )
+
+    assert result["mode"] == "package_activation"
+    assert calls[0]["expected_plan_digest"] == "sha256:" + "a" * 64
+    assert calls[0]["idempotency_key"] == "builder-update-1"

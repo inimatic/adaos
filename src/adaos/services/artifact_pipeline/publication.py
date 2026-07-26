@@ -357,8 +357,15 @@ class ArtifactPublicationService:
             reason = "channel_moved"
         return SubscriptionUpdateNotice(subscription, pointer, available, allowed, reason)
 
-    def plan_subscription_update(self, project_id: str) -> SubscriptionUpdatePlan:
-        notice = self.check_subscription(project_id)
+    def plan_subscription_update(
+        self,
+        project_id: str,
+        *,
+        notice: SubscriptionUpdateNotice | None = None,
+    ) -> SubscriptionUpdatePlan:
+        notice = notice or self.check_subscription(project_id)
+        if notice.subscription.project_id != project_id:
+            raise PublicationError("subscription update notice belongs to another project")
         if not notice.available:
             raise PublicationError("subscription is already up to date")
         release_plan = self.remote.get_release(project_id, notice.pointer.release_digest)

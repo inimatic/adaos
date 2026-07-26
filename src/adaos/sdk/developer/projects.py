@@ -568,6 +568,43 @@ def plan_subscription_update(project_id: str) -> dict[str, Any]:
     return _jsonable(_service().plan_artifact_subscription_update(normalized_id))
 
 
+def inspect_subscription_update(project_id: str) -> dict[str, Any]:
+    normalized_id = _project_id(project_id)
+    return _jsonable(_service().inspect_artifact_subscription_update(normalized_id))
+
+
+async def apply_subscription_update(
+    kind: str,
+    project_id: str,
+    *,
+    expected_plan_digest: str,
+    idempotency_key: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    expected = str(expected_plan_digest or "").strip()
+    if not expected:
+        raise DeveloperProjectError("expected_plan_digest is required")
+    from adaos.services.artifact_subscription_update import (
+        ArtifactSubscriptionUpdateCoordinator,
+    )
+
+    ctx = require_ctx("sdk.developer.projects")
+    coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
+    result = await coordinator.update(
+        normalized_kind,
+        normalized_id,
+        expected_plan_digest=expected,
+        idempotency_key=(str(idempotency_key or "").strip() or None),
+        permission_decision=permission_decision,
+        webspace_id=webspace_id,
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="subscription_activated")
+    return _jsonable(result)
+
+
 def activate_subscription(
     kind: str,
     project_id: str,
@@ -614,8 +651,10 @@ __all__ = [
     "ProjectNotFoundError",
     "create",
     "check_subscription",
+    "inspect_subscription_update",
     "plan_subscription_update",
     "activate_subscription",
+    "apply_subscription_update",
     "delete",
     "describe",
     "find_scenario_root",
