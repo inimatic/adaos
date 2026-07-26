@@ -56,8 +56,16 @@ Run from the AdaOS repository root:
 The latest durable local record for this run is:
 
 ```text
-.adaos/state/artifact_pipeline/proofs/20260724T175229863192Z/evidence.json
+.adaos/state/artifact_pipeline/proofs/20260726T230230545555Z/evidence.json
 ```
+
+This rerun uses the post-audit package policy. Before any new proof package is
+built, the verifier compares every publishable DEV path, size, and content
+digest with the immutable package recorded by the original Forge checkpoint.
+The source file inventories matched exactly (4 scenario files and 8 skill
+files). The resulting package digests changed only because the builder policy
+identity and package metadata were strengthened; that transition is recorded
+explicitly in the evidence rather than being mistaken for a source change.
 
 After the live Builder publication, the same verifier was run against Builder's
 exact checkpoint. Its isolated durable record is:
@@ -82,6 +90,7 @@ redacted identities and conclusions required for review.
 | --- | --- | --- |
 | Representative scenario and skill contracts | passed | 19 tests |
 | Exact checkpoint belongs to one bounded change | passed | both pushed-source records contain the checkpoint id |
+| Checkpoint source fidelity | passed | current DEV publishable inventories exactly match the recorded scenario and skill packages; changed content has a fail-closed regression |
 | Immutable component packaging | passed | two verified package digests |
 | Companion skill dependency lock | passed | scenario and skill present in one ProjectRelease |
 | Isolated candidate trial | passed | accepted trial with its own WorkspaceLock |
@@ -108,8 +117,10 @@ redacted identities and conclusions required for review.
 | Builder subscription review surface | passed | 133 focused core regressions plus 32 DEV Builder tests; skill/scenario validators passed; live `/api/tools/call` returned the Builder subscription as `up_to_date` after DEV skill `0.1.29` activation and one explicit core reload; DEV scenario is `0.2.21`, while Workspace remains unchanged at Builder `0.2.20` and skill `0.1.28` |
 | Delayed activation verification | passed | 137 focused core regressions; every new activation records an exact lock digest/revision and a bounded pending marker; delayed pass, materialized-file tamper, moved-lock supersession, terminal marker cleanup, and API worker diagnostics are covered without automatic activation replay or rollback |
 | Artifact retention safety | passed | 143 focused core regressions; dry-run/apply preserve active packages and running or uncertain recovery trees, collect old unreferenced packages and proven orphan staging, fail closed on a corrupt journal, and keep nonterminal candidate packages; the live machine dry-run reported zero candidates |
+| Post-audit verifier contract | passed | 2 dedicated verifier regressions plus a complete rerun; channel promotion uses compare-and-swap, runtime reload absence requires an explicit isolated-stand skip, and mutable DEV cannot be relabelled as an older checkpoint |
 
-Exact immutable identities from the proof:
+Original checkpoint-package identities retained as the source inventory
+witness:
 
 ```text
 scenario package  sha256:072c6dfbae81032455cf05ed3e936f2ef3c7d04896214f3a3934f468c23b02c5
@@ -118,6 +129,16 @@ project release   sha256:08703b09a44eb50410617dccb0297243100db79797cdbfcbaef36ec
 workspace lock    sha256:c2002d80c1596b0c6700f9c67ce2fc947aea2084f1fdb6471ab09634754d4165
 scenario source   510e991ba7469b16cc283fef152105bc9ef07069
 skill source      6487651b5fd5dab58d72f24161bcfb39834509d5
+```
+
+Post-audit rebuild identities under package policy
+`sha256:779b466088fbe1c7254e75865f6822cf1028e2b7f479b602b438708bed1138b4`:
+
+```text
+scenario package  sha256:5a007b582c50ec2c8a6ad2662bb1853da6272bccec54f513ce52ce391d67be20
+skill package     sha256:e751d9ecde3222373c6d38c7a4959ad740a207656a1838da94bf44e26e9160bb
+project release   sha256:afb87148014ba1aee8d308842d1ff6937a7fc495bb18b5ba0505e113fb848f11
+workspace lock    sha256:5fc2aa5270151f24162129477280f01bbce1911bf370f90ad11ccafa2155b49c
 ```
 
 Live Builder publication identities:
@@ -143,7 +164,7 @@ checkpoint records.
 
 ## Failed Experiments Retained
 
-Five failures materially changed the implementation and remain part of the
+Seven failures materially changed the implementation and remain part of the
 evidence:
 
 1. The first checkpoint sequence rejected a valid zero-byte file because the
@@ -171,6 +192,16 @@ evidence:
    by an explicit checkpoint-only reconciliation; no state-changing command and
    no Codex task was automatically repeated. A partially committed pair is not
    eligible for this recovery path.
+6. The first post-audit rerun reached a stale proof adapter that did not accept
+   the channel compare-and-swap expectation and then omitted the now-mandatory
+   runtime reload policy. The verifier now implements the production remote
+   contract, records an explicit skip only because its Workspace is isolated,
+   and has an automated full-path contract regression.
+7. The verifier originally checked the stored checkpoint identity but rebuilt
+   packages from the current DEV directories without comparing their content
+   to that checkpoint. This could produce a false source claim. It now verifies
+   the recorded archive, compares the complete publishable file inventory, and
+   fails before tests or mutation when any path, size, or digest differs.
 
 The partially completed Forge writes from the first experiment were recovered
 using exact change metadata and archive hashes. The resulting design now uses
@@ -179,8 +210,6 @@ reconciliation, and no automatic repeat of the modifying command.
 
 ## Open Acceptance Gates
 
-- Delayed post-activation observation remains a `[should]` operational gate;
-  synchronous health verification and rollback are locally validated.
 - A clean stand/second-machine run is required before package-only activation
   becomes the default and before legacy sparse Workspace compatibility is
   retired.
@@ -189,8 +218,10 @@ reconciliation, and no automatic repeat of the modifying command.
   source; the stand proof must exercise that path end to end.
 - The pre-existing client submodule change was not modified or included.
 - The backend builder/lock admission hardening is validated on branch
-  `codex/artifact-contract-hardening`; merge, deployment, and clean-stand proof
-  remain separate gates.
+  `codex/artifact-contract-hardening` at `f109753`; git remote refs currently
+  expose only the already merged PR `#1`, and the connected GitHub API account
+  cannot see the private backend repository. Opening/merging that branch,
+  deployment, and clean-stand proof remain separate gates.
 
 These gates keep the maturity at `validated-local`; they are not failures of the
 bounded local proof.

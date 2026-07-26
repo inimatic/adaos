@@ -95,7 +95,10 @@ Validated-local implementation now provides:
   with fail-closed permission admission and one-shot migration reconciliation.
 - fail-closed v1 contract readers, portable package-path and secret admission,
   immutable project-version identities, and local/backend channel
-  compare-and-swap with idempotent same-target retry.
+  compare-and-swap with idempotent same-target retry;
+- a source-faithful local verifier that compares mutable DEV against the exact
+  pushed package file inventory before rebuilding under a newer package policy,
+  and exercises the current channel-CAS and explicit runtime-reload contracts.
 
 The reproducible result and exact digests are recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
@@ -110,8 +113,9 @@ record remains valid for its narrower stated cases.
 
 Remaining acceptance blockers:
 
-- merge and deploy the remaining backend admission hardening recorded by the
-  critical audit;
+- open, merge, and deploy the remaining backend admission hardening already
+  pushed as `codex/artifact-contract-hardening` at `f109753`; only backend PR
+  `#1` is currently advertised by the remote PR refs;
 - a live stand/second-machine run is required before package-only activation is
   the default or legacy sparse Workspace compatibility is retired;
 - streaming package transport and full filesystem directory durability remain
@@ -141,7 +145,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
-| AP7 | 11/13 | validated-local | representative LLM/Codex scenario+skill, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
+| AP7 | 11/13 | validated-local | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -527,6 +531,11 @@ dependency-conflict, interruption, and rollback cases.
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 including its reproducible verifier command, immutable digests, operation
 records, regression counts, backend deployment, and live Builder publication.
+The verifier was rerun on 2026-07-26 after the critical audit. Its contract
+regression now fails if DEV publishable content differs from the recorded
+checkpoint package, while allowing the same exact files to be rebuilt under an
+explicitly identified newer package policy. `AP7-11` remains unchecked because
+this was a same-machine isolated run, not a clean stand or second machine.
 
 ## Explicit Deferred Backlog
 

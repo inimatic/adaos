@@ -12,8 +12,11 @@ from adaos.domain.artifact_release import ArtifactPackageRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
     ContentAddressedPackageStore,
+    PushedSourceRecord,
     ReleasePlan,
     ReleaseRepository,
+    build_artifact_package,
+    verify_artifact_package,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 
@@ -36,12 +39,19 @@ class LocalProofRemote:
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
         return self.releases.get_release(project_id, release_digest)
 
-    def set_channel(self, plan: ReleasePlan, channel: str = "stable"):
+    def set_channel(
+        self,
+        plan: ReleasePlan,
+        channel: str = "stable",
+        *,
+        expected_release_digest: str | None,
+    ):
         self.releases.put_release(plan)
         return self.releases.set_channel(
             plan.release.project_id,
             channel,
             plan.release.release_digest,
+            expected_release_digest=expected_release_digest,
         )
 
     def get_channel(self, project_id: str, channel: str = "stable"):
@@ -58,6 +68,63 @@ class LocalProofRemote:
         if len(revision) not in {40, 64}:
             raise RuntimeError("local proof source revision is not an immutable Git object id")
         return revision
+
+
+def verify_checkpoint_source(
+    source_service: ArtifactPublicationService,
+    record: PushedSourceRecord,
+    artifact_dir: Path,
+) -> dict[str, object]:
+    """Prove mutable DEV still represents the exact recorded checkpoint files.
+
+    The package builder policy may have advanced since the checkpoint. In that
+    case the archive digest can legitimately change, but the publishable file
+    paths, sizes, and content digests must remain identical.
+    """
+
+    recorded_archive = source_service.package_store.read(record.package.digest)
+    recorded = verify_artifact_package(
+        recorded_archive,
+        expected_digest=record.package.digest,
+    )
+    rebuilt = build_artifact_package(
+        artifact_dir,
+        kind=record.kind,  # type: ignore[arg-type]
+        source_ref=record.source_ref,
+    )
+
+    def inventory(manifest: Mapping[str, object]) -> dict[str, tuple[int, str]]:
+        raw_files = manifest.get("files")
+        if not isinstance(raw_files, list):
+            raise RuntimeError("checkpoint package has no verified file inventory")
+        result: dict[str, tuple[int, str]] = {}
+        for raw in raw_files:
+            if not isinstance(raw, Mapping):
+                raise RuntimeError("checkpoint package file inventory is malformed")
+            path = str(raw.get("path") or "")
+            result[path] = (int(raw.get("size") or 0), str(raw.get("digest") or ""))
+        return result
+
+    recorded_files = inventory(recorded.package_manifest)
+    rebuilt_files = inventory(rebuilt.package_manifest)
+    if recorded_files != rebuilt_files:
+        changed = sorted(
+            path
+            for path in recorded_files.keys() | rebuilt_files.keys()
+            if recorded_files.get(path) != rebuilt_files.get(path)
+        )
+        raise RuntimeError(
+            f"{record.kind} {record.artifact_id} DEV content differs from its exact "
+            f"Forge checkpoint: {changed}"
+        )
+    return {
+        "mode": "checkpoint_package_file_inventory",
+        "recorded_package_digest": record.package.digest,
+        "rebuilt_package_digest": rebuilt.ref.digest,
+        "file_count": len(recorded_files),
+        "builder_policy_changed": record.package.build_policy_digest
+        != rebuilt.ref.build_policy_digest,
+    }
 
 
 def _arguments() -> argparse.Namespace:
@@ -125,6 +192,16 @@ def main() -> int:
     )
     skill_dir = dev_root / "skills" / args.skill
     scenario_dir = dev_root / "scenarios" / args.scenario
+    scenario_source_verification = verify_checkpoint_source(
+        source_service,
+        scenario_source,
+        scenario_dir,
+    )
+    skill_source_verification = verify_checkpoint_source(
+        source_service,
+        skill_source,
+        skill_dir,
+    )
 
     test_command = [
         sys.executable,
@@ -207,6 +284,11 @@ def main() -> int:
     )
     promoted = service.promote(
         accepted.candidate_id,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "local-pipeline-proof",
+            "reason": "isolated proof Workspace has no attached runtime",
+        },
         health_check=lambda _lock: (
             (workspace_root / "scenarios" / args.scenario / "scenario.yaml").is_file()
             and (workspace_root / "skills" / args.skill / "skill.yaml").is_file()
@@ -227,8 +309,10 @@ def main() -> int:
         "tests": test_result,
         "resilience_tests": resilience_result,
         "source_verification": {
-            "mode": "local_commit_witness",
-            "note": "Live promotion uses the backend Forge tree verification endpoint.",
+            "mode": "local_commit_witness_and_checkpoint_package_inventory",
+            "note": "Live promotion additionally uses the backend Forge tree verification endpoint.",
+            "scenario": scenario_source_verification,
+            "skill": skill_source_verification,
         },
         "source": {
             "scenario": scenario_source.to_dict(),

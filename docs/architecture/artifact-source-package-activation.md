@@ -724,7 +724,10 @@ shared skill demonstrate:
     effect;
 13. exact Builder task input and concurrent DEV conflict preservation;
 14. permission fail-closed behavior and reversible/uncertain migration
-    recovery across all activation phases.
+    recovery across all activation phases;
+15. proof-harness conformance to the current channel/reload contracts and an
+    exact file-inventory comparison between mutable DEV and its recorded Forge
+    checkpoint before a newer package policy may rebuild that source.
 
 Only after this proof should the broader Builder, registry, marketplace, and
 governed-evolution documents be updated to report the new pipeline as current.

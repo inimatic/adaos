@@ -243,6 +243,26 @@ still re-plans and compares that digest before mutation. An explicit caller key
 remains supported for recovery tooling, but the ordinary UI no longer invents
 a new logical operation on every click.
 
+### B12. The acceptance verifier drifted from production contracts and source
+
+The first post-audit rerun failed because its local remote still exposed the
+pre-CAS channel signature and its live promotion omitted the newly mandatory
+runtime reload decision. After those were corrected, a deeper review found
+that the verifier loaded an exact checkpoint identity but then rebuilt from a
+mutable DEV directory without comparing that content with the checkpoint. It
+could therefore emit a green proof for different source labelled with an older
+revision.
+
+Current correction: the verifier implements the same channel compare-and-swap
+signature as production, records an approved reload skip only for its isolated
+non-runtime Workspace, and compares the complete publishable path/size/digest
+inventory with the verified checkpoint package before tests or proof writes.
+It permits a changed package digest only when the source inventory is identical
+and the change is attributable to an explicitly recorded package-policy
+identity. A dedicated full-path regression exercises the verifier with current
+promotion contracts, and a negative regression rejects DEV mutation after the
+checkpoint.
+
 ## Reliability And Performance Gaps
 
 ### R1. Cached activation verifies each archive four times
@@ -329,7 +349,10 @@ operator view.
    WorkspaceLock revision, with bounded pending markers and read-only replay.
 9. **Completed locally:** add explicit dry-run-first cleanup/retention with
    active/recovery reachability protection and exact-path revalidation.
-10. Repeat the proof on a clean stand.
+10. **Completed locally:** rerun the representative proof against the current
+    CAS/reload contracts and bind mutable DEV to the exact checkpoint package
+    inventory before rebuilding.
+11. Repeat the proof on a clean stand.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale
@@ -343,4 +366,6 @@ No blocker above is closed by code presence alone. Closure requires:
 - an implementation test at the local trust boundary;
 - backend coverage when the invariant crosses the remote boundary;
 - exact operation or digest evidence for state-changing paths;
+- a source-faithful verifier regression compiled against the current
+  production-side contracts;
 - an updated roadmap checkbox in the same coherent delivery slice.
