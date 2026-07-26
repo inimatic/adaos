@@ -236,6 +236,46 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
     assert captured["health_policy"] is None
 
 
+def test_subscription_activation_exposes_operation_identity() -> None:
+    class _Record:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def to_dict(self):
+            return dict(self.payload)
+
+    activation = SimpleNamespace(
+        operation_id="activation-123",
+        status="completed",
+        idempotent_replay=True,
+        workspace_lock=_Record({"lock_digest": "sha256:" + "b" * 64}),
+    )
+    updated = SimpleNamespace(
+        pointer=SimpleNamespace(release="recipes@2.0.0", release_digest="sha256:" + "c" * 64),
+        activation=activation,
+        subscription=_Record({"project_id": "recipes", "policy": "notify"}),
+    )
+
+    class _Publication:
+        def activate_subscription_update(self, _project_id: str, **_kwargs):
+            return updated
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+    service._artifact_publication_service = lambda _cfg: _Publication()
+
+    result = service.activate_artifact_subscription(
+        "recipes",
+        expected_plan_digest="sha256:" + "a" * 64,
+        reload_policy={"mode": "skip", "approved_by": "test", "reason": "bounded test"},
+        health_policy={"mode": "skip", "approved_by": "test", "reason": "bounded test"},
+    )
+
+    assert result["activation_operation_id"] == "activation-123"
+    assert result["activation_status"] == "completed"
+    assert result["idempotent_replay"] is True
+
+
 class _UnusedPublicationRemote:
     def __getattr__(self, name):
         raise AssertionError(f"publication remote must not be called: {name}")

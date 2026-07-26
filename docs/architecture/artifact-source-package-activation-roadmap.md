@@ -446,9 +446,11 @@ and channel/subscription regressions in
 Primary scenario and skill REST/WebSocket update entrypoints now select the
 package-backed path for subscribed projects, require the digest of the reviewed
 plan, and execute runtime reload/projection plus health evidence inside the
-activation transaction. DEV draft update and LLM-facing scenario pull are
-retired; the bounded non-subscribed source-pull bridge is explicit in responses
-as `legacy_source_pull`. Direct subscription activation fails closed when a
+activation transaction. Both transports use one runtime coordinator; deferred
+projection is rejected instead of being reported as healthy, and success events
+are emitted only after activation commits. DEV draft update and LLM-facing
+scenario pull are retired; the bounded non-subscribed source-pull bridge is
+explicit in responses as `legacy_source_pull`. Direct subscription activation fails closed when a
 runtime adapter or an explicit policy is absent. AP6-08 remains open until the
 Builder/operator UI renders the existing plan contract. Full removal of the
 non-subscribed compatibility bridge remains part of the legacy-retirement gate.

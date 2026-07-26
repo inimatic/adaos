@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Dict, Any, Mapping
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
 
-from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi import APIRouter, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 try:
@@ -8748,12 +8748,10 @@ async def process_events_command(
     if kind == "skills.update":
         try:
             from adaos.services.agent_context import get_ctx as _get_ctx
-            from adaos.services.skill.update import SkillUpdateService
-            from adaos.apps.api.skills import (
-                UpdateReq as _SkillUpdateReq,
-                _package_subscription_service as _package_skill_update_service,
-                _update_subscribed_skill,
+            from adaos.services.artifact_subscription_update import (
+                ArtifactSubscriptionUpdateCoordinator,
             )
+            from adaos.services.skill.update import SkillUpdateService
 
             ctx = _get_ctx()
             skill_name = str(payload.get("name") or payload.get("skill") or "").strip()
@@ -8761,29 +8759,25 @@ async def process_events_command(
             if not skill_name:
                 await _ack(False, error="name required")
                 return None
-            package_service = _package_skill_update_service(ctx, skill_name)
-            if package_service is not None:
-                result = await _update_subscribed_skill(
-                    _SkillUpdateReq(
-                        name=skill_name,
-                        dry_run=dry_run,
-                        webspace_id=str(payload.get("webspace_id") or webspace_id),
-                        defer_webspace_rebuild=bool(payload.get("defer_webspace_rebuild", False)),
-                        expected_plan_digest=(
-                            str(payload.get("expected_plan_digest") or "").strip() or None
-                        ),
-                        permission_decision=(
-                            payload.get("permission_decision")
-                            if isinstance(payload.get("permission_decision"), dict)
-                            else None
-                        ),
+            coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
+            if coordinator.is_subscribed(skill_name):
+                result = await coordinator.update(
+                    "skill",
+                    skill_name,
+                    dry_run=dry_run,
+                    webspace_id=str(payload.get("webspace_id") or webspace_id),
+                    defer_webspace_rebuild=bool(payload.get("defer_webspace_rebuild", False)),
+                    expected_plan_digest=(
+                        str(payload.get("expected_plan_digest") or "").strip() or None
                     ),
-                    ctx,
-                    package_service,
-                )
-                _publish_bus(
-                    "skills.updated",
-                    {"name": skill_name, "source": "artifact_subscription", **dict(result)},
+                    permission_decision=(
+                        payload.get("permission_decision")
+                        if isinstance(payload.get("permission_decision"), dict)
+                        else None
+                    ),
+                    idempotency_key=(
+                        str(payload.get("idempotency_key") or "").strip() or None
+                    ),
                 )
                 await _ack(True, data=result)
                 return None
@@ -8802,15 +8796,20 @@ async def process_events_command(
                     "warning": "no stable package subscription; compatibility git pull was used",
                 },
             )
-        except HTTPException as exc:
-            detail = exc.detail
-            await _ack(False, error=(detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)))
         except FileNotFoundError:
             await _ack(False, error="skill_not_installed")
         except PermissionError as exc:
             await _ack(False, error=str(exc) or "fs_readonly")
         except Exception as exc:
-            await _ack(False, error=str(exc) or "update_failed")
+            detail = exc.to_detail() if callable(getattr(exc, "to_detail", None)) else None
+            await _ack(
+                False,
+                error=(
+                    json.dumps(detail, ensure_ascii=False)
+                    if isinstance(detail, dict)
+                    else str(exc) or "update_failed"
+                ),
+            )
         return None
 
     if kind == "nlp.teacher.candidate.apply":

@@ -873,11 +873,12 @@ class RootDeveloperService:
         config_loader: Callable[[], NodeConfig] | None = None,
         config_saver: Callable[[NodeConfig], None] | None = None,
         client_factory: Callable[[NodeConfig], RootHttpClient] | None = None,
+        ctx: AgentContext | None = None,
     ) -> None:
         self._load_config = config_loader or load_node
         self._save_config = config_saver or save_node
         self._client_factory = client_factory
-        self.ctx: AgentContext = get_ctx()
+        self.ctx: AgentContext = ctx or get_ctx()
 
     # ------------------------------------------------------------------
     # Public API
@@ -2217,6 +2218,9 @@ class RootDeveloperService:
             "workspace_lock": updated.activation.workspace_lock.to_dict(),
             "subscription": updated.subscription.to_dict(),
             "activation_mode": "package_lock",
+            "activation_operation_id": updated.activation.operation_id,
+            "activation_status": updated.activation.status,
+            "idempotent_replay": updated.activation.idempotent_replay,
         }
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:

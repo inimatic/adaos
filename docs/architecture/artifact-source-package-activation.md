@@ -588,6 +588,9 @@ freshly reviewed plan; activation rejects a changed WorkspaceLock, missing
 runtime reload adapter, or missing health evidence. Runtime reload/projection
 is part of the activation transaction so a failure restores files, data, and
 the previous lock before the subscription observation can advance.
+REST and WebSocket delegate to the same runtime coordinator. It does not allow
+deferred projection in this transaction and emits the public success event only
+after activation and subscription persistence complete.
 
 The old DEV draft `update` and LLM-facing scenario `pull` commands are retired:
 they cannot overwrite a mutable DEV tree from Workspace or a remote source.

@@ -2678,6 +2678,54 @@ def test_process_events_command_publishes_generic_skill_event(monkeypatch) -> No
     assert responses[-1]["data"] == {"event_type": "custom.location.requested"}
 
 
+def test_process_events_command_routes_subscribed_skill_update_through_coordinator(monkeypatch) -> None:
+    from adaos.services import agent_context as agent_context_module
+    from adaos.services import artifact_subscription_update as update_service_module
+
+    responses: list[dict[str, object]] = []
+    updates: list[dict[str, object]] = []
+    ctx = SimpleNamespace()
+
+    class _Coordinator:
+        def __init__(self, value) -> None:
+            assert value is ctx
+
+        def is_subscribed(self, project_id: str) -> bool:
+            return project_id == "recipe_skill"
+
+        async def update(self, kind: str, project_id: str, **kwargs):
+            updates.append({"kind": kind, "project_id": project_id, **kwargs})
+            return {"ok": True, "mode": "package_activation", "updated": True}
+
+    monkeypatch.setattr(agent_context_module, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(update_service_module, "ArtifactSubscriptionUpdateCoordinator", _Coordinator)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="skills.update",
+            cmd_id="cmd-skill-update-1",
+            payload={
+                "name": "recipe_skill",
+                "webspace_id": "desktop",
+                "expected_plan_digest": "sha256:" + "a" * 64,
+                "idempotency_key": "operator-attempt-1",
+            },
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert updates[0]["kind"] == "skill"
+    assert updates[0]["expected_plan_digest"] == "sha256:" + "a" * 64
+    assert updates[0]["idempotency_key"] == "operator-attempt-1"
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["mode"] == "package_activation"
+
+
 def test_process_events_command_accepts_demo_metrics_host_action(monkeypatch) -> None:
     published: list[object] = []
     responses: list[dict[str, object]] = []

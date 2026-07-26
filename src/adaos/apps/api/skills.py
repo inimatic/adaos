@@ -22,8 +22,10 @@ from adaos.services.skill.artifacts import (
     store_skill_upload,
 )
 from adaos.services.skill.update import SkillUpdateService
-from adaos.services.artifact_pipeline import PublicationError, SubscriptionStore
-from adaos.services.root.service import RootDeveloperService, RootServiceError
+from adaos.services.artifact_subscription_update import (
+    ArtifactSubscriptionUpdateCoordinator,
+    ArtifactSubscriptionUpdateError,
+)
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
@@ -140,6 +142,7 @@ class UpdateReq(BaseModel):
     force: bool | None = None
     expected_plan_digest: str | None = None
     permission_decision: dict[str, Any] | None = None
+    idempotency_key: str | None = None
 
 
 class UninstallReq(BaseModel):
@@ -195,167 +198,6 @@ async def _reload_live_skill_handlers(ctx: AgentContext, skill_name: str) -> dic
     except Exception as exc:
         log.debug("live skill handler reload failed skill=%s: %s", skill_name, exc, exc_info=True)
         return {"ok": False, "reason": "reload_failed", "error": str(exc)}
-
-
-def _package_subscription_service(
-    ctx: AgentContext,
-    project_id: str,
-) -> RootDeveloperService | None:
-    path = Path(ctx.paths.workspace_dir()) / ".adaos" / "subscriptions.json"
-    if not path.is_file():
-        return None
-    try:
-        subscriptions = SubscriptionStore(path).load()
-    except Exception as exc:
-        raise RuntimeError(f"artifact subscription store is invalid: {exc}") from exc
-    return RootDeveloperService(ctx) if project_id in subscriptions else None
-
-
-async def _update_subscribed_skill(
-    body: UpdateReq,
-    ctx: AgentContext,
-    service: RootDeveloperService,
-) -> dict[str, Any]:
-    try:
-        reviewed = await asyncio.to_thread(
-            service.plan_artifact_subscription_update,
-            body.name,
-        )
-    except (PublicationError, RootServiceError, RuntimeError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if body.dry_run:
-        return {
-            "ok": True,
-            "updated": False,
-            "mode": "package_plan",
-            "update_plan": reviewed,
-        }
-    expected = str(body.expected_plan_digest or "").strip().lower()
-    if not expected:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "artifact_update_plan_required",
-                "message": "review the package update plan and resubmit its plan_digest",
-                "update_plan": reviewed,
-            },
-        )
-    webspace_id = body.webspace_id or default_webspace_id()
-    mgr = _get_manager(ctx)
-    loop = asyncio.get_running_loop()
-    runtime_receipts: dict[str, dict[str, Any]] = {}
-
-    def await_runtime(coroutine):
-        return asyncio.run_coroutine_threadsafe(coroutine, loop).result(timeout=120)
-
-    def reload_runtime(lock) -> dict[str, Any]:
-        package = next(
-            (
-                item
-                for item in lock.components
-                if item.kind == "skill" and item.artifact_id == body.name
-            ),
-            None,
-        )
-        if package is None:
-            raise RuntimeError(f"activated WorkspaceLock has no skill:{body.name}")
-        refresh = refresh_skill_runtime(
-            mgr,
-            body.name,
-            webspace_id=webspace_id,
-            source_version=package.version,
-            migrate_runtime=True,
-            ensure_installed=False,
-            require_active_version=True,
-            disable_during_migration=True,
-            operation_id=f"artifact-subscription:{body.name}:{package.digest[-12:]}",
-        )
-        handlers = await_runtime(_reload_live_skill_handlers(ctx, body.name))
-        if handlers.get("ok") is False:
-            raise RuntimeError(
-                f"live skill handler reload failed: {handlers.get('error') or handlers.get('reason')}"
-            )
-        materialization_cache = invalidate_webspace_materialization_cache(
-            webspace_id,
-            reason=f"artifact_subscription:{body.name}",
-            action="artifact_subscription_sync",
-            source_of_truth="workspace_lock",
-        )
-        bus = getattr(ctx, "bus", None)
-        if bus is not None:
-            bus_emit(
-                bus,
-                "skills.updated",
-                {"name": body.name, "webspace_id": webspace_id, "source": "artifact_subscription"},
-                "api.skills",
-            )
-            bus_emit(
-                bus,
-                "skills.activated",
-                {
-                    "skill_name": body.name,
-                    "space": "default",
-                    "webspace_id": webspace_id,
-                    "source": "artifact_subscription",
-                },
-                "api.skills",
-            )
-        rebuild: dict[str, Any]
-        if body.defer_webspace_rebuild:
-            rebuild = {"status": "deferred", "webspace_id": webspace_id}
-        else:
-            await_runtime(
-                rebuild_webspace_projection(
-                    webspace_id=webspace_id,
-                    action="artifact_subscription_sync",
-                    source_of_truth="workspace_lock",
-                )
-            )
-            rebuild = {"status": "completed", "webspace_id": webspace_id}
-        receipt = {
-            "status": "reloaded",
-            "skill": body.name,
-            "version": package.version,
-            "package_digest": package.digest,
-            "runtime_refresh": refresh,
-            "handler_reload": handlers,
-            "materialization_cache": materialization_cache,
-            "webspace_rebuild": rebuild,
-        }
-        runtime_receipts[lock.to_dict()["lock_digest"]] = receipt
-        return receipt
-
-    def health_check(lock) -> dict[str, Any]:
-        lock_digest = lock.to_dict()["lock_digest"]
-        receipt = runtime_receipts.get(lock_digest)
-        if receipt is None:
-            return {"status": "failed", "reason": "runtime_reload_receipt_missing"}
-        return {
-            "status": "passed",
-            "check": "skill_runtime_reload_and_webspace_projection",
-            "lock_digest": lock_digest,
-            "skill": body.name,
-            "version": receipt["version"],
-        }
-
-    try:
-        activated = await asyncio.to_thread(
-            service.activate_artifact_subscription,
-            body.name,
-            expected_plan_digest=expected,
-            permission_decision=body.permission_decision,
-            reload_runtime=reload_runtime,
-            health_check=health_check,
-        )
-    except (PublicationError, RootServiceError, RuntimeError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {
-        **activated,
-        "updated": True,
-        "mode": "package_activation",
-        "reviewed_plan_digest": expected,
-        "runtime_receipts": runtime_receipts,
-    }
 
 
 def _clean_version_text(value: object | None) -> str | None:
@@ -969,12 +811,27 @@ async def runtime_setup(body: RuntimeSetupReq, mgr: SkillManager = Depends(_get_
 
 @router.post("/update")
 async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
+    coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
     try:
-        package_service = _package_subscription_service(ctx, body.name)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if package_service is not None:
-        return await _update_subscribed_skill(body, ctx, package_service)
+        subscribed = coordinator.is_subscribed(body.name)
+    except ArtifactSubscriptionUpdateError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+    if subscribed:
+        try:
+            return await coordinator.update(
+                "skill",
+                body.name,
+                dry_run=body.dry_run,
+                expected_plan_digest=body.expected_plan_digest,
+                permission_decision=body.permission_decision,
+                idempotency_key=body.idempotency_key,
+                webspace_id=body.webspace_id,
+                defer_webspace_rebuild=body.defer_webspace_rebuild,
+            )
+        except ArtifactSubscriptionUpdateError as exc:
+            raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     service = SkillUpdateService(ctx)
     try:
         kwargs: dict[str, Any] = {"dry_run": body.dry_run}
