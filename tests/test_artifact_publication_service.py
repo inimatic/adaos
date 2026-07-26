@@ -635,6 +635,23 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
     notice = subscriber.check_subscription("recipes")
     assert notice.available is True
     assert notice.pointer.release_digest == second.pointer.release_digest
+    update_plan = subscriber.plan_subscription_update("recipes")
+    update_payload = update_plan.to_dict()
+    assert update_payload["plan_digest"].startswith("sha256:")
+    assert update_payload["activation"]["component_changes"] == {
+        "added": [],
+        "changed": ["scenario:recipes"],
+        "retained": [],
+        "removed": [],
+    }
+    assert update_payload["activation"]["permissions"]["introduced"] == []
+    assert update_payload["activation"]["rollback"]["available"] is True
+
+    with pytest.raises(PublicationError, match="plan changed"):
+        subscriber.activate_subscription_update(
+            "recipes",
+            expected_plan_digest="sha256:" + "0" * 64,
+        )
 
     with pytest.raises(ActivationError, match="health check failed"):
         subscriber.activate_subscription_update(
@@ -655,6 +672,7 @@ def test_remote_stable_subscription_updates_from_packages_after_success_only(tmp
     updated = subscriber.activate_subscription_update(
         "recipes",
         idempotency_key="subscription-retry-after-health-fix",
+        expected_plan_digest=update_plan.plan_digest,
         health_check=lambda _lock: True,
         reload_policy={
             "mode": "skip",

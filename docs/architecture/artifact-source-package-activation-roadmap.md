@@ -135,7 +135,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 6/9 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission | external signing and package-store lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
-| AP3 | 7/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, and interruption recovery | delayed observation, retention, operator diff, and stand validation |
+| AP3 | 8/11 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, and digest-bound operator diff | delayed observation, retention, and stand validation |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, local/backend atomic channel CAS, and durable post-CAS continuation | merge/deploy backend hardening and clean stand promotion |
 | AP6 | 6/10 | validated-local | stable subscription discovery, notify/pinned policy, package update, rollback, post-success observation | legacy update-entrypoint cutover and Builder/operator update-plan UI |
@@ -297,7 +297,7 @@ leave either the old or the new complete release active.
 - [ ] `[should]` `AP3-08` Add delayed post-activation verification linked to the
   exact WorkspaceLock revision.
 - [ ] `[should]` `AP3-09` Add orphan staging cleanup and package retention policy.
-- [ ] `[could]` `AP3-10` Add operator diff output between active and proposed
+- [x] `[could]` `AP3-10` Add operator diff output between active and proposed
   locks.
 - [ ] `[deferred]` `AP3-11` Add unattended activation of irreversible migrations.
 
@@ -313,6 +313,12 @@ before the Workspace writer lease when a fetch adapter is supplied. `AP3-02`
 was reclosed after reload and health became fail-closed phases: every success
 has a callback receipt or a named policy skip with `approved_by` and `reason`,
 and legacy completed operations without both receipts cannot replay as current.
+`AP3-10` is closed by a read-only activation plan bound to the observed
+WorkspaceLock digest and target release digest. It reports exact component and
+dependency changes, permission additions/removals, schema and migration locks,
+rollback availability, required runtime checks, and legacy-target warnings.
+The plan has its own canonical digest; activation rejects an obsolete reviewed
+plan and still performs WorkspaceLock CAS under the writer lease.
 
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 
@@ -439,6 +445,9 @@ and channel/subscription regressions in
 `tests/test_artifact_channels_subscriptions.py`.
 `AP6-04` remains open: the package-backed subscription path is validated, but
 all legacy scenario/skill update entrypoints have not yet been cut over to it.
+The service/SDK now expose the digest-bound update-plan contract and activation
+accepts `expected_plan_digest`; AP6-08 remains open until Builder/operator UI
+renders that contract and the live runtime adapter replaces the named MVP skip.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 

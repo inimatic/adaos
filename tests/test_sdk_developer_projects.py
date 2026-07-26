@@ -202,11 +202,19 @@ class _DeveloperService:
     def check_artifact_subscription(self, project_id):
         return {"ok": True, "project_id": project_id, "available": True}
 
+    def plan_artifact_subscription_update(self, project_id):
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "plan_digest": "sha256:" + "a" * 64,
+        }
+
     def activate_artifact_subscription(
         self,
         project_id,
         *,
         idempotency_key=None,
+        expected_plan_digest=None,
         permission_decision=None,
     ):
         return {
@@ -214,6 +222,7 @@ class _DeveloperService:
             "project_id": project_id,
             "release": f"{project_id}@1.1.0",
             "idempotency_key": idempotency_key,
+            "expected_plan_digest": expected_plan_digest,
             "permission_decision": permission_decision,
         }
 
@@ -259,10 +268,12 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         validation_evidence={"status": "passed"},
     )
     notice = projects.check_subscription("builder")
+    update_plan = projects.plan_subscription_update("builder")
     subscription_update = projects.activate_subscription(
         "scenario",
         "builder",
         idempotency_key="update-builder-1",
+        expected_plan_digest=update_plan["plan_digest"],
         permission_decision={"approved": True, "actor": "user:test"},
     )
 
@@ -271,7 +282,9 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
     assert promoted["permission_decision"]["actor"] == "user:test"
     assert rebased["candidate"]["candidate_id"] == "builder-rebased"
     assert notice["available"] is True
+    assert update_plan["plan_digest"].startswith("sha256:")
     assert subscription_update["idempotency_key"] == "update-builder-1"
+    assert subscription_update["expected_plan_digest"] == update_plan["plan_digest"]
     assert subscription_update["permission_decision"]["approved"] is True
 
     with pytest.raises(projects.DeveloperProjectError, match="at least one Builder Change"):

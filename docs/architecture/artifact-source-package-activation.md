@@ -426,6 +426,14 @@ Failure before `switch-lock` removes staged state and leaves the active lock
 unchanged. Failure after `switch-lock` restores the previous lock and reloads
 the previous component set when rollback is supported.
 
+Before a user-approved update, the same planner runs without writes and emits a
+canonical plan digest. The plan is bound to both the immutable target release
+and the observed WorkspaceLock digest, and includes component/dependency,
+permission, schema, migration, runtime-check, and rollback sections. Activation
+recomputes this view and rejects an obsolete `expected_plan_digest`; the
+Workspace writer lease and lock compare-and-switch remain the final concurrency
+guard.
+
 The operation record contains:
 
 - operation and idempotency ids;

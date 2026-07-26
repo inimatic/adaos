@@ -2209,18 +2209,35 @@ class RootDeveloperService:
         notice = self._artifact_publication_service(cfg).check_subscription(project_id)
         return {"ok": True, **notice.to_dict()}
 
+    def plan_artifact_subscription_update(self, project_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        plan = self._artifact_publication_service(cfg).plan_subscription_update(project_id)
+        return {"ok": True, **plan.to_dict()}
+
     def activate_artifact_subscription(
         self,
         project_id: str,
         *,
         idempotency_key: str | None = None,
+        expected_plan_digest: str | None = None,
         permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         updated = self._artifact_publication_service(cfg).activate_subscription_update(
             project_id,
             idempotency_key=idempotency_key,
+            expected_plan_digest=expected_plan_digest,
             permission_decision=permission_decision,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "root.artifact_subscription.mvp",
+                "reason": "live artifact reload adapter is not connected yet",
+            },
+            health_policy={
+                "mode": "skip",
+                "approved_by": "root.artifact_subscription.mvp",
+                "reason": "live artifact health adapter is not connected yet",
+            },
         )
         return {
             "ok": True,

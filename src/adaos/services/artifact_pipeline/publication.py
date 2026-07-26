@@ -14,6 +14,7 @@ from adaos.domain.artifact_release import (
     ArtifactSourceRef,
     StableSubscription,
     WorkspaceLock,
+    canonical_payload_digest,
 )
 from adaos.services.artifact_pipeline.activation import (
     ActivationResult,
@@ -253,6 +254,26 @@ class SubscriptionUpdateResult:
     activation: ActivationResult
 
 
+@dataclass(frozen=True, slots=True)
+class SubscriptionUpdatePlan:
+    notice: SubscriptionUpdateNotice
+    release_plan: ReleasePlan
+    activation_plan: Mapping[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "schema": "adaos.artifact.subscription_update_plan.v1",
+            "notice": self.notice.to_dict(),
+            "activation": dict(self.activation_plan),
+        }
+        payload["plan_digest"] = canonical_payload_digest(payload)
+        return payload
+
+    @property
+    def plan_digest(self) -> str:
+        return str(self.to_dict()["plan_digest"])
+
+
 class ArtifactPublicationService:
     def __init__(
         self,
@@ -336,11 +357,31 @@ class ArtifactPublicationService:
             reason = "channel_moved"
         return SubscriptionUpdateNotice(subscription, pointer, available, allowed, reason)
 
+    def plan_subscription_update(self, project_id: str) -> SubscriptionUpdatePlan:
+        notice = self.check_subscription(project_id)
+        if not notice.available:
+            raise PublicationError("subscription is already up to date")
+        release_plan = self.remote.get_release(project_id, notice.pointer.release_digest)
+        if (
+            release_plan.release.project_id != project_id
+            or (release_plan.release.release_digest or release_plan.release.computed_digest())
+            != notice.pointer.release_digest
+        ):
+            raise PublicationError("stable channel resolved to a different ProjectRelease identity")
+        activation_manager = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+        )
+        activation_plan = activation_manager.plan_activation(release_plan)
+        return SubscriptionUpdatePlan(notice, release_plan, activation_plan)
+
     def activate_subscription_update(
         self,
         project_id: str,
         *,
         idempotency_key: str | None = None,
+        expected_plan_digest: str | None = None,
         health_check=None,
         reload_runtime=None,
         health_policy=None,
@@ -349,12 +390,13 @@ class ArtifactPublicationService:
         migration_executor=None,
         migration_rollback=None,
     ) -> SubscriptionUpdateResult:
-        notice = self.check_subscription(project_id)
-        if not notice.available:
-            raise PublicationError("subscription is already up to date")
+        prepared = self.plan_subscription_update(project_id)
+        notice = prepared.notice
         if not notice.activation_allowed:
             raise PublicationError("pinned subscription cannot be activated")
-        plan = self.remote.get_release(project_id, notice.pointer.release_digest)
+        if expected_plan_digest is not None and str(expected_plan_digest).strip().lower() != prepared.plan_digest:
+            raise PublicationError("subscription update plan changed; review the new plan before activation")
+        plan = prepared.release_plan
         activation = WorkspaceActivationManager(
             workspace_root=self.workspace_root,
             package_store=self.package_store,
@@ -373,6 +415,7 @@ class ArtifactPublicationService:
             permission_decision=permission_decision,
             migration_executor=migration_executor,
             migration_rollback=migration_rollback,
+            expected_lock_digest=prepared.activation_plan.get("observed_lock_digest"),
         )
         self.release_cache.put_release(plan)
         self._record_workspace_projection(plan)

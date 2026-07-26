@@ -68,6 +68,7 @@ from .publication import (
     PublicationStaleError,
     PushedSourceRecord,
     SubscriptionUpdateNotice,
+    SubscriptionUpdatePlan,
     SubscriptionUpdateResult,
 )
 from .sources import (
@@ -113,6 +114,7 @@ __all__ = [
     "PublicationStaleError",
     "PushedSourceRecord",
     "SubscriptionUpdateNotice",
+    "SubscriptionUpdatePlan",
     "SubscriptionUpdateResult",
     "LocalGitSourceProvider",
     "MaterializedSource",

@@ -103,6 +103,7 @@ redacted identities and conclusions required for review.
 | DEV/trial/Workspace content equality | passed | SHA-256 equality for canonical manifests, `webui.json`, and skill handler |
 | Builder checkpoint identity per iteration | passed | 113 focused regressions; explicit checkpoint-only reconciliation, no Codex replay |
 | Builder/schema/migration/evidence lock admission | passed | 95 artifact-pipeline regressions plus backend TypeScript build/package smoke; partial and content-mismatched lock sets rejected |
+| Operator activation diff and review binding | passed | read-only component/dependency/permission/schema/migration/rollback plan; canonical plan digest and WorkspaceLock CAS guard activation |
 
 Exact immutable identities from the proof:
 

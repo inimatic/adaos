@@ -564,16 +564,25 @@ def check_subscription(project_id: str) -> dict[str, Any]:
     return _jsonable(_service().check_artifact_subscription(normalized_id))
 
 
+def plan_subscription_update(project_id: str) -> dict[str, Any]:
+    normalized_id = _project_id(project_id)
+    return _jsonable(_service().plan_artifact_subscription_update(normalized_id))
+
+
 def activate_subscription(
     kind: str,
     project_id: str,
     *,
     idempotency_key: str | None = None,
+    expected_plan_digest: str | None = None,
     permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)
-    kwargs: dict[str, Any] = {"idempotency_key": idempotency_key}
+    kwargs: dict[str, Any] = {
+        "idempotency_key": idempotency_key,
+        "expected_plan_digest": expected_plan_digest,
+    }
     if permission_decision is not None:
         kwargs["permission_decision"] = permission_decision
     result = _jsonable(_service().activate_artifact_subscription(normalized_id, **kwargs))
@@ -606,6 +615,7 @@ __all__ = [
     "ProjectNotFoundError",
     "create",
     "check_subscription",
+    "plan_subscription_update",
     "activate_subscription",
     "delete",
     "describe",

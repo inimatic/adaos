@@ -14,6 +14,7 @@ from adaos.domain.artifact_release import (
     ProjectRelease,
     WorkspaceLock,
     WorkspaceSlot,
+    canonical_payload_digest,
 )
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
@@ -475,6 +476,113 @@ class WorkspaceActivationManager:
         if self.workspace_root not in target.parents:
             raise ActivationError(f"package target escapes Workspace: {target}")
         return target
+
+    def plan_activation(
+        self,
+        plan: ReleasePlan,
+        *,
+        slot_id: str = "primary",
+        audience: str | None = None,
+        data_mode: str | None = None,
+        data_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a deterministic, read-only plan bound to the observed WorkspaceLock."""
+
+        self._assert_plan(plan)
+        current = self.load_lock()
+        desired = self._desired_lock(
+            current=current,
+            plan=plan,
+            slot_id=slot_id,
+            audience=audience,
+            data_mode=data_mode,
+            data_ref=data_ref,
+        )
+        current_release = self._active_release(current, slot_id=slot_id)
+        permission_plan = self._permission_plan(current_release, plan.release)
+        migration_plan = self._migration_plan(plan.release)
+        migration_locks = {item.lock_id: item.digest for item in plan.release.migration_locks}
+        for entry in migration_plan["entries"]:
+            entry["digest"] = migration_locks.get(str(entry["id"]))
+
+        current_schemas = {
+            item.lock_id: item.digest
+            for item in (current_release.schema_locks if current_release is not None else ())
+        }
+        target_schemas = {item.lock_id: item.digest for item in plan.release.schema_locks}
+        schema_plan = {
+            "current_release_known": current_release is not None,
+            "added": sorted(key for key in target_schemas if key not in current_schemas),
+            "changed": sorted(
+                key
+                for key in target_schemas
+                if key in current_schemas and target_schemas[key] != current_schemas[key]
+            ),
+            "removed": sorted(key for key in current_schemas if key not in target_schemas),
+            "target": [item.to_dict() for item in plan.release.schema_locks],
+        }
+        component_changes = self._component_plan(current, desired)
+        warnings: list[str] = []
+        legacy_targets = sorted(item.key for item in plan.packages if item.materialization_path is None)
+        if legacy_targets:
+            warnings.append(
+                "legacy packages use canonical materialization targets: " + ", ".join(legacy_targets)
+            )
+        if current is not None and current_release is None:
+            warnings.append(
+                "active ProjectRelease is unavailable; introduced permissions and schema removals cannot be fully compared"
+            )
+        rollback_available = current is not None and (
+            migration_plan["count"] == 0 or migration_plan["rollback_ready"]
+        )
+        payload: dict[str, Any] = {
+            "schema": "adaos.artifact.activation_plan.v1",
+            "project_id": plan.release.project_id,
+            "target_release": f"{plan.release.project_id}@{plan.release.version}",
+            "target_release_digest": plan.release.release_digest
+            or plan.release.computed_digest(),
+            "slot_id": slot_id,
+            "observed_lock_digest": self._lock_digest(current),
+            "component_changes": component_changes,
+            "target_components": [
+                {
+                    "key": item.key,
+                    "version": item.version,
+                    "package_digest": item.digest,
+                    "materialization_path": item.materialization_path
+                    or (
+                        f"skills/{item.artifact_id}"
+                        if item.kind == "skill"
+                        else f"scenarios/{item.artifact_id}"
+                    ),
+                }
+                for item in sorted(plan.packages, key=lambda value: value.key)
+            ],
+            "resolved_dependencies": [
+                item.to_dict()
+                for item in sorted(plan.release.resolved_dependencies, key=lambda value: value.key)
+            ],
+            "permissions": permission_plan,
+            "schemas": schema_plan,
+            "migrations": migration_plan,
+            "rollback": {
+                "available": rollback_available,
+                "reason": (
+                    "previous_workspace_lock_and_reversible_migrations"
+                    if rollback_available
+                    else "no_previous_workspace_lock"
+                    if current is None
+                    else "migration_rollback_contract_incomplete"
+                ),
+            },
+            "runtime": {
+                "reload_required": True,
+                "health_verification_required": True,
+            },
+            "warnings": warnings,
+        }
+        payload["plan_digest"] = canonical_payload_digest(payload)
+        return payload
 
     def _rollback(self, operation: dict[str, Any]) -> None:
         mutation = operation.get("workspace_mutation")
