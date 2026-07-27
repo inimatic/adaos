@@ -569,7 +569,7 @@ def _compact_watchdog_verification(value: Any) -> dict[str, Any]:
         return {}
     result = {
         key: _compact_json_value(value.get(key), max_depth=2, max_text=256)
-        for key in ("ok", "state", "attempts", "timeout_sec", "error")
+        for key in ("ok", "state", "source", "attempts", "timeout_sec", "error")
         if value.get(key) is not None
     }
     channel = _compact_watchdog_channel_state(value.get("channel"))
@@ -5507,12 +5507,15 @@ class SupervisorManager:
             else {}
         )
         root_probe_state = str(root_probe.get("state") or "").strip().lower()
-        if not channel_ready and root_probe_state != "ready":
-            return None
+        verification_state = (
+            "ready"
+            if channel_ready
+            else ("root_perspective_ready" if root_probe_state == "ready" else "local_runtime_api_ready")
+        )
         verification = {
             "ok": True,
-            "state": "ready" if channel_ready else "root_perspective_ready",
-            "source": "supervisor.periodic_core_update_reconcile",
+            "state": verification_state,
+            "source": "supervisor.periodic_core_update_reconcile.direct_root_mtls",
             "channel": dict(channel_state),
             "root_perspective_probe": dict(root_probe),
         }

@@ -1130,10 +1130,36 @@ def test_hub_root_watchdog_preserves_runtime_route_on_degraded_browser_route_by_
 
     asyncio.run(manager._maybe_reconnect_hub_root_from_watchdog())
 
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0]["path"] == "/api/admin/update/reconcile"
+    assert calls[0]["payload"]["reason"] == "supervisor.hub_root.periodic_core_update_reconcile"
     assert manager._hub_root_watchdog_last_state == "degraded"
     assert manager._hub_root_watchdog_last_reason == "browser route degraded; preserving active runtime-owned tunnels"
     assert manager._hub_root_watchdog_reconnect_total == 0
+
+
+def test_periodic_core_update_reconcile_uses_local_runtime_when_hub_root_route_is_down(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUPERVISOR_PERIODIC_CORE_UPDATE_RECONCILE", raising=False)
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        manager,
+        "_runtime_request_json",
+        lambda **kwargs: calls.append(dict(kwargs)) or {"ok": True, "needs_update": False},
+    )
+    runtime = {
+        "readiness_tree": {"root_control": {"status": "down"}},
+        "channel_overview": {"hub_root": {"effective_status": "down"}},
+    }
+
+    result = asyncio.run(manager._maybe_reconcile_hub_core_update_periodic(runtime))
+
+    assert result is not None
+    assert result["result"]["ok"] is True
+    assert calls[0]["path"] == "/api/admin/update/reconcile"
+    assert result["verification"]["state"] == "local_runtime_api_ready"
+    assert result["verification"]["source"] == "supervisor.periodic_core_update_reconcile.direct_root_mtls"
 
 
 def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypatch, tmp_path) -> None:

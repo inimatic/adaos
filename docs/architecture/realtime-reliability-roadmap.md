@@ -595,6 +595,9 @@ lifecycle and update attempt state.
   A/B slot without ad-hoc root mutation and retain a durable recovery marker.
 - [x] `[must]` Allow only the supervisor control plane—not a surviving active or
   candidate runtime—to confirm completion of a root restart.
+- [x] `[must]` Decouple periodic core-release reconciliation from realtime
+  hub-root route readiness; use the ready local runtime and its direct root mTLS
+  client as the bounded update-discovery path.
 - [ ] `[must]` Prove the hardened root promotion and slot fallback through two
   consecutive release updates on the affected second machine.
 - [x] `[must]` Detect bootstrap-managed file changes and surface

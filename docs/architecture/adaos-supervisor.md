@@ -479,6 +479,10 @@ Rules:
   tree (root for normal supervisor boot, selected slot for recovery). Refreshes
   do not append inherited root/slot entries, so repeated updates cannot create a
   mixed-generation import graph
+- periodic release reconciliation is gated by the local runtime API that owns
+  the direct root mTLS client, not by realtime hub-root route readiness. A
+  degraded WS/Yjs/control route therefore cannot strand an otherwise healthy
+  node on an old core release; retries remain bounded by the supervisor interval
 - a slot runtime may validate its application boot, but only the supervisor
   control plane may commit `root_promoted` as a completed root restart. The
   supervisor rechecks source parity before success, so an old surviving runtime
