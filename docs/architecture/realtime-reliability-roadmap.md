@@ -222,6 +222,34 @@ observability gap.
   unless server-side Yjs datachannel enablement is visible in diagnostics and
   browser-side direct-path cooldown has been cleared or expired.
 
+### Stand checkpoint: 2026-07-27, `.30` / `192.168.0.30`
+
+The routed browser exposed a protocol-level first-sync defect after a successful
+core rollout. Runtime, sidecar, and root route diagnostics were ready, while the
+browser remained `runtime=connecting:yws`, `first=timeout`, and
+`resync=provider_disconnected`; Infra State therefore kept an old `slot --`
+projection and inventory widgets remained at their initial `Loading` values.
+
+- The server-authoritative Yjs guard incorrectly discarded browser
+  `SYNC_STEP1`. That frame is a read-only state-vector request; discarding it
+  prevents the server from returning `SYNC_STEP2`, so `y-websocket` never marks
+  the provider synced and repeatedly recreates it.
+- Six short reconnects activated the server reconnect-storm guard and converted
+  the protocol defect into a ten-minute `client_reconnect_backoff`, which made
+  healthy sidecar and root routes look like a transport outage.
+- Release `0.1.615` now processes `SYNC_STEP1` while still rejecting the initial
+  mutating browser `SYNC_STEP2`/`SYNC_UPDATE` under server-authoritative policy.
+  The full gateway suite passed, CI run `30265531570` passed, and `.30`
+  automatically promoted slot `B` with runtime port `8778`.
+- A live post-promotion probe through sidecar `/yws/desktop` received the
+  expected `SYNC_STEP2`. Direct Infra State tools returned
+  `slot B | 0.1.615 | a96d3fe`, update state `succeeded`, 36 installed skills,
+  and 6 registered scenarios.
+
+This closes the handshake defect and proves the post-promotion endpoint. It
+does not yet close the wider acceptance item for one already-open real
+root-routed browser session surviving the complete A/B interval.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -806,6 +834,9 @@ Make Yjs transport-independent without building a second distributed system arou
 - [x] `[must]` Client local persistence.
 - [x] `[must]` Awareness explicitly ephemeral.
 - [x] `[must]` Explicit resync path after route or transport churn.
+- [x] `[must]` Preserve a standards-complete server-authoritative handshake:
+  answer the read-only browser `SYNC_STEP1` and reject only the initial mutating
+  client state/update frames.
 - [ ] `[should]` Validate SyncChannel recovery during A/B runtime switch with
   an already-open rooted browser `/yws` session.
 - [ ] `[deferred]` Move Yjs websocket termination and live room/session
