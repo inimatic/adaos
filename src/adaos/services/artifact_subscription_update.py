@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,6 +23,26 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 
 ArtifactKind = Literal["scenario", "skill"]
+ARTIFACT_UPDATE_ROUTE_SCHEMA = "adaos.artifact.update_route.v1"
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactUpdateRoute:
+    project_id: str
+    mode: Literal["package_activation", "legacy_source_pull"]
+    package_required: bool
+    legacy_allowed: bool
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": ARTIFACT_UPDATE_ROUTE_SCHEMA,
+            "project_id": self.project_id,
+            "mode": self.mode,
+            "package_required": self.package_required,
+            "legacy_allowed": self.legacy_allowed,
+            "reason": self.reason,
+        }
 
 
 class ArtifactSubscriptionUpdateError(RuntimeError):
@@ -75,6 +96,31 @@ class ArtifactSubscriptionUpdateCoordinator:
             ) from exc
         return token in subscriptions
 
+    def select_route(self, project_id: str) -> ArtifactUpdateRoute:
+        """Choose one update authority without failure-driven fallback."""
+
+        token = str(project_id or "").strip()
+        if not token:
+            raise ArtifactSubscriptionUpdateError(
+                "project_id is required",
+                code="artifact_project_id_required",
+            )
+        if self.is_subscribed(token):
+            return ArtifactUpdateRoute(
+                project_id=token,
+                mode="package_activation",
+                package_required=True,
+                legacy_allowed=False,
+                reason="stable_subscription_present",
+            )
+        return ArtifactUpdateRoute(
+            project_id=token,
+            mode="legacy_source_pull",
+            package_required=False,
+            legacy_allowed=True,
+            reason="stable_subscription_absent_bounded_compatibility",
+        )
+
     async def plan(self, project_id: str) -> dict[str, Any]:
         return await asyncio.to_thread(
             self.root.plan_artifact_subscription_update,
@@ -104,7 +150,8 @@ class ArtifactSubscriptionUpdateCoordinator:
                 "project_id is required",
                 code="artifact_project_id_required",
             )
-        if not self.is_subscribed(token):
+        route = self.select_route(token)
+        if not route.package_required:
             raise ArtifactSubscriptionUpdateError(
                 f"project has no stable subscription: {token}",
                 code="artifact_subscription_not_found",
@@ -121,6 +168,7 @@ class ArtifactSubscriptionUpdateCoordinator:
                 "ok": True,
                 "updated": False,
                 "mode": "package_plan",
+                "update_route": route.to_dict(),
                 "update_plan": reviewed,
             }
 
@@ -156,6 +204,7 @@ class ArtifactSubscriptionUpdateCoordinator:
             **activated,
             "updated": True,
             "mode": "package_activation",
+            "update_route": route.to_dict(),
             "reviewed_plan_digest": expected,
             "runtime_receipts": receipts,
         }
@@ -338,6 +387,8 @@ class ArtifactSubscriptionUpdateCoordinator:
 
 
 __all__ = [
+    "ARTIFACT_UPDATE_ROUTE_SCHEMA",
     "ArtifactSubscriptionUpdateCoordinator",
     "ArtifactSubscriptionUpdateError",
+    "ArtifactUpdateRoute",
 ]

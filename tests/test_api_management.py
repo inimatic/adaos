@@ -371,6 +371,9 @@ def test_subscribed_scenario_update_requires_reviewed_plan_and_records_projectio
         def is_subscribed(self, project_id: str) -> bool:
             return project_id == "scene"
 
+        def select_route(self, project_id: str):
+            return SimpleNamespace(package_required=project_id == "scene")
+
         async def update(self, kind: str, project_id: str, **kwargs):
             activations.append({"kind": kind, "project_id": project_id, **kwargs})
             plan = {"ok": True, "project_id": project_id, "plan_digest": plan_digest}
@@ -550,6 +553,9 @@ def test_subscribed_skill_update_requires_reviewed_plan_and_records_runtime_heal
 
         def is_subscribed(self, project_id: str) -> bool:
             return project_id == "demo"
+
+        def select_route(self, project_id: str):
+            return SimpleNamespace(package_required=project_id == "demo")
 
         async def update(self, kind: str, project_id: str, **kwargs):
             activations.append({"kind": kind, "project_id": project_id, **kwargs})

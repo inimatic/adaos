@@ -668,6 +668,23 @@ bridge. Such responses are marked `legacy_source_pull` and
 `legacy_materialization`; they are not equivalent to reviewed package
 activation and remain subject to the legacy-retirement gate.
 
+The bounded rollout decision is therefore explicit and deterministic:
+
+- a valid stable subscription selects `package_activation` and forbids legacy
+  fallback for that request;
+- an absent subscription may select only the labelled `legacy_source_pull`
+  compatibility route;
+- a corrupt or unreadable subscription store fails closed and does not look
+  like an absent subscription;
+- remote/package/activation failure after the package route was selected never
+  triggers source pull;
+- REST, WebSocket, and Builder consume the same versioned route decision.
+
+This makes package activation the mandatory update authority for migrated
+projects without claiming that every historical installation has already been
+migrated. Retirement of the compatibility route is a later evidence-based
+decision, not an error fallback or an implicit deadline.
+
 ## Forge And Repository Evolution
 
 The current monorepo remains supported through `SourceProvider`:

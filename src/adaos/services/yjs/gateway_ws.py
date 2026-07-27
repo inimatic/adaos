@@ -8760,7 +8760,8 @@ async def process_events_command(
                 await _ack(False, error="name required")
                 return None
             coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
-            if coordinator.is_subscribed(skill_name):
+            update_route = coordinator.select_route(skill_name)
+            if update_route.package_required:
                 result = await coordinator.update(
                     "skill",
                     skill_name,
@@ -8792,6 +8793,7 @@ async def process_events_command(
                     "updated": result.updated,
                     "version": result.version,
                     "mode": "legacy_source_pull",
+                    "update_route": update_route.to_dict(),
                     "legacy_materialization": True,
                     "warning": "no stable package subscription; compatibility git pull was used",
                 },

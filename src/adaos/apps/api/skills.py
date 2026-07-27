@@ -813,10 +813,10 @@ async def runtime_setup(body: RuntimeSetupReq, mgr: SkillManager = Depends(_get_
 async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
     coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
     try:
-        subscribed = coordinator.is_subscribed(body.name)
+        update_route = coordinator.select_route(body.name)
     except ArtifactSubscriptionUpdateError as exc:
         raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
-    if subscribed:
+    if update_route.package_required:
         try:
             return await coordinator.update(
                 "skill",
@@ -927,6 +927,7 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         "updated": result.updated,
         "version": result.version,
         "mode": "legacy_source_pull",
+        "update_route": update_route.to_dict(),
         "legacy_materialization": True,
         "warning": "no stable package subscription; compatibility git pull was used",
         "runtime_refresh": runtime_refresh,

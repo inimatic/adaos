@@ -180,7 +180,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
-| AP6 | 10/12 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, and attested recovery of missing remote immutable state | bounded legacy fallback decision and stand acceptance |
+| AP6 | 11/13 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, and one fail-closed package/legacy route contract | stand acceptance and later evidence-based retirement of the compatibility route |
 | AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
@@ -561,6 +561,10 @@ injected failure.
   require current-contract isolated revalidation for legacy trial records and
   journal package, release, and absent-channel-CAS phases without automatic
   mutation replay.
+- [x] `[must]` `AP6-13` Make the bounded rollout route explicit and shared:
+  subscribed projects require package activation, only subscription absence
+  admits labelled legacy source pull, corrupt subscription state fails closed,
+  and package-path failures never trigger compatibility fallback.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and channel/subscription regressions in
@@ -612,6 +616,13 @@ projected the pointer into `registry.json`. Subsequent identity diagnostics have
 no warnings; recovery and reconciliation both report `noop`, and WorkspaceLock
 remains revision 1 at digest
 `sha256:62ac1e57aea1c93a911fdaa663c1dcb8fdfdc993ccabbe10024695c276b1d0b8`.
+AP6-13 records the bounded rollout decision in the architecture and implements
+one `adaos.artifact.update_route.v1` selector used by scenario REST, skill REST,
+skill WebSocket, and the shared package coordinator. Focused API, WebSocket, and
+coordinator regressions prove the package route for subscribed projects and
+fail-closed handling of a malformed subscription store. The legacy bridge
+remains only for projects with no subscription and stays explicitly labelled;
+its eventual retirement is not required for this bounded rollout.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 

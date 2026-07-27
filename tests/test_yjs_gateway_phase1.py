@@ -2693,6 +2693,9 @@ def test_process_events_command_routes_subscribed_skill_update_through_coordinat
         def is_subscribed(self, project_id: str) -> bool:
             return project_id == "recipe_skill"
 
+        def select_route(self, project_id: str):
+            return SimpleNamespace(package_required=project_id == "recipe_skill")
+
         async def update(self, kind: str, project_id: str, **kwargs):
             updates.append({"kind": kind, "project_id": project_id, **kwargs})
             return {"ok": True, "mode": "package_activation", "updated": True}

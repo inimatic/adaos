@@ -417,10 +417,10 @@ async def update(
 ):
     coordinator = ArtifactSubscriptionUpdateCoordinator(ctx, scenario_manager=mgr)
     try:
-        subscribed = coordinator.is_subscribed(body.name)
+        update_route = coordinator.select_route(body.name)
     except ArtifactSubscriptionUpdateError as exc:
         raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
-    if subscribed:
+    if update_route.package_required:
         if body.async_operation:
             raise HTTPException(
                 status_code=409,
@@ -502,6 +502,7 @@ async def update(
         },
         "dependency_bootstrap": dependency_bootstrap,
         "mode": "legacy_source_pull",
+        "update_route": update_route.to_dict(),
         "legacy_materialization": True,
         "warning": "no stable package subscription; compatibility workspace sync was used",
     }

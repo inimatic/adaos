@@ -68,6 +68,7 @@ broader frontend/WebSocket handoff remains separate.
 | B15 channel/subscription admission | corrected, validated-local | malformed or partial ChannelPointers, inconsistent channel indexes, and malformed/duplicate subscription records fail closed before reconciliation |
 | B16 remote registry loss recovery | corrected, recovered-live (bounded) | reviewed recovery uploaded exact verified packages/release and created the absent stable channel through CAS; ordinary reconciliation then projected it locally and both plans now return `noop` |
 | B17 historical trial contract drift | corrected, recovered-live (bounded) | legacy Builder acceptance claimed `snapshot` without current `data_ref`; recovery refused it until the same immutable release passed a new isolated empty-data activation under current reload/health contracts |
+| B18 update-route policy drift | corrected, validated-local | REST, WebSocket, and Builder now share a versioned subscription-based route decision; subscribed package failure cannot fall through to legacy source pull and malformed subscription state fails closed |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
@@ -343,6 +344,22 @@ The resulting operation digest is
 The strict Candidate reader remains unchanged and future recovery plans bind the
 legacy record digest plus the current revalidation receipt.
 
+### B18. Package rollout policy was duplicated across transports
+
+Scenario REST, skill REST, and skill WebSocket each independently checked for a
+subscription before choosing package activation or the legacy source bridge.
+They currently branched in the same direction, but the duplicated boolean
+decision left room for one transport to reinterpret a package error as grounds
+for source pull or to treat an invalid subscription store as no subscription.
+
+Current correction: `adaos.artifact.update_route.v1` is selected once by the
+shared coordinator. A present valid subscription means `package_required=true`
+and `legacy_allowed=false`; only genuine absence selects the explicitly labelled
+compatibility route. Subscription parsing errors remain errors. REST and
+WebSocket consume that object, and package activation responses expose it for
+Builder/operator diagnostics. Focused transport and coordinator regressions
+cover the shared route and fail-closed store behavior.
+
 ## Reliability And Performance Gaps
 
 ### R1. Cached activation verified each archive repeatedly
@@ -508,10 +525,14 @@ readiness.
     an isolated empty-data Workspace, restore both packages plus exact release
     and absent stable channel, then complete ordinary registry reconciliation.
     Identity, recovery, and reconciliation postchecks are clean/noop.
-20. **Next:** record and enforce the bounded package-only rollout boundary and
-    the remaining non-subscribed legacy fallback policy. Replace single-zone
-    buffered storage with streamed/object-store multi-zone durability before
-    broad rollout.
+20. **Completed locally:** record and enforce the bounded rollout boundary with
+    one versioned update-route contract. Subscribed projects are package-only;
+    only genuine subscription absence admits labelled legacy source pull, and
+    package failure never causes fallback.
+21. **Next:** run the final focused/full pipeline and stand checks against the
+    resulting revision, then synchronize remaining documentation and client/core
+    release state. Replace single-zone buffered storage with streamed/object-store
+    multi-zone durability before broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

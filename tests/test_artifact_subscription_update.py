@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from adaos.domain.artifact_release import StableSubscription
 from adaos.services import artifact_subscription_update as update_service
+from adaos.services.artifact_pipeline import SubscriptionStore
 
 
 PLAN_DIGEST = "sha256:" + "a" * 64
@@ -109,6 +111,39 @@ def test_scenario_update_uses_one_runtime_contract(monkeypatch, tmp_path) -> Non
     assert syncs == [{"project_id": "recipes", "webspace_id": "desktop", "emit_event": False}]
     assert projections[0]["source_of_truth"] == "workspace_lock"
     assert coordinator.root.activations[0]["expected_plan_digest"] == PLAN_DIGEST
+    assert result["update_route"]["package_required"] is True
+    assert result["update_route"]["legacy_allowed"] is False
+
+
+def test_update_route_is_subscription_based_and_corruption_fails_closed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ctx = _context(tmp_path, "scenario", "recipes", "2.0.0")
+    monkeypatch.setattr(update_service, "RootDeveloperService", _Root)
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(ctx)
+
+    legacy = coordinator.select_route("recipes")
+    assert legacy.mode == "legacy_source_pull"
+    assert legacy.legacy_allowed is True
+    assert legacy.package_required is False
+
+    SubscriptionStore(coordinator.subscription_path).save(
+        StableSubscription(
+            project_id="recipes",
+            installed_release="recipes@1.0.0",
+            installed_digest="sha256:" + "e" * 64,
+        )
+    )
+    package = coordinator.select_route("recipes")
+    assert package.mode == "package_activation"
+    assert package.package_required is True
+    assert package.legacy_allowed is False
+
+    coordinator.subscription_path.write_text("{", encoding="utf-8")
+    with pytest.raises(update_service.ArtifactSubscriptionUpdateError) as raised:
+        coordinator.select_route("recipes")
+    assert raised.value.code == "artifact_subscription_store_invalid"
 
 
 def test_skill_update_requires_runtime_and_webspace_projection(monkeypatch, tmp_path) -> None:
