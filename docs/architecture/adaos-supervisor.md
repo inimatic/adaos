@@ -470,7 +470,10 @@ Rules:
   `adaos.apps.core_update_root_promote` with that slot's interpreter and only
   that slot's source on `PYTHONPATH`. The candidate performs root promotion and
   generates the replacement wrapper; the old supervisor accepts the structured
-  receipt and must not regenerate that wrapper from old code
+  receipt and must not regenerate that wrapper from old code. Because this is a
+  standalone process, the runner initializes its own candidate-owned
+  `AgentContext` before calling autostart services; it never assumes that the
+  requesting supervisor's process context crosses the subprocess boundary
 - bootstrap dependency closure is a tested contract. A package re-export added
   to a root-controlled `__init__.py` must bring its imported module into the
   bootstrap path set; the projected import preflight remains the final guard
@@ -500,8 +503,17 @@ Rules:
   silent partial failure
 - a slot runtime may validate its application boot, but only the supervisor
   control plane may commit `root_promoted` as a completed root restart. The
-  supervisor rechecks source parity before success, so an old surviving runtime
-  cannot turn a failed root import into a false successful update
+  promotion receipt records the immutable supervisor instance id and PID that
+  requested activation. That same process generation is forbidden from
+  finalizing its own restart even when the active runtime is already ready.
+  Only a replacement supervisor instance may add the completion instance/PID
+  receipt after service restart and source-parity validation, so neither an old
+  surviving runtime nor the pre-restart supervisor can turn a failed or merely
+  scheduled restart into false success
+- terminal reconciliation treats `subsequent_transition_request` as the durable
+  execution authority. A carried boolean without that request is an orphaned
+  diagnostic marker: the supervisor clears it instead of displaying or replaying
+  a nonexistent state-changing command
 - managed systemd services rate-limit a completely unrecoverable restart loop
   while retaining normal `Restart=always` behavior. On autostart-managed Linux
   deployments the supervisor requests the service restart automatically so the

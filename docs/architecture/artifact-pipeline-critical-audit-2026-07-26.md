@@ -565,6 +565,32 @@ diagnostics. This does not change runtime state or test outcome. The eventual
 cleanup should make finalization idempotent and avoid emission through a closed
 handler without hiding real profiling lifecycle failures.
 
+### R9. Root promotion success originally proved runtime readiness, not supervisor replacement
+
+The first recovered second-machine updates exposed two distinct false-success
+paths. The candidate-owned root runner inherited no process `AgentContext`, so
+root copy committed but wrapper refresh failed. After that was corrected, the
+old supervisor could still observe the already-ready slot runtime and write
+`root restart completed` immediately before its own scheduled exit. The files
+were correct, but the receipt did not prove that the promoted supervisor code
+was actually loaded.
+
+Current correction: the standalone runner initializes a candidate-owned
+context before promotion services are used. Promotion and restart status also
+record the immutable supervisor instance id and PID that owned the operation;
+that same instance is barred from finalizing its restart. The replacement
+process records a distinct completion instance/PID only after root parity and
+active-runtime readiness pass. A terminal status boolean cannot authorize a
+queued mutation without a durable `subsequent_transition_request`.
+
+Bounded live proof on `192.168.0.30` ended at release `0.1.614` (`f9faba41`, CI
+run `30260047119`). The watcher captured `root_promoted` under PID `824452` with
+no completion timestamp, then PID exit, systemd restart, and completion under
+PID `827238` with a distinct instance id. Runtime ping returned active slot A on
+8777; systemd restart count advanced once and both queued-transition flags were
+false. This closes the second-machine core convergence gate, but not broad
+production or long-lived browser transport acceptance.
+
 ## Corrected Implementation Order
 
 1. Harden schema admission, version uniqueness, package scrub, portable paths,

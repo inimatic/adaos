@@ -185,7 +185,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
-| AP7 | 13/16 | validated-stand + local-runtime-recovered (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 375 final core/Yjs/artifact regressions, live Builder `0.2.20` publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, and exact-build local A/B recovery under real browser reconnects | candidate-before-health proxy admission is reopened under AP7-14; second-machine clean convergence, frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
+| AP7 | 14/16 | validated-stand + second-machine-core-recovered (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 375 final core/Yjs/artifact regressions, live Builder `0.2.20` publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery under real browser reconnects, and generation-bound second-machine core convergence | candidate-before-health proxy admission is reopened under AP7-14; frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -727,7 +727,7 @@ dependency-conflict, interruption, and rollback cases.
 - [x] `[must]` `AP7-15` Recover the local runtime through an exact-build A/B
   slot, one bounded restart, and real browser Yjs reconnects without accepting
   listener-only readiness or automatically repeating a state-changing phase.
-- [ ] `[must]` `AP7-16` Prove second-machine core-release convergence after a
+- [x] `[must]` `AP7-16` Prove second-machine core-release convergence after a
   partial root promotion: verified-slot supervisor fallback, transactional root
   repair, truthful restart authority, and one subsequent clean update cycle.
 
@@ -777,6 +777,23 @@ under one PID for seven samples over 36 seconds. Real `dev1`, `dev1-dev`, and
 admission without reproducing the native Yrs panic. This does not prove
 long-lived WebSocket continuity across cutover, and initial offline-only browser
 drafts are deliberately not merged in this MVP safety mode.
+`AP7-16` is closed for the affected Linux node `192.168.0.30` by the bounded
+release sequence ending at `0.1.614` (`f9faba41`, CI run `30260047119`). The
+earlier partial promotion was recovered from the verified active slot; root
+copy now uses candidate-owned commit receipts and backup/rollback metadata,
+wrapper/CLI replacement is atomic, and the monitor resumes from durable state.
+Automatic releases `0.1.611` and `0.1.612` completed slot/root convergence with
+one self-restart each; `0.1.613` activated the generation gate. The strict
+`0.1.614` control was observed without any manual reconcile or complete call:
+the durable `root_promoted` state named old supervisor PID `824452` and instance
+`0a6507...` while `root_restart_completed_at` was absent; that PID exited,
+systemd started PID `827238`, and only its distinct instance `9834e0...` wrote
+completion 7.9 seconds after the restart request. Slot B changed to A, root
+version became `0.1.614`, direct runtime ping identified active slot A on 8777,
+root parity had no mismatched paths, restart count advanced exactly once, and
+both status and attempt reported no subsequent transition. This is bounded
+second-machine core convergence, not broad production, multi-zone, or
+long-lived browser WebSocket acceptance.
 
 ## Explicit Deferred Backlog
 

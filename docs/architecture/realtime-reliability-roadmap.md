@@ -598,8 +598,12 @@ lifecycle and update attempt state.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.
-- [ ] `[must]` Prove the hardened root promotion and slot fallback through two
-  consecutive release updates on the affected second machine.
+- [x] `[must]` Prove the hardened root promotion and slot fallback through two
+  consecutive release updates on the affected second machine. Evidence is
+  recorded under
+  [`AP7-16`](artifact-source-package-activation-roadmap.md#milestone-ap7-end-to-end-proof-and-legacy-retirement-decision):
+  automatic `0.1.611`/`0.1.612` convergence followed by the generation-bound
+  `0.1.614` control on `192.168.0.30`.
 - [x] `[must]` Detect bootstrap-managed file changes and surface
   `root_promotion_required` explicitly instead of silently mixing slot and
   root drift.
