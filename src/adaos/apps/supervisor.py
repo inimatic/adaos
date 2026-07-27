@@ -1948,6 +1948,16 @@ def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
         return None
     if float(finalized.get("root_restart_completed_at") or 0.0) > 0.0:
         finalized = dict(finalized)
+        for key in (
+            "root_promotion_supervisor_instance_id",
+            "root_promotion_supervisor_pid",
+            "root_promotion_supervisor_started_at",
+            "restart_requested_by_instance_id",
+            "restart_requested_by_pid",
+            "restart_requested_by_started_at",
+        ):
+            if key not in finalized and current.get(key) is not None:
+                finalized[key] = current[key]
         finalized["root_restart_completed_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
         finalized["root_restart_completed_by_pid"] = os.getpid()
         finalized["root_restart_completed_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT

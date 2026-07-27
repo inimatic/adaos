@@ -554,6 +554,39 @@ def test_root_restart_boot_finalize_requires_new_supervisor_generation() -> None
     assert supervisor._runtime_ready_for_boot_status_finalize(next_generation, runtime) is True
 
 
+def test_root_restart_finalize_records_receiving_supervisor_generation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.os, "getpid", lambda: 7654)
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "root_promoted",
+            "target_slot": "B",
+            "root_promotion_supervisor_instance_id": "previous-supervisor-instance",
+        }
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "finalize_runtime_boot_status",
+        lambda **_kwargs: {
+            "state": "succeeded",
+            "phase": "validate",
+            "target_slot": "B",
+            "root_restart_completed_at": 501.0,
+        },
+    )
+
+    finalized = supervisor._finalize_runtime_boot_status_from_supervisor()
+
+    assert isinstance(finalized, dict)
+    assert finalized["root_restart_completed_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
+    assert finalized["root_restart_completed_by_pid"] == 7654
+    assert finalized["root_restart_completed_by_started_at"] == supervisor._SUPERVISOR_INSTANCE_STARTED_AT
+    persisted = read_status()
+    assert persisted["root_restart_completed_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
+    assert persisted["root_promotion_supervisor_instance_id"] == "previous-supervisor-instance"
+
+
 def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
