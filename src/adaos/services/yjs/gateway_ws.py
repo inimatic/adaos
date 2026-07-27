@@ -459,6 +459,10 @@ _YROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC = _env_float(
     5.0,
     minimum=0.25,
 )
+_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC = _env_flag(
+    "ADAOS_YJS_SERVER_AUTHORITATIVE_INITIAL_SYNC",
+    True,
+)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 64 * 1024 * 1024, minimum=1)
@@ -1294,6 +1298,9 @@ class DiagnosticYRoom(YRoom):
         self._diag_native_preflight_block_total = 0
         self._diag_native_preflight_block_bytes = 0
         self._diag_native_preflight_last_reason = ""
+        self._diag_authoritative_initial_skip_total = 0
+        self._diag_authoritative_initial_skip_bytes = 0
+        self._diag_authoritative_initial_last_sync_type = ""
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
         self._diag_effective_initial_replay_total = 0
@@ -1369,6 +1376,11 @@ class DiagnosticYRoom(YRoom):
             "native_preflight_block_total": int(self._diag_native_preflight_block_total),
             "native_preflight_block_bytes": int(self._diag_native_preflight_block_bytes),
             "native_preflight_last_reason": str(self._diag_native_preflight_last_reason or ""),
+            "authoritative_initial_skip_total": int(self._diag_authoritative_initial_skip_total),
+            "authoritative_initial_skip_bytes": int(self._diag_authoritative_initial_skip_bytes),
+            "authoritative_initial_last_sync_type": str(
+                self._diag_authoritative_initial_last_sync_type or ""
+            ),
             "effective_repair_total": int(self._diag_effective_repair_total),
             "effective_repair_bytes": int(self._diag_effective_repair_bytes),
             "effective_repair_replay_pending": len(self._effective_repair_replay_entries()),
@@ -1960,11 +1972,51 @@ class DiagnosticYRoom(YRoom):
                                 )
                                 await self._send_initial_effective_state_replay(websocket)
                                 continue
+                        authoritative_initial = bool(
+                            sync_type is not None
+                            and inbound_payload is not None
+                            and _YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC
+                            and (
+                                sync_type == int(YSyncMessageType.SYNC_STEP1)
+                                or (
+                                    initial_native_update_pending
+                                    and sync_type
+                                    in {
+                                        int(YSyncMessageType.SYNC_STEP2),
+                                        int(YSyncMessageType.SYNC_UPDATE),
+                                    }
+                                )
+                            )
+                        )
+                        if authoritative_initial:
+                            sync_name = (
+                                YSyncMessageType(int(sync_type)).name
+                                if int(sync_type) in {0, 1, 2}
+                                else str(sync_type)
+                            )
+                            self._diag_authoritative_initial_skip_total += 1
+                            self._diag_authoritative_initial_skip_bytes += len(inbound_payload)
+                            self._diag_authoritative_initial_last_sync_type = sync_name
                             if sync_type in {
                                 int(YSyncMessageType.SYNC_STEP2),
                                 int(YSyncMessageType.SYNC_UPDATE),
                             }:
                                 initial_native_update_pending = False
+                                await self._send_initial_effective_state_replay(websocket)
+                            _ylog.warning(
+                                "ignored initial browser Y sync payload in server-authoritative mode "
+                                "webspace=%s sync_type=%s bytes=%s digest=%s",
+                                self._diag_room_id(),
+                                sync_name,
+                                len(inbound_payload),
+                                hashlib.sha256(inbound_payload).hexdigest(),
+                            )
+                            continue
+                        if sync_type in {
+                            int(YSyncMessageType.SYNC_STEP2),
+                            int(YSyncMessageType.SYNC_UPDATE),
+                        }:
+                            initial_native_update_pending = False
                         tg.start_soon(
                             process_sync_message,
                             message[1:],

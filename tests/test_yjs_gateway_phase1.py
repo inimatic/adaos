@@ -328,6 +328,109 @@ def test_room_serve_preflights_state_vector_before_native_call(monkeypatch) -> N
     assert room._diag_native_preflight_last_reason == "native_panic"
 
 
+def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch) -> None:
+    processed: list[bytes] = []
+
+    class _Websocket:
+        path = "/yws/desktop-dev"
+
+        def __init__(self) -> None:
+            self._messages = iter([b"\x00\x01empty-update"])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, _message: bytes) -> None:
+            return None
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        return None
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda _payload: b"\x00\x00")
+    monkeypatch.setattr(
+        gateway_module,
+        "_preflight_inbound_y_sync_payload",
+        lambda *_args, **_kwargs: (True, "ok"),
+    )
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_INITIAL_REPLAY", False)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC", True)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == []
+    assert room._diag_authoritative_initial_skip_total == 1
+    assert room._diag_authoritative_initial_skip_bytes == 2
+    assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
+
+
+def test_room_serve_applies_updates_after_authoritative_initial_sync(monkeypatch) -> None:
+    processed: list[bytes] = []
+
+    class _Websocket:
+        path = "/yws/desktop-dev"
+
+        def __init__(self) -> None:
+            self._messages = iter(
+                [
+                    b"\x00\x00client-vector",
+                    b"\x00\x01initial-client-state",
+                    b"\x00\x02subsequent-update",
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, _message: bytes) -> None:
+            return None
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        return None
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(
+        gateway_module,
+        "_preflight_inbound_y_sync_payload",
+        lambda *_args, **_kwargs: (True, "ok"),
+    )
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_INITIAL_REPLAY", False)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC", True)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == [b"\x02subsequent-update"]
+    assert room._diag_authoritative_initial_skip_total == 2
+    assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
+
+
 def test_repair_room_effective_branches_runs_directly_on_owner_thread(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 
