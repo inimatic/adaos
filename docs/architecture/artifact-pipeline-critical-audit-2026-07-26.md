@@ -66,7 +66,8 @@ broader frontend/WebSocket handoff remains separate.
 | B13 registry trust boundary | corrected, validated-local | corrupt or unknown registry payloads, unsafe paths, and ambiguous aliases fail closed; read-modify-write mutations are serialized, durable writes are atomic, and historical incomplete manifests receive deterministic non-publishable compatibility identities |
 | B14 identity drift visibility | corrected, validated-local | read-only diagnostics distinguish registry/channel, installed subscription, immutable source/package/release, and active WorkspaceLock identities; Builder's installed subscription and lock agree while its missing discovery pointer is an explicit AP6 rollout gate |
 | B15 channel/subscription admission | corrected, validated-local | malformed or partial ChannelPointers, inconsistent channel indexes, and malformed/duplicate subscription records fail closed before reconciliation |
-| B16 remote registry loss recovery | open, reproduced-live | Builder's installed subscription, WorkspaceLock, release receipt, and packages agree, but authenticated remote reads return `release_not_found` and `channel_not_found`; central truth must be restored only through a reviewed source/package-attested recovery operation |
+| B16 remote registry loss recovery | corrected, recovered-live (bounded) | reviewed recovery uploaded exact verified packages/release and created the absent stable channel through CAS; ordinary reconciliation then projected it locally and both plans now return `noop` |
+| B17 historical trial contract drift | corrected, recovered-live (bounded) | legacy Builder acceptance claimed `snapshot` without current `data_ref`; recovery refused it until the same immutable release passed a new isolated empty-data activation under current reload/health contracts |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
@@ -310,9 +311,37 @@ recovery needs a separate reviewed operation that:
   reconciliation path for local discovery;
 - blocks if any remote release or channel exists with a conflicting identity.
 
-Until that operation has local regressions and a live reviewed receipt, package
-rollout remains gated even though ordinary remote-to-local reconciliation is
-implemented.
+Current correction: recovery is a separate `plan -> reviewed digest -> apply`
+operation. It verifies every local and remote identity above, records durable
+phase receipts, uploads a missing package/release only once per explicit
+invocation, and creates a missing channel only with absent-channel CAS. Lost
+responses pause the operation; an explicit retry verifies remote state before
+continuing. Builder recovery plan
+`sha256:4e2cdbbfcd22e4ebda0cd4cd444283769807a58553de6655f86a96f9e921e06c`
+completed with two uploaded package receipts, one immutable release receipt,
+and one created-channel receipt. Reconciliation plan
+`sha256:c275ccd1b8c1a1d61a99f312c73e1d2f6ca330ad456847faaf8f8ee49cf24dd3`
+then projected the exact pointer. Read-only postchecks report no identity
+warnings and both operations now plan `noop`.
+
+### B17. Historical acceptance can be weaker than the current trial contract
+
+The target Builder candidate was recorded before the strengthened trial data
+contract. It said `data_mode=snapshot` but carried no required immutable
+`data_ref`. The current Candidate reader correctly rejected it, which initially
+blocked remote recovery even though the old completed activation and user
+decision still existed.
+
+Current correction: unrelated candidates are ignored before strict parsing,
+but a matching legacy candidate is never silently upgraded. Its immutable core
+identity, exact accepted decision, completed historical activation, lock, and
+package set are checked through a narrow compatibility adapter. Recovery then
+requires a separate explicit revalidation of the same immutable release in a
+new isolated empty-data Workspace under current reload and health contracts.
+The resulting operation digest is
+`sha256:4b8d35827ff4f0b1dd04b2c42f10c8e8f1e1abb4271f897a4bd15da56bec19da`.
+The strict Candidate reader remains unchanged and future recovery plans bind the
+legacy record digest plus the current revalidation receipt.
 
 ## Reliability And Performance Gaps
 
@@ -474,11 +503,15 @@ readiness.
     plan/review/apply, registry CAS, WorkspaceLock stability checks, and
     operation-receipt recovery. The live Builder probe correctly failed closed
     because the remote release and channel are absent.
-19. **Next:** implement and review source/package-attested recovery for an exact
-    locally installed release whose remote immutable state is missing, then run
-    ordinary registry reconciliation and make the bounded package-only rollout
-    decision. Replace single-zone buffered storage with streamed/object-store
-    multi-zone durability before broad rollout.
+19. **Completed live for Builder:** implement source/package-attested recovery,
+    refuse its legacy incomplete trial, revalidate the same immutable release in
+    an isolated empty-data Workspace, restore both packages plus exact release
+    and absent stable channel, then complete ordinary registry reconciliation.
+    Identity, recovery, and reconciliation postchecks are clean/noop.
+20. **Next:** record and enforce the bounded package-only rollout boundary and
+    the remaining non-subscribed legacy fallback policy. Replace single-zone
+    buffered storage with streamed/object-store multi-zone durability before
+    broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

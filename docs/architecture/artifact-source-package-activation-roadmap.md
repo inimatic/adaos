@@ -121,13 +121,12 @@ Remaining acceptance blockers:
 - keep frontend replacement, long-lived WebSocket continuity, and proxy
   control-plane evolution separate from the now-proven bounded backend HTTP
   handoff before claiming broad zero-downtime operation;
-- recover or re-establish the authoritative remote stable record before
-  rollout. The local Builder diagnostic proves its installed subscription
-  matches the active WorkspaceLock, but a fresh authenticated read found both
-  its exact release and `stable` channel absent remotely. Registry
-  reconciliation therefore refused to infer a pointer from local activation
-  state. Production and marketplace acceptance remain deferred until an
-  explicit, attested remote recovery is implemented and reviewed.
+- make and record the bounded package-only rollout decision. Builder's missing
+  remote packages, release, and `stable` channel were restored through an
+  explicit attested recovery and then projected through ordinary
+  reconciliation; all postconditions are now `noop` with no identity warnings.
+  Broad production and marketplace acceptance still require the explicit
+  rollout boundary plus the open transport/durability gates below.
 
 The original backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
@@ -181,7 +180,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
-| AP6 | 9/11 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, and digest-reviewed remote-to-local registry reconciliation | attested recovery of missing remote state, bounded legacy fallback retirement, and stand acceptance |
+| AP6 | 10/12 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, and attested recovery of missing remote immutable state | bounded legacy fallback decision and stand acceptance |
 | AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
@@ -556,6 +555,12 @@ injected failure.
   immutable release into registry discovery through an explicit
   `plan -> reviewed digest -> apply` operation, with registry and WorkspaceLock
   compare-and-switch checks and no package activation.
+- [x] `[must]` `AP6-12` Recover a locally installed exact release only when
+  subscription, WorkspaceLock, release plan/receipt, package bytes, accepted
+  candidate decision, isolated trial, and immutable Forge source refs agree;
+  require current-contract isolated revalidation for legacy trial records and
+  journal package, release, and absent-channel-CAS phases without automatic
+  mutation replay.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and channel/subscription regressions in
@@ -592,6 +597,21 @@ failed closed because Forge returned `404 release_not_found` for
 `sha256:feee37b221a12c6d6ba4e12c1cdd00fdd8320df4b5d4ca9a9ee13747f01a450b`
 and `404 channel_not_found` for `builder/stable`. This is now an explicit remote
 recovery blocker; local activation evidence is not promoted into central truth.
+AP6-12 closes that bounded blocker. The first recovery plan refused Builder's
+historical candidate because its legacy `snapshot` trial lacked the now-required
+`data_ref`. Rather than weakening the reader, an explicit empty-data isolated
+revalidation produced activation receipt
+`sha256:4b8d35827ff4f0b1dd04b2c42f10c8e8f1e1abb4271f897a4bd15da56bec19da`.
+Reviewed recovery plan
+`sha256:4e2cdbbfcd22e4ebda0cd4cd444283769807a58553de6655f86a96f9e921e06c`
+then uploaded the exact scenario and companion-skill packages, restored release
+`sha256:feee37b221a12c6d6ba4e12c1cdd00fdd8320df4b5d4ca9a9ee13747f01a450b`,
+and created `builder/stable` with absent-channel CAS. Ordinary reconciliation
+plan `sha256:c275ccd1b8c1a1d61a99f312c73e1d2f6ca330ad456847faaf8f8ee49cf24dd3`
+projected the pointer into `registry.json`. Subsequent identity diagnostics have
+no warnings; recovery and reconciliation both report `noop`, and WorkspaceLock
+remains revision 1 at digest
+`sha256:62ac1e57aea1c93a911fdaa663c1dcb8fdfdc993ccabbe10024695c276b1d0b8`.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 
