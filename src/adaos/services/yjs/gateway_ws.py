@@ -1912,7 +1912,7 @@ class DiagnosticYRoom(YRoom):
                             self._diag_native_preflight_block_total += 1
                             self._diag_native_preflight_block_bytes += len(message)
                             self._diag_native_preflight_last_reason = "malformed_sync_frame"
-                            self.log.error(
+                            _ylog.error(
                                 "blocked malformed inbound Y sync payload before native call "
                                 "webspace=%s bytes=%s digest=%s",
                                 self._diag_room_id(),
@@ -1950,7 +1950,7 @@ class DiagnosticYRoom(YRoom):
                                 self._diag_native_preflight_block_total += 1
                                 self._diag_native_preflight_block_bytes += len(inbound_payload)
                                 self._diag_native_preflight_last_reason = str(reason or "blocked")
-                                self.log.error(
+                                _ylog.error(
                                     "blocked inbound Y sync payload after native subprocess preflight "
                                     "webspace=%s bytes=%s digest=%s reason=%s",
                                     self._diag_room_id(),

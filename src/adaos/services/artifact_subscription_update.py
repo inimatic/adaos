@@ -127,6 +127,12 @@ class ArtifactSubscriptionUpdateCoordinator:
             str(project_id or "").strip(),
         )
 
+    async def inspect(self, project_id: str) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self.root.inspect_artifact_subscription_update,
+            str(project_id or "").strip(),
+        )
+
     async def update(
         self,
         kind: ArtifactKind,
@@ -162,8 +168,24 @@ class ArtifactSubscriptionUpdateCoordinator:
                 code="artifact_runtime_projection_required",
             )
 
-        reviewed = await self.plan(token)
         if dry_run:
+            inspected = await self.inspect(token)
+            if inspected.get("available") is not True:
+                reviewed = {
+                    "schema": "adaos.artifact.subscription_update_noop.v1",
+                    "project_id": token,
+                    "status": "up_to_date",
+                    "available": False,
+                    "reason": str(inspected.get("reason") or "up_to_date"),
+                    "inspection": inspected,
+                }
+            else:
+                reviewed = inspected.get("update_plan")
+                if not isinstance(reviewed, Mapping):
+                    raise ArtifactSubscriptionUpdateError(
+                        "available package update has no reviewable plan",
+                        code="artifact_update_plan_unavailable",
+                    )
             return {
                 "ok": True,
                 "updated": False,
@@ -172,6 +194,7 @@ class ArtifactSubscriptionUpdateCoordinator:
                 "update_plan": reviewed,
             }
 
+        reviewed = await self.plan(token)
         expected = str(expected_plan_digest or "").strip().lower()
         if not expected:
             raise ArtifactSubscriptionUpdateError(

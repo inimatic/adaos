@@ -34,6 +34,15 @@ class _Root:
     def plan_artifact_subscription_update(self, project_id: str):
         return {"ok": True, "project_id": project_id, "plan_digest": PLAN_DIGEST}
 
+    def inspect_artifact_subscription_update(self, project_id: str):
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "available": True,
+            "reason": "channel_moved",
+            "update_plan": self.plan_artifact_subscription_update(project_id),
+        }
+
     def activate_artifact_subscription(self, project_id: str, **kwargs):
         self.activations.append({"project_id": project_id, **kwargs})
         lock = self.ctx.test_lock
@@ -144,6 +153,38 @@ def test_update_route_is_subscription_based_and_corruption_fails_closed(
     with pytest.raises(update_service.ArtifactSubscriptionUpdateError) as raised:
         coordinator.select_route("recipes")
     assert raised.value.code == "artifact_subscription_store_invalid"
+
+
+def test_dry_run_returns_package_noop_when_subscription_is_current(monkeypatch, tmp_path) -> None:
+    ctx = _context(tmp_path, "scenario", "recipes", "2.0.0")
+
+    class _CurrentRoot(_Root):
+        def inspect_artifact_subscription_update(self, project_id: str):
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "available": False,
+                "activation_allowed": False,
+                "reason": "up_to_date",
+                "update_plan": None,
+            }
+
+        def plan_artifact_subscription_update(self, project_id: str):
+            raise AssertionError(f"planner must not run for current subscription: {project_id}")
+
+    monkeypatch.setattr(update_service, "RootDeveloperService", _CurrentRoot)
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(ctx)
+    monkeypatch.setattr(coordinator, "is_subscribed", lambda _project_id: True)
+
+    result = asyncio.run(coordinator.update("scenario", "recipes", dry_run=True))
+
+    assert result["mode"] == "package_plan"
+    assert result["updated"] is False
+    assert result["update_route"]["package_required"] is True
+    assert result["update_route"]["legacy_allowed"] is False
+    assert result["update_plan"]["schema"] == "adaos.artifact.subscription_update_noop.v1"
+    assert result["update_plan"]["project_id"] == "recipes"
+    assert result["update_plan"]["status"] == "up_to_date"
 
 
 def test_skill_update_requires_runtime_and_webspace_projection(monkeypatch, tmp_path) -> None:
