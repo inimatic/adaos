@@ -673,9 +673,25 @@ lifecycle and update attempt state.
   candidate runtime—to confirm completion of a root restart.
 - [x] `[must]` Bridge the supervisor-owned `root_promoted -> validate` commit
   back into the new runtime event bus and make Infra State materialize
-  `sys.ready` plus terminal core-update state inline. Live recovery proof on
-  `192.168.0.30` and `91.98.89.76` converged both persisted widgets to
-  `slot A | 0.1.618 | 5d59c42` without repeating an update command.
+  `sys.ready` plus terminal core-update state inline.
+- [x] `[must]` Arm supervisor convergence from the passive candidate's first
+  bounded transition state (`preparing` / `countdown` / drain / restart), not
+  only after `root_promoted`, so fast warm-switch promotion cannot lose the
+  terminal event when the candidate becomes active without another bootstrap.
+- [x] `[must]` Await the actual live-room Yjs transaction before reporting a
+  projection as applied; when no room is ready, write through the detached
+  replay log and synchronously persist/compact the resulting snapshot. Surface
+  persistence failure to the SDK caller instead of recording false success.
+- [x] `[must]` Recover a same-version quarantined skill runtime only through an
+  explicit named migration, retain backup/rollback semantics, and keep
+  background migration from automatically repeating that state-changing
+  operation.
+- [x] `[must]` Prove terminal Infra State convergence and restart-safe first
+  paint on both Linux nodes. Automatic release `0.1.624` (`a25f227`) converged
+  `192.168.0.30` and `91.98.89.76` to `slot A | 0.1.624 | a25f227`; a fresh
+  process read the same summary from each disk snapshot, both runtimes retained
+  active `infrastate_skill 0.75.59`, and no update or refresh command was
+  repeated.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.
