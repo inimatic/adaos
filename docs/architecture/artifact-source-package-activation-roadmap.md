@@ -121,8 +121,10 @@ Remaining acceptance blockers:
 - keep frontend replacement, long-lived WebSocket continuity, and proxy
   control-plane evolution separate from the now-proven bounded backend HTTP
   handoff before claiming broad zero-downtime operation;
-- add historical registry/manifest migration fixtures before removing the
-  compatibility readers; production and marketplace acceptance remain deferred.
+- explicitly reconcile legacy registry discovery with the active WorkspaceLock
+  before rollout: the local Builder diagnostic currently reports an active
+  package without a stable channel/source pointer; production and marketplace
+  acceptance remain deferred.
 
 The original backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
@@ -170,7 +172,7 @@ proof is not silently promoted to stand or production acceptance.
 
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
-| AP0 | 7/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, and deterministic historical registry/manifest migration fixtures | identity diagnostics |
+| AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
 | AP1 | 8/12 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, and deployed binary transport whose durable host store survived a blue/green redeploy | external signing, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
@@ -203,7 +205,7 @@ remain green.
   for current path-backed artifacts.
 - [x] `[should]` `AP0-07` Add schema migration fixtures for historical registry
   entries and manifests with incomplete version metadata.
-- [ ] `[could]` `AP0-08` Add a diagnostic command that explains resolved source,
+- [x] `[could]` `AP0-08` Add a diagnostic command that explains resolved source,
   package, release, and activation identities.
 - [ ] `[deferred]` `AP0-09` Add publisher namespaces and ownership-transfer
   records after the single-user identity contract is stable.
@@ -222,6 +224,12 @@ and ignores the derived JSON version. Registry reads now reject corrupt,
 unknown-version, unsafe-path, and ambiguous-alias inputs; writes replace the
 registry atomically, read-modify-write mutations share a cross-process lease,
 and v2 catalog reads do not rescan manifests.
+`AP0-08` adds the read-only `adaos maintenance artifact-identity` command. It
+keeps registry/channel identity separate from active WorkspaceLock identity and
+reports drift instead of synthesizing missing pointers. On this machine the
+Builder scenario is correctly active in WorkspaceLock, while its local registry
+still has no stable channel/source pointer; that is now an explicit AP6 rollout
+gate rather than hidden compatibility state.
 
 ## Milestone AP1: Deterministic Immutable Packages
 

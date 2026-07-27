@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 
 import adaos.services.self_hygiene as self_hygiene
 from adaos.services.agent_context import get_ctx
 from adaos.services.artifact_pipeline import run_artifact_retention
+from adaos.services.artifact_identity import (
+    ArtifactIdentityDiagnosticError,
+    explain_workspace_artifact_identity,
+)
 
 
 app = typer.Typer(help="Maintenance and self-hygiene operations.")
@@ -71,4 +76,31 @@ def artifact_retention_cmd(
     """Plan or explicitly apply artifact staging/package retention."""
 
     payload = run_artifact_retention(get_ctx(), dry_run=not apply)
+    _emit(payload, json_output=json_output)
+
+
+@app.command("artifact-identity")
+def artifact_identity_cmd(
+    name_or_id: str = typer.Argument(..., help="Registry name or canonical artifact id."),
+    kind: str = typer.Option(..., "--kind", help="Artifact kind: scenario or skill."),
+    channel: str = typer.Option("stable", "--channel", help="Registry channel to explain."),
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Explicit Workspace root; defaults to the active AdaOS Workspace.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit formatted JSON."),
+) -> None:
+    """Explain source, package, release, and activation identity without mutation."""
+
+    workspace_root = Path(workspace or get_ctx().paths.workspace_dir())
+    try:
+        payload = explain_workspace_artifact_identity(
+            workspace_root,
+            kind=kind,
+            name_or_id=name_or_id,
+            channel=channel,
+        )
+    except (ValueError, FileNotFoundError, ArtifactIdentityDiagnosticError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
     _emit(payload, json_output=json_output)
