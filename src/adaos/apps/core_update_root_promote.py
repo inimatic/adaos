@@ -23,15 +23,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Import only after the stable paths are explicit. The module itself is
     # executed from the already validated candidate slot via PYTHONPATH.
+    # This is a standalone process, so it does not inherit the supervisor's
+    # process-wide AgentContext.  Build its own candidate-owned context before
+    # using autostart services; get_ctx() alone is intentionally not enough.
+    from adaos.apps.bootstrap import init_ctx
     from adaos.services.core_update import promote_root_from_slot
 
+    ctx = init_ctx()
     result = promote_root_from_slot(slot=str(args.slot))
     if bool(result.get("ok")):
         try:
-            from adaos.services.agent_context import get_ctx
             from adaos.services.autostart import default_spec, refresh_wrapper
 
-            ctx = get_ctx()
             spec = default_spec(
                 ctx,
                 host=str(args.runtime_host),
