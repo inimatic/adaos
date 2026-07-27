@@ -300,7 +300,7 @@ def test_api_detached_restart_uses_root_cli_bootstrap(monkeypatch, tmp_path):
 
 def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
     monkeypatch.delenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", raising=False)
-    assert api_cmd._api_restart_start_timeout_seconds() == 60.0
+    assert api_cmd._api_restart_start_timeout_seconds() == 90.0
 
     monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "90")
     assert api_cmd._api_restart_start_timeout_seconds() == 90.0
@@ -309,7 +309,59 @@ def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
     assert api_cmd._api_restart_start_timeout_seconds() == 20.0
 
     monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "invalid")
-    assert api_cmd._api_restart_start_timeout_seconds() == 60.0
+    assert api_cmd._api_restart_start_timeout_seconds() == 90.0
+
+    monkeypatch.delenv("ADAOS_API_RESTART_STABILITY_SEC", raising=False)
+    assert api_cmd._api_restart_stability_seconds() == 10.0
+    monkeypatch.setenv("ADAOS_API_RESTART_STABILITY_SEC", "120")
+    assert api_cmd._api_restart_stability_seconds() == 60.0
+
+
+def test_wait_for_server_start_requires_expected_pid_and_ready_health(monkeypatch):
+    class _ReadyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda _host, _port: 4321)
+    monkeypatch.setattr(api_cmd.requests, "get", lambda *_args, **_kwargs: _ReadyResponse())
+
+    assert api_cmd._wait_for_server_start(
+        "127.0.0.1",
+        8777,
+        timeout=0.5,
+        expected_pid=4321,
+        stability=0,
+    )
+    assert not api_cmd._wait_for_server_start(
+        "127.0.0.1",
+        8777,
+        timeout=0.01,
+        expected_pid=9999,
+        stability=0,
+    )
+
+
+def test_wait_for_server_start_rejects_listener_without_ready_health(monkeypatch):
+    class _UnreadyResponse:
+        status_code = 503
+
+        @staticmethod
+        def json():
+            return {"detail": "not ready"}
+
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda _host, _port: 4321)
+    monkeypatch.setattr(api_cmd.requests, "get", lambda *_args, **_kwargs: _UnreadyResponse())
+
+    assert not api_cmd._wait_for_server_start(
+        "127.0.0.1",
+        8777,
+        timeout=0.01,
+        expected_pid=4321,
+        stability=0,
+    )
 
 
 def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
@@ -341,14 +393,18 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     monkeypatch.setattr(
         api_cmd,
         "_wait_for_server_start",
-        lambda _host, _port, *, timeout: observed.update(timeout=timeout) or False,
+        lambda _host, _port, *, timeout, expected_pid: observed.update(
+            timeout=timeout,
+            expected_pid=expected_pid,
+        )
+        or False,
     )
     monkeypatch.setattr(api_cmd.psutil, "pid_exists", lambda pid: pid == 4321)
 
     result = runner.invoke(app, ["restart"])
 
     assert result.exit_code == 1
-    assert observed == {"timeout": 75.0}
+    assert observed == {"timeout": 75.0, "expected_pid": 4321}
     assert "within 75s" in result.stdout
     assert "alive=true" in result.stdout
     assert str(launch.log_path) in result.stdout

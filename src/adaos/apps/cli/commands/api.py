@@ -1364,23 +1364,67 @@ def _wait_for_server_exit(host: str, port: int, *, timeout: float) -> bool:
     return False
 
 
-def _wait_for_server_start(host: str, port: int, *, timeout: float) -> bool:
+def _wait_for_server_start(
+    host: str,
+    port: int,
+    *,
+    timeout: float,
+    expected_pid: int | None = None,
+    stability: float | None = None,
+) -> bool:
     deadline = time.monotonic() + max(0.0, float(timeout))
+    stability_window = (
+        _api_restart_stability_seconds()
+        if stability is None
+        else max(0.0, float(stability))
+    )
+    ready_since: float | None = None
     while time.monotonic() < deadline:
         owner_pid = _find_listening_server_pid(host, port)
-        if owner_pid and owner_pid != os.getpid():
-            return True
+        if (
+            not owner_pid
+            or owner_pid == os.getpid()
+            or (expected_pid is not None and owner_pid != int(expected_pid))
+        ):
+            ready_since = None
+            time.sleep(0.1)
+            continue
+        try:
+            response = requests.get(
+                f"http://{host}:{int(port)}/health/ready",
+                timeout=0.75,
+            )
+            payload = response.json() if response.status_code == 200 else {}
+            ready = isinstance(payload, dict) and payload.get("ok") is True
+        except Exception:
+            ready = False
+        if ready:
+            if ready_since is None:
+                ready_since = time.monotonic()
+            if time.monotonic() - ready_since >= stability_window:
+                return True
+        else:
+            ready_since = None
         time.sleep(0.1)
     return False
 
 
 def _api_restart_start_timeout_seconds() -> float:
-    raw = str(os.getenv("ADAOS_API_RESTART_START_TIMEOUT_SEC") or "60").strip()
+    raw = str(os.getenv("ADAOS_API_RESTART_START_TIMEOUT_SEC") or "90").strip()
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        value = 60.0
+        value = 90.0
     return max(20.0, min(value, 300.0))
+
+
+def _api_restart_stability_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_RESTART_STABILITY_SEC") or "10").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 10.0
+    return max(0.0, min(value, 60.0))
 
 
 def _restart_log_path(host: str, port: int) -> Path:
@@ -1770,7 +1814,12 @@ def restart():
 
         launch = _spawn_detached_server(host, port, token=token, reload=False)
         start_timeout = _api_restart_start_timeout_seconds()
-        if not _wait_for_server_start(host, port, timeout=start_timeout):
+        if not _wait_for_server_start(
+            host,
+            port,
+            timeout=start_timeout,
+            expected_pid=launch.pid,
+        ):
             alive = psutil.pid_exists(launch.pid)
             raise RuntimeError(
                 f"api server did not start at {host}:{port} within {start_timeout:g}s; "

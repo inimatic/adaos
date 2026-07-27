@@ -11,6 +11,9 @@ from collections import deque
 import hashlib
 import inspect
 import json
+import struct
+import subprocess
+import sys
 import time
 import logging
 import threading
@@ -35,12 +38,19 @@ except ImportError as exc:  # pragma: no cover - import guard for dev envs
 
 create_update_message = _ypy_yutils.create_update_message
 process_sync_message = getattr(_ypy_yutils, "process_sync_message", None)
+read_sync_message = getattr(_ypy_yutils, "read_message", None)
 sync = getattr(_ypy_yutils, "sync", None)
 YMessageType = getattr(_ypy_yutils, "YMessageType", None)
+YSyncMessageType = getattr(_ypy_yutils, "YSyncMessageType", None)
 if YMessageType is None:
     class YMessageType(IntEnum):
         SYNC = 0
         AWARENESS = 1
+if YSyncMessageType is None:
+    class YSyncMessageType(IntEnum):
+        SYNC_STEP1 = 0
+        SYNC_STEP2 = 1
+        SYNC_UPDATE = 2
 
 from adaos.services.workspaces import ensure_workspace, get_workspace, workspace_catalog_version
 from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario, write_runtime_bootstrap_state
@@ -438,6 +448,17 @@ _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, mini
 _YROOM_DIAG_UPDATE_WARN_BYTES = _env_int("ADAOS_YJS_ROOM_DIAG_UPDATE_WARN_BYTES", 256 * 1024, minimum=1)
 _YROOM_INBOUND_GUARD_BLOCK_BYTES = _env_int("ADAOS_YJS_ROOM_INBOUND_GUARD_BLOCK_BYTES", 16 * 1024 * 1024, minimum=1)
 _YROOM_INBOUND_GUARD_RESET_COOLDOWN_SEC = _env_float("ADAOS_YJS_ROOM_INBOUND_GUARD_RESET_COOLDOWN_SEC", 5.0, minimum=0.0)
+_YROOM_NATIVE_PREFLIGHT_ENABLED = _env_flag("ADAOS_YJS_ROOM_NATIVE_PREFLIGHT_ENABLED", True)
+_YROOM_NATIVE_PREFLIGHT_THRESHOLD_BYTES = _env_int(
+    "ADAOS_YJS_ROOM_NATIVE_PREFLIGHT_THRESHOLD_BYTES",
+    256 * 1024,
+    minimum=1,
+)
+_YROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC = _env_float(
+    "ADAOS_YJS_ROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC",
+    5.0,
+    minimum=0.25,
+)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 64 * 1024 * 1024, minimum=1)
@@ -458,6 +479,76 @@ _YROOM_EFFECTIVE_DEFAULT_REQUIRED_BRANCHES = (
     "data.routing",
     "registry.merged",
 )
+
+
+_YROOM_NATIVE_PREFLIGHT_SCRIPT = (
+    "import struct, sys\n"
+    "import y_py as Y\n"
+    "payload = sys.stdin.buffer.read()\n"
+    "if len(payload) < 16:\n"
+    "    raise SystemExit(2)\n"
+    "current_size, update_size = struct.unpack('>QQ', payload[:16])\n"
+    "if len(payload) != 16 + current_size + update_size:\n"
+    "    raise SystemExit(3)\n"
+    "current = payload[16:16 + current_size]\n"
+    "update = payload[16 + current_size:]\n"
+    "doc = Y.YDoc()\n"
+    "if current:\n"
+    "    Y.apply_update(doc, current)\n"
+    "if update and update != b'\\x00\\x00':\n"
+    "    Y.apply_update(doc, update)\n"
+    "Y.encode_state_vector(doc)\n"
+)
+
+
+def _extract_inbound_y_sync_update(message: bytes) -> tuple[bool, bytes | None]:
+    if (
+        not message
+        or read_sync_message is None
+        or int(message[0]) != int(YMessageType.SYNC)
+    ):
+        return False, None
+    if len(message) < 2:
+        return True, None
+    sync_payload = bytes(message[1:])
+    sync_type = int(sync_payload[0])
+    if sync_type not in {
+        int(YSyncMessageType.SYNC_STEP2),
+        int(YSyncMessageType.SYNC_UPDATE),
+    }:
+        return False, None
+    try:
+        return True, bytes(read_sync_message(sync_payload[1:]) or b"")
+    except Exception:
+        return True, None
+
+
+def _preflight_inbound_y_sync_update(current: bytes, update: bytes) -> tuple[bool, str]:
+    if not _YROOM_NATIVE_PREFLIGHT_ENABLED:
+        return True, "disabled"
+    if len(update) >= int(_YROOM_INBOUND_GUARD_BLOCK_BYTES):
+        return False, "update_too_large"
+    payload = struct.pack(">QQ", len(current), len(update)) + current + update
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", _YROOM_NATIVE_PREFLIGHT_SCRIPT],
+            input=payload,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=float(_YROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except Exception as exc:
+        return False, f"preflight_error:{type(exc).__name__}"
+    if completed.returncode == 0:
+        return True, "ok"
+    stderr = (completed.stderr or b"")[:500].decode("utf-8", errors="replace").strip()
+    reason = f"returncode={completed.returncode}"
+    if stderr:
+        reason += f" stderr={stderr}"
+    return False, reason
 
 
 def _yroom_effective_env_required_branches() -> tuple[str, ...]:
@@ -1182,6 +1273,10 @@ class DiagnosticYRoom(YRoom):
         self._diag_inbound_guard_last_block_bytes = int(_YROOM_INBOUND_GUARD_BLOCK_BYTES)
         self._diag_inbound_guard_last_at = 0.0
         self._diag_inbound_guard_last_reset_reserved = False
+        self._diag_native_preflight_total = 0
+        self._diag_native_preflight_block_total = 0
+        self._diag_native_preflight_block_bytes = 0
+        self._diag_native_preflight_last_reason = ""
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
         self._diag_effective_initial_replay_total = 0
@@ -1253,6 +1348,10 @@ class DiagnosticYRoom(YRoom):
                 time.time(),
             ),
             "inbound_guard_last_reset_reserved": bool(self._diag_inbound_guard_last_reset_reserved),
+            "native_preflight_total": int(self._diag_native_preflight_total),
+            "native_preflight_block_total": int(self._diag_native_preflight_block_total),
+            "native_preflight_block_bytes": int(self._diag_native_preflight_block_bytes),
+            "native_preflight_last_reason": str(self._diag_native_preflight_last_reason or ""),
             "effective_repair_total": int(self._diag_effective_repair_total),
             "effective_repair_bytes": int(self._diag_effective_repair_bytes),
             "effective_repair_replay_pending": len(self._effective_repair_replay_entries()),
@@ -1774,12 +1873,13 @@ class DiagnosticYRoom(YRoom):
         )
 
     async def serve(self, websocket: YWebsocket):
-        if sync is None or process_sync_message is None:
+        if sync is None or process_sync_message is None or read_sync_message is None:
             raise RuntimeError("ypy_websocket.yutils sync helpers are unavailable")
         async with create_task_group() as tg:
             self.clients.append(websocket)
             await sync(self.ydoc, websocket, self.log)
             await self._send_initial_effective_state_replay(websocket)
+            initial_native_update_pending = True
             try:
                 async for message in websocket:
                     skip = False
@@ -1790,6 +1890,58 @@ class DiagnosticYRoom(YRoom):
                         continue
                     message_type = message[0]
                     if message_type == YMessageType.SYNC:
+                        is_state_update, inbound_update = _extract_inbound_y_sync_update(message)
+                        if is_state_update and inbound_update is None:
+                            self._diag_native_preflight_block_total += 1
+                            self._diag_native_preflight_block_bytes += len(message)
+                            self._diag_native_preflight_last_reason = "malformed_sync_frame"
+                            self.log.error(
+                                "blocked malformed inbound Y sync update before native apply "
+                                "webspace=%s bytes=%s digest=%s",
+                                self._diag_room_id(),
+                                len(message),
+                                hashlib.sha256(message).hexdigest(),
+                            )
+                            await self._send_initial_effective_state_replay(websocket)
+                            continue
+                        should_preflight = bool(
+                            is_state_update
+                            and inbound_update
+                            and _YROOM_NATIVE_PREFLIGHT_ENABLED
+                            and (
+                                initial_native_update_pending
+                                or len(inbound_update) >= _YROOM_NATIVE_PREFLIGHT_THRESHOLD_BYTES
+                            )
+                        )
+                        if should_preflight:
+                            self._diag_native_preflight_total += 1
+                            try:
+                                import y_py as Y  # pylint: disable=import-outside-toplevel
+
+                                current = Y.encode_state_as_update(self.ydoc)
+                                accepted, reason = await asyncio.to_thread(
+                                    _preflight_inbound_y_sync_update,
+                                    current,
+                                    inbound_update,
+                                )
+                            except Exception as exc:
+                                accepted = False
+                                reason = f"preflight_error:{type(exc).__name__}"
+                            if not accepted:
+                                self._diag_native_preflight_block_total += 1
+                                self._diag_native_preflight_block_bytes += len(inbound_update)
+                                self._diag_native_preflight_last_reason = str(reason or "blocked")
+                                self.log.error(
+                                    "blocked inbound Y sync update after native subprocess preflight "
+                                    "webspace=%s bytes=%s digest=%s reason=%s",
+                                    self._diag_room_id(),
+                                    len(inbound_update),
+                                    hashlib.sha256(inbound_update).hexdigest(),
+                                    reason,
+                                )
+                                await self._send_initial_effective_state_replay(websocket)
+                                continue
+                            initial_native_update_pending = False
                         tg.start_soon(
                             process_sync_message,
                             message[1:],

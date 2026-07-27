@@ -160,7 +160,99 @@ def _fake_log() -> SimpleNamespace:
     return SimpleNamespace(
         debug=lambda *args, **kwargs: None,
         warning=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
     )
+
+
+def test_extract_inbound_y_sync_update_distinguishes_valid_and_malformed_frames(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: b"decoded:" + payload)
+
+    is_state_update, update = gateway_module._extract_inbound_y_sync_update(b"\x00\x01payload")
+    assert is_state_update is True
+    assert update == b"decoded:payload"
+
+    monkeypatch.setattr(
+        gateway_module,
+        "read_sync_message",
+        lambda _payload: (_ for _ in ()).throw(ValueError("malformed")),
+    )
+    is_state_update, update = gateway_module._extract_inbound_y_sync_update(b"\x00\x02broken")
+    assert is_state_update is True
+    assert update is None
+
+    is_state_update, update = gateway_module._extract_inbound_y_sync_update(b"\x00")
+    assert is_state_update is True
+    assert update is None
+
+
+def test_native_y_sync_preflight_accepts_valid_update() -> None:
+    current_doc = y_py.YDoc()
+    update_doc = y_py.YDoc()
+    current = y_py.encode_state_as_update(current_doc)
+    update = y_py.encode_state_as_update(update_doc)
+
+    accepted, reason = gateway_module._preflight_inbound_y_sync_update(current, update)
+
+    assert accepted is True
+    assert reason == "ok"
+
+
+def test_native_y_sync_preflight_fails_closed_on_subprocess_abort(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gateway_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=134, stderr=b"native panic"),
+    )
+
+    accepted, reason = gateway_module._preflight_inbound_y_sync_update(b"current", b"update")
+
+    assert accepted is False
+    assert "returncode=134" in reason
+
+
+def test_room_serve_blocks_malformed_state_update_before_native_apply(monkeypatch) -> None:
+    processed: list[bytes] = []
+
+    class _Websocket:
+        path = "/yws/desktop-dev"
+
+        def __init__(self) -> None:
+            self._messages = iter([b"\x00\x01broken"])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, _message: bytes) -> None:
+            return None
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        return None
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(
+        gateway_module,
+        "read_sync_message",
+        lambda _payload: (_ for _ in ()).throw(ValueError("malformed")),
+    )
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_INITIAL_REPLAY", False)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == []
+    assert room._diag_native_preflight_block_total == 1
+    assert room._diag_native_preflight_last_reason == "malformed_sync_frame"
 
 
 def test_repair_room_effective_branches_runs_directly_on_owner_thread(monkeypatch) -> None:
