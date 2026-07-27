@@ -475,6 +475,10 @@ Rules:
   preserves an independent recovery/update plane; it replaces file-specific
   startup repair scripts and does not treat the fallback slot as proof that root
   is healthy
+- managed wrappers normalize `PYTHONPATH` to exactly one selected AdaOS source
+  tree (root for normal supervisor boot, selected slot for recovery). Refreshes
+  do not append inherited root/slot entries, so repeated updates cannot create a
+  mixed-generation import graph
 - a slot runtime may validate its application boot, but only the supervisor
   control plane may commit `root_promoted` as a completed root restart. The
   supervisor rechecks source parity before success, so an old surviving runtime

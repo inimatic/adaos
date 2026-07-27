@@ -191,11 +191,24 @@ def default_spec(
             env[key] = value
     if repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(repo_root)
-        pythonpath_entries = [str(repo_root / "src")]
+        root_source = (repo_root / "src").resolve()
+        pythonpath_entries = [str(root_source)]
         existing_pythonpath = str(os.getenv("PYTHONPATH") or "").strip()
         if existing_pythonpath:
-            pythonpath_entries.append(existing_pythonpath)
-        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(entry for entry in pythonpath_entries if str(entry).strip()))
+            for entry in existing_pythonpath.split(os.pathsep):
+                candidate = str(entry or "").strip()
+                if not candidate:
+                    continue
+                try:
+                    candidate_path = Path(candidate).expanduser().resolve()
+                except Exception:
+                    candidate_path = None
+                if candidate_path == root_source:
+                    continue
+                if candidate_path is not None and is_core_slot_path(candidate_path, base_dir=base_dir):
+                    continue
+                pythonpath_entries.append(candidate)
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath_entries))
     env.setdefault("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     env.setdefault("ADAOS_SUPERVISOR_PORT", "8776")
     resolved_token = str(token or _default_control_token() or "").strip()
@@ -379,7 +392,7 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
                 'base_dir="${ADAOS_BASE_DIR:-$HOME/.adaos}"',
                 "root_ready=0",
                 'if [ -x "${root_python}" ] && [ -d "${root_repo}/src/adaos" ]; then',
-                f'  if env PYTHONPATH="${{root_repo}}/src${{PYTHONPATH:+:${{PYTHONPATH}}}}" "${{root_python}}" -c {_sh_quote(import_smoke)} >/dev/null 2>&1; then',
+                f'  if env PYTHONPATH="${{root_repo}}/src" "${{root_python}}" -c {_sh_quote(import_smoke)} >/dev/null 2>&1; then',
                 "    root_ready=1",
                 "  fi",
                 "fi",
@@ -436,7 +449,7 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
     )
     quoted = " ".join(_sh_quote(str(x)) for x in argv)
     if "adaos.apps.supervisor" in {str(item) for item in argv}:
-        lines.append('exec env PYTHONPATH="${root_repo}/src${PYTHONPATH:+:${PYTHONPATH}}" ' + quoted)
+        lines.append('exec env PYTHONPATH="${root_repo}/src" ' + quoted)
     else:
         lines.append(f"exec {quoted}")
     _write_text(path, "\n".join(lines) + "\n")
@@ -501,7 +514,7 @@ def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
             '    export ADAOS_ACTIVE_CORE_SLOT_DIR="$SLOT_DIR"',
             '    export ADAOS_SLOT_REPO_ROOT="$REPO_DIR"',
             '    if [ -d "$REPO_DIR/src" ]; then',
-            '      export PYTHONPATH="$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"',
+            '      export PYTHONPATH="$REPO_DIR/src"',
             "    fi",
             '    exec "$VENV_DIR/bin/python" -m adaos.apps.cli.app "$@"',
             "  fi",

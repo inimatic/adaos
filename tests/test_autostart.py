@@ -61,6 +61,31 @@ def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     assert spec.env["ADAOS_TOKEN"] == "t1"
 
 
+def test_default_autostart_spec_deduplicates_root_and_rejects_slot_pythonpath(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import adaos.services.autostart as autostart
+
+    repo_root = tmp_path / "repo"
+    package_dir = repo_root / "src" / "adaos"
+    package_dir.mkdir(parents=True)
+    slot_source = tmp_path / "base" / "state" / "core_slots" / "slots" / "A" / "repo" / "src"
+    external_source = tmp_path / "external-src"
+    monkeypatch.setenv("ADAOS_ROOT_REPO_ROOT", str(repo_root))
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join(
+            (str(repo_root / "src"), str(repo_root / "src"), str(slot_source), str(external_source))
+        ),
+    )
+
+    spec = autostart.default_spec(_FakeCtx(tmp_path / "base"))
+    entries = spec.env["PYTHONPATH"].split(os.pathsep)
+
+    assert entries == [str((repo_root / "src").resolve()), str(external_source)]
+
+
 def test_shell_wrapper_sources_dotenv_before_managed_exports(tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
