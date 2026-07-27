@@ -118,8 +118,9 @@ Remaining acceptance blockers:
 - replace the current bounded in-memory binary transfer and single-zone host
   store with streamed/object-store transport and multi-zone durability before
   larger artifacts or broad usage;
-- remove the observed public-route gap during blue/green upstream handoff and
-  prove continuous health while the old backend is drained;
+- keep frontend replacement, long-lived WebSocket continuity, and proxy
+  control-plane evolution separate from the now-proven bounded backend HTTP
+  handoff before claiming broad zero-downtime operation;
 - add historical registry/manifest migration fixtures before removing the
   compatibility readers; production and marketplace acceptance remain deferred.
 
@@ -149,7 +150,16 @@ exact package, release, and dedicated channel survived a second deployment run
 `30227206352`; binary read-back matched the expected digest and bytes, and an
 idempotent repeat PUT returned `created=false`. This proves single-zone
 deployment durability, not object-store streaming, replication, or continuous
-route availability.
+route availability. Infrastructure PRs
+[inimatic/infra-inimatic#2](https://github.com/inimatic/infra-inimatic/pull/2)
+through [#5](https://github.com/inimatic/infra-inimatic/pull/5) subsequently
+made slot state durable, serialized deployments, removed the retiring endpoint
+before process stop with config rollback, pinned the proxy control plane, and
+removed duplicate reloads. Bootstrap run `30229453608` and clean reverse
+control runs `30229653248` and `30229788369` passed strict 100 ms server-side
+health sampling in both deployment zones. The two clean runs recorded
+`322/298` and `321/297` successful samples respectively, no failures, and no
+proxy-container recreation.
 
 ## Delivery Snapshot
 
@@ -167,7 +177,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
-| AP7 | 12/14 | validated-stand (bounded, isolated same-host) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, and package/release/channel survival across redeploy | continuous blue/green route availability plus production and marketplace acceptance remain open/deferred |
+| AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -580,7 +590,7 @@ dependency-conflict, interruption, and rollback cases.
   release backend.
 - [ ] `[deferred]` `AP7-13` Claim production acceptance or marketplace readiness
   from the single-machine proof.
-- [ ] `[should]` `AP7-14` Eliminate the public-route gap during blue/green
+- [x] `[should]` `AP7-14` Eliminate the public-route gap during blue/green
   upstream handoff and prove continuous health while replacing a backend that
   serves persisted artifact state.
 
@@ -600,8 +610,20 @@ byte/digest read-back matched and repeat upload was idempotent. It remains
 deliberately narrower than second-machine, multi-zone, and broad production
 acceptance.
 `AP7-14` was added after a transient public `502` was observed during both
-deployment transitions: the new final-health gate detects a route that fails
-to recover but does not yet provide a zero-gap upstream handoff.
+deployment transitions. The initial stop-then-regenerate sequence, a deleted
+slot-state file, and later reload-aligned transport resets were retained as
+failed evidence in runs `30228183747`, `30228459894`, `30228943924`, and
+`30229165792`. Infrastructure PRs `#2` through `#5` corrected those boundaries:
+the candidate is admitted before cutover, the old endpoint leaves the validated
+config before process stop, the slot pointer commits atomically, deployments
+are serialized, proxy config failure rolls back, released proxy images are
+pinned, and observer helpers do not issue duplicate reloads. Bootstrap run
+`30229453608` passed both zones with `325` and `295` strict samples. Clean
+opposite-direction controls `30229653248` and `30229788369` passed with
+`322/298` and `321/297` samples, no server-side failures, and zero proxy
+recreates. This closes bounded backend HTTP handoff only; frontend replacement,
+long-lived WebSocket continuity, and a future dynamic proxy control plane are
+not implied by this checkbox.
 
 ## Explicit Deferred Backlog
 

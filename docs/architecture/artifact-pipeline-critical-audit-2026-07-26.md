@@ -42,7 +42,12 @@ Infrastructure PR
 gave both blue/green slots one persistent host package root. A clean-stand
 round-trip and a second deployment proved that package,
 release, and channel state survive a single-zone redeploy. Default rollout,
-multi-zone durability, and continuous route handoff remain separate gates.
+multi-zone durability, and continuous route handoff remained separate gates.
+Infrastructure PRs `#2` through `#5` later added durable slot state,
+deployment serialization, pre-stop upstream retirement with rollback, pinned
+proxy releases, and a single explicit cutover reload. Two clean production
+control runs then proved continuous backend HTTP health in both zones; the
+broader frontend/WebSocket handoff remains separate.
 
 | Finding | Status | Evidence or next gate |
 | --- | --- | --- |
@@ -63,7 +68,7 @@ multi-zone durability, and continuous route handoff remain separate gates.
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
 | R4 filesystem durability | corrected, validated-local | durable rename metadata plus pending/active/rolled-back history sidecars prevent false successful history |
 | R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
-| R6 blue/green route handoff | open (`should`) | final health now fails deployment if the public route does not recover, but transient `502` was observed and continuous handoff remains AP7-14 |
+| R6 blue/green route handoff | corrected, production-route-verified (bounded) | clean runs `30229653248` and `30229788369` kept strict server-side health at `322/298` and `321/297` samples across both zones with no failures or proxy recreation; frontend and WebSocket continuity remain separate |
 
 ## What Remains Sound
 
@@ -357,19 +362,27 @@ it does not repeat or approximate a state-changing call. Longer term, runtime
 version diagnostics should expose source revision and loaded core build in one
 operator view.
 
-### R6. Blue/green deployment has a public-route handoff gap
+### R6. Blue/green deployment had a public-route handoff gap
 
 Both the binary-backend deployment and the persistent-store deployment briefly
-returned public `502` while the workflow was replacing the active slot. The
-deployment now reloads nginx after old-slot removal and fails unless public
-`/healthz` recovers, which prevents a silently broken terminal state. It does
-not make the transition zero-downtime.
+returned public `502` while the workflow was replacing the active slot. Further
+fail-closed experiments found three distinct causes: rsync deleted the original
+slot pointer, the old process stopped while nginx still routed new requests to
+it, and redundant reloads on a floating proxy image produced transport resets.
+Failed runs `30228183747`, `30228459894`, `30228943924`, and `30229165792`
+remain part of the evidence rather than being reclassified as successes.
 
-Required correction: make upstream selection explicit, wait for the candidate
-to be ready through its private route, atomically switch/reload the public
-upstream, drain the old slot, and prove continuous health with an external
-probe across the whole transition. This is tracked by `AP7-14` and remains a
-broad-rollout blocker.
+Current correction: infrastructure PRs `#2` through `#5` persist slot state
+under the protected runtime root, serialize workflow and host mutations, admit
+the healthy candidate, atomically install and validate a new-only proxy config
+with rollback, commit the new slot, drain before stop, pin `nginx-proxy 1.11.0`
+and `acme-companion 2.6.3`, and remove duplicate observer reloads. Bootstrap run
+`30229453608` passed both zones with `325/295` strict samples. Clean reverse
+controls `30229653248` and `30229788369` passed `322/298` and `321/297` strict
+samples with no failures and no proxy recreation. This closes `AP7-14` for the
+bounded backend HTTP route. It does not prove seamless frontend replacement,
+long-lived WebSocket handoff, object-store durability, or broad production
+readiness.
 
 ## Corrected Implementation Order
 
@@ -406,9 +419,12 @@ broad-rollout blocker.
 13. **Completed for one zone:** persist one package root across both blue/green
     slots and prove exact package, release, and channel survival after a second
     deployment.
-14. **Next:** eliminate the public-route handoff gap, then replace single-zone
-    buffered storage with streamed/object-store multi-zone durability before
-    broad rollout.
+14. **Completed for bounded backend HTTP:** eliminate the public-route handoff
+    gap with serialized, rollback-safe pre-stop cutover and two clean controls
+    across both deployment zones.
+15. **Next:** add historical migration fixtures and make an explicit bounded
+    rollout decision, then replace single-zone buffered storage with
+    streamed/object-store multi-zone durability before broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale
