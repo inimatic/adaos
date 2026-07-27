@@ -16,7 +16,7 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.scenario.node_data_scope import node_scope_data_path
-from adaos.services.yjs.doc import mutate_live_room, async_get_ydoc
+from adaos.services.yjs.doc import async_get_ydoc, submit_live_room_mutation
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.user.profile import UserProfileService
 from .projection_registry import ProjectionRegistry, ProjectionTarget
@@ -1542,17 +1542,26 @@ class ProjectionService:
                 return
             root.set(txn, top_key, merged)
 
-        if prefer_live_room and mutate_live_room(
-            ws_id,
-            _mutator,
-            root_names=[root_name],
-            source="projection_service",
-            owner=owner,
-            channel=f"projection.{str(target.backend or 'yjs')}.live_room",
-            governed=True,
-            update_callback=_on_yjs_update,
-        ):
-            return
+        if prefer_live_room:
+            live_result = await submit_live_room_mutation(
+                ws_id,
+                _mutator,
+                root_names=[root_name],
+                source="projection_service",
+                owner=owner,
+                channel=f"projection.{str(target.backend or 'yjs')}.live_room",
+                governed=True,
+                update_callback=_on_yjs_update,
+            )
+            if bool(live_result.get("applied")):
+                return
+            _log.debug(
+                "live-room projection unavailable; using durable YStore fallback "
+                "webspace=%s path=%s reason=%s",
+                ws_id,
+                path,
+                str(live_result.get("reason") or "not_applied"),
+            )
         try:
             async with ystore_write_metadata(
                 root_names=[root_name],
