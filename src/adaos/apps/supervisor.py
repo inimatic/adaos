@@ -1628,7 +1628,33 @@ def _complete_update_attempt(*, state: str, status: dict[str, Any] | None, reaso
     if reason:
         payload["completion_reason"] = str(reason)
     if isinstance(status, dict):
-        payload["last_status"] = dict(status)
+        status_payload = dict(status)
+        # Rollout status intentionally carries a queued transition through
+        # prepare, promotion, and restart.  Once the attempt is terminal there
+        # must also be an actual durable queued request, otherwise preserving
+        # an old boolean makes read surfaces claim that another mutation is
+        # pending even though the reconciler has nothing it can execute.
+        if _subsequent_transition_request(payload) is None:
+            had_stale_marker = bool(status_payload.get("subsequent_transition")) or any(
+                key in status_payload
+                for key in (
+                    "subsequent_transition_action",
+                    "subsequent_transition_target_rev",
+                    "subsequent_transition_target_version",
+                )
+            )
+            status_payload["subsequent_transition"] = False
+            status_payload["subsequent_transition_requested_at"] = None
+            for key in (
+                "subsequent_transition_action",
+                "subsequent_transition_target_rev",
+                "subsequent_transition_target_version",
+            ):
+                status_payload.pop(key, None)
+            if had_stale_marker:
+                status_payload["updated_at"] = now
+                status_payload = write_core_update_status(status_payload)
+        payload["last_status"] = status_payload
     return _write_update_attempt(payload)
 
 

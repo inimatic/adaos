@@ -450,6 +450,51 @@ def test_reconcile_update_status_completes_awaiting_root_restart_attempt(monkeyp
     assert attempt["last_status"]["root_restart_completed_at"] == 499.0
 
 
+def test_reconcile_update_status_clears_stale_subsequent_marker_without_queued_request(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    supervisor._write_update_attempt(
+        {
+            "state": "awaiting_root_restart",
+            "action": "update",
+            "requested_at": 450.0,
+            "transitioned_at": 460.0,
+            "updated_at": 460.0,
+            "subsequent_transition": False,
+        }
+    )
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "root_restart_completed_at": 499.0,
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 400.0,
+            "subsequent_transition_action": "update",
+            "subsequent_transition_target_rev": "stale-rev",
+            "subsequent_transition_target_version": "stale-version",
+            "updated_at": 499.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "_served_by": "runtime",
+        }
+    )
+
+    attempt = payload.get("attempt")
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "completed"
+    assert attempt["last_status"]["subsequent_transition"] is False
+    status = read_status()
+    assert status["subsequent_transition"] is False
+    assert status["subsequent_transition_requested_at"] is None
+    assert "subsequent_transition_target_version" not in status
+
+
 def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
