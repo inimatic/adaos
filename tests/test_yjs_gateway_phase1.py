@@ -377,7 +377,7 @@ def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch)
     assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
 
 
-def test_room_serve_applies_updates_after_authoritative_initial_sync(monkeypatch) -> None:
+def test_room_serve_answers_step1_and_applies_updates_after_authoritative_initial_sync(monkeypatch) -> None:
     processed: list[bytes] = []
 
     class _Websocket:
@@ -426,8 +426,8 @@ def test_room_serve_applies_updates_after_authoritative_initial_sync(monkeypatch
     room.ydoc = y_py.YDoc()
     asyncio.run(room.serve(_Websocket()))
 
-    assert processed == [b"\x02subsequent-update"]
-    assert room._diag_authoritative_initial_skip_total == 2
+    assert processed == [b"\x00client-vector", b"\x02subsequent-update"]
+    assert room._diag_authoritative_initial_skip_total == 1
     assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
 
 

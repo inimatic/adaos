@@ -1972,21 +1972,25 @@ class DiagnosticYRoom(YRoom):
                                 )
                                 await self._send_initial_effective_state_replay(websocket)
                                 continue
+                        # A browser SYNC_STEP1 contains only its state vector.  It
+                        # cannot mutate the server document and must reach
+                        # process_sync_message so the server returns SYNC_STEP2.
+                        # y-websocket marks the provider synced only after that
+                        # response; dropping STEP1 leaves the provider forever in
+                        # `connecting` and eventually creates a reconnect storm.
+                        # Keep the server-authoritative guard on the initial
+                        # client state/update frames, which are the mutating part
+                        # of the handshake.
                         authoritative_initial = bool(
                             sync_type is not None
                             and inbound_payload is not None
                             and _YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC
-                            and (
-                                sync_type == int(YSyncMessageType.SYNC_STEP1)
-                                or (
-                                    initial_native_update_pending
-                                    and sync_type
-                                    in {
-                                        int(YSyncMessageType.SYNC_STEP2),
-                                        int(YSyncMessageType.SYNC_UPDATE),
-                                    }
-                                )
-                            )
+                            and initial_native_update_pending
+                            and sync_type
+                            in {
+                                int(YSyncMessageType.SYNC_STEP2),
+                                int(YSyncMessageType.SYNC_UPDATE),
+                            }
                         )
                         if authoritative_initial:
                             sync_name = (
