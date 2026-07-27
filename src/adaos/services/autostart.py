@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import json
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -341,6 +342,38 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _write_executable_text_atomically(path: Path, text: str, *, validate_bash: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(temporary.stat().st_mode | 0o111)
+        if validate_bash and os.name != "nt":
+            bash = shutil_which("bash")
+            if bash:
+                validation = _run([bash, "-n", str(temporary)])
+                if validation.returncode != 0:
+                    detail = str(validation.stderr or validation.stdout or "bash syntax validation failed").strip()
+                    raise RuntimeError(detail)
+        os.replace(temporary, path)
+        try:
+            flags = os.O_RDONLY | int(getattr(os, "O_DIRECTORY", 0))
+            directory_fd = os.open(path.parent, flags)
+        except Exception:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _sh_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
@@ -452,11 +485,7 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
         lines.append('exec env PYTHONPATH="${root_repo}/src" ' + quoted)
     else:
         lines.append(f"exec {quoted}")
-    _write_text(path, "\n".join(lines) + "\n")
-    try:
-        path.chmod(path.stat().st_mode | 0o111)
-    except Exception:
-        pass
+    _write_executable_text_atomically(path, "\n".join(lines) + "\n", validate_bash=True)
 
 
 def _linux_cli_shim_path() -> Path:
@@ -524,11 +553,7 @@ def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
     if "PYTHONPATH" in spec.env:
         lines.append(f"export PYTHONPATH={_sh_quote(str(spec.env['PYTHONPATH']))}")
     lines.append(f"exec {_sh_quote(python)} -m adaos.apps.cli.app \"$@\"")
-    _write_text(path, "\n".join(lines) + "\n")
-    try:
-        path.chmod(path.stat().st_mode | 0o111)
-    except Exception:
-        pass
+    _write_executable_text_atomically(path, "\n".join(lines) + "\n", validate_bash=True)
 
 
 def _linux_cli_shim_status(*, base_dir: Path | str | None = None) -> dict[str, object]:

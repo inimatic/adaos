@@ -46,13 +46,13 @@ from adaos.services.core_slots import (
     read_slot_manifest,
     remove_inactive_slot,
     rollback_to_previous_slot,
+    slot_dir,
     slot_status as core_slot_status,
     validate_slot_structure,
 )
 from adaos.services.core_update import clear_plan as clear_core_update_plan
 from adaos.services.core_update import finalize_runtime_boot_status
 from adaos.services.core_update import prepare_pending_update
-from adaos.services.core_update import promote_root_from_slot
 from adaos.services.core_update import read_last_result as read_core_update_last_result
 from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
@@ -643,6 +643,80 @@ def _local_update_payload() -> dict[str, Any]:
         "active_manifest": active_slot_manifest(),
         "_local_fallback": True,
     }
+
+
+def _promote_root_with_validated_candidate(
+    *,
+    slot: str,
+    manifest: dict[str, Any],
+    runtime_host: str,
+    runtime_port: int,
+) -> dict[str, Any]:
+    slot_name = str(slot or "").strip().upper()
+    if slot_name not in {"A", "B"}:
+        raise RuntimeError("validated candidate slot is unavailable for root promotion")
+    expected_slot_dir = slot_dir(slot_name).resolve()
+    repo_dir = Path(os.path.abspath(os.path.expanduser(str(manifest.get("repo_dir") or ""))))
+    argv = manifest.get("argv") if isinstance(manifest.get("argv"), list) else []
+    candidate_python = Path(os.path.abspath(os.path.expanduser(str(argv[0] if argv else ""))))
+    expected_repo_dir = expected_slot_dir / "repo"
+    expected_venv_dir = expected_slot_dir / "venv"
+    if repo_dir != expected_repo_dir or expected_venv_dir not in candidate_python.parents:
+        raise RuntimeError("root promotion candidate paths do not belong to the validated slot")
+    if not (repo_dir / "src" / "adaos" / "apps" / "core_update_root_promote.py").is_file():
+        raise RuntimeError("validated candidate does not provide the root promotion runner")
+    if not candidate_python.is_file():
+        raise RuntimeError(f"validated candidate Python is unavailable: {candidate_python}")
+    root_dir_raw = str(manifest.get("root_repo_root") or "").strip()
+    root_dir = Path(root_dir_raw).expanduser().resolve() if root_dir_raw else current_repo_root()
+    if root_dir is None:
+        raise RuntimeError("stable root checkout is unavailable for candidate-owned promotion")
+    env = dict(os.environ)
+    env["ADAOS_BASE_DIR"] = str(current_base_dir())
+    env["ADAOS_ROOT_REPO_ROOT"] = str(root_dir)
+    env["PYTHONPATH"] = str((repo_dir / "src").resolve())
+    completed = subprocess.run(
+        [
+            str(candidate_python),
+            "-m",
+            "adaos.apps.core_update_root_promote",
+            "--slot",
+            slot_name,
+            "--base-dir",
+            str(current_base_dir()),
+            "--root-repo-root",
+            str(root_dir),
+            "--runtime-host",
+            str(runtime_host),
+            "--runtime-port",
+            str(int(runtime_port)),
+        ],
+        cwd=str(repo_dir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180.0,
+    )
+    if completed.returncode != 0:
+        detail = str(completed.stderr or completed.stdout or "candidate promotion failed").strip()[-4000:]
+        raise RuntimeError(f"candidate-owned root promotion failed: {detail}")
+    payload: dict[str, Any] | None = None
+    for line in reversed(str(completed.stdout or "").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if not isinstance(payload, dict) or not bool(payload.get("ok")):
+        raise RuntimeError("candidate-owned root promotion returned no successful result")
+    if str(payload.get("slot") or "").strip().upper() != slot_name:
+        raise RuntimeError("candidate-owned root promotion returned the wrong slot")
+    payload["execution_owner"] = "validated_candidate"
+    payload["candidate_python"] = str(candidate_python)
+    payload["candidate_repo_dir"] = str(repo_dir)
+    return payload
 
 
 def _update_attempt_timeout_sec() -> float:
@@ -4110,7 +4184,12 @@ class SupervisorManager:
         )
         self._persist_runtime_state()
 
-    def _schedule_service_restart(self, *, reason: str) -> dict[str, Any]:
+    def _schedule_service_restart(
+        self,
+        *,
+        reason: str,
+        candidate_wrapper_refresh: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         delay_sec = _root_restart_delay_sec()
         if not _autostart_self_restart_supported():
             return {
@@ -4120,7 +4199,11 @@ class SupervisorManager:
                 "delay_sec": None,
                 "reason": "autostart self-restart is unavailable for the current supervisor process",
             }
-        wrapper_refresh = self._refresh_autostart_wrapper(reason=reason)
+        wrapper_refresh = (
+            dict(candidate_wrapper_refresh)
+            if isinstance(candidate_wrapper_refresh, dict) and bool(candidate_wrapper_refresh.get("ok"))
+            else self._refresh_autostart_wrapper(reason=reason)
+        )
         if self._service_restart_pending:
             return {
                 "ok": True,
@@ -4363,7 +4446,16 @@ class SupervisorManager:
                 "_served_by": "supervisor",
             }
 
-        restart = self._schedule_service_restart(reason=reason)
+        root_promotion = status.get("root_promotion") if isinstance(status.get("root_promotion"), dict) else {}
+        candidate_wrapper_refresh = (
+            root_promotion.get("wrapper_refresh")
+            if isinstance(root_promotion.get("wrapper_refresh"), dict)
+            else None
+        )
+        restart = self._schedule_service_restart(
+            reason=reason,
+            candidate_wrapper_refresh=candidate_wrapper_refresh,
+        )
         now = time.time()
         status_payload = dict(status)
         status_payload["state"] = "succeeded"
@@ -10265,7 +10357,13 @@ class SupervisorManager:
             )
             _complete_update_attempt(state="completed", status=status, reason=reason)
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
-        promotion = promote_root_from_slot(slot=str((manifest or {}).get("slot") or active_slot() or ""))
+        promotion_slot = str((manifest or {}).get("slot") or active_slot() or "")
+        promotion = _promote_root_with_validated_candidate(
+            slot=promotion_slot,
+            manifest=manifest or {},
+            runtime_host=self.runtime_host,
+            runtime_port=self.runtime_port,
+        )
         status = write_core_update_status(
             {
                 "state": "succeeded",

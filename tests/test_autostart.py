@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.apps.autostart_runner import _slot_launch_spec
 from adaos.services.autostart import default_spec, disable, enable, status
 
@@ -597,6 +599,24 @@ def test_linux_refresh_wrapper_updates_cli_shim(monkeypatch, tmp_path: Path) -> 
     assert res["cli_shim"]["install"]["ok"] is True
     assert res["cli_shim"]["changed"] is True
     assert "adaos.apps.cli.app" in shim.read_text(encoding="utf-8")
+
+
+def test_shell_wrapper_atomic_write_preserves_previous_file_on_replace_failure(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "adaos-autostart.sh"
+    wrapper.write_text("#!/usr/bin/env bash\necho previous\n", encoding="utf-8")
+    monkeypatch.setattr(autostart.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("replace failed")))
+
+    with pytest.raises(OSError, match="replace failed"):
+        autostart._write_wrapper_sh(
+            wrapper,
+            argv=("/root/adaos/.venv/bin/python", "-m", "adaos.apps.supervisor"),
+            env={"ADAOS_ROOT_REPO_ROOT": "/root/adaos", "ADAOS_BASE_DIR": "/root/.adaos"},
+        )
+
+    assert wrapper.read_text(encoding="utf-8") == "#!/usr/bin/env bash\necho previous\n"
+    assert list(tmp_path.glob(".adaos-autostart.sh.*")) == []
 
 
 def test_linux_enable_root_prefers_system_service_even_with_user_bus(monkeypatch, tmp_path: Path) -> None:

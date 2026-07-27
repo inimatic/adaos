@@ -4793,6 +4793,67 @@ def test_runtime_state_payload_uses_process_family_rss_for_warm_switch_gate(monk
     assert payload["warm_switch_memory"]["current_rss_bytes"] == 640 * 1024 * 1024
 
 
+def test_validated_candidate_owns_root_promotion_execution(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_repo = tmp_path / "root"
+    root_repo.mkdir()
+    slot_root = tmp_path / "state" / "core_slots" / "slots" / "B"
+    repo_dir = slot_root / "repo"
+    runner = repo_dir / "src" / "adaos" / "apps" / "core_update_root_promote.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("# candidate runner\n", encoding="utf-8")
+    candidate_python = slot_root / "venv" / "bin" / "python"
+    candidate_python.parent.mkdir(parents=True)
+    candidate_python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "slot_dir", lambda slot: slot_root)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def _run(command: list[str], **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"ok": True, "slot": "B", "transaction_state": "committed"}) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(supervisor.subprocess, "run", _run)
+
+    payload = supervisor._promote_root_with_validated_candidate(
+        slot="B",
+        manifest={
+            "repo_dir": str(repo_dir),
+            "root_repo_root": str(root_repo),
+            "argv": [str(candidate_python), "-m", "adaos.apps.autostart_runner"],
+        },
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+    )
+
+    assert payload["execution_owner"] == "validated_candidate"
+    assert payload["transaction_state"] == "committed"
+    command, kwargs = calls[0]
+    assert command[0] == str(candidate_python)
+    assert command[1:3] == ["-m", "adaos.apps.core_update_root_promote"]
+    assert command[-4:] == ["--runtime-host", "127.0.0.1", "--runtime-port", "8777"]
+    assert kwargs["cwd"] == str(repo_dir)
+    assert kwargs["env"]["PYTHONPATH"] == str(repo_dir / "src")
+
+
+def test_validated_candidate_root_promotion_rejects_paths_outside_slot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    outside_repo = tmp_path / "outside" / "repo"
+    outside_python = tmp_path / "outside" / "venv" / "bin" / "python"
+
+    with pytest.raises(RuntimeError, match="do not belong"):
+        supervisor._promote_root_with_validated_candidate(
+            slot="A",
+            manifest={"repo_dir": str(outside_repo), "argv": [str(outside_python)]},
+            runtime_host="127.0.0.1",
+            runtime_port=8777,
+        )
+
+
 def test_supervisor_promote_root_marks_update_succeeded(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -4814,8 +4875,8 @@ def test_supervisor_promote_root_marks_update_succeeded(monkeypatch, tmp_path) -
     monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
     monkeypatch.setattr(
         supervisor,
-        "promote_root_from_slot",
-        lambda slot=None: {
+        "_promote_root_with_validated_candidate",
+        lambda *, slot, manifest, runtime_host, runtime_port: {
             "ok": True,
             "slot": slot or "B",
             "required": True,
@@ -4862,8 +4923,8 @@ def test_supervisor_promote_root_preserves_subsequent_transition_request(monkeyp
     )
     monkeypatch.setattr(
         supervisor,
-        "promote_root_from_slot",
-        lambda *, slot=None: {
+        "_promote_root_with_validated_candidate",
+        lambda *, slot, manifest, runtime_host, runtime_port: {
             "ok": True,
             "slot": slot or "B",
             "required": True,
@@ -4931,8 +4992,8 @@ def test_supervisor_promote_root_allows_idle_status_when_root_promotion_is_still
     )
     monkeypatch.setattr(
         supervisor,
-        "promote_root_from_slot",
-        lambda slot=None: {
+        "_promote_root_with_validated_candidate",
+        lambda *, slot, manifest, runtime_host, runtime_port: {
             "ok": True,
             "slot": slot or "B",
             "required": True,
@@ -4981,6 +5042,27 @@ def test_supervisor_schedule_service_restart_requests_self_exit(monkeypatch, tmp
     assert kills == [(4321, supervisor.signal.SIGTERM)]
 
 
+def test_supervisor_restart_keeps_candidate_generated_wrapper(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._service_restart_pending = True
+    monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
+    monkeypatch.setattr(
+        manager,
+        "_refresh_autostart_wrapper",
+        lambda reason: (_ for _ in ()).throw(AssertionError("old supervisor must not rewrite candidate wrapper")),
+    )
+    candidate_refresh = {"ok": True, "wrapper": str(tmp_path / "bin" / "adaos-autostart.sh")}
+
+    payload = manager._schedule_service_restart(
+        reason="test.candidate_wrapper",
+        candidate_wrapper_refresh=candidate_refresh,
+    )
+
+    assert payload["duplicate"] is True
+    assert payload["wrapper_refresh"] == candidate_refresh
+
+
 def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -5011,8 +5093,8 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
     )
     monkeypatch.setattr(
         supervisor,
-        "promote_root_from_slot",
-        lambda slot=None: {
+        "_promote_root_with_validated_candidate",
+        lambda *, slot, manifest, runtime_host, runtime_port: {
             "ok": True,
             "slot": slot or "B",
             "required": True,
@@ -5037,7 +5119,9 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
 
     restart_reasons: list[str] = []
 
-    def _schedule_service_restart(*, reason: str) -> dict[str, object]:
+    def _schedule_service_restart(
+        *, reason: str, candidate_wrapper_refresh: dict[str, object] | None = None
+    ) -> dict[str, object]:
         restart_reasons.append(reason)
         return {"ok": True, "requested": True, "mode": "self_exit", "delay_sec": 0.25}
 

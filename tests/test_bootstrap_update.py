@@ -8,6 +8,10 @@ def test_core_version_metadata_is_bootstrap_promoted() -> None:
     assert "pyproject.toml" in BOOTSTRAP_CRITICAL_PATHS
 
 
+def test_candidate_owned_root_promotion_runner_is_bootstrap_promoted() -> None:
+    assert "src/adaos/apps/core_update_root_promote.py" in BOOTSTRAP_CRITICAL_PATHS
+
+
 def test_bounded_io_helper_is_bootstrap_promoted() -> None:
     assert "src/adaos/services/bounded_io.py" in BOOTSTRAP_CRITICAL_PATHS
 
