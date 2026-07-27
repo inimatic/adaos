@@ -693,7 +693,7 @@ def test_resolved_root_promotion_detects_stale_pyproject_version(monkeypatch, tm
     assert "pyproject.toml" in payload["effective_mismatched_paths"]
 
 
-def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_path) -> None:
+def test_promote_root_from_slot_replaces_bootstrap_package_atomically(monkeypatch, tmp_path) -> None:
     from adaos.services.core_update import promote_root_from_slot
 
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
@@ -703,6 +703,13 @@ def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_
     (slot_repo / "src" / "adaos" / "apps").mkdir(parents=True, exist_ok=True)
     (root_dir / "src" / "adaos" / "apps" / "supervisor.py").write_text("old\n", encoding="utf-8")
     (slot_repo / "src" / "adaos" / "apps" / "supervisor.py").write_text("new\n", encoding="utf-8")
+    (root_dir / "src" / "adaos" / "services").mkdir(parents=True, exist_ok=True)
+    (root_dir / "src" / "adaos" / "services" / "legacy.py").write_text("legacy\n", encoding="utf-8")
+    (slot_repo / "src" / "adaos" / "services" / "skill").mkdir(parents=True, exist_ok=True)
+    (slot_repo / "src" / "adaos" / "services" / "skill" / "declarations.py").write_text(
+        "current\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
 
     write_slot_manifest(
@@ -725,9 +732,16 @@ def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_
     assert payload["restart_required"] is True
     assert payload["transaction_state"] == "committed"
     assert payload["preflight"]["ok"] is True
+    assert payload["changed_paths"] == ["src/adaos"]
     assert (root_dir / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "new\n"
+    assert (
+        root_dir / "src" / "adaos" / "services" / "skill" / "declarations.py"
+    ).read_text(encoding="utf-8") == "current\n"
+    assert not (root_dir / "src" / "adaos" / "services" / "legacy.py").exists()
     backup_file = Path(payload["backup_dir"]) / "src" / "adaos" / "apps" / "supervisor.py"
     assert backup_file.read_text(encoding="utf-8") == "old\n"
+    backup_legacy = Path(payload["backup_dir"]) / "src" / "adaos" / "services" / "legacy.py"
+    assert backup_legacy.read_text(encoding="utf-8") == "legacy\n"
 
 
 def test_promote_root_from_slot_aborts_before_mutation_when_import_preflight_fails(

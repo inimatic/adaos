@@ -576,7 +576,24 @@ def _promotion_relative_paths(changed_paths: list[Any]) -> list[str]:
         if relative.is_absolute() or raw.startswith("/") or any(part in {"", ".", ".."} for part in relative.parts):
             raise RuntimeError(f"invalid root promotion path: {raw}")
         normalized.append(relative.as_posix())
-    return list(dict.fromkeys(normalized))
+    deduplicated = list(dict.fromkeys(normalized))
+    if not any(path == "src/adaos" or path.startswith("src/adaos/") for path in deduplicated):
+        return deduplicated
+
+    # Root-launched control code is one import graph. Promoting only the files
+    # that triggered the bootstrap comparison can leave their newly introduced
+    # transitive modules behind, producing a hybrid candidate/root package.
+    # Keep non-package metadata granular, but replace src/adaos atomically.
+    collapsed: list[str] = []
+    package_added = False
+    for rel_path in deduplicated:
+        if rel_path == "src/adaos" or rel_path.startswith("src/adaos/"):
+            if not package_added:
+                collapsed.append("src/adaos")
+                package_added = True
+            continue
+        collapsed.append(rel_path)
+    return collapsed
 
 
 def _promotion_path(root: Path, rel_path: str) -> Path:
