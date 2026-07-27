@@ -71,13 +71,13 @@ broader frontend/WebSocket handoff remains separate.
 | B18 update-route policy drift | corrected, validated-local | REST, WebSocket, and Builder now share a versioned subscription-based route decision; subscribed package failure cannot fall through to legacy source pull and malformed subscription state fails closed |
 | B19 local slot/restart identity | corrected, validated-local | active/previous markers use durable replacement; restart requires ready health, the exact active-slot Git commit, and a stability window rather than accepting a listener or bootstrap PID |
 | B20 untrusted initial Yjs reconnect | contained, validated-local (bounded) | malformed/native-risk payloads are subprocess-preflighted and initial browser state is server-authoritative; real reconnects survived, while offline initial draft merge remains deliberately unsupported |
-| B21 builder identity is self-declared | partially corrected, validated-local foundation | detached Ed25519 subject/predicate attestations, purpose-scoped trust, revocation, immutable stores, activation admission, no-replay emission, and exact release-set binding exist locally; backend deployment, runtime trust provisioning, and stand evidence remain open in AP1-07 |
+| B21 builder identity is self-declared | corrected, validated-stand (bounded) | backend `8f4f2c1` stores immutable assets/exact release bindings; a separately provisioned signer/trust pair passed exact-bound required activation from an empty cache/Workspace, wrong trust failed before mutation, and no-replay/reconciliation paths have deterministic regressions |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
 | R4 filesystem durability | corrected, validated-local | durable rename metadata plus pending/active/rolled-back history sidecars prevent false successful history |
 | R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
-| R6 blue/green route handoff | corrected, production-route-verified (bounded) | clean runs `30229653248` and `30229788369` kept strict server-side health at `322/298` and `321/297` samples across both zones with no failures or proxy recreation; frontend and WebSocket continuity remain separate |
+| R6 blue/green route handoff | regressed, fix-pending | earlier clean runs passed, but backend PR `#4` exposed candidate admission before health and one strict public-probe `curl rc=55`; infra `5f9a5b0` gates proxy network attachment on health and still needs merge plus clean production control |
 | R7 local core-slot preparation | open, should | exact local slot A took 246.6 s: 169.115 s for venv seed/copy and 29.6 s for install; cache/reflink by lock digest is needed without weakening source/import/build gates |
 | R8 memory-profile finalizer logging | open, could | the 375-test regression passes, but late finalizers can log after pytest capture closes and emit non-fatal `ValueError: I/O operation on closed file` noise |
 
@@ -420,16 +420,19 @@ and can use local or external immutable storage without changing existing
 release digests. Required activation checks the full release/package set before
 fetch and repeats admission under the Workspace writer lease before staging.
 
-This closes the local trust/admission foundation, not end-to-end provenance.
+This closes the bounded trust/admission path, not broad end-to-end provenance.
 The local AP1-07 publisher now journals one deterministic package-then-release
 attestation set before dispatch, refuses to replay an uncertain write, and
 separates read-only exact-digest reconciliation from explicit continuation. It
 also recomputes each expected predicate from the reviewed release plan, so a
-valid signature over different provenance is not admitted. AP1-07 remains open
-until the published backend immutable asset/release-set routes are merged and
-deployed, runtime signer/trust composition is explicit, and required-mode
-activation passes on a clean stand. The registry validates the exact set and
-its release coverage but deliberately cannot make its signatures trusted.
+valid signature over different provenance is not admitted. Backend PR `#4` is
+deployed as `8f4f2c1`, and stand `20260727t070101z-required` proved exact-bound
+required activation over mTLS from an empty cache and Workspace. Consumer
+admission now rejects valid but unbound signatures; a wrong trust store failed
+before fetch or mutation. Deterministic tests cover unknown write outcomes,
+read-only reconciliation, and explicit continuation without inducing transport
+failure in production. The registry validates exact set connectivity but
+deliberately cannot make its signatures trusted.
 
 ## Reliability And Performance Gaps
 

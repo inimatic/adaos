@@ -28,6 +28,10 @@ empty-Workspace activation through the deployed external package backend.
   [inimatic/adaos-backend#3](https://github.com/inimatic/adaos-backend/pull/3)
   at `0bc1f8262405dc19b3248d5e1a5bd124a6ff7296`, CI-validated, and deployed as
   backend `0.1.144`.
+- Backend immutable attestation assets and exact release bindings: merged by
+  [inimatic/adaos-backend#4](https://github.com/inimatic/adaos-backend/pull/4)
+  from commits `cd5da95` and `4f5cb80`; production health reports merge commit
+  `8f4f2c1` and the new mTLS routes are active.
 - Single-zone package-store persistence: merged by
   [inimatic/infra-inimatic#1](https://github.com/inimatic/infra-inimatic/pull/1)
   at `45a8476f0fc6ebfd02782a174fd1a30aaeb2d35d`; both blue/green slots use the
@@ -113,21 +117,51 @@ changing historical PackageRef or ProjectRelease digests. Evidence covers:
   when required trust is absent.
 
 The focused `tests/test_artifact_attestations.py` and
-`tests/test_attestation_publication.py` set passes 18 tests. The post-change
+`tests/test_attestation_publication.py` set initially passed 18 tests. The
+post-change
 gate passes 155 artifact/attestation tests across 18 files plus 71 API runtime
 identity, management, build-info, Root client/composition, and verification
-tests (226 total across 24 files). This is a local trust foundation with
-journaled publisher issuance and exact remote-binding contracts. Deployment
-and clean-stand required-mode activation remain open under AP1-07.
+tests (226 total across 24 files). After exact-bound consumer admission and the
+external stand runner were added, the broad artifact/attestation gate passed
+166 tests across 19 files. This is a local trust foundation with journaled
+publisher issuance and exact remote-binding contracts.
 
 Backend commits `cd5da95` and `4f5cb80` add content-addressed attestation
 assets, canonical ordering, and one immutable exact binding per release.
 `npm run test:artifact-packages` passed the
 TypeScript build and storage smoke, including idempotent writes, exact
-package/release coverage, durable reads, and incomplete-set rejection. The
-commit is pushed to `codex/artifact-binary-transport`; deployment evidence is
-not claimed because the previous PR #3 for that branch is already merged and
-the available GitHub API credentials could not create the new PR.
+package/release coverage, durable reads, and incomplete-set rejection. They were
+merged through backend PR `#4`; deployed health reports `8f4f2c1`.
+
+### External required-attestation stand, 2026-07-27
+
+The clean stand at `20260727t070101z-required` reused the already reviewed
+`streaming_recipe_book_eval@1.0.11` release inputs; it did not edit or regenerate
+the scenario or companion skill. A separately provisioned stand-only Ed25519
+signer and trust store exercised the deployed production backend over hub mTLS:
+
+- the scenario and skill package plus the release produced three detached
+  subject/provenance attestations;
+- immutable set
+  `sha256:dd72386de1abca21d2ecfd4e33201e22fecb76dcb90016b9ae024753774b02d8`
+  covered all three subjects and was read back from the exact release binding;
+- binding completed before CAS movement of the dedicated
+  `stand-required-20260727t070101z` channel;
+- an empty package cache fetched both packages, an empty Workspace materialized
+  scenario and skill, and delayed exact-lock verification passed;
+- activation operation `76736a72560f1df450a8a0d91d56ec3b` recorded
+  `release_binding_required=true`, the same set digest, three verified subjects,
+  and terminal `completed/commit` state;
+- a second read-only negative proof used a separately provisioned wrong trust
+  store and failed before package fetch, operation creation, cache creation, or
+  Workspace mutation.
+
+Unknown-outcome safety was not induced against production. Deterministic tests
+cover commit-then-timeout and timeout-before-commit, prove no implicit replay,
+require exact-digest read-only reconciliation, and require a later explicit
+continuation for both assets and release binding. Together with the deployed
+positive/negative stand, this closes bounded `AP1-07`; it does not establish
+multi-zone trust distribution or marketplace acceptance.
 
 The representative implementation was not hand-programmed as proof setup.
 The built-in LLM produced the UI revision and the isolated Codex process
@@ -255,6 +289,7 @@ redacted identities and conclusions required for review.
 | Bounded binary package transport | passed | backend `0.1.144`; the representative scenario package used 8,130 binary bytes instead of 10,840 base64 payload bytes; exact bytes/digest round-trip passed, a mismatched digest failed with `409`, and unknown upload outcomes have a no-fallback/no-retry regression |
 | Single-zone package-store deployment durability | passed | infrastructure runs `30227081918` and `30227206352`; after the second blue/green deployment the exact package and release remained readable, channel `stand-afb87148014b` retained its release digest, and repeat binary PUT returned `created=false` |
 | External clean-stand round-trip | passed | two packages (15,370 archive bytes), exact release and dedicated `stand-route-5dd1492f` channel traversed deployed backend; a new empty cache/Workspace activated 12 files in 1.375 s and exact-lock delayed verification passed |
+| External required-attestation stand | passed | backend `8f4f2c1`; three detached subjects; exact set `sha256:dd72386de1abca21d2ecfd4e33201e22fecb76dcb90016b9ae024753774b02d8`; dedicated channel; empty-cache/Workspace activation; wrong-trust rejection before mutation; 166 artifact/attestation regressions |
 
 Original checkpoint-package identities retained as the source inventory
 witness:
@@ -348,6 +383,14 @@ evidence:
    transitions. The workflow now fails if the public route does not recover,
    but continuous upstream handoff is not yet proven and remains an explicit
    rollout blocker rather than being hidden by a successful terminal health.
+10. Backend PR `#4` did deploy successfully as `8f4f2c1`, but the deployment job
+    failed after its continuous probe recorded one `curl rc=55`. The candidate
+    had joined nginx-proxy at Docker start, before its healthcheck passed. The
+    result was a committed rollout reported as failed, which could invite an
+    unsafe repeat. Infra commit `5f9a5b0` now warms a recreated candidate on a
+    private dependency network, connects it to `inimatic_proxy` only after
+    `healthy`, and keeps the strict continuous probe. Merge and clean deployment
+    evidence remain open under `AP7-14`.
 
 The partially completed Forge writes from the first experiment were recovered
 using exact change metadata and archive hashes. The resulting design now uses
@@ -364,8 +407,9 @@ reconciliation, and no automatic repeat of the modifying command.
   is required before larger artifacts or broad usage.
 - The host-backed package store survived a blue/green redeploy in one zone; it
   does not yet prove multi-zone replication, backup/restore, or lifecycle/GC.
-- The deployment has a terminal public-health gate but still showed a transient
-  route gap. Continuous candidate-ready/switch/drain handoff remains open.
+- The deployment has a strict continuous public-health gate, but PR `#4`
+  exposed candidate admission before readiness. Infra commit `5f9a5b0` is
+  pending merge and clean production control under reopened `AP7-14`.
 - The pre-existing client submodule change was not modified or included.
 - The backend builder/lock admission hardening was validated locally and by the
   locked GitHub Actions artifact-contract gate, then merged through
