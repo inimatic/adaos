@@ -7,6 +7,6 @@ without bootstrapping the full runtime.
 
 from __future__ import annotations
 
-from . import artifacts, automation, preview
+from . import artifacts, automation, preview, workflow
 
-__all__ = ["artifacts", "automation", "preview"]
+__all__ = ["artifacts", "automation", "preview", "workflow"]

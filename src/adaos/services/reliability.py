@@ -6133,13 +6133,36 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
 
     gateway_effective_ready = bool(effective_branches.get("ready"))
     materialization_ready = bool(materialization.get("ready")) or gateway_effective_ready
+    materialization_readiness_state = str(materialization.get("readiness_state") or "").strip() or None
+    rebuild_status = str(rebuild.get("status") or "").strip().lower()
+    rebuild_pending = bool(rebuild.get("pending")) or rebuild_status in {
+        "scheduled",
+        "running",
+        "invalidated",
+    }
+    materialization_transition_expected = bool(
+        not materialization_ready
+        and rebuild_pending
+        and materialization_readiness_state in {
+            "pending_structure",
+            "first_paint",
+            "interactive",
+            "hydrating",
+        }
+        and (
+            str(materialization.get("current_scenario") or "").strip()
+            or str(rebuild.get("scenario_id") or "").strip()
+        )
+    )
     bootstrap_stuck = bool(gateway_room.get("bootstrap_stuck"))
     bootstrap_recommended_action = str(gateway_room.get("recommended_action") or "").strip() or None
     if transport_state == "not_applicable":
         semantic_state = "not_applicable"
     elif bootstrap_stuck:
         semantic_state = "stale"
-    elif materialization_ready and (assessment_state in {"nominal", "idle"} or maintenance_pressure_only):
+    elif (materialization_ready or materialization_transition_expected) and (
+        assessment_state in {"nominal", "idle"} or maintenance_pressure_only
+    ):
         semantic_state = "ready"
     elif materialization_ready and assessment_state in {"pressure", "degraded"}:
         semantic_state = "degraded"
@@ -6167,8 +6190,8 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     if reason:
         blockers.append(reason)
     if semantic_state == "stale" and not materialization_ready:
-        blockers.append(str(materialization.get("readiness_state") or "materialization_not_ready"))
-    if not materialization_ready:
+        blockers.append(str(materialization_readiness_state or "materialization_not_ready"))
+    if not materialization_ready and not materialization_transition_expected:
         for item in list(materialization.get("missing_branches") or []):
             text = str(item).strip()
             if text:
@@ -6217,6 +6240,20 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
             if not bool(runtime.get("available")) and assessment_state != "not_applicable"
             else "off"
         ),
+        "materialization": {
+            "ready": bool(materialization_ready),
+            "readiness_state": materialization_readiness_state,
+            "transition_expected": bool(materialization_transition_expected),
+            "pending": bool(rebuild_pending),
+            "status": rebuild_status or None,
+            "current_scenario": str(materialization.get("current_scenario") or "").strip() or None,
+            "target_scenario": str(rebuild.get("scenario_id") or "").strip() or None,
+            "missing_branches": [
+                str(item).strip()
+                for item in list(materialization.get("missing_branches") or [])
+                if str(item).strip()
+            ][:20],
+        },
         "bootstrap": {
             "state": bootstrap_state,
             "attempt_id": bootstrap_attempt_id,
@@ -6243,9 +6280,16 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
                 "recommended_action": bootstrap_recommended_action,
             },
             "materialization_seed": {
-                "state": "ready" if materialization_ready and not bootstrap_stuck else "degraded",
-                "stale": not bool(materialization_ready) or bootstrap_stuck,
-                "reason": str(materialization.get("stale_reason") or materialization.get("readiness_state") or "").strip() or None,
+                "state": (
+                    "ready"
+                    if materialization_ready and not bootstrap_stuck
+                    else "staging"
+                    if materialization_transition_expected and not bootstrap_stuck
+                    else "degraded"
+                ),
+                "stale": (not bool(materialization_ready) and not materialization_transition_expected) or bootstrap_stuck,
+                "reason": str(materialization.get("stale_reason") or materialization_readiness_state or "").strip() or None,
+                "transition_expected": bool(materialization_transition_expected),
             },
             "supervisor_action_required": bool(bootstrap_stuck and bootstrap_recommended_action),
         },
@@ -6429,13 +6473,9 @@ def _yjs_projection_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) 
             "persisted_up_to_date": bool(entry.get("persisted_up_to_date")),
             "compact_total": _nonnegative_int(entry.get("compact_total")),
             "backup_total": _nonnegative_int(entry.get("backup_total")),
-            "backup_gc_total": _nonnegative_int(entry.get("backup_gc_total")),
-            "backup_malloc_trim_total": _nonnegative_int(entry.get("backup_malloc_trim_total")),
             "auto_backup_total": _nonnegative_int(entry.get("auto_backup_total")),
             "auto_backup_large_update_bytes": _nonnegative_int(entry.get("auto_backup_large_update_bytes")),
             "auto_backup_large_update_debounce_sec": entry.get("auto_backup_large_update_debounce_sec"),
-            "last_backup_gc_collected": _nonnegative_int(entry.get("last_backup_gc_collected")),
-            "last_backup_malloc_trimmed": bool(entry.get("last_backup_malloc_trimmed")),
             "last_auto_backup_reason": str(entry.get("last_auto_backup_reason") or "").strip() or None,
             "last_auto_backup_ago_s": entry.get("last_auto_backup_ago_s"),
             "last_compact_reason": str(entry.get("last_compact_reason") or "").strip() or None,

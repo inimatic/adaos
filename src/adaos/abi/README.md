@@ -6,7 +6,7 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `latent.v1.schema.json` - latent state payload
 - `lrpc.v1.schema.json` - lightweight RPC messages
 - `nb.v1.schema.json` - notebook payload
-- `scenario.schema.json` - scenario manifest (`scenario.yaml` or `scenario.json`)
+- `scenario.schema.json` - scenario manifest (`scenario.yaml`)
 - `skill.schema.json` - skill manifest (`skill.yaml`), including browser
   `data_routes` for explicit Yjs/stream/details route planning
 - `builder.task.v1.schema.json` - Builder task handoff packet for human,

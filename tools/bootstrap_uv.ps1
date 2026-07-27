@@ -198,6 +198,12 @@ if ($LASTEXITCODE -ne 0) { throw "uv python install $minPython failed" }
 $env:UV_PYTHON = $minPython
 
 # 2) Sync Python deps (creates .venv and installs project)
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+  throw "Rust/Cargo >=1.72 is required to build the repository-pinned vendor/y-py source. Install Rust with rustup."
+}
+if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+  $env:CARGO_TARGET_DIR = Join-Path $PWD ".adaos\build\y-py-target"
+}
 if (Test-Path "uv.lock") {
   Write-Host "Syncing environment from uv.lock..."
   uv sync --python $env:UV_PYTHON --locked

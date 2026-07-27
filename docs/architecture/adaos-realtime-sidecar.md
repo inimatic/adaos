@@ -32,6 +32,17 @@ This is intentionally minimal:
 - no hub business-logic move
 - only transport ownership moves out of the main process
 
+The sidecar never treats a new local client as permission to cancel the old
+one. Each relay has independent NATS PING/PONG accounting. Candidate bootstrap
+does not consume the overlap slot during prewarm; it opens transport only after
+supervisor calls `promote-active`, and the old session closes naturally during
+drain after new route authority is confirmed.
+
+Retiring the old runtime is explicitly runtime-scoped. It closes the old
+listener and process-local resources without publishing node-wide
+`subnet.stopping/subnet.stopped`; the replacement runtime and sidecar continue
+to represent the same online subnet throughout the transition.
+
 ## Status Labels
 
 Checklist items use the same four-level MoSCoW-style priority vocabulary as
@@ -46,17 +57,22 @@ Checklist items use the same four-level MoSCoW-style priority vocabulary as
 
 `adaos-realtime`:
 
-- accepts one local NATS TCP client
-- opens one remote NATS-over-WebSocket session to root
+- accepts one normal local NATS TCP client and a bounded second client during
+  A/B authority handoff (`ADAOS_REALTIME_MAX_LOCAL_SESSIONS`, default `2`)
+- opens one remote NATS-over-WebSocket session per admitted local client; the
+  two sessions may overlap only until the old runtime drains
 - relays raw NATS bytes in both directions
 - writes periodic diagnostics to `.adaos/diagnostics/realtime_sidecar.jsonl`
 - exposes a runtime status surface in protocol terms:
   - transport readiness
   - control readiness
-  - reconnect, quarantine, and supersede counters
+  - reconnect, quarantine, active-session, and handoff-overlap counters
   - transport provenance and ownership boundary
   - current scope, lifecycle manager, and next planned boundaries
 - can be inspected and restarted independently through the local control API / CLI without restarting the hub process
+- a managed restart synchronizes validated sidecar source before launch and is
+  completed by an explicit active-runtime hub-root reconnect; code sync and
+  operator requests are coalesced into one process generation
 
 Managed autostart / runtime boundary:
 

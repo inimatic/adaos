@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import time
 import types
 from uuid import uuid4
 
@@ -985,7 +986,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0)
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
@@ -1077,7 +1078,7 @@ async def test_voice_chat_requested_builder_channel_refreshes_stale_active_tool(
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0)
     await _drain_voice_chat_persist(router)
 
     assert calls
@@ -2254,7 +2255,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
         )
     )
 
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0)
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
@@ -2515,6 +2516,43 @@ async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_histo
     await bus.wait_for_idle(timeout=1.0)
 
     assert seen_stream == []
+
+
+async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    def _slow_recovery(*_args, **_kwargs):
+        time.sleep(0.2)
+        return {"messages": [], "total_message_count": 0}
+
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "recover_projection_from_store",
+        _slow_recovery,
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    started = time.perf_counter()
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=1.0,
+            payload={"receiver": "voice_chat.messages", "webspace_id": "desktop"},
+        )
+    )
+    await asyncio.sleep(0.02)
+
+    assert time.perf_counter() - started < 0.1
+    assert await bus.wait_for_idle(timeout=1.0)
 
 
 async def test_voice_chat_snapshot_request_recovers_requested_thread_when_cache_has_another_thread(monkeypatch) -> None:

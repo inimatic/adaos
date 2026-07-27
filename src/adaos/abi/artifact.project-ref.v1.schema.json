@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.project-ref.v1.schema.json",
+  "title": "AdaOS Artifact Project Reference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_id"],
+  "properties": {
+    "schema": { "const": "adaos.artifact.project_ref.v1" },
+    "project_id": { "$ref": "#/$defs/artifactId" }
+  },
+  "$defs": {
+    "artifactId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    }
+  }
+}

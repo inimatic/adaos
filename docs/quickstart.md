@@ -62,7 +62,8 @@ Bootstrap scripts support zone-aware Root routing via `--zone` or `-ZoneId`. Use
 ### Manual editable install
 
 ```bash
-pip install -e ".[dev]"
+rustc --version  # Rust 1.72 or newer
+uv sync --locked --extra dev
 ```
 
 ## First commands

@@ -1,7 +1,15 @@
 from pathlib import Path
 import types
 
+import pytest
 import yaml
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_dependency_install(monkeypatch):
+    from adaos.services.skill.manager import SkillManager
+
+    monkeypatch.setattr(SkillManager, "_install_python_dependencies", lambda *_args, **_kwargs: [])
 
 
 def test_ensure_rasa_service_skill_installed_creates_skill_tree():

@@ -1968,6 +1968,8 @@ class NamedEntityRegistrySnapshot:
     changed_refs: tuple[str, ...] = field(default_factory=tuple)
     rebuilt_sources: tuple[str, ...] = field(default_factory=tuple)
     reused_sources: tuple[str, ...] = field(default_factory=tuple)
+    source_timings_ms: Mapping[str, float] = field(default_factory=dict, repr=False)
+    phase_timings_ms: Mapping[str, float] = field(default_factory=dict, repr=False)
     service_identity: int = field(default=0, repr=False)
     built_at: float = 0.0
 
@@ -1981,6 +1983,8 @@ class NamedEntityRegistrySnapshot:
             "changed_refs": list(self.changed_refs),
             "rebuilt_sources": list(self.rebuilt_sources),
             "reused_sources": list(self.reused_sources),
+            "source_timings_ms": {str(key): round(float(value), 3) for key, value in self.source_timings_ms.items()},
+            "phase_timings_ms": {str(key): round(float(value), 3) for key, value in self.phase_timings_ms.items()},
             "built_at": self.built_at,
         }
         if include_payload:
@@ -2052,17 +2056,24 @@ class NamedEntityRegistry:
         records_by_source: dict[str, tuple[NamedEntityRecord, ...]] = {}
         rebuilt_sources: list[str] = []
         reused_sources: list[str] = []
+        source_timings_ms: dict[str, float] = {}
+        collect_started = time.perf_counter()
         for source in REGISTRY_SOURCES:
+            source_started = time.perf_counter()
             if previous is not None and source not in requested_sources:
                 cached = previous.records_by_source.get(source)
                 if cached is not None:
                     records_by_source[source] = tuple(cached)
                     reused_sources.append(source)
+                    source_timings_ms[source] = round(max(0.0, time.perf_counter() - source_started) * 1000.0, 3)
                     continue
             records_by_source[source] = tuple(
                 entity_service.list_source_entities(source, webspace_id=webspace)
             )
             rebuilt_sources.append(source)
+            source_timings_ms[source] = round(max(0.0, time.perf_counter() - source_started) * 1000.0, 3)
+        collect_ms = round(max(0.0, time.perf_counter() - collect_started) * 1000.0, 3)
+        payload_started = time.perf_counter()
         records = [
             record
             for source in REGISTRY_SOURCES
@@ -2070,10 +2081,12 @@ class NamedEntityRegistry:
         ]
         records.sort(key=lambda item: (item.kind, item.display_label.casefold(), item.canonical_ref))
         payload = _compact_registry_payload_from_records(records, webspace_id=webspace)
+        payload_ms = round(max(0.0, time.perf_counter() - payload_started) * 1000.0, 3)
         summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
         fingerprint = str(summary.get("fingerprint") or "")
         records_by_ref = self._records_by_ref(payload)
         built_at = time.time()
+        commit_started = time.perf_counter()
         with self._lock:
             self._refresh_total += 1
             self._source_build_total += len(rebuilt_sources)
@@ -2084,6 +2097,16 @@ class NamedEntityRegistry:
                 return previous
             revision = int(previous.revision if previous is not None else 0) + 1
             changed_refs = self._changed_refs(previous.records_by_ref if previous is not None else {}, records_by_ref)
+            commit_ms = round(max(0.0, time.perf_counter() - commit_started) * 1000.0, 3)
+            phase_timings_ms = {
+                "collect_sources": collect_ms,
+                "payload": payload_ms,
+                "commit": commit_ms,
+                "total": round(
+                    collect_ms + payload_ms + commit_ms,
+                    3,
+                ),
+            }
             projected_payload = dict(payload)
             projected_summary = dict(summary)
             projected_summary["registry_revision"] = revision
@@ -2098,6 +2121,8 @@ class NamedEntityRegistry:
                 changed_refs=changed_refs,
                 rebuilt_sources=tuple(rebuilt_sources),
                 reused_sources=tuple(reused_sources),
+                source_timings_ms=source_timings_ms,
+                phase_timings_ms=phase_timings_ms,
                 service_identity=id(entity_service),
                 built_at=built_at,
             )

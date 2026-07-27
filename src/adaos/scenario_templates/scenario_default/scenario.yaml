@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../abi/scenario.schema.json
+id: template-id
+name: template-id
+version: "0.1.0"
+title: New Scenario
+description: Empty AdaOS desktop canvas ready for Builder authoring.
+type: desktop
+supported_locales:
+  - en
+  - ru
+depends: []
+runtime:
+  skills:
+    required: []
+    optional: []
+ui:
+  manifest: webui.json
+trigger: manual
+vars: {}
+llm_hints:
+  description: Empty desktop scenario ready for Builder authoring.
+  aliases: []
+  primary_actions: []
+  examples: []
+  owner_hints: []
+nlu:
+  nlu_hints:
+    aliases: []
+    examples: []
+    slot_schemas: {}
+    entities: []
+steps: []

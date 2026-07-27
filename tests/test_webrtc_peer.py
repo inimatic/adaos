@@ -174,6 +174,180 @@ def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
     assert existing.emitted_reasons == ["webspace:offer.renegotiate"]
 
 
+def test_fresh_generation_replaces_connecting_peer(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    class ExistingPeer:
+        def __init__(self) -> None:
+            self.pc = SimpleNamespace(connectionState="connecting")
+            self.generation_id = "generation-old"
+            self.closed = False
+
+        def _connection_state(self) -> str:
+            return "connecting"
+
+        def is_reusable_for_offer(self) -> bool:
+            return True
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class NewPeer:
+        def __init__(self, device_id, webspace_id, send_ice_cb, generation_id=None) -> None:
+            self.device_id = device_id
+            self.webspace_id = webspace_id
+            self._send_ice = send_ice_cb
+            self.generation_id = generation_id
+            self.pc = SimpleNamespace(connectionState="new")
+            self.emitted_reasons: list[str] = []
+
+        async def handle_offer(self, sdp: str, type: str = "offer") -> dict[str, str]:
+            return {"sdp": "fresh-answer", "type": "answer"}
+
+        async def add_ice_candidate(self, candidate) -> None:
+            return None
+
+        def _emit_state_event(self, *, reason: str) -> None:
+            self.emitted_reasons.append(reason)
+
+    existing = ExistingPeer()
+    monkeypatch.setattr(peer_mod, "HubPeer", NewPeer)
+    peer_mod._peers.clear()
+    peer_mod._peers["browser-fresh"] = existing
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    answer = asyncio.run(
+        peer_mod.handle_rtc_offer(
+            offer_sdp="offer-sdp",
+            offer_type="offer",
+            device_id="browser-fresh",
+            webspace_id="desktop",
+            send_ice_cb=send_ice_cb,
+            generation_id="generation-new",
+            negotiation_mode="fresh_peer",
+        )
+    )
+
+    assert existing.closed is True
+    assert peer_mod._peers["browser-fresh"] is not existing
+    assert peer_mod._peers["browser-fresh"].generation_id == "generation-new"
+    assert answer["generation_id"] == "generation-new"
+
+
+def test_ice_restart_reuses_same_generation_peer(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    class ExistingPeer:
+        def __init__(self) -> None:
+            self.device_id = "browser-restart"
+            self.pc = SimpleNamespace(connectionState="disconnected")
+            self.generation_id = "generation-same"
+            self.webspace_id = "desktop"
+            self._send_ice = None
+            self.closed = False
+            self.handled = 0
+
+        def _connection_state(self) -> str:
+            return "disconnected"
+
+        def is_reusable_for_offer(self) -> bool:
+            return False
+
+        def _set_webspace_id(self, webspace_id: str, *, reason: str) -> bool:
+            self.webspace_id = webspace_id
+            return True
+
+        async def handle_offer(self, sdp: str, type: str = "offer") -> dict[str, str]:
+            self.handled += 1
+            return {"sdp": "restart-answer", "type": "answer"}
+
+        async def add_ice_candidate(self, candidate) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    existing = ExistingPeer()
+    peer_mod._peers.clear()
+    peer_mod._peers["browser-restart"] = existing
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    answer = asyncio.run(
+        peer_mod.handle_rtc_offer(
+            offer_sdp="restart-offer",
+            offer_type="offer",
+            device_id="browser-restart",
+            webspace_id="desktop",
+            send_ice_cb=send_ice_cb,
+            generation_id="generation-same",
+            negotiation_mode="ice_restart",
+        )
+    )
+
+    assert peer_mod._peers["browser-restart"] is existing
+    assert existing.closed is False
+    assert existing.handled == 1
+    assert answer["generation_id"] == "generation-same"
+
+
+def test_remote_ice_is_buffered_until_matching_offer(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    class NewPeer:
+        def __init__(self, device_id, webspace_id, send_ice_cb, generation_id=None) -> None:
+            self.device_id = device_id
+            self.webspace_id = webspace_id
+            self._send_ice = send_ice_cb
+            self.generation_id = generation_id
+            self.pc = SimpleNamespace(connectionState="new")
+            self.candidates: list[dict[str, object]] = []
+
+        async def handle_offer(self, sdp: str, type: str = "offer") -> dict[str, str]:
+            return {"sdp": "answer", "type": "answer"}
+
+        async def add_ice_candidate(self, candidate) -> None:
+            self.candidates.append(candidate)
+
+        def _emit_state_event(self, *, reason: str) -> None:
+            return None
+
+    monkeypatch.setattr(peer_mod, "HubPeer", NewPeer)
+    peer_mod._peers.clear()
+    candidate = {"candidate": "candidate:1 1 udp 1 192.0.2.1 5000 typ host"}
+
+    asyncio.run(
+        peer_mod.handle_remote_ice(
+            "browser-buffered",
+            candidate,
+            generation_id="generation-buffered",
+        )
+    )
+    assert peer_mod._pending_remote_ice
+
+    async def send_ice_cb(item: dict[str, object]) -> None:
+        return None
+
+    asyncio.run(
+        peer_mod.handle_rtc_offer(
+            offer_sdp="offer",
+            offer_type="offer",
+            device_id="browser-buffered",
+            webspace_id="desktop",
+            send_ice_cb=send_ice_cb,
+            generation_id="generation-buffered",
+            negotiation_mode="fresh_peer",
+        )
+    )
+
+    peer = peer_mod._peers["browser-buffered"]
+    assert peer.candidates == [candidate]
+    assert peer_mod._pending_remote_ice == {}
+
+
 def test_hub_peer_is_not_reusable_with_live_channels(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
 
@@ -536,10 +710,11 @@ def test_handle_rtc_offer_replaces_failed_peer(monkeypatch) -> None:
             self.close_called = True
 
     class NewPeer:
-        def __init__(self, device_id: str, webspace_id: str, send_ice_cb) -> None:
+        def __init__(self, device_id: str, webspace_id: str, send_ice_cb, generation_id=None) -> None:
             self.device_id = device_id
             self.webspace_id = webspace_id
             self._send_ice = send_ice_cb
+            self.generation_id = generation_id
             self.pc = SimpleNamespace(connectionState="new")
             self.handled_offers: list[tuple[str, str]] = []
             self.emitted_reasons: list[str] = []
@@ -597,10 +772,11 @@ def test_handle_rtc_offer_replaces_disconnected_peer(monkeypatch) -> None:
             return False
 
     class NewPeer:
-        def __init__(self, device_id: str, webspace_id: str, send_ice_cb) -> None:
+        def __init__(self, device_id: str, webspace_id: str, send_ice_cb, generation_id=None) -> None:
             self.device_id = device_id
             self.webspace_id = webspace_id
             self._send_ice = send_ice_cb
+            self.generation_id = generation_id
             self.pc = SimpleNamespace(connectionState="new")
             self.handled_offers: list[tuple[str, str]] = []
             self.emitted_reasons: list[str] = []
@@ -658,10 +834,11 @@ def test_handle_rtc_offer_continues_when_existing_close_hangs(monkeypatch) -> No
             return False
 
     class NewPeer:
-        def __init__(self, device_id: str, webspace_id: str, send_ice_cb) -> None:
+        def __init__(self, device_id: str, webspace_id: str, send_ice_cb, generation_id=None) -> None:
             self.device_id = device_id
             self.webspace_id = webspace_id
             self._send_ice = send_ice_cb
+            self.generation_id = generation_id
             self.pc = SimpleNamespace(connectionState="new")
             self.handled_offers: list[tuple[str, str]] = []
             self.emitted_reasons: list[str] = []

@@ -2,7 +2,7 @@
 
 Status: active planning document.
 
-Snapshot date: 2026-07-21.
+Snapshot date: 2026-07-23.
 
 This roadmap summarizes the remaining work to reach the current AdaOS MVP
 definition. It does not replace the detailed architecture roadmaps. Its role is
@@ -108,13 +108,13 @@ MVP outcome:
 
 Checklist:
 
-- [ ] Runtime packaging preserves `skill.yaml`, `webui.json`, and projection
+- [x] Runtime packaging preserves `skill.yaml`, `webui.json`, and projection
   declarations for installed skill artifacts.
-- [ ] Skill activation loads `data_projections`, `data_routes`, and stream
+- [x] Skill activation loads `data_projections`, `data_routes`, and stream
   receiver metadata before tools, subscriptions, or startup refreshes run.
 - [x] Add a first-class `ProjectionService.apply_sync(...)` or equivalent SDK
   bridge for short synchronous handlers.
-- [ ] Emit diagnostics when a skill returns success but no projection rule
+- [x] Emit diagnostics when a skill returns success but no projection rule
   exists for the slot it attempted to publish.
 - [x] Browser runtime consumes projection lifecycle states:
   `pending`, `refreshing`, `ready`, `stale`, and `error`.
@@ -122,10 +122,10 @@ Checklist:
   legacy desktop toast branches.
 - [x] Keep arbitrary runtime `ProjectionRecord` write surfaces unavailable to
   browser/API callers.
-- [ ] Add lint or validation warnings for direct skill-owned browser projection
+- [x] Add lint or validation warnings for direct skill-owned browser projection
   writes outside the approved SDK path.
 
-Local implementation checkpoint, 2026-07-21:
+Closed local implementation checkpoint, 2026-07-23:
 
 - synchronous handlers now enter the durable core bridge through
   `ProjectionService.apply_sync(...)`; an active event-loop thread must use the
@@ -138,9 +138,19 @@ Local implementation checkpoint, 2026-07-21:
 - deterministic local acceptance proves runtime and guard status cards plus
   notifications remain visible through the core-owned path without depending
   on `infrastate_skill`
-- these are local code/test claims only. Deployed stand validation and the
-  remaining packaging, activation, registry-miss diagnostics, and lint items
-  stay open.
+- runtime staging now verifies byte-identical `skill.yaml` and `webui.json`
+  artifacts, and activation/startup load projections, routes, and receiver
+  policy before target handlers or lifecycle refreshes run
+- successful skill publish attempts without a matching projection rule now
+  produce bounded, operator-visible diagnostics with skill, scope, slot,
+  webspace, payload size, and active-declaration state
+- skill validation reports `projection.direct_yjs_write` for direct calls to
+  write-capable core Yjs APIs while preserving read-only and SDK access paths
+- the original closure recheck passed `80` focused Python tests, `99` focused Angular
+  tests, the Angular production build, and strict English/Russian MkDocs builds
+- the declaration/diagnostics closure adds `77` focused Python tests and strict
+  MkDocs verification. These remain local code/test claims; deployed stand
+  validation stays open under `MVP-STAND-001`.
 
 Related docs:
 
@@ -175,10 +185,12 @@ Checklist:
   budget when normal skill communication is guarded.
 - [ ] Make thin reliability/status summaries sufficient for first operator
   diagnosis without mandatory full `infrastate/snapshot` reads.
-- [ ] Persist accepted/running operations enough to recover as
+- [x] Persist accepted/running operations enough to recover as
   completed/failed/recoverable after API restart.
-- [ ] Define cancellation, retry, and operator recovery policy for operations.
-- [ ] Mirror operation notifications through the new notification/projection
+- [x] Define cancellation, retry, and operator recovery policy for operations:
+  cancellation is limited to isolated subprocess work, and retry is limited to
+  known idempotent install/update kinds with one child attempt per source id.
+- [x] Mirror operation notifications through the new notification/projection
   path while keeping legacy toasts only as compatibility.
 - [ ] Add acceptance evidence that a noisy or quarantined `infrastate_skill`
   cannot hide active slot, update, Yjs, or member-status truth.
@@ -205,6 +217,10 @@ MVP outcome:
   monolithic snapshots or local executors.
 
 Checklist:
+
+The three named skill migrations are candidates, not a fixed rollout order.
+Select the next pilot from current browser demand, runtime pressure, diagnostic
+coverage, and stand failures; keep detailed work in each owning roadmap.
 
 - [ ] Add a shared activation runtime that tracks loaded/active state per skill
   and relevant webspace.
@@ -261,6 +277,10 @@ Checklist:
   hydration, ready, and degraded states.
 - [ ] Add browser E2E checks for login/attach, webspace switch, reload/reset,
   PWA profile mismatch, runtime debug export, and Yjs red/green interpretation.
+
+The first login/attach, runtime-debug, connected-Yjs, and materialization smoke
+is implemented in `e2e/stand/browser`. Switch, reload/reset, PWA mismatch, and
+managed-restart scenarios remain open.
 
 Related docs:
 

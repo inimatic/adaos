@@ -6,6 +6,14 @@ from pathlib import Path
 import sys, os, subprocess
 import pytest
 
+# Runtime collaboration dependencies are required by the project. Import them
+# before test modules so legacy optional-dependency fallbacks cannot replace the
+# real packages process-wide during collection.
+import nats  # noqa: F401
+import y_py  # noqa: F401
+import ypy_websocket  # noqa: F401
+import ypy_websocket.ystore  # noqa: F401
+
 from adaos.services.agent_context import AgentContext, set_ctx, clear_ctx
 from adaos.services.settings import Settings
 from adaos.services.eventbus import LocalEventBus

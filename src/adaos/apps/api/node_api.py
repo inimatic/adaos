@@ -1169,6 +1169,9 @@ def _thin_runtime_reliability_payload(
         "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
         "blockers": _coerce_list(state_sync.get("blockers")),
     }
+    compact_materialization = _compact_state_sync_materialization(state_sync)
+    if compact_materialization:
+        compact_state_sync["materialization"] = compact_materialization
     compact_state_sync = _apply_runtime_fault_to_state_sync(compact_state_sync, runtime_fault)
     compact_webrtc_yjs = _compact_webrtc_yjs_runtime(sync_runtime)
     return {
@@ -1348,6 +1351,31 @@ def _apply_runtime_fault_to_state_sync(
     updated["fallbackMode"] = "hard_degraded_recovery"
     updated["blockers"] = blockers
     return updated
+
+
+def _compact_state_sync_materialization(state_sync: dict[str, Any] | None) -> dict[str, Any]:
+    materialization = _coerce_dict(_coerce_dict(state_sync).get("materialization"))
+    if not materialization:
+        return {}
+
+    def _optional_text(key: str) -> str | None:
+        value = str(materialization.get(key) or "").strip()
+        return value or None
+
+    return {
+        "ready": bool(materialization.get("ready")),
+        "readinessState": _optional_text("readiness_state"),
+        "transitionExpected": bool(materialization.get("transition_expected")),
+        "pending": bool(materialization.get("pending")),
+        "status": _optional_text("status"),
+        "currentScenario": _optional_text("current_scenario"),
+        "targetScenario": _optional_text("target_scenario"),
+        "missingBranches": [
+            token
+            for token in (str(item).strip() for item in _coerce_list(materialization.get("missing_branches")))
+            if token
+        ],
+    }
 
 
 def _compact_hub_browser_quality(
@@ -1943,6 +1971,9 @@ def _compact_runtime_reliability_payload(
         "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
         "blockers": _coerce_list(state_sync.get("blockers")),
     }
+    compact_materialization = _compact_state_sync_materialization(state_sync)
+    if compact_materialization:
+        compact_state_sync["materialization"] = compact_materialization
     compact_state_sync = _apply_runtime_fault_to_state_sync(compact_state_sync, runtime_fault)
     compact_connectivity = {
         "requiredUpstreamLink": {

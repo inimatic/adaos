@@ -8,7 +8,7 @@ license = {text = "MIT"}
 name = "adaos"
 readme = "README.md"
 requires-python = ">=3.11.9,<3.12"
-version = "0.1.554"
+version = "0.1.605"
 
 authors = [
   {name = "AdaOS Team"},
@@ -29,6 +29,7 @@ dependencies = [
   "SQLAlchemy>=2.0.32",
   "sqlite-utils>=3.36",
   "jsonschema>=4.23.0",
+  "packaging>=24.1",
   "PyYAML>=6.0.2",
   "pytest>=8.3.2",
   "watchdog>=4.0.1",
@@ -38,7 +39,9 @@ dependencies = [
   "pyttsx3",
   "uvicorn",
   "fastapi",
-  "y-py>=0.6.0",
+  "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl ; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl ; sys_platform == 'darwin' and platform_machine == 'arm64'",
   "ypy-websocket>=0.12.4",
   "httpx>=0.27.0",
   "aiohttp>=3.10.0",
@@ -88,6 +91,7 @@ dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "anyio>=4", "responses>=0.25", "py
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
 markers = [
   "integration: integration tests",
   "e2e: end-to-end tests",
@@ -97,3 +101,6 @@ testpaths = [
   "tests", # SDK/API tests
   "src/adaos/skills/**/tests", # packaged skill tests
 ]
+
+[tool.uv.sources]
+y-py = {path = "vendor/y-py"}

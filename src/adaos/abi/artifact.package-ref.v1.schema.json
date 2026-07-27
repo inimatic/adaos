@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.package-ref.v1.schema.json",
+  "title": "AdaOS Artifact Package Reference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "artifact_id",
+    "version",
+    "digest",
+    "manifest_digest",
+    "source_ref"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.artifact.package_ref.v1" },
+    "kind": { "enum": ["skill", "scenario"] },
+    "artifact_id": { "$ref": "#/$defs/artifactId" },
+    "version": { "$ref": "#/$defs/version" },
+    "digest": { "$ref": "#/$defs/digest" },
+    "manifest_digest": { "$ref": "#/$defs/digest" },
+    "source_ref": { "$ref": "#/$defs/sourceRef" },
+    "builder_id": { "type": "string", "minLength": 1 },
+    "build_policy_digest": { "$ref": "#/$defs/digest" },
+    "materialization_path": {
+      "type": "string",
+      "pattern": "^(scenarios|skills)/[a-z0-9][a-z0-9_.-]*$"
+    },
+    "schema_locks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contractLock" }
+    }
+  },
+  "dependentRequired": {
+    "builder_id": ["build_policy_digest", "materialization_path", "schema_locks"],
+    "build_policy_digest": ["builder_id", "materialization_path", "schema_locks"],
+    "materialization_path": ["builder_id", "build_policy_digest", "schema_locks"],
+    "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"]
+  },
+  "$defs": {
+    "artifactId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "contractLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_id", "digest"],
+      "properties": {
+        "lock_id": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "forge", "repository", "revision", "path_scope"],
+      "properties": {
+        "schema": { "const": "adaos.artifact.source_ref.v1" },
+        "forge": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 7 },
+        "path_scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "environment": "stand",
+  "profile": "observe",
+  "firebaseClientUrl": "https://inimatic.web.app/",
+  "rootApiUrl": "https://ru.api.inimatic.com",
+  "hubApiUrl": "https://ru.api.inimatic.com/hubs/sn_REPLACE_ME",
+  "subnetId": "sn_REPLACE_ME",
+  "hubId": "sn_REPLACE_ME",
+  "webspaceId": "desktop",
+  "browserDeviceId": "e2e-browser-01",
+  "tokenEnv": "ADAOS_E2E_TOKEN",
+  "timeouts": {
+    "httpSeconds": 10,
+    "browserSeconds": 120
+  },
+  "browser": {
+    "projectDir": "e2e/stand/browser",
+    "storageStatePath": ".secrets/e2e-browser-storage-state.json"
+  }
+}

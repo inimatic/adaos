@@ -26,7 +26,7 @@
   `src/adaos/services/scenario/webspace_runtime.py`
 - Проекция сценария в compatibility cache:
   `src/adaos/services/scenario/manager.py`
-- Bootstrap seed + rebuild nudge:
+- Bootstrap snapshot load + explicit cold-room validation:
   `src/adaos/services/yjs/bootstrap.py`
 - Диагностика и benchmark:
   `src/adaos/apps/api/node_api.py`,

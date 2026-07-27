@@ -318,6 +318,15 @@ catch { }
 
 .\.venv\Scripts\python.exe -m pip install -U pip
 if ($LASTEXITCODE -ne 0) { Write-Host "pip upgrade failed." -ForegroundColor Red; exit 1 }
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Write-Host "Rust/Cargo >=1.72 is required to build vendor/y-py. Prefer tools/bootstrap_uv.ps1 after installing rustup." -ForegroundColor Red
+    exit 1
+}
+if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+    $env:CARGO_TARGET_DIR = Join-Path $PWD ".adaos\build\y-py-target"
+}
+.\.venv\Scripts\python.exe -m pip install .\vendor\y-py
+if ($LASTEXITCODE -ne 0) { Write-Host "vendored y-py install failed." -ForegroundColor Red; exit 1 }
 .\.venv\Scripts\python.exe -m pip install -e .[dev]
 if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
 

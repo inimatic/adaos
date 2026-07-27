@@ -24,6 +24,7 @@ if "ypy_websocket" not in sys.modules:
     sys.modules["ypy_websocket"] = pkg
 
 from adaos.services import skills_loader_importlib as skills_loader_module
+from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 
 
@@ -42,7 +43,15 @@ data_projections:
     targets:
       - backend: yjs
         path: data/infrastate
+data_routes:
+  - surface: modal:infrastate
+    route: stream
+    receiver: infrastate.events
 """.strip(),
+        encoding="utf-8",
+    )
+    (skill_dir / "webui.json").write_text(
+        '{"webio":{"receivers":{"infrastate.webui":{"mode":"replace"}}}}',
         encoding="utf-8",
     )
 
@@ -56,8 +65,15 @@ data_projections:
         projections = _Projections()
 
     loader = ImportlibSkillsLoader()
-    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda root: None)
-    monkeypatch.setattr(loader, "_load_handler", lambda handler: None)
+
+    def _assert_declarations_precede_handler(_handler: Path) -> None:
+        assert loaded_entries
+        assert runtime_stream_receiver_patterns("infrastate_skill") == (
+            "infrastate.events",
+            "infrastate.webui",
+        )
+
+    monkeypatch.setattr(loader, "_load_handler", _assert_declarations_precede_handler)
     monkeypatch.setattr("adaos.services.skills_loader_importlib.get_ctx", lambda: _Ctx())
 
     asyncio.run(loader.import_all_handlers(tmp_path))
@@ -89,7 +105,6 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
 
     loader = ImportlibSkillsLoader()
     monkeypatch.setattr(loader, "_sync_runtime_from_repo_workspace_if_missing", lambda root: None)
-    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda root: None)
     warnings: list[str] = []
     projection_loads: list[Path] = []
 
@@ -97,7 +112,11 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
         warnings.append(message % args)
 
     monkeypatch.setattr(skills_loader_module._LOG, "warning", _warning)
-    monkeypatch.setattr(loader, "_load_skill_data_projections", lambda handler, _loaded: projection_loads.append(handler))
+    monkeypatch.setattr(
+        loader,
+        "_load_skill_declarations",
+        lambda handler, _loaded, *, skill_name: projection_loads.append(handler),
+    )
     if hasattr(builtins, "_adaos_good_skill_imported"):
         delattr(builtins, "_adaos_good_skill_imported")
 
@@ -107,7 +126,10 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
         assert getattr(builtins, "_adaos_good_skill_imported", False) is True
         assert any("skill handler import failed; skipping skill=bad_skill" in item for item in warnings)
         assert any("ModuleNotFoundError" in item for item in warnings)
-        assert projection_loads == [good_skill / "handlers" / "main.py"]
+        assert projection_loads == [
+            bad_skill / "handlers" / "main.py",
+            good_skill / "handlers" / "main.py",
+        ]
     finally:
         for handler in (bad_skill / "handlers" / "main.py", good_skill / "handlers" / "main.py"):
             sys.modules.pop("adaos_skill_" + handler.parent.as_posix().replace("/", "_"), None)
@@ -175,3 +197,29 @@ def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> Non
         sys.modules.pop(mod_name, None)
         if hasattr(builtins, "_adaos_reload_import_counter"):
             delattr(builtins, "_adaos_reload_import_counter")
+
+
+def test_runtime_source_sync_is_explicit_and_never_runs_in_candidate(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(
+        loader,
+        "_sync_runtime_from_repo_workspace_if_missing",
+        lambda _root: calls.append("repo"),
+    )
+    monkeypatch.setattr(loader, "_sync_runtime_from_workspace", lambda _root: calls.append("workspace"))
+    monkeypatch.delenv("ADAOS_SKILL_RUNTIME_SOURCE_SYNC", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_TRANSITION_ROLE", raising=False)
+    assert ImportlibSkillsLoader._runtime_source_sync_enabled() is False
+    asyncio.run(loader.import_all_handlers(tmp_path))
+    assert calls == []
+
+    monkeypatch.setenv("ADAOS_SKILL_RUNTIME_SOURCE_SYNC", "1")
+    assert ImportlibSkillsLoader._runtime_source_sync_enabled() is True
+    asyncio.run(loader.import_all_handlers(tmp_path))
+    assert calls == ["repo", "workspace"]
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    assert ImportlibSkillsLoader._runtime_source_sync_enabled() is False
+    asyncio.run(loader.import_all_handlers(tmp_path))
+    assert calls == ["repo", "workspace"]

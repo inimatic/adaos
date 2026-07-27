@@ -138,6 +138,70 @@ def _read_sidecar_tail_lines(path: Path, *, lines: int) -> list[str]:
     )
 
 
+def _nats_credentials_refresh_evidence(
+    err: Exception,
+    *,
+    server: str | None,
+    sidecar_diag_file: Path | None = None,
+) -> str | None:
+    try:
+        message = str(err or "").strip().lower()
+    except Exception:
+        message = ""
+    explicit_auth_markers = (
+        "authentication failure",
+        "authentication timeout",
+        "authorization violation",
+        "invalid credentials",
+        "invalid user credentials",
+    )
+    if any(marker in message for marker in explicit_auth_markers):
+        return "explicit_auth_error"
+    if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in message:
+        return "explicit_auth_error"
+
+    is_eof = type(err).__name__ == "UnexpectedEOF" or "unexpected eof" in message
+    if not is_eof or str(server or "").strip() != realtime_sidecar_local_url():
+        return None
+
+    diag_path = Path(sidecar_diag_file) if sidecar_diag_file is not None else realtime_sidecar_diag_path()
+    try:
+        max_age_s = float(os.getenv("HUB_NATS_AUTH_DIAG_MAX_AGE_S", "60") or "60")
+    except Exception:
+        max_age_s = 60.0
+    max_age_s = max(1.0, min(max_age_s, 300.0))
+    now = time.time()
+    for line in reversed(_read_sidecar_tail_lines(diag_path, lines=8)):
+        try:
+            record = _json.loads(line)
+            recorded_at = float(record.get("ts"))
+            last_error = str(record.get("last_error") or "").strip().lower()
+        except (AttributeError, TypeError, ValueError, _json.JSONDecodeError):
+            continue
+        age_s = now - recorded_at
+        if age_s < -5.0 or age_s > max_age_s:
+            continue
+        if any(marker in last_error for marker in explicit_auth_markers):
+            return "sidecar_auth_failure_after_eof"
+    return None
+
+
+def _should_refresh_nats_credentials(
+    err: Exception,
+    *,
+    server: str | None,
+    sidecar_diag_file: Path | None = None,
+) -> bool:
+    return (
+        _nats_credentials_refresh_evidence(
+            err,
+            server=server,
+            sidecar_diag_file=sidecar_diag_file,
+        )
+        is not None
+    )
+
+
 def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
     try:
         from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed, is_rasa_nlu_enabled
@@ -796,8 +860,12 @@ def _hub_route_should_retry_http_upstream_error(
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     method_norm = str(method or "").strip().upper()
     kind = str(error_kind or "").strip()
+    if path_norm == "/api/tools/call":
+        # The tool may already have committed a side effect before the route
+        # observed a connection failure. Execution is at-most-once here.
+        return False
     if kind == "ReadTimeout" and (
-        method_norm not in {"GET", "HEAD"} or path_norm == "/api/tools/call"
+        method_norm not in {"GET", "HEAD"}
     ):
         return False
     return True
@@ -1299,6 +1367,14 @@ class BootstrapService:
         self._hub_root_route_reset: Any = None
         self._hub_root_bridge_task_name = "adaos-nats-io-bridge"
         self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
+        self._hub_root_authority_waiters: set[asyncio.Event] = set()
+        self._hub_root_authority_ready_at: float | None = None
+
+    def _mark_hub_root_authority_ready(self) -> None:
+        """Release cutover waiters only after the active Root route subscription is flushed."""
+        self._hub_root_authority_ready_at = time.time()
+        for waiter in tuple(self._hub_root_authority_waiters):
+            waiter.set()
 
     def _find_live_boot_task(self, task_name: str) -> asyncio.Task | None:
         live_tasks: list[asyncio.Task] = []
@@ -1321,8 +1397,15 @@ class BootstrapService:
         self._boot_tasks.append(task)
         return task
 
-    def _start_hub_root_bridge_task(self, coro_factory: Callable[[], Awaitable[Any]]) -> asyncio.Task:
+    def _start_hub_root_bridge_task(
+        self,
+        coro_factory: Callable[[], Awaitable[Any]],
+        *,
+        start_immediately: bool = True,
+    ) -> asyncio.Task | None:
         self._hub_root_bridge_factory = coro_factory
+        if not start_immediately:
+            return None
         return self._start_boot_task_once(self._hub_root_bridge_task_name, coro_factory)
 
     def _ensure_hub_root_bridge_task(
@@ -1451,6 +1534,7 @@ class BootstrapService:
         *,
         transport: str | None = None,
         url_override: str | None = None,
+        wait_for_authority: bool = False,
     ) -> dict[str, Any]:
         """
         Force hub-root transport reconnect.
@@ -1462,6 +1546,24 @@ class BootstrapService:
         override = str(url_override or "").strip() or None
         close_diag: dict[str, Any] = {"attempted": False, "timeout": False, "forced_ws_close": False}
         bridge_diag: dict[str, Any] = {"attempted": False, "started": False}
+        authority_waiter = asyncio.Event() if wait_for_authority else None
+        authority_diag: dict[str, Any] = {
+            "required": bool(wait_for_authority),
+            "ready": None if not wait_for_authority else False,
+        }
+        if authority_waiter is not None:
+            self._hub_root_authority_waiters.add(authority_waiter)
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                current_task.add_done_callback(
+                    lambda _task, waiter=authority_waiter: self._hub_root_authority_waiters.discard(waiter)
+                )
+
+        def _finish(payload: dict[str, Any]) -> dict[str, Any]:
+            if authority_waiter is not None:
+                self._hub_root_authority_waiters.discard(authority_waiter)
+            payload["authority"] = dict(authority_diag)
+            return payload
 
         def _safe_strategy() -> dict[str, Any]:
             try:
@@ -1590,22 +1692,49 @@ class BootstrapService:
                     "state": "failed",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            return {
-                "ok": True,
+            if authority_waiter is not None:
+                try:
+                    authority_timeout_s = float(
+                        os.getenv("HUB_ROOT_RECONNECT_AUTHORITY_TIMEOUT_S", "8.0") or "8.0"
+                    )
+                except Exception:
+                    authority_timeout_s = 8.0
+                authority_timeout_s = max(0.25, min(authority_timeout_s, 30.0))
+                authority_started_at = time.monotonic()
+                try:
+                    await asyncio.wait_for(authority_waiter.wait(), timeout=authority_timeout_s)
+                    authority_diag.update(
+                        {
+                            "ready": True,
+                            "wait_sec": round(max(0.0, time.monotonic() - authority_started_at), 3),
+                            "ready_at": self._hub_root_authority_ready_at,
+                        }
+                    )
+                except asyncio.TimeoutError:
+                    authority_diag.update(
+                        {
+                            "ready": False,
+                            "wait_sec": round(max(0.0, time.monotonic() - authority_started_at), 3),
+                            "timeout_sec": authority_timeout_s,
+                            "error": "hub_root_authority_timeout",
+                        }
+                    )
+            return _finish({
+                "ok": not bool(wait_for_authority) or bool(authority_diag.get("ready")),
                 "requested": {"transport": tr, "url_override": override},
                 "strategy": _safe_strategy(),
                 "close": close_diag,
                 "bridge": bridge_diag,
-            }
+            })
         except Exception as exc:
-            return {
+            return _finish({
                 "ok": False,
                 "requested": {"transport": tr, "url_override": override},
                 "strategy": _safe_strategy(),
                 "close": close_diag,
                 "bridge": bridge_diag,
                 "error": f"{type(exc).__name__}: {exc}",
-            }
+            })
 
     def _member_hub_transition_snapshot(self) -> dict[str, Any]:
         try:
@@ -2107,6 +2236,64 @@ class BootstrapService:
                 await asyncio.sleep(_control_lifecycle_heartbeat_s)
                 await _report_control_lifecycle("heartbeat")
 
+        async def _run_release_validation_autorun(trigger: str) -> None:
+            try:
+                from adaos.services.release_validation_autorun import (
+                    autonomous_release_validation_delay_s,
+                    run_autonomous_release_validation,
+                )
+
+                await asyncio.sleep(autonomous_release_validation_delay_s())
+                report = await asyncio.to_thread(
+                    run_autonomous_release_validation,
+                    conf,
+                    trigger=trigger,
+                )
+                if not isinstance(report, dict):
+                    return
+                await bus.emit(
+                    "release_validation.autonomous.finished",
+                    report,
+                    source="release_validation.autorun",
+                    actor="system",
+                )
+                state = str(report.get("state") or "unknown").upper()
+                await bus.emit(
+                    "ui.notify",
+                    {
+                        "text": (
+                            f"AdaOS autonomous validation {state}: "
+                            f"{report.get('build_identity') or 'unknown build'}\n"
+                            f"{report.get('reason') or 'no result reason'}"
+                        ),
+                        "_meta": {
+                            "source": "release_validation.autorun",
+                            "report_id": report.get("report_id"),
+                            "severity": "info" if report.get("state") == "passed" else "critical",
+                        },
+                    },
+                    source="release_validation.autorun",
+                    actor="system",
+                )
+                if str(getattr(conf, "role", "") or "").strip().lower() == "hub":
+                    from adaos.services.root.core_update_sync import report_hub_core_update_state
+
+                    await asyncio.to_thread(report_hub_core_update_state, conf)
+            except Exception:
+                self._log.warning("autonomous release validation failed trigger=%s", trigger, exc_info=True)
+
+        def _schedule_release_validation_autorun(trigger: str) -> None:
+            try:
+                from adaos.services.release_validation_autorun import autonomous_release_validation_enabled
+
+                if autonomous_release_validation_enabled():
+                    self._start_boot_task_once(
+                        "adaos-release-validation-autorun",
+                        lambda: _run_release_validation_autorun(trigger),
+                    )
+            except Exception:
+                self._log.debug("failed to schedule autonomous release validation", exc_info=True)
+
         try:
             from adaos.services.system_model.service import (
                 current_node_status_push_payload as _current_node_status_push_payload,
@@ -2424,6 +2611,8 @@ class BootstrapService:
                                 tasks.sort(key=lambda t: (0 if t is asyncio.current_task() else 1, t.get_name()))
                                 lines: list[str] = []
                                 for t in tasks[:dump_top]:
+                                    frames = None
+                                    top = None
                                     try:
                                         frames = t.get_stack(limit=1)
                                         top = frames[-1] if frames else None
@@ -2436,6 +2625,14 @@ class BootstrapService:
                                         lines.append(f"- task={t.get_name()} done={t.done()} cancelled={t.cancelled()} at={loc}")
                                     except Exception:
                                         continue
+                                    finally:
+                                        # Do not keep frame objects in the lag
+                                        # monitor coroutine. Frames can retain
+                                        # y_py locals and later release them from
+                                        # an unrelated thread during GC.
+                                        del top
+                                        del frames
+                                del tasks
                                 try:
                                     backlog_fn = getattr(core_bus, "backlog_snapshot", None)
                                     backlog = backlog_fn() if callable(backlog_fn) else {}
@@ -2694,6 +2891,7 @@ class BootstrapService:
                     _finalize_runtime_boot_status()
             except Exception:
                 self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
+            _schedule_release_validation_autorun("sys.ready")
             _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
             await _report_control_lifecycle("sys.ready")
             _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
@@ -2726,6 +2924,7 @@ class BootstrapService:
                         _finalize_runtime_boot_status()
                 except Exception:
                     self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
+                _schedule_release_validation_autorun("sys.ready")
 
             task = await self._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
             if task:
@@ -3112,29 +3311,6 @@ class BootstrapService:
                             return f"{type(err).__name__}: {str(err)}"
                         except Exception:
                             return type(err).__name__
-
-                    def _looks_like_auth_failure(err: Exception) -> bool:
-                        """
-                        Heuristic: when root-side NATS WS proxy closes after CONNECT because of invalid credentials,
-                        nats-py can surface confusing exceptions (historically observed in this project).
-                        Treat these as auth-ish failures and trigger credential refresh.
-                        """
-                        try:
-                            msg = str(err) or ""
-                            low = msg.lower()
-                            if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in low:
-                                return True
-                            if "authentication timeout" in low:
-                                return True
-                            if "authorization violation" in low:
-                                return True
-                            if "auth" in low:
-                                return True
-                            if type(err).__name__ == "UnexpectedEOF" or "unexpected eof" in low:
-                                return True
-                        except Exception:
-                            return False
-                        return False
 
                     while True:
                         try:
@@ -4478,13 +4654,18 @@ class BootstrapService:
                                     except Exception:
                                         pass
 
-                                    # Best-effort token refresh on auth-ish failures.
+                                    # Refresh credentials only when the transport has auth evidence.
                                     try:
-                                        if _looks_like_auth_failure(e):
+                                        refresh_evidence = _nats_credentials_refresh_evidence(
+                                            e,
+                                            server=locals().get("connect_server", None),
+                                        )
+                                        if refresh_evidence:
                                             if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
                                                 try:
                                                     print(
-                                                        f"[hub-io] NATS auth failure suspected; refreshing credentials (err={type(e).__name__}: {e})"
+                                                        "[hub-io] NATS auth failure confirmed; refreshing credentials "
+                                                        f"(evidence={refresh_evidence} err={type(e).__name__}: {e})"
                                                     )
                                                 except Exception:
                                                     pass
@@ -9415,6 +9596,8 @@ class BootstrapService:
                             route_sub_v2 = await _sub(f"route.v2.to_hub.{hub_id}.*", cb=_route_cb)
                         except Exception:
                             route_sub_v2 = None
+                        if route_sub_v2 is None:
+                            raise RuntimeError("hub route v2 subscription was not installed")
                         if hub_nats_verbose or not hub_nats_quiet:
                             if route_sub is not None:
                                 print("[hub-io] NATS subscribe route.to_hub.* (hub route proxy, legacy v1)")
@@ -9441,6 +9624,7 @@ class BootstrapService:
                             )
                         except Exception:
                             pass
+                        self._mark_hub_root_authority_ready()
                         try:
                             _update_route_protocol_runtime()
                         except Exception:
@@ -10510,8 +10694,16 @@ class BootstrapService:
                             else:
                                 delay = min(max(delay, 0.5), 2.0)
 
-                # TODO restore nats WS subscription
-                self._start_hub_root_bridge_task(_nats_bridge_supervisor)
+                candidate_transport_deferred = _hub_root_candidate_passive_mode()
+                self._start_hub_root_bridge_task(
+                    _nats_bridge_supervisor,
+                    start_immediately=not candidate_transport_deferred,
+                )
+                if candidate_transport_deferred:
+                    self._log.info(
+                        "nats candidate transport deferred until promotion instance=%s",
+                        str(runtime_identity_snapshot().get("runtime_instance_id") or ""),
+                    )
         except Exception:
             try:
                 if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or os.getenv("ADAOS_CLI_DEBUG", "0") == "1":
@@ -10631,8 +10823,17 @@ def is_ready() -> bool:
     return _svc().is_ready()
 
 
-async def request_hub_root_reconnect(*, transport: str | None = None, url_override: str | None = None) -> dict[str, Any]:
-    return await _svc().request_hub_root_reconnect(transport=transport, url_override=url_override)
+async def request_hub_root_reconnect(
+    *,
+    transport: str | None = None,
+    url_override: str | None = None,
+    wait_for_authority: bool = False,
+) -> dict[str, Any]:
+    return await _svc().request_hub_root_reconnect(
+        transport=transport,
+        url_override=url_override,
+        wait_for_authority=bool(wait_for_authority),
+    )
 
 
 async def request_member_hub_reconnect(*, force: bool = False) -> dict[str, Any]:

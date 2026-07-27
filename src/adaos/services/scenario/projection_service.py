@@ -92,28 +92,19 @@ _YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC = max(
     0.0,
     float(os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_QUIET_SEC") or "0.0"),
 )
-_YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM = str(
-    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM") or "1"
-).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC = str(
-    os.getenv("ADAOS_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC") or "0"
-).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 _YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC = max(
     0.0,
     float(os.getenv("ADAOS_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC") or "120.0"),
 )
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
+_PROJECTION_RULE_MISS_LOCK = threading.Lock()
+_PROJECTION_RULE_MISS_STATS: dict[str, dict[str, Any]] = {}
+_PROJECTION_RULE_MISS_MAX_ENTRIES = _int_env("ADAOS_PROJECTION_RULE_MISS_MAX_ENTRIES", 256, 16)
+_PROJECTION_RULE_MISS_LOG_INTERVAL_SEC = max(
+    0.0,
+    float(os.getenv("ADAOS_PROJECTION_RULE_MISS_LOG_INTERVAL_SEC") or "60.0"),
+)
 
 
 def _projection_write_owner() -> str:
@@ -122,6 +113,110 @@ def _projection_write_owner() -> str:
     if name:
         return f"skill:{name}"
     return "core"
+
+
+def _record_projection_rule_miss(
+    *,
+    owner: str,
+    scope: str,
+    slot: str,
+    webspace_id: str | None,
+    value: Any,
+) -> None:
+    if not owner.startswith("skill:"):
+        return
+    token_scope = str(scope or "").strip()
+    token_slot = str(slot or "").strip()
+    token_webspace = str(webspace_id or "").strip()
+    skill_name = owner.removeprefix("skill:")
+    try:
+        from adaos.services.skill.declarations import runtime_skill_declarations_snapshot
+
+        declaration_state = runtime_skill_declarations_snapshot(skill_name)
+    except Exception:
+        declaration_state = {}
+    key = "\x1f".join((owner, token_scope, token_slot, token_webspace))
+    now = time.time()
+    should_log = False
+    with _PROJECTION_RULE_MISS_LOCK:
+        row = _PROJECTION_RULE_MISS_STATS.get(key)
+        if row is None:
+            if len(_PROJECTION_RULE_MISS_STATS) >= _PROJECTION_RULE_MISS_MAX_ENTRIES:
+                oldest = min(
+                    _PROJECTION_RULE_MISS_STATS,
+                    key=lambda item: float(_PROJECTION_RULE_MISS_STATS[item].get("last_at") or 0.0),
+                )
+                _PROJECTION_RULE_MISS_STATS.pop(oldest, None)
+            row = {
+                "owner": owner,
+                "skill": skill_name,
+                "scope": token_scope,
+                "slot": token_slot,
+                "webspace_id": token_webspace or None,
+                "attempt_total": 0,
+                "first_at": now,
+                "last_at": now,
+                "last_payload_bytes": 0,
+                "_last_log_at": 0.0,
+            }
+            _PROJECTION_RULE_MISS_STATS[key] = row
+        row["attempt_total"] = int(row.get("attempt_total") or 0) + 1
+        row["last_at"] = now
+        row["last_payload_bytes"] = _json_payload_bytes(value)
+        row["declarations_loaded"] = bool(declaration_state)
+        row["declared_projection_total"] = int(declaration_state.get("projection_total") or 0)
+        row["declared_route_total"] = int(declaration_state.get("route_total") or 0)
+        last_log_at = float(row.get("_last_log_at") or 0.0)
+        should_log = last_log_at <= 0.0 or now - last_log_at >= _PROJECTION_RULE_MISS_LOG_INTERVAL_SEC
+        if should_log:
+            row["_last_log_at"] = now
+    if should_log:
+        _log.warning(
+            "skill projection publish completed without a matching rule owner=%s scope=%s slot=%s webspace_id=%s",
+            owner,
+            token_scope,
+            token_slot,
+            token_webspace or "-",
+        )
+
+
+def projection_rule_miss_snapshot(
+    *,
+    webspace_id: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    token_webspace = str(webspace_id or "").strip()
+    token_owner = str(owner or "").strip()
+    max_items = max(1, min(int(limit or 20), 100))
+    with _PROJECTION_RULE_MISS_LOCK:
+        rows = [
+            {key: value for key, value in row.items() if not key.startswith("_")}
+            for row in _PROJECTION_RULE_MISS_STATS.values()
+        ]
+    if token_webspace:
+        rows = [
+            row
+            for row in rows
+            if not str(row.get("webspace_id") or "")
+            or str(row.get("webspace_id") or "") == token_webspace
+        ]
+    if token_owner:
+        rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
+    rows.sort(key=lambda row: float(row.get("last_at") or 0.0), reverse=True)
+    return {
+        "schema": "adaos.projection_rule_miss.v1",
+        "webspace_id": token_webspace or None,
+        "owner": token_owner or None,
+        "total": len(rows),
+        "attempt_total": sum(int(row.get("attempt_total") or 0) for row in rows),
+        "items": rows[:max_items],
+    }
+
+
+def reset_projection_rule_miss_diagnostics() -> None:
+    with _PROJECTION_RULE_MISS_LOCK:
+        _PROJECTION_RULE_MISS_STATS.clear()
 
 
 def _local_node_id() -> str:
@@ -479,31 +574,10 @@ def _projection_compaction_runtime_summary(snapshot: Mapping[str, Any]) -> dict[
         "persisted_up_to_date": bool(snapshot.get("persisted_up_to_date")),
         "compact_total": max(0, _int_or_zero(snapshot.get("compact_total"))),
         "backup_total": max(0, _int_or_zero(snapshot.get("backup_total"))),
-        "backup_gc_total": max(0, _int_or_zero(snapshot.get("backup_gc_total"))),
-        "backup_malloc_trim_total": max(0, _int_or_zero(snapshot.get("backup_malloc_trim_total"))),
         "auto_backup_total": max(0, _int_or_zero(snapshot.get("auto_backup_total"))),
         "auto_backup_large_update_bytes": max(0, _int_or_zero(snapshot.get("auto_backup_large_update_bytes"))),
         "auto_backup_large_update_debounce_sec": snapshot.get("auto_backup_large_update_debounce_sec"),
-        "last_backup_gc_collected": max(0, _int_or_zero(snapshot.get("last_backup_gc_collected"))),
-        "last_backup_malloc_trimmed": bool(snapshot.get("last_backup_malloc_trimmed")),
     }
-
-
-def _trim_allocator_after_projection_compaction() -> bool:
-    if not _YJS_PROJECTION_AUTOCOMPACT_MALLOC_TRIM:
-        return False
-    if os.name != "posix":
-        return False
-    try:
-        import ctypes  # pylint: disable=import-outside-toplevel
-
-        libc = ctypes.CDLL("libc.so.6")
-        trim = getattr(libc, "malloc_trim", None)
-        if not callable(trim):
-            return False
-        return bool(trim(0))
-    except Exception:
-        return False
 
 
 async def _compact_projection_amplification_store(
@@ -559,18 +633,6 @@ async def _compact_projection_amplification_store(
         after_entries = max(0, _int_or_zero(after.get("update_log_entries")))
         result["compacted"] = bool(after_entries < before_entries or after_replay_bytes < before_replay_bytes)
         result["released_replay_bytes"] = max(0, before_replay_bytes - after_replay_bytes)
-        if _YJS_PROJECTION_AUTOCOMPACT_FORCE_GC:
-            try:
-                import gc  # pylint: disable=import-outside-toplevel
-
-                result["gc_collected"] = int(gc.collect() or 0)
-            except Exception as exc:
-                result["gc_collected"] = 0
-                result["gc_error"] = f"{type(exc).__name__}: {exc}"
-        else:
-            result["gc_collected"] = 0
-            result["gc_skipped"] = "disabled:ADAOS_YJS_PROJECTION_AUTOCOMPACT_FORCE_GC"
-        result["malloc_trimmed"] = _trim_allocator_after_projection_compaction()
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         _log.debug("failed to compact YStore after projection amplification webspace=%s", key, exc_info=True)
@@ -596,11 +658,10 @@ def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, 
         outcome = await _compact_projection_amplification_store(key, mode="background")
         if outcome.get("executed"):
             _log.warning(
-                "YStore compacted after projection amplification webspace=%s compacted=%s released_replay_bytes=%s malloc_trimmed=%s",
+                "YStore compacted after projection amplification webspace=%s compacted=%s released_replay_bytes=%s",
                 key,
                 bool(outcome.get("compacted")),
                 int(outcome.get("released_replay_bytes") or 0),
-                bool(outcome.get("malloc_trimmed")),
             )
 
     try:
@@ -1284,6 +1345,13 @@ class ProjectionService:
         rule = resolve_rule(scope, slot) if callable(resolve_rule) else None
         targets = list(getattr(rule, "targets", []) or []) if rule is not None else self.registry.resolve(scope, slot)
         if not targets:
+            _record_projection_rule_miss(
+                owner=_projection_write_owner(),
+                scope=scope,
+                slot=slot,
+                webspace_id=webspace_id,
+                value=value,
+            )
             _log.debug("no projections configured for scope=%s slot=%s", scope, slot)
             return
         for t in targets:
@@ -1509,11 +1577,10 @@ class ProjectionService:
                 )
                 if outcome.get("executed"):
                     _log.warning(
-                        "YStore compacted inline after detached projection amplification webspace=%s compacted=%s released_replay_bytes=%s malloc_trimmed=%s",
+                        "YStore compacted inline after detached projection amplification webspace=%s compacted=%s released_replay_bytes=%s",
                         ws_id,
                         bool(outcome.get("compacted")),
                         int(outcome.get("released_replay_bytes") or 0),
-                        bool(outcome.get("malloc_trimmed")),
                     )
         except Exception:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)
@@ -1538,4 +1605,10 @@ class ProjectionService:
             _log.debug("kv projection ignored for scope=%s slot=%s (no handler)", scope, slot)
 
 
-__all__ = ["ProjectionService", "primary_doc_governance_snapshot", "yjs_projection_guard_snapshot"]
+__all__ = [
+    "ProjectionService",
+    "primary_doc_governance_snapshot",
+    "projection_rule_miss_snapshot",
+    "reset_projection_rule_miss_diagnostics",
+    "yjs_projection_guard_snapshot",
+]

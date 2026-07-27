@@ -59,6 +59,7 @@ from adaos.services.runtime_memory_profile import (
     finish_active_runtime_memory_profile,
     register_active_runtime_memory_profile,
 )
+from adaos.services.runtime_identity import runtime_transition_role
 from adaos.services.runtime_paths import current_base_dir, current_logs_dir
 from adaos.services.root.client import RootHttpClient
 from adaos.services.root.core_update_sync import build_core_update_report
@@ -87,6 +88,11 @@ def _resolved_token(raw_token: str | None = None) -> str | None:
 
 def _skip_pending_update_requested() -> bool:
     raw = str(os.getenv(_SKIP_PENDING_UPDATE_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _supervisor_owns_runtime_lifecycle() -> bool:
+    raw = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
 
@@ -1119,17 +1125,18 @@ def _launch_active_slot_if_needed(args: argparse.Namespace, *, host: str, port: 
 def main() -> None:
     args = _parse_args()
     token = _resolved_token(args.token)
+    authoritative_runtime = runtime_transition_role() != "candidate"
     phase = "init"
     pidfile: Path | None = None
     try:
         phase = "init_ctx"
         init_ctx()
         phase = "read_plan"
-        skip_pending_update = _skip_pending_update_requested()
+        skip_pending_update = _skip_pending_update_requested() or not authoritative_runtime
         plan = None if skip_pending_update else read_plan()
         pending_update_succeeded = False
         prepared_restart_boot = False
-        current_status = read_status()
+        current_status = read_status() if authoritative_runtime else {}
         conf = None
         try:
             conf = load_config()
@@ -1249,7 +1256,7 @@ def main() -> None:
                     if isinstance(manifest, dict) and manifest:
                         payload["manifest"] = manifest
                     write_status(payload)
-        if not prepared_restart_boot and not pending_update_succeeded:
+        if authoritative_runtime and not prepared_restart_boot and not pending_update_succeeded:
             phase = "boot"
             current_status = read_status()
             reconciled = _reconcile_post_root_promotion_restart(current_status)
@@ -1269,14 +1276,26 @@ def main() -> None:
         advertised_base = _advertise_base(host, port)
         os.environ["ADAOS_AUTOSTART_MODE"] = "1"
         os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = "autostart_runner"
-        phase = "stop_previous_server"
-        _stop_previous_server(host, port)
+        if _supervisor_owns_runtime_lifecycle():
+            phase = "supervisor_owned_bind"
+            _LOG.info(
+                "supervisor owns runtime listener handoff; skipping self-directed takeover host=%s port=%s",
+                host,
+                port,
+            )
+        else:
+            phase = "stop_previous_server"
+            _stop_previous_server(host, port)
         phase = "write_pidfile"
         pidfile = _pidfile_path(host, port)
         _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner="autostart")
         atexit.register(_cleanup_pidfile, pidfile)
 
-        if conf is not None and str(getattr(conf, "role", "") or "").strip().lower() == "hub":
+        if (
+            authoritative_runtime
+            and conf is not None
+            and str(getattr(conf, "role", "") or "").strip().lower() == "hub"
+        ):
             phase = "update_hub_url"
             try:
                 if str(getattr(conf, "hub_url", "") or "").strip() != advertised_base:
@@ -1325,20 +1344,23 @@ def main() -> None:
     except SystemExit:
         raise
     except Exception as exc:
-        try:
-            write_status(
-                {
-                    "state": "failed",
-                    "phase": phase,
-                    "message": f"autostart runner failed during {phase}",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "traceback": traceback.format_exc(limit=20),
-                    "updated_at": time.time(),
-                }
-            )
-        except Exception:
-            pass
+        if authoritative_runtime:
+            try:
+                write_status(
+                    {
+                        "state": "failed",
+                        "phase": phase,
+                        "message": f"autostart runner failed during {phase}",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(limit=20),
+                        "updated_at": time.time(),
+                    }
+                )
+            except Exception:
+                pass
+        else:
+            _LOG.exception("candidate autostart runner failed during %s", phase)
         raise
 
 

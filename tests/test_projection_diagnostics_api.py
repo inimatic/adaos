@@ -16,7 +16,6 @@ from adaos.services.status import StatusRegistry
 
 
 def _make_client() -> TestClient:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -87,6 +86,15 @@ def test_projection_diagnostics_links_demand_handlers_and_status_cards(monkeypat
     _publish_runtime_card(registry)
     _write_runtime_demand()
     monkeypatch.setattr("adaos.services.status_projection.get_ctx", lambda: SimpleNamespace(status_registry=registry))
+    monkeypatch.setattr(
+        "adaos.services.scenario.projection_service.projection_rule_miss_snapshot",
+        lambda **_kwargs: {
+            "schema": "adaos.projection_rule_miss.v1",
+            "total": 1,
+            "attempt_total": 3,
+            "items": [{"owner": "skill:demo_skill", "scope": "subnet", "slot": "missing.snapshot"}],
+        },
+    )
 
     resp = client.get("/api/node/projection-diagnostics", params={"webspace_id": "desktop"})
 
@@ -96,6 +104,8 @@ def test_projection_diagnostics_links_demand_handlers_and_status_cards(monkeypat
     assert payload["active_consumer_total"] == 2
     assert payload["missing_handler_total"] == 1
     assert payload["missing_status_card_total"] == 0
+    assert payload["missing_projection_rule_attempt_total"] == 3
+    assert payload["projection_rule_misses"]["items"][0]["slot"] == "missing.snapshot"
     by_key = {item["projection_key"]: item for item in payload["active_projections"]}
     runtime = by_key["status-card:runtime"]
     assert runtime["handler"] == {"available": True, "key": "status-card:*", "match": "wildcard"}

@@ -160,6 +160,54 @@ def ping():
     assert not any(issue.code == "runtime.sdk_only_import" for issue in report.issues)
 
 
+def test_skill_validation_warns_on_direct_write_capable_yjs_access(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+from adaos.services.yjs.doc import async_get_ydoc as open_doc
+
+@tool(summary="ping")
+async def ping():
+    async with open_doc("desktop") as ydoc:
+        ydoc.get_map("data")
+    return {"ok": True}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    issues = [issue for issue in report.issues if issue.code == "projection.direct_yjs_write"]
+    assert report.ok is True
+    assert len(issues) == 1
+    assert issues[0].level == "warning"
+    assert "async_get_ydoc" in issues[0].message
+    assert issues[0].where == "handlers/main.py:7"
+
+
+def test_skill_validation_allows_projection_sdk_and_read_only_yjs_access(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+from adaos.sdk.web.yjs import webspace_read_ydoc
+from adaos.services.yjs.doc import async_read_ydoc
+
+@tool(summary="ping")
+async def ping():
+    async with webspace_read_ydoc("desktop"):
+        pass
+    async with async_read_ydoc("desktop"):
+        pass
+    return {"ok": True}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert not any(issue.code == "projection.direct_yjs_write" for issue in report.issues)
+
+
 def test_skill_validation_allows_declared_stream_receiver_and_bounded_state(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

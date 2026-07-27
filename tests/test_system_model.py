@@ -248,7 +248,6 @@ def test_canonical_object_from_browser_session_uses_metadata_draft_title() -> No
 
 
 def test_browser_session_catalog_unions_yws_and_webrtc_snapshots(monkeypatch) -> None:
-    sys.modules.setdefault("nats", SimpleNamespace())
     sys.modules.setdefault(
         "y_py",
         SimpleNamespace(
@@ -339,7 +338,6 @@ def test_browser_session_catalog_unions_yws_and_webrtc_snapshots(monkeypatch) ->
 
 
 def test_device_catalog_uses_device_inventory_records_and_preserves_workspace_bindings(monkeypatch) -> None:
-    sys.modules.setdefault("nats", SimpleNamespace())
     sys.modules.setdefault(
         "y_py",
         SimpleNamespace(

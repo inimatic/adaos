@@ -171,6 +171,8 @@ def test_skill_api_exposes_management_routes(monkeypatch) -> None:
     scenario_mgr = _FakeScenarioManager()
     rebuilds: list[tuple[str, str, str, str | None]] = []
     reloads: list[str] = []
+    monkeypatch.setattr(skills, "_workspace_skill_manifest_exists", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scenarios, "_workspace_scenario_manifest_exists", lambda *args, **kwargs: True)
     skills.submit_install_operation = lambda **kwargs: {
         "operation_id": "op-skill-demo",
         "target_id": kwargs["target_id"],
@@ -248,6 +250,7 @@ def test_skill_api_list_prefers_workspace_version(monkeypatch) -> None:
     scenario_mgr = _FakeScenarioManager()
     client = _make_client(skill_mgr, scenario_mgr)
 
+    monkeypatch.setattr(skills, "_workspace_skill_manifest_exists", lambda *args, **kwargs: True)
     monkeypatch.setattr(skills, "list_workspace_registry_entries", lambda *args, **kwargs: [{"name": "demo", "version": "2.0.0"}])
     monkeypatch.setattr(skills, "_resolve_list_skill_version", lambda **kwargs: "2.0.0")
 
@@ -259,10 +262,35 @@ def test_skill_api_list_prefers_workspace_version(monkeypatch) -> None:
     assert payload["items"][0]["version"] == "2.0.0"
 
 
-def test_scenario_api_matches_service_surface() -> None:
+def test_skill_api_list_skips_installed_rows_without_skill_yaml(tmp_path: Path) -> None:
+    class _MixedSkillManager(_FakeSkillManager):
+        def list_installed(self) -> list[_Record]:
+            return [
+                _Record(name="demo", installed=True, active_version="1.0.0"),
+                _Record(name="ghost", installed=True, active_version="9.9.9"),
+            ]
+
+    skills_root = tmp_path / "workspace" / "skills"
+    (skills_root / "demo").mkdir(parents=True)
+    (skills_root / "demo" / "skill.yaml").write_text("id: demo\nversion: '1.0.0'\n", encoding="utf-8")
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            workspace_dir=lambda: tmp_path / "workspace",
+            skills_workspace_dir=lambda: skills_root,
+            skills_dir=lambda: skills_root,
+        )
+    )
+
+    result = asyncio.run(skills.list_skills(mgr=_MixedSkillManager(), ctx=ctx))
+
+    assert [item["name"] for item in result["items"]] == ["demo"]
+
+
+def test_scenario_api_matches_service_surface(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
     rebuilds: list[tuple[str, str, str, str | None]] = []
+    monkeypatch.setattr(scenarios, "_workspace_scenario_manifest_exists", lambda *args, **kwargs: True)
     scenarios.submit_install_operation = lambda **kwargs: {
         "operation_id": "op-scenario-scene",
         "target_id": kwargs["target_id"],
@@ -328,10 +356,96 @@ def test_scenario_api_matches_service_surface() -> None:
     assert any(call.startswith("push:") for call in scenario_mgr.calls)
 
 
+def test_subscribed_scenario_update_requires_reviewed_plan_and_records_projection_health(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    client = _make_client(skill_mgr, scenario_mgr)
+    plan_digest = "sha256:" + "d" * 64
+    lock_digest = "sha256:" + "e" * 64
+    activations: list[dict[str, Any]] = []
+
+    class _Coordinator:
+        def __init__(self, _ctx, **_kwargs):
+            pass
+
+        def is_subscribed(self, project_id: str) -> bool:
+            return project_id == "scene"
+
+        def select_route(self, project_id: str):
+            return SimpleNamespace(package_required=project_id == "scene")
+
+        async def update(self, kind: str, project_id: str, **kwargs):
+            activations.append({"kind": kind, "project_id": project_id, **kwargs})
+            plan = {"ok": True, "project_id": project_id, "plan_digest": plan_digest}
+            if kwargs.get("dry_run"):
+                return {"ok": True, "updated": False, "mode": "package_plan", "update_plan": plan}
+            if not kwargs.get("expected_plan_digest"):
+                raise scenarios.ArtifactSubscriptionUpdateError(
+                    "review the package update plan",
+                    code="artifact_update_plan_required",
+                    update_plan=plan,
+                )
+            return {
+                "ok": True,
+                "updated": True,
+                "mode": "package_activation",
+                "runtime_receipts": {lock_digest: {"version": "3.0.0"}},
+            }
+
+    monkeypatch.setattr(scenarios, "ArtifactSubscriptionUpdateCoordinator", _Coordinator)
+
+    planned = client.post("/api/scenarios/update", json={"name": "scene", "dry_run": True})
+    assert planned.status_code == 200
+    assert planned.json()["update_plan"]["plan_digest"] == plan_digest
+
+    blocked = client.post("/api/scenarios/update", json={"name": "scene"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "artifact_update_plan_required"
+
+    applied = client.post(
+        "/api/scenarios/update",
+        json={"name": "scene", "webspace_id": "desktop", "expected_plan_digest": plan_digest},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["mode"] == "package_activation"
+    assert activations[-1]["expected_plan_digest"] == plan_digest
+    assert applied.json()["runtime_receipts"][lock_digest]["version"] == "3.0.0"
+
+
+def test_scenario_list_uses_active_version_and_skips_missing_scenario_yaml(monkeypatch, tmp_path) -> None:
+    class _MixedScenarioManager(_FakeScenarioManager):
+        def list_installed(self) -> list[_Record]:
+            return [
+                _Record(name="scene", installed=True, active_version="0.2.0"),
+                _Record(name="ghost", installed=True, active_version="9.9.9"),
+            ]
+
+    scenarios_root = tmp_path / "workspace" / "scenarios"
+    (scenarios_root / "scene").mkdir(parents=True)
+    (scenarios_root / "scene" / "scenario.yaml").write_text("id: scene\nversion: '0.2.0'\n", encoding="utf-8")
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            workspace_dir=lambda: tmp_path / "workspace",
+            scenarios_workspace_dir=lambda: scenarios_root,
+            scenarios_dir=lambda: scenarios_root,
+        )
+    )
+    monkeypatch.setattr(scenarios, "load_config", lambda: SimpleNamespace(role="node", node_id="node-local"))
+    monkeypatch.setattr(
+        scenarios,
+        "node_display_from_config",
+        lambda _config: {"node_label": "Node", "node_compact_label": "N", "node_index": 1},
+    )
+
+    result = asyncio.run(scenarios.list_scenarios(mgr=_MixedScenarioManager(), ctx=ctx))
+
+    assert [(item["name"], item["version"]) for item in result["items"]] == [("scene", "0.2.0")]
+
+
 def test_scenario_list_includes_dev_artifacts_only_for_dev_webspace(monkeypatch, tmp_path) -> None:
     dev_root = tmp_path / "dev" / "scenarios"
     (dev_root / "dev_recipe").mkdir(parents=True)
-    (dev_root / "dev_recipe" / "scenario.json").write_text('{"id":"dev_recipe"}', encoding="utf-8")
+    (dev_root / "dev_recipe" / "scenario.yaml").write_text("id: dev_recipe\n", encoding="utf-8")
     ctx = SimpleNamespace(paths=SimpleNamespace(dev_scenarios_dir=lambda: dev_root))
     mgr = _FakeScenarioManager()
 
@@ -368,7 +482,9 @@ def test_scenario_list_includes_dev_artifacts_only_for_dev_webspace(monkeypatch,
     assert all(item["id"] != "dev_recipe" for item in workspace_result["items"])
 
 
-def test_scenario_api_blocks_failed_dependencies_before_projection() -> None:
+def test_scenario_api_blocks_failed_dependencies_before_projection(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.delenv("ADAOS_ENV_TYPE", raising=False)
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
     rebuilds: list[tuple[str, str, str, str | None]] = []
@@ -412,6 +528,7 @@ def test_scenario_api_blocks_failed_dependencies_before_projection() -> None:
 def test_skill_installed_status_uses_registry_catalog_version(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
+    monkeypatch.setattr(skills, "_workspace_skill_manifest_exists", lambda *args, **kwargs: True)
     monkeypatch.setattr(skills, "find_workspace_registry_entry", lambda *args, **kwargs: {"version": "2.0.0"})
     client = _make_client(skill_mgr, scenario_mgr)
 
@@ -420,6 +537,63 @@ def test_skill_installed_status_uses_registry_catalog_version(monkeypatch) -> No
     item = resp.json()["items"][0]
     assert item["remote_version"] == "2.0.0"
     assert item["update_available"] is True
+
+
+def test_subscribed_skill_update_requires_reviewed_plan_and_records_runtime_health(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    client = _make_client(skill_mgr, scenario_mgr)
+    plan_digest = "sha256:" + "a" * 64
+    lock_digest = "sha256:" + "b" * 64
+    activations: list[dict[str, Any]] = []
+
+    class _Coordinator:
+        def __init__(self, _ctx):
+            pass
+
+        def is_subscribed(self, project_id: str) -> bool:
+            return project_id == "demo"
+
+        def select_route(self, project_id: str):
+            return SimpleNamespace(package_required=project_id == "demo")
+
+        async def update(self, kind: str, project_id: str, **kwargs):
+            activations.append({"kind": kind, "project_id": project_id, **kwargs})
+            plan = {"ok": True, "project_id": project_id, "plan_digest": plan_digest}
+            if kwargs.get("dry_run"):
+                return {"ok": True, "updated": False, "mode": "package_plan", "update_plan": plan}
+            if not kwargs.get("expected_plan_digest"):
+                raise skills.ArtifactSubscriptionUpdateError(
+                    "review the package update plan",
+                    code="artifact_update_plan_required",
+                    update_plan=plan,
+                )
+            return {
+                "ok": True,
+                "updated": True,
+                "mode": "package_activation",
+                "runtime_receipts": {lock_digest: {"version": "2.0.0"}},
+            }
+
+    monkeypatch.setattr(skills, "ArtifactSubscriptionUpdateCoordinator", _Coordinator)
+
+    planned = client.post("/api/skills/update", json={"name": "demo", "dry_run": True})
+    assert planned.status_code == 200
+    assert planned.json()["mode"] == "package_plan"
+    assert planned.json()["update_plan"]["plan_digest"] == plan_digest
+
+    blocked = client.post("/api/skills/update", json={"name": "demo"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "artifact_update_plan_required"
+
+    applied = client.post(
+        "/api/skills/update",
+        json={"name": "demo", "expected_plan_digest": plan_digest},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["mode"] == "package_activation"
+    assert activations[-1]["expected_plan_digest"] == plan_digest
+    assert applied.json()["runtime_receipts"][lock_digest]["version"] == "2.0.0"
 
 
 def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch) -> None:

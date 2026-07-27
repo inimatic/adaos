@@ -61,6 +61,7 @@ RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/domain/conversation.py",
     "src/adaos/domain/event_envelope.py",
     "src/adaos/domain/personalization_access.py",
+    "src/adaos/domain/project_events.py",
     "src/adaos/domain/projection_keys.py",
     "src/adaos/domain/projection_record.py",
     "src/adaos/domain/projection_subscription.py",

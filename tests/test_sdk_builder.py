@@ -75,6 +75,7 @@ class _PreviewService:
         self.active_drafts: list[dict] = []
         self.selections: list[dict] = []
         self.ensure_calls: list[dict] = []
+        self.preview_targets: list[dict] = []
 
     def set_active_draft(self, **kwargs):
         self.active_drafts.append(kwargs)
@@ -102,6 +103,15 @@ class _PreviewService:
 
     def get_workspace_binding(self, source_webspace_id):
         return {"ok": True, "source_webspace_id": source_webspace_id, "preview_webspace_id": "preview-alpha"}
+
+    def set_preview_target(self, **kwargs):
+        self.preview_targets.append(kwargs)
+        return {
+            "ok": True,
+            "source_webspace_id": kwargs["source_webspace_id"],
+            "preview_webspace_id": "preview-alpha",
+            "preview_target": kwargs["target"],
+        }
 
     def resolve_source_webspace_id(self, webspace_id):
         return "dev1-builder" if webspace_id == "dev1-builder" else str(webspace_id or "desktop")
@@ -186,6 +196,130 @@ def test_preview_facade_never_blocks_event_driven_selection_on_rebuild(monkeypat
     desired = next(payload for topic, payload in events if topic == "builder.preview.desired")
     assert desired["reconciled"] is False
     assert desired["wait_for_rebuild"] is False
+
+
+def test_preview_target_materializes_exact_prototype_without_changing_workflow(monkeypatch) -> None:
+    service = _PreviewService()
+    materializations: list[dict] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
+        lambda: SimpleNamespace(
+            describe=lambda kind, project_id: {
+                "active_phase": "automation",
+                "prototype": {"head_revision": "003"},
+                "automation": {"head_task_id": "task.current", "result_version": "0.2.0"},
+                "publication": {"current_version": "0.2.1"},
+                "capabilities": {
+                    "can_preview_prototype": True,
+                    "can_preview_automation": True,
+                    "can_preview_publication": True,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
+    )
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="prototype",
+        revision="002",
+        source_webspace_id="desktop",
+    )
+
+    assert result["target"]["stage"] == "prototype"
+    assert result["target"]["revision"] == "002"
+    assert result["target"]["label"] == "proto: recipes · UI 002"
+    assert materializations[0]["preview_stage"] == "prototype"
+    assert materializations[0]["revision"] == "002"
+    assert service.preview_targets[0]["target"]["follow_active"] is False
+
+
+def test_preview_target_materializes_current_content_when_a_scenario_has_no_ui_revision(monkeypatch) -> None:
+    service = _PreviewService()
+    materializations: list[dict] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
+        lambda: SimpleNamespace(
+            describe=lambda kind, project_id: {
+                "active_phase": "prototype",
+                "prototype": {"head_revision": None},
+                "automation": {},
+                "publication": {},
+                "capabilities": {
+                    "can_preview_prototype": True,
+                    "can_preview_automation": False,
+                    "can_preview_publication": False,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
+    )
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="prototype",
+        source_webspace_id="desktop",
+    )
+
+    assert result["target"]["revision"] is None
+    assert result["target"]["label"] == "proto: recipes · current"
+    assert materializations[0]["revision"] is None
+
+
+def test_preview_follow_active_resolves_current_automation(monkeypatch) -> None:
+    service = _PreviewService()
+    materializations: list[dict] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
+        lambda: SimpleNamespace(
+            describe=lambda kind, project_id: {
+                "active_phase": "automation",
+                "prototype": {"head_revision": "003"},
+                "automation": {
+                    "head_task_id": "task.adaptation",
+                    "snapshot_task_id": "task.current",
+                    "result_version": "0.2.0",
+                },
+                "publication": {"current_version": None},
+                "capabilities": {
+                    "can_preview_prototype": True,
+                    "can_preview_automation": True,
+                    "can_preview_publication": False,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
+    )
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="prototype",
+        source_webspace_id="desktop",
+        follow_active=True,
+    )
+
+    assert result["target"]["stage"] == "automation"
+    assert result["target"]["revision"] == "task.current"
+    assert result["target"]["label"] == "active: recipes · 0.2.0"
+    assert materializations[0]["preview_stage"] == "automation"
 
 
 def test_artifact_checkpoint_forwards_public_metadata(monkeypatch) -> None:

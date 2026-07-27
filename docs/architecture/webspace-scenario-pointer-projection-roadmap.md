@@ -122,6 +122,36 @@ ownership model, see:
   does not auto-persist `home_scenario` for dev webspaces. Persisting home is an
   explicit `set_home=true` operation, so repeated preview/browse switches do
   not pay workspace-listing sync cost or mutate restart defaults by accident.
+- Hot-switch hardening checkpoint as of 2026-07-22:
+  builder/web_desktop scenario toggles use payload-only materialization cache
+  entries keyed by source fingerprints and active skill declaration stamps.
+  Live-room apply trusts runtime-owned previous branch fingerprints for patch
+  base verification, so ordinary toggles avoid re-reading large live YDoc
+  branches. YStore auto-backup now treats replay pressure as durable work even
+  during the auto-backup cooldown: if a replay tail appears immediately after a
+  backup, a delayed backup is scheduled instead of waiting for another write.
+  This prevents cold `scenario_projection_sync` from paying a multi-second
+  replay cost on the next room open.
+- Cold-switch ownership checkpoint as of 2026-07-23:
+  payload-only scenario switching no longer starts a one-shot AdaOS runtime.
+  Skill declaration discovery is process-owned and startup-prewarmed, resolver
+  CPU work runs outside the event loop, and a scenario/source/skills/access
+  core can be reused across webspaces before applying a separately cloned
+  overlay. Ordinary switches preserve YStore and persist a branch diff instead
+  of clearing the store and synchronously rewriting a full snapshot. Browser
+  commands accept pointer changes in background unless an explicit recovery or
+  diagnostic caller requests `wait_for_rebuild=true`.
+- Startup projection checkpoint as of 2026-07-22:
+  named-entity projection defers expensive registry snapshot construction while
+  the target live room is not ready, keeping the dirty source set pending until
+  `room_ready`. Registry diagnostics now include per-source timings
+  (`source.static`, `source.subnet`, `source.devices`, `source.lookups`) and
+  registry phases. NLU lookup baseline buckets are cached by workspace manifest
+  stamps and a short TTL, while the requested `webspace_id` remains uncached per
+  call. Individual JSON/YAML lookup sources are stamp-cached with process-local
+  single-flight parsing, so one changed runtime directory does not turn a
+  background registry refresh into repeated full-manifest parsing that can
+  starve the scenario-switch control loop.
 
 ## Implementation Anchors
 
@@ -129,7 +159,7 @@ ownership model, see:
   `src/adaos/services/scenario/webspace_runtime.py`
 - Scenario projection into compatibility caches:
   `src/adaos/services/scenario/manager.py`
-- Bootstrap seed + rebuild nudge path:
+- Bootstrap snapshot load and explicit cold-room validation path:
   `src/adaos/services/yjs/bootstrap.py`
 - Operator diagnostics + benchmark/reporting:
   `src/adaos/apps/api/node_api.py`,
@@ -565,6 +595,15 @@ runtime can skip reopening that heavy branch for deep equality checks. This is
 an intermediate fast-path before full top-level diff-apply, and benchmark/apply
 diagnostics now surface those `fingerprint_unchanged_branches` counts.
 
+The same runtime-owned fingerprints are also trusted as the previous
+materialized branch identity during live-room payload apply. When the previous
+materialized payload fingerprint matches
+`registry.runtime_meta.effective_branch_fingerprints`, patch/diff application
+does not re-hash the large live branch just to verify the patch base. This is
+valid because effective branches are runtime-owned materialization output, not
+browser-owned collaborative data. Diagnostics surface
+`trusted_previous_fingerprint_patch_branches` when this path is used.
+
 Bootstrap compatibility fallback now also stays on the incremental YStore path
 when possible: if the default webspace has to seed legacy compatibility caches,
 bootstrap writes a diff update over the already-open document and only falls
@@ -581,37 +620,69 @@ that scenario is already `scheduled` or `running`. Control responses now
 surface both skip metadata and the current rebuild status so retries can stay
 cheap without becoming opaque.
 
-Default scenario switch now uses a `pointer_only` contract: validate the
-target, update `ui.current_scenario`, and let semantic rebuild own effective
-branch hydration. The older feature flag
-`ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH=1` remains accepted as an explicit
-pointer-path compatibility alias, but pointer writes are now the normal path
-instead of the opt-in experiment.
+Default scenario switch keeps the `pointer_only` compatibility label, but its
+live publication contract is now atomic: validate the target, persist the
+desired scenario in the webspace control state, materialize the effective
+branches, then commit `ui.current_scenario` and those branches to the live room
+in one Yjs transaction. The selector is not published to the live document
+before the projection is ready. The former pointer-first, fresh-doc,
+payload-only, skip/defer-refresh, and atomic-commit feature flags are removed;
+ordinary switching has one production contract. Recovery keeps separate
+reload/reset/restore operations instead of configuration-driven switch modes.
+
+This transaction is the scenario-switch commit barrier. A browser must never
+observe a new selector paired with branches from the previous scenario as the
+successful final state. Materialized-payload apply reasserts the selector even
+when the room already contains the target value, so the final update remains
+an explicit selector/projection commit. The response exposes
+`selector_commit_mode=materialization_transaction`; legacy paths report
+`eager_pointer`.
 
 The remaining `materialize_and_copy` path has now been removed entirely.
 Scenario switch no longer loads `scenario.json` or writes
 `ui.scenarios`, `registry.scenarios`, or `data.scenarios` on the hot path.
-The only switch-time state mutation is the scenario pointer plus minimal
-manifest/home bookkeeping; semantic rebuild remains the sole owner of
-effective runtime branches after reconcile.
+The only immediate switch-time mutation is minimal manifest/control-state
+bookkeeping. The live scenario pointer is part of the later materialization
+transaction; semantic rebuild remains the sole owner of effective runtime
+branches after reconcile.
 
-Bootstrap fallback now follows the same ownership model. When canonical
-scenario projection is unavailable during startup, bootstrap seeds only the
-legacy compatibility cache branches plus `ui.current_scenario` and nudges a
-normal semantic rebuild. Emergency startup no longer writes `ui.application`,
-`data.catalog`, `data.installed`, `data.desktop`, or `registry.merged`
-directly.
+Bootstrap fallback now follows the same ownership model. It loads persisted
+state and validates a matching ready marker without scheduling a hidden
+semantic rebuild. When canonical scenario projection is unavailable during an
+empty-store startup, bootstrap seeds only legacy compatibility cache branches
+plus `ui.current_scenario`; the room owner then invokes the explicit resolver
+and apply pipeline. Emergency startup never writes `ui.application`,
+`data.catalog`, `data.installed`, `data.desktop`, or `registry.merged` directly.
 
-When an active live room is already attached, pointer-only switch can now also
-update `ui.current_scenario` in-memory first and persist that pointer
-stale-safely in the background. This removes one avoidable store-backed YDoc
-open from the hot path while keeping persistence convergence explicit.
+When an active live room is already attached, the final materialized payload is
+applied without closing YWS or WebRTC data channels. Avoiding the early pointer
+write removes one live-room mutation from the hot path and prevents a missed
+small update from leaving a browser on a permanently split selector/projection
+state.
+
+Clients validate scenario-switch and go-home hydration against the scenario id
+returned in the command acknowledgement. If a connected client still has a
+semantically inconsistent live document, it may use the authoritative
+materialization snapshot as a render-only overlay for that exact acknowledged
+scenario. The overlay has a short TTL, never mutates or republishes the local
+YDoc, and does not upgrade live state-sync health; it is recovery containment,
+not a second collaborative source of truth.
+
+The browser now checks that authoritative render snapshot immediately after a
+scenario command acknowledgement. It no longer serializes a fixed 1.6-second
+delay, a five-second local-materialization poll, and only then the render
+snapshot fallback. That old sequence made a completed sub-200 ms backend
+switch appear as a repeatable 6.6-7 second UI transition whenever the local
+materialization predicate lagged behind the acknowledged projection. A stale
+but connected local provider is repaired in the background after the
+authoritative render becomes available; a disconnected provider still uses
+the blocking resync recovery path.
 
 Current rollback guidance if pointer-only switch regresses runtime behavior:
 
-- if `ui.current_scenario` flips quickly but the visible UI stays stale until a
-  late rebuild or never catches up, suspect a remaining consumer that still
-  depends on legacy `ui.scenarios`, `registry.scenarios`, or `data.scenarios`
+- if `ui.current_scenario` flips before the visible projection, first verify
+  `selector_commit_mode`; this is valid only in explicit `eager_pointer`
+  rollback mode, otherwise it is a commit-barrier regression
 - compare `phase_timings_ms`, `compatibility_caches`, and resolver diagnostics
   before changing code: `legacy_fallback_active`, `missing_branches`, and the
   rebuild/materialization state now identify whether the gap is in backend
@@ -722,13 +793,25 @@ windows over time, even when many small diff updates accumulate.
 
 To reduce repeated cold-open cost after replay pressure, YStore can now also
 schedule a debounced auto-backup after pressure compaction. That backup writes
-an up-to-date snapshot file and, when no newer writes raced ahead, collapses
-the in-memory log to a single base snapshot (`backup_compaction`). The knobs
-are:
+an up-to-date snapshot file and collapses the in-memory log. If concurrent
+writes append while the backup is encoding, YStore compacts the already-encoded
+prefix and preserves the newer replay tail (`backup_prefix_compaction`) instead
+of leaving the whole replay log inflated. If that tail still exceeds the soft
+pressure threshold, a short retry compaction is scheduled. The knobs are:
 
 - `ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT`
 - `ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC`
 - `ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC`
+- `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_BYTES` (default 1 MiB)
+- `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_ENTRIES` (default half of the
+  replay window, at least 4)
+- `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_DEBOUNCE_SEC` (default 1s)
+
+This soft replay-pressure path is intentionally separate from the hard
+`ADAOS_YSTORE_MAX_REPLAY_BYTES` / `ADAOS_YSTORE_MAX_UPDATES` limits. The hard
+limits keep the runtime bounded; the soft path keeps interactive reopen and
+scenario-projection latency from degrading while the tail is still technically
+within bounds.
 
 Operator recovery paths were also tightened so performance work is not masked
 by recovery fan-out:
@@ -880,6 +963,14 @@ Use this checklist as the authoritative progress tracker for the migration.
   `time_to_interactive_focus`, and `time_to_full_hydration`.
 - [x] Coalesce stale background hydration work when a newer scenario switch
   supersedes it.
+- [x] Bound process-owned materialization CPU work and keep live YDocs on their
+  owner loop. `ADAOS_MATERIALIZATION_CPU_WORKERS` defaults to 1 and is capped
+  at 4.
+- [x] Reuse a validated durable effective-state marker on cold room open instead
+  of decoding large branches and launching another materialization.
+- [ ] Define a generation-aware CRDT checkpoint protocol across server YStore,
+  browser YDoc, and optional IndexedDB. This is required to bound long-term
+  Yjs struct history without turning an ordinary switch into a reconnect.
 
 ### 5.5. ABI and Renderer Readiness Contract
 
@@ -900,6 +991,8 @@ Use this checklist as the authoritative progress tracker for the migration.
   as mandatory runtime inputs.
 - [x] Demote those branches to optional compatibility caches.
 - [x] Remove obsolete switch-time materialize-and-copy code paths.
+- [x] Remove obsolete pointer-first/fresh-doc/skip/defer/atomic switch flags;
+  ordinary scenario switching now has one atomic live-commit contract.
 - [x] Update architecture and operator docs to describe the new ownership
   model.
 
@@ -1012,6 +1105,10 @@ Changes validated in this slice:
   `ADAOS_WEBSPACE_SCENARIO_SWITCH_BACKGROUND_ROUTE_YIELD_S` (default runtime
   value: `0.02`). This lets the API response leave the route before the
   background rebuild monopolizes the event loop.
+- Voice-chat snapshot recovery and history paging now cross the blocking
+  conversation-ledger boundary in worker threads. Browser subscription bursts
+  can overlap a scenario rebuild without serializing SQLite work on the event
+  loop.
 - Live materialized payload apply now uses one Yjs transaction for the payload
   path while regular rebuild keeps the older two-phase behavior.
 - Successful materialized payload apply can use a synthetic ready snapshot via

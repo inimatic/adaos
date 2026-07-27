@@ -2,6 +2,13 @@
 
 AdaOS provisions an isolated runtime per skill with versioned A/B slots. Each installation produces a fully self-contained copy of the skill sources, dependencies, resolved manifest, and metadata that can be activated atomically.
 
+For package-backed project publication, A/B preparation is a runtime projection
+of an immutable component package selected by `ProjectRelease` and
+`WorkspaceLock`; it is not the publication source of truth. Permission and
+migration plans are admitted before the lock switch, and an unknown
+state-changing outcome is reconciled explicitly rather than replayed. See
+[Artifact Source, Package, and Activation Architecture](architecture/artifact-source-package-activation.md).
+
 ## Directory layout
 
 Every skill lives under `skills/<name>` in the workspace. Runtime artefacts are stored separately:
@@ -123,6 +130,14 @@ Migration selection is bounded:
 - successful migration clears transient process state during activation and
   should not leave persistent UI noise
 
+Handler discovery is read-only with respect to installed skill runtime slots.
+For an explicit local development workflow, `ADAOS_SKILL_RUNTIME_SOURCE_SYNC=1`
+allows the loader to synchronize workspace sources before discovery. The sync
+runs outside the event loop and is always disabled in a prewarmed core
+`candidate`, because candidate startup must not mutate runtime state shared with
+the active process. Normal install, update, activation, and background migration
+remain the production mutation paths.
+
 During prepare/activate, the affected skill is temporarily deactivated with
 `status=disabled`, `reason=runtime_migration_in_progress`, and an operation id.
 If migration fails, AdaOS leaves the skill deactivated with
@@ -241,6 +256,20 @@ Dependency admission policy:
 - `runtime.env.mode: shared` is an explicit legacy/diagnostic mode that installs into the current core interpreter. It is not used as an automatic fallback.
 - Heavy/native dependency stacks such as Torch, TensorFlow, OpenCV, FAISS, EasyOCR, and transformer runtimes are rejected for in-process skills by default. They should be declared as `runtime.kind: service` with `runtime.env.mode: venv`, or later as a core-owned dependency profile.
 - `runtime.env.allow_heavy_dependencies: true` is a transitional override for controlled stand work. It keeps the operator-visible risk explicit and should not be used as the production shape for ML/model skills.
+
+### Declaration staging and activation order
+
+Runtime preparation copies `skill.yaml` and `webui.json` into the slot source
+artifact and verifies that their bytes match the source files. The resolved
+manifest retains `data_projections` and `data_routes`.
+
+Activation loads projection rules plus stream/Yjs receiver metadata from the
+target slot before smoke import and target lifecycle hooks. Startup discovery
+does the same before importing runtime or workspace handlers, so subscriptions
+and import-time refreshes see the active declaration set. A missing projection
+rule during a skill-owned publish is available in
+`/api/node/projection-diagnostics`; direct calls to write-capable core Yjs APIs
+also produce `projection.direct_yjs_write` validation warnings.
 
 ### Runtime lifecycle hooks
 

@@ -470,6 +470,35 @@ def test_selected_project_is_persisted_without_changing_runtime_scenario(tmp_pat
     assert service.get_workspace_binding("desktop")["selection"] == binding["selection"]
 
 
+def test_changing_runtime_project_clears_an_explicit_preview_from_the_previous_project(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="recipes",
+        persist_projection=False,
+    )
+    service.set_preview_target(
+        source_webspace_id="desktop",
+        target={
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "stage": "prototype",
+            "revision": "003",
+        },
+    )
+
+    binding = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="shopping",
+        persist_projection=False,
+    )
+
+    assert binding["selection"]["object_id"] == "shopping"
+    assert binding["preview_target"] is None
+
+
 @pytest.mark.asyncio
 async def test_builder_runtime_projection_is_compact_and_host_only(monkeypatch, tmp_path: Path) -> None:
     import adaos.services.yjs.doc as ydoc_module

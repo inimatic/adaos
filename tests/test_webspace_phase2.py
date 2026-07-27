@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import time
 import types
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1905,6 +1907,25 @@ def _patch_switch_dependencies(monkeypatch, *, state: dict[str, _FakeMap] | None
     async def _fake_sync_listing() -> None:
         sync_listing_calls.append(True)
 
+    async def _fake_live_refresh(webspace_id: str, **kwargs):
+        payload = kwargs.get("materialized_payload")
+        payload_map = payload if isinstance(payload, dict) else {}
+        scenario = str(payload_map.get("scenario_id") or "prompt_engineer_scenario")
+        fake_state.setdefault("ui", _FakeMap())["current_scenario"] = scenario
+        return {
+            "ok": True,
+            "webspace_id": webspace_id,
+            "materialized_payload_applied": True,
+            "materialized_payload": {
+                "ready": True,
+                "apply_summary": {
+                    "branch_count": 6,
+                    "changed_branches": 3,
+                    "unchanged_branches": 3,
+                },
+            },
+        }
+
     monkeypatch.setattr(webspace_runtime_module, "async_get_ydoc", lambda _webspace_id: _FakeAsyncDoc(fake_state))
     monkeypatch.setattr(webspace_runtime_module, "_scenario_exists_for_switch", lambda scenario_id, *, space: True)
     monkeypatch.setattr(
@@ -1919,10 +1940,14 @@ def _patch_switch_dependencies(monkeypatch, *, state: dict[str, _FakeMap] | None
         },
     )
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "materialize_webspace_payload_async", _fake_materialize)
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "resolve_materialized_payload_async", _fake_materialize)
     monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
-    monkeypatch.setattr(webspace_runtime_module, "_refresh_live_room_after_rebuild_enabled", lambda: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway",
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
+    )
     monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: fake_ctx)
     fake_state["_meta"] = _FakeMap({"rebuilds": rebuilds, "workflows": workflows, "listing_syncs": sync_listing_calls})
     return fake_state
@@ -1962,7 +1987,8 @@ def test_switch_webspace_scenario_can_persist_home_scenario(monkeypatch) -> None
     assert result["scenario_switch_mode"] == "pointer_only"
     assert isinstance(result["timings_ms"], dict)
     assert "validate_scenario" in result["timings_ms"]
-    assert "write_switch_pointer" in result["timings_ms"]
+    assert result["timings_ms"]["defer_switch_pointer"] == 0.0
+    assert "write_switch_pointer" not in result["timings_ms"]
     assert "load_scenario" not in result["timings_ms"]
     assert "wait_rebuild" in result["timings_ms"]
     assert isinstance(result["rebuild_timings_ms"], dict)
@@ -1976,8 +2002,8 @@ def test_switch_webspace_scenario_can_persist_home_scenario(monkeypatch) -> None
     assert "time_to_first_structure" in result["phase_timings_ms"]
     assert "time_to_interactive_focus" in result["phase_timings_ms"]
     assert "time_to_full_hydration" in result["phase_timings_ms"]
-    assert result["phase_timings_ms"]["time_to_first_structure"] < result["phase_timings_ms"]["time_to_full_hydration"]
-    assert result["phase_timings_ms"]["time_to_interactive_focus"] < result["phase_timings_ms"]["time_to_full_hydration"]
+    assert result["phase_timings_ms"]["time_to_first_structure"] == result["phase_timings_ms"]["time_to_full_hydration"]
+    assert result["phase_timings_ms"]["time_to_interactive_focus"] == result["phase_timings_ms"]["time_to_full_hydration"]
 
 
 def test_switch_webspace_scenario_keeps_home_unchanged_by_default_for_dev_webspace(monkeypatch) -> None:
@@ -2096,7 +2122,7 @@ def test_switch_webspace_scenario_default_pointer_only_can_schedule_background_r
     assert result["background_rebuild"] is True
     assert result["scenario_switch_mode"] == "pointer_only"
     assert scheduled == [(webspace_id, "prompt_engineer_scenario", "explicit", "pointer_only", True)]
-    assert fake_state["ui"]["current_scenario"] == "prompt_engineer_scenario"
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
     assert fake_state["ui"]["application"]["desktop"]["pageSchema"]["id"] == "old-page"
     assert fake_state["registry"]["merged"]["modals"] == ["old-modal"]
     assert fake_state["data"]["catalog"]["apps"] == [{"id": "old-app"}]
@@ -2106,14 +2132,57 @@ def test_switch_webspace_scenario_default_pointer_only_can_schedule_background_r
     assert "prompt_engineer_scenario" not in fake_state["data"]["scenarios"]
     assert isinstance(result["timings_ms"], dict)
     assert "validate_scenario" in result["timings_ms"]
-    assert "write_switch_pointer" in result["timings_ms"]
+    assert result["timings_ms"]["defer_switch_pointer"] == 0.0
+    assert "write_switch_pointer" not in result["timings_ms"]
     assert "load_scenario" not in result["timings_ms"]
     assert "materialize_switch_payload" not in result["timings_ms"]
     assert "schedule_background_rebuild" in result["timings_ms"]
     assert isinstance(result["phase_timings_ms"], dict)
     assert "time_to_accept" in result["phase_timings_ms"]
-    assert "time_to_pointer_update" in result["phase_timings_ms"]
+    assert "time_to_pointer_update" not in result["phase_timings_ms"]
     assert "time_to_full_hydration" not in result["phase_timings_ms"]
+
+
+def test_switch_webspace_scenario_defers_selector_until_atomic_materialization(monkeypatch) -> None:
+    webspace_id = "phase2-scenario-atomic-selector"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Phase 2 Atomic Selector",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+    fake_state = _patch_switch_dependencies(
+        monkeypatch,
+        state={
+            "ui": _FakeMap({"current_scenario": "web_desktop"}),
+            "registry": _FakeMap(),
+            "data": _FakeMap(),
+        },
+    )
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_schedule_scenario_switch_rebuild",
+        lambda webspace_id, **_kwargs: scheduled.append(webspace_id),
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.switch_webspace_scenario(
+            webspace_id,
+            "prompt_engineer_scenario",
+            wait_for_rebuild=False,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["selector_commit_mode"] == "materialization_transaction"
+    assert result["timings_ms"]["defer_switch_pointer"] == 0.0
+    assert "write_switch_pointer" not in result["timings_ms"]
+    assert "time_to_pointer_update" not in result["phase_timings_ms"]
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
+    assert scheduled == [webspace_id]
 
 
 def test_switch_webspace_scenario_compat_env_is_ignored_and_keeps_pointer_only_contract(monkeypatch) -> None:
@@ -2178,7 +2247,7 @@ def test_switch_webspace_scenario_compat_env_is_ignored_and_keeps_pointer_only_c
     assert result["background_rebuild"] is True
     assert result["scenario_switch_mode"] == "pointer_only"
     assert scheduled == [(webspace_id, "prompt_engineer_scenario", "explicit", "pointer_only", True)]
-    assert fake_state["ui"]["current_scenario"] == "prompt_engineer_scenario"
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
     assert fake_state["ui"]["application"]["desktop"]["pageSchema"]["id"] == "old-page"
     assert fake_state["registry"]["merged"]["modals"] == ["old-modal"]
     assert fake_state["data"]["catalog"]["apps"] == [{"id": "old-app"}]
@@ -2188,7 +2257,8 @@ def test_switch_webspace_scenario_compat_env_is_ignored_and_keeps_pointer_only_c
     assert "prompt_engineer_scenario" not in fake_state["data"]["scenarios"]
     assert isinstance(result["timings_ms"], dict)
     assert "validate_scenario" in result["timings_ms"]
-    assert "write_switch_pointer" in result["timings_ms"]
+    assert result["timings_ms"]["defer_switch_pointer"] == 0.0
+    assert "write_switch_pointer" not in result["timings_ms"]
     assert "load_scenario" not in result["timings_ms"]
     assert "materialize_switch_payload" not in result["timings_ms"]
     assert "schedule_background_rebuild" in result["timings_ms"]
@@ -2196,7 +2266,7 @@ def test_switch_webspace_scenario_compat_env_is_ignored_and_keeps_pointer_only_c
     assert "time_to_accept" in result["phase_timings_ms"]
     assert "time_to_full_hydration" not in result["phase_timings_ms"]
 
-def test_switch_webspace_scenario_pointer_first_updates_pointer_without_eager_materialization(monkeypatch) -> None:
+def test_switch_webspace_scenario_deprecated_pointer_first_env_keeps_atomic_contract(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH", "1")
 
     webspace_id = "phase-pointer-switch"
@@ -2256,9 +2326,10 @@ def test_switch_webspace_scenario_pointer_first_updates_pointer_without_eager_ma
 
     assert result["ok"] is True
     assert result["background_rebuild"] is True
-    assert result["scenario_switch_mode"] == "pointer_first"
-    assert scheduled == [(webspace_id, "prompt_engineer_scenario", "explicit", "pointer_first", True)]
-    assert fake_state["ui"]["current_scenario"] == "prompt_engineer_scenario"
+    assert result["scenario_switch_mode"] == "pointer_only"
+    assert result["selector_commit_mode"] == "materialization_transaction"
+    assert scheduled == [(webspace_id, "prompt_engineer_scenario", "explicit", "pointer_only", True)]
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
     assert fake_state["ui"]["application"]["desktop"]["pageSchema"]["id"] == "old-page"
     assert "prompt_engineer_scenario" not in fake_state["ui"]["scenarios"]
     assert fake_state["registry"]["merged"]["modals"] == ["old-modal"]
@@ -2267,14 +2338,15 @@ def test_switch_webspace_scenario_pointer_first_updates_pointer_without_eager_ma
     assert "prompt_engineer_scenario" not in fake_state["data"]["scenarios"]
     assert isinstance(result["timings_ms"], dict)
     assert "validate_scenario" in result["timings_ms"]
-    assert "write_switch_pointer" in result["timings_ms"]
+    assert result["timings_ms"]["defer_switch_pointer"] == 0.0
+    assert "write_switch_pointer" not in result["timings_ms"]
     assert "load_scenario" not in result["timings_ms"]
     assert "materialize_switch_payload" not in result["timings_ms"]
     assert isinstance(result["phase_timings_ms"], dict)
-    assert "time_to_pointer_update" in result["phase_timings_ms"]
+    assert "time_to_pointer_update" not in result["phase_timings_ms"]
 
 
-def test_switch_webspace_scenario_pointer_first_avoids_eager_scenario_content_load(monkeypatch) -> None:
+def test_switch_webspace_scenario_deprecated_pointer_env_does_not_load_content(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH", "1")
 
     webspace_id = "phase-pointer-no-content-load"
@@ -2302,6 +2374,11 @@ def test_switch_webspace_scenario_pointer_first_avoids_eager_scenario_content_lo
     )
     monkeypatch.setattr(
         webspace_runtime_module,
+        "_read_effective_materialization_scenario",
+        lambda _webspace_id: (_ for _ in ()).throw(AssertionError("should not probe materialization for a different target scenario")),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
         "_schedule_scenario_switch_rebuild",
         lambda webspace_id, **kwargs: None,
     )
@@ -2315,12 +2392,14 @@ def test_switch_webspace_scenario_pointer_first_avoids_eager_scenario_content_lo
     )
 
     assert result["accepted"] is True
-    assert fake_state["ui"]["current_scenario"] == "prompt_engineer_scenario"
+    assert result["scenario_switch_mode"] == "pointer_only"
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
     assert "validate_scenario" in result["timings_ms"]
     assert "load_scenario" not in result["timings_ms"]
+    assert "read_materialization_scenario_before" not in result["timings_ms"]
 
 
-def test_switch_webspace_scenario_pointer_first_keeps_dev_home_unchanged_by_default(monkeypatch) -> None:
+def test_switch_webspace_scenario_deprecated_pointer_env_keeps_dev_home_unchanged(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH", "1")
 
     webspace_id = "phase-pointer-dev-auto-home"
@@ -2364,12 +2443,12 @@ def test_switch_webspace_scenario_pointer_first_keeps_dev_home_unchanged_by_defa
     row = get_workspace(webspace_id)
     assert row is not None
     assert row.home_scenario == "web_desktop"
-    assert fake_state["ui"]["current_scenario"] == "prompt_engineer_scenario"
+    assert fake_state["ui"]["current_scenario"] == "web_desktop"
     assert sync_listing_calls == []
     assert scheduled == [(webspace_id, "prompt_engineer_scenario")]
     assert result["set_home"] is False
     assert result["home_scenario"] == "web_desktop"
-    assert result["scenario_switch_mode"] == "pointer_first"
+    assert result["scenario_switch_mode"] == "pointer_only"
 
 
 def test_switch_webspace_scenario_compat_env_is_ignored_and_does_not_load_content(monkeypatch) -> None:
@@ -2540,10 +2619,10 @@ def test_switch_webspace_scenario_same_current_ready_skips_rebuild_and_only_pers
     assert "wait_rebuild" not in result["timings_ms"]
 
 
-def test_fresh_doc_rebuild_runs_materialization_in_worker_thread(monkeypatch) -> None:
+def test_fresh_doc_rebuild_runs_in_bounded_materialization_executor(monkeypatch) -> None:
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    async def _fake_to_thread(func, *args, **kwargs):
+    async def _fake_run_cpu(func, *args, **kwargs):
         calls.append((getattr(func, "__name__", ""), args, kwargs))
         return {
             "entry": webspace_runtime_module.WebUIRegistryEntry(scenario_id="prompt_engineer_scenario"),
@@ -2561,7 +2640,7 @@ def test_fresh_doc_rebuild_runs_materialization_in_worker_thread(monkeypatch) ->
             },
         }
 
-    monkeypatch.setattr(webspace_runtime_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(webspace_runtime_module, "_run_materialization_cpu", _fake_run_cpu)
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
     entry = asyncio.run(
@@ -2596,6 +2675,17 @@ def test_fresh_doc_rebuild_runs_materialization_in_worker_thread(monkeypatch) ->
     assert runtime._last_rebuild_ydoc_timings_ms["in_doc_rebuild"] == 12.0
     assert runtime._last_rebuild_ydoc_timings_ms["encode_snapshot"] == 2.0
     assert runtime._last_apply_summary == {"changed_branches": 2, "unchanged_branches": 6}
+
+
+def test_materialization_cpu_worker_count_is_bounded(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_MATERIALIZATION_CPU_WORKERS", raising=False)
+    assert webspace_runtime_module._materialization_cpu_workers() == 1
+    monkeypatch.setenv("ADAOS_MATERIALIZATION_CPU_WORKERS", "0")
+    assert webspace_runtime_module._materialization_cpu_workers() == 1
+    monkeypatch.setenv("ADAOS_MATERIALIZATION_CPU_WORKERS", "8")
+    assert webspace_runtime_module._materialization_cpu_workers() == 4
+    monkeypatch.setenv("ADAOS_MATERIALIZATION_CPU_WORKERS", "invalid")
+    assert webspace_runtime_module._materialization_cpu_workers() == 1
 
 
 def test_materialized_payload_apply_replaces_existing_effective_branches() -> None:
@@ -2638,7 +2728,7 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
-    entry = runtime.apply_materialized_payload_in_doc(
+    entry = runtime.apply_materialized_payload_to_doc(
         ydoc,
         "desktop-dev",
         payload,
@@ -2656,8 +2746,54 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     assert runtime._last_rebuild_timings_ms["load_materialized_payload"] >= 0.0
     assert runtime._last_apply_summary["changed_branches"] >= 1
     assert runtime._last_apply_summary["selector_changed"] is True
+    assert runtime._last_apply_summary["selector_reasserted"] is True
+    assert runtime._last_apply_summary["selector_apply_mode"] == "reasserted"
     assert runtime._last_apply_summary["transaction_total"] == 1
     assert "apply_combined_transaction" in runtime._last_apply_phase_timings_ms
+
+
+def test_materialized_payload_keeps_only_declarations_needed_for_ydoc_defaults() -> None:
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop-dev",
+        scenario_id="web_desktop",
+        source_mode="dev",
+        application={"desktop": {"pageSchema": {"id": "desktop"}}},
+        catalog={"apps": [], "widgets": []},
+        registry={},
+        installed={"apps": [], "widgets": []},
+        desktop={},
+        webio={},
+        routing={},
+        skill_decls=[
+            {
+                "skill": "weather_skill",
+                "node_id": "node-1",
+                "ui_owner": "node",
+                "apps": [{"id": "large-app", "schema": {"unused": ["x"] * 100}}],
+                "widgets": [{"id": "large-widget"}],
+                "handlers": {"unused": "module.handler"},
+                "ydoc_defaults": {"data/weather/current": {"city": "Moscow"}},
+            },
+            {
+                "skill": "catalog_only_skill",
+                "apps": [{"id": "catalog-only"}],
+            },
+        ],
+    )
+
+    payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
+
+    assert payload["skill_decls"] == [
+        {
+            "skill": "weather_skill",
+            "node_id": "node-1",
+            "ui_owner": "node",
+            "ydoc_defaults": {"data/weather/current": {"city": "Moscow"}},
+        }
+    ]
+    assert "apps" not in payload["skill_decls"][0]
+    assert "widgets" not in payload["skill_decls"][0]
+    assert "handlers" not in payload["skill_decls"][0]
 
 
 def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> None:
@@ -2715,6 +2851,125 @@ def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> No
     assert not list(tmp_path.glob("*.json"))
 
 
+def test_payload_only_materialized_worker_cache_round_trips_without_snapshot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
+
+    webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE.clear()  # noqa: SLF001
+    identity = {
+        "key_hash": "payload-cache-key",
+        "key": "payload-cache-key",
+        "webspace_id": "desktop-dev",
+        "scenario_id": "todo_scenario",
+    }
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop-dev",
+        scenario_id="todo_scenario",
+        source_mode="dev",
+        application={"desktop": {"pageSchema": {"id": "page", "widgets": []}}},
+        catalog={"apps": [{"id": "todo"}], "widgets": []},
+        registry={"modals": [], "widgets": []},
+        installed={"apps": ["todo"], "widgets": []},
+        desktop={"pageSchema": {"id": "page", "widgets": []}},
+        webio={"receivers": {}},
+        routing={"routes": {}},
+        skill_decls=[],
+    )
+    payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
+    worker_result = {
+        "materialized_payload": payload,
+        "rebuild_timings_ms": {"total": 123.0},
+        "resolver_debug": {"source": "test"},
+        "apply_summary": {"payload_only": True},
+        "ydoc_timings_ms": {"total": 456.0},
+    }
+
+    webspace_runtime_module._remember_materialized_worker_result(  # noqa: SLF001
+        identity,
+        worker_result,
+        cache_mode="payload_only",
+        require_snapshot=False,
+    )
+    webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE.clear()  # noqa: SLF001
+
+    cached = webspace_runtime_module._get_cached_materialized_worker_result(  # noqa: SLF001
+        identity,
+        cache_mode="payload_only",
+        require_snapshot=False,
+    )
+    fresh_doc_cached = webspace_runtime_module._get_cached_materialized_worker_result(identity)  # noqa: SLF001
+
+    assert cached is not None
+    assert cached["snapshot_update"] == b""
+    assert cached["materialized_payload"]["scenario_id"] == "todo_scenario"
+    assert cached["materialization_cache"]["hit"] is True
+    assert cached["materialization_cache"]["source"] == "disk"
+    assert cached["materialization_cache"]["mode"] == "payload_only"
+    assert cached["apply_summary"]["payload_only"] is True
+    assert fresh_doc_cached is None
+
+    dropped = webspace_runtime_module._drop_materialized_cache_for_webspace(  # noqa: SLF001
+        "desktop-dev",
+        scenario_id="todo_scenario",
+    )
+    assert dropped == {"memory": 1, "disk": 1}
+
+
+def test_materialization_cache_invalidation_without_scenario_drops_whole_webspace(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
+
+    webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE.clear()  # noqa: SLF001
+    webspace_runtime_module._SKILL_SOURCE_FINGERPRINT_CACHE["workspace"] = (123.0, "stale")  # noqa: SLF001
+    for scenario_id in ("builder", "web_desktop"):
+        identity = {
+            "key_hash": f"{scenario_id}-cache-key",
+            "key": f"{scenario_id}-cache-key",
+            "webspace_id": "desktop",
+            "scenario_id": scenario_id,
+        }
+        resolved = webspace_runtime_module.WebspaceResolverOutputs(
+            webspace_id="desktop",
+            scenario_id=scenario_id,
+            source_mode="workspace",
+            application={"desktop": {"pageSchema": {"id": scenario_id, "widgets": []}}},
+            catalog={"apps": [], "widgets": []},
+            registry={"modals": [], "widgets": []},
+            installed={"apps": [], "widgets": []},
+            desktop={"pageSchema": {"id": scenario_id, "widgets": []}},
+            webio={"receivers": {}},
+            routing={"routes": {}},
+            skill_decls=[],
+        )
+        payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
+        webspace_runtime_module._remember_materialized_worker_result(  # noqa: SLF001
+            identity,
+            {
+                "snapshot_update": b"snapshot",
+                "state_vector": b"state-vector",
+                "materialized_payload": payload,
+                "rebuild_timings_ms": {"total": 1.0},
+                "resolver_debug": {"source": "test"},
+                "ydoc_timings_ms": {"total": 1.0},
+            },
+        )
+
+    result = webspace_runtime_module.invalidate_webspace_materialization_cache(
+        "desktop",
+        reason="skill_activate:test",
+        action="skill_activation_sync",
+        source_of_truth="skill_runtime",
+    )
+
+    assert result["materialization"]["cache_drop_scope"] == "webspace"
+    assert result["materialization"]["cache_dropped"] == {"memory": 2, "disk": 2}
+    assert not webspace_runtime_module._MATERIALIZED_WEBSPACE_CACHE  # noqa: SLF001
+    assert not webspace_runtime_module._SKILL_SOURCE_FINGERPRINT_CACHE  # noqa: SLF001
+    assert not list(tmp_path.glob("*.json"))
+
+
 def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materialization(monkeypatch) -> None:
     webspace_id = "phase2-same-current-mismatch"
     ensure_workspace(webspace_id)
@@ -2725,6 +2980,7 @@ def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materia
         source_mode="workspace",
         home_scenario="web_desktop",
     )
+    set_workspace_current_scenario_overlay(webspace_id, "web_desktop")
 
     fake_state = _patch_switch_dependencies(
         monkeypatch,
@@ -2935,7 +3191,7 @@ def test_background_scenario_switch_rebuild_superseded_request_keeps_newer_statu
 
     assert final["status"] == "ready"
     assert final["scenario_id"] == "scenario_b"
-    assert final["switch_mode"] == "pointer_first"
+    assert final["switch_mode"] == "pointer_only"
     assert isinstance(final["phase_timings_ms"], dict)
     assert "time_to_full_hydration" in final["phase_timings_ms"]
 
@@ -2961,19 +3217,41 @@ def test_scenario_switch_rebuild_can_defer_listing_sync(monkeypatch) -> None:
             "scenario_resolution": scenario_resolution,
         }
 
-    async def _fake_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+    async def _fake_materialize(self, webspace_id: str, **kwargs):  # noqa: ARG001
         self._last_rebuild_timings_ms = {"collect_inputs": 1.0, "resolve": 1.0, "apply": 1.0, "total": 3.0}
         self._last_apply_summary = {"changed_branches": 1, "unchanged_branches": 0}
         self._last_rebuild_ydoc_timings_ms = {"total": 3.0}
+        self._last_materialized_payload = {
+            "scenario_id": "prompt_engineer_scenario",
+            "application": {"desktop": {"pageSchema": {"id": "page"}}},
+            "catalog": {"apps": [], "widgets": []},
+            "registry": {},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+        }
         return SimpleNamespace(scenario_id="prompt_engineer_scenario", apps=[], widgets=[])
 
     async def _fake_workflow_sync(self, scenario_id: str, webspace_id: str):  # noqa: ARG002
         return None
 
+    async def _fake_live_refresh(webspace_id: str, **_kwargs):
+        return {"ok": True, "webspace_id": webspace_id}
+
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
     monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway",
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
+    )
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.store",
@@ -2993,8 +3271,8 @@ def test_scenario_switch_rebuild_can_defer_listing_sync(monkeypatch) -> None:
 
     assert result["accepted"] is True
     assert sync_calls == []
-    assert "fresh_doc_sync_listing" not in result["timings_ms"]
-    assert result["timings_ms"]["fresh_doc_sync_listing_deferred"] == 0.0
+    assert "scenario_switch_sync_listing" not in result["timings_ms"]
+    assert result["timings_ms"]["scenario_switch_sync_listing_deferred"] == 0.0
 
 
 def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
@@ -3984,7 +4262,15 @@ def test_phase5_resolver_prefers_scenario_page_schema_and_topbar_over_overlay() 
             },
             scenario_catalog={"apps": [], "widgets": []},
             scenario_registry={},
-            overlay_snapshot={"installed": {"apps": [], "widgets": []}},
+            overlay_snapshot={
+                "installed": {"apps": [], "widgets": []},
+                "topbar": [{"id": "stale-home", "label": "Stale"}],
+                "pageSchema": {
+                    "id": "stale-desktop",
+                    "layout": {"type": "single", "areas": []},
+                    "widgets": [],
+                },
+            },
             live_state={"desktop": {}, "routing": {}},
             skill_decls=[],
             desktop_scenarios=[],
@@ -4176,6 +4462,178 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
     assert result["webspace_identity_update"]["attempted"] is True
     assert result["webspace_identity_update"]["changed"] is True
     assert result["webspace_identity_update"]["home_scenario_before"] == "prompt_engineer_scenario"
+
+
+def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeypatch, tmp_path: Path) -> None:
+    scenario_root = tmp_path / "dev" / "scenarios" / "recipes"
+    revisions = scenario_root / "ui_revisions"
+    revisions.mkdir(parents=True)
+    prototype = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes prototype"}}}},
+    }
+    (revisions / "002.json").write_text(
+        json.dumps({"after_webui": prototype}),
+        encoding="utf-8",
+    )
+    state_dir = tmp_path / "state"
+    automation_dir = state_dir / "builder" / "workflow_snapshots" / "scenario" / "recipes" / "automation"
+    automation_dir.mkdir(parents=True)
+    automation = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes automation"}}}},
+    }
+    (automation_dir / "webui.json").write_text(json.dumps(automation), encoding="utf-8")
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "scenario_root_for_space",
+        lambda scenario_id, space: scenario_root,
+    )
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+
+    prototype_content, prototype_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="prototype",
+        revision="002",
+        label=None,
+    )
+    automation_content, automation_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="automation",
+        revision="task.current",
+        label=None,
+    )
+
+    assert prototype_space == "dev"
+    assert prototype_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "proto:002 Recipes prototype"
+    assert automation_space == "dev"
+    assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Recipes automation"
+
+
+def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+    publication = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Published recipes"}}}},
+    }
+
+    def _read_content(scenario_id: str, *, space: str):
+        calls.append((scenario_id, space))
+        return publication
+
+    monkeypatch.setattr(webspace_runtime_module.scenarios_loader, "read_content", _read_content)
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="publication",
+        revision="0.2.0",
+        label=None,
+    )
+
+    assert calls == [("recipes", "workspace")]
+    assert source_space == "workspace"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
+
+
+def test_builder_prototype_preview_synthesizes_an_empty_canvas_for_legacy_default_scenarios(monkeypatch) -> None:
+    legacy_content = {
+        "id": "template-id",
+        "version": "0.1.0",
+        "name": "New Scenario",
+        "steps": [],
+    }
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: legacy_content,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_manifest",
+        lambda scenario_id, *, space: {"id": scenario_id, "name": "Recipe Book"},
+    )
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "test01_recipes",
+        stage="prototype",
+        revision=None,
+        label=None,
+    )
+
+    page = content["ui"]["application"]["desktop"]["pageSchema"]
+    assert source_space == "dev"
+    assert page["id"] == "test01_recipes"
+    assert page["title"] == "proto:current Recipe Book"
+    assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
+    assert page["meta"]["builder"]["compatibility_fallback"] is True
+    assert "ui" not in legacy_content
+
+
+def test_builder_prototype_preview_repairs_an_existing_zero_widget_empty_canvas(monkeypatch) -> None:
+    empty_canvas = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "template-id",
+                        "title": "New Scenario",
+                        "layout": {
+                            "type": "single",
+                            "pattern": "stack",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [],
+                        "meta": {"builder": {"empty_canvas": True}},
+                    }
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: empty_canvas,
+    )
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "test02_recipes",
+        stage="prototype",
+        revision=None,
+        label="proto: test02_recipes · current",
+    )
+
+    page = content["ui"]["application"]["desktop"]["pageSchema"]
+    assert source_space == "dev"
+    assert page["id"] == "test02_recipes"
+    assert page["title"] == "proto: test02_recipes · current"
+    assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
+    assert page["meta"]["builder"]["placeholder_injected"] is True
+    assert empty_canvas["ui"]["application"]["desktop"]["pageSchema"]["widgets"] == []
+
+
+def test_legacy_automation_preview_falls_back_to_current_dev_descriptor(monkeypatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    current = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Legacy automation"}}}},
+    }
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: current,
+    )
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "legacy-recipes",
+        stage="automation",
+        revision="current",
+        label=None,
+    )
+
+    assert source_space == "dev"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Legacy automation"
 
 
 def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> None:
@@ -4545,6 +5003,66 @@ def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() ->
     assert [item["id"] for item in second.catalog["apps"]] == ["cached-app"]
 
 
+def test_resolver_reuses_scenario_core_across_webspaces_without_overlay_leakage() -> None:
+    webspace_runtime_module._RESOLVED_WEBSPACE_CACHE.clear()
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    common = {
+        "scenario_id": "shared-generated-scenario",
+        "source_mode": "dev",
+        "scenario_application": {"desktop": {"pageSchema": {"id": "shared-page"}}},
+        "scenario_catalog": {"apps": [{"id": "shared-app"}], "widgets": []},
+        "scenario_registry": {"modals": [], "widgets": []},
+        "live_state": {},
+        "skill_decls": [],
+        "skill_decls_fingerprint": "skills-v1",
+        "desktop_scenarios": [],
+        "scenario_source": "loader:dev:shared-v1",
+    }
+
+    first = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="preview-a",
+            overlay_snapshot={"installed": {"apps": ["only-a"], "widgets": []}},
+            **common,
+        )
+    )
+    second = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="preview-b",
+            overlay_snapshot={"installed": {"apps": ["only-b"], "widgets": []}},
+            **common,
+        )
+    )
+    second_debug = dict(runtime._last_resolver_debug or {})
+    runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="preview-c",
+            overlay_snapshot={"installed": {"apps": ["only-c"], "widgets": []}},
+            metadata={
+                "materialization": {
+                    "identity": {
+                        "user_id": "operator",
+                        "roles_hash": "admin-role-hash",
+                        "policy_fingerprint": "policy-v2",
+                    }
+                }
+            },
+            **common,
+        )
+    )
+    third_debug = dict(runtime._last_resolver_debug or {})
+
+    assert second_debug["cache_hit"] is False
+    assert second_debug["core_cache_hit"] is True
+    assert third_debug["core_cache_hit"] is False
+    assert first.webspace_id == "preview-a"
+    assert second.webspace_id == "preview-b"
+    assert first.installed["apps"] == ["only-a"]
+    assert second.installed["apps"] == ["only-b"]
+    second.application["desktop"]["pageSchema"]["id"] = "mutated"
+    assert first.application["desktop"]["pageSchema"]["id"] == "shared-page"
+
+
 def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches() -> None:
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     fake_state = {
@@ -4711,6 +5229,95 @@ def test_phase5_apply_trusts_previous_materialized_fingerprint_without_live_bran
     assert summary["branch_timings_ms"]["data.webio"]["presence_check"] >= 0.0
 
 
+def test_phase5_apply_trusts_previous_materialized_fingerprint_for_patch_base(monkeypatch) -> None:
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)
+
+    live_catalog_sentinel = object()
+    original_fingerprint = webspace_runtime_module._fingerprint_json_like
+
+    def _fingerprint(value):
+        if value is live_catalog_sentinel:
+            raise AssertionError("trusted patch base should not fingerprint live data.catalog")
+        return original_fingerprint(value)
+
+    monkeypatch.setattr(webspace_runtime_module, "_fingerprint_json_like", _fingerprint)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_trust_previous_materialized_branch_fingerprints_enabled",
+        lambda: True,
+    )
+
+    previous_catalog = {"apps": [{"id": "old"}], "widgets": []}
+    next_catalog = {"apps": [{"id": "new"}], "widgets": []}
+    previous_catalog_fingerprint = original_fingerprint(previous_catalog)
+    next_catalog_fingerprint = original_fingerprint(next_catalog)
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="phase5-trusted-patch-base",
+        scenario_id="builder",
+        source_mode="workspace",
+        application={"desktop": {"pageSchema": {"id": "next"}}},
+        catalog=next_catalog,
+        registry={"modals": [], "widgets": []},
+        installed={"apps": [], "widgets": []},
+        desktop={"installed": {"apps": [], "widgets": []}},
+        webio={"receivers": {}},
+        routing={"routes": {}},
+        skill_decls=[],
+    )
+    previous = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id=resolved.webspace_id,
+        scenario_id="web_desktop",
+        source_mode="workspace",
+        application=resolved.application,
+        catalog=previous_catalog,
+        registry=resolved.registry,
+        installed=resolved.installed,
+        desktop=resolved.desktop,
+        webio=resolved.webio,
+        routing=resolved.routing,
+        skill_decls=[],
+    )
+    fake_state = {
+        "ui": _CountingMap({"application": previous.application, "current_scenario": previous.scenario_id}),
+        "registry": _CountingMap(
+            {
+                "merged": previous.registry,
+                "runtime_meta": {
+                    webspace_runtime_module._RUNTIME_META_EFFECTIVE_BRANCH_FINGERPRINTS_KEY: {
+                        "data.catalog": previous_catalog_fingerprint,
+                    }
+                },
+            }
+        ),
+        "data": _CountingMap(
+            {
+                "catalog": live_catalog_sentinel,
+                "installed": previous.installed,
+                "desktop": previous.desktop,
+                "webio": previous.webio,
+                "routing": previous.routing,
+            }
+        ),
+        "runtime": _CountingMap({"environment": webspace_runtime_module.runtime_environment_payload()}),
+    }
+
+    runtime._apply_resolved_state_in_doc(
+        _FakeDoc(fake_state),
+        "phase5-trusted-patch-base",
+        resolved,
+        previous_resolved=previous,
+        resolved_branch_fingerprints_override={"data.catalog": next_catalog_fingerprint},
+        previous_branch_fingerprints_override={"data.catalog": previous_catalog_fingerprint},
+    )
+
+    summary = runtime._last_apply_summary or {}
+    assert summary["trusted_previous_fingerprint_patch_paths"] == ["data.catalog"]
+    assert summary["branch_timings_ms"]["data.catalog"]["previous_fingerprint_trusted"] >= 0.0
+    assert "previous_actual_fingerprint" not in summary["branch_timings_ms"]["data.catalog"]
+    assert fake_state["data"].get("catalog") == next_catalog
+
+
 def test_phase5_derive_phase_timings_uses_semantic_phase_breakdown() -> None:
     phase_timings = webspace_runtime_module._derive_phase_timings(
         switch_timings_ms={
@@ -4742,6 +5349,34 @@ def test_phase5_derive_phase_timings_uses_semantic_phase_breakdown() -> None:
     assert phase_timings["time_to_pointer_update"] == 3.5
     assert phase_timings["time_to_first_structure"] == 9.0
     assert phase_timings["time_to_interactive_focus"] == 11.0
+    assert phase_timings["time_to_full_hydration"] == 12.0
+
+
+def test_phase5_atomic_commit_reports_selector_visible_at_full_hydration() -> None:
+    phase_timings = webspace_runtime_module._derive_phase_timings(
+        switch_timings_ms={
+            "describe_state_before": 0.5,
+            "resolve_manifest_policy": 0.5,
+            "validate_scenario": 1.0,
+            "defer_switch_pointer": 0.0,
+            "total": 4.0,
+        },
+        rebuild_timings_ms={"projection_refresh": 2.0, "total": 10.0},
+        semantic_rebuild_timings_ms={
+            "collect_inputs": 1.0,
+            "resolve": 1.0,
+            "apply_structure": 1.0,
+            "apply_interactive": 2.0,
+            "total": 6.0,
+        },
+        switch_mode="pointer_only",
+    )
+
+    assert phase_timings is not None
+    assert phase_timings["time_to_accept"] == 4.0
+    assert phase_timings["time_to_pointer_update"] == 12.0
+    assert phase_timings["time_to_first_structure"] == 12.0
+    assert phase_timings["time_to_interactive_focus"] == 12.0
     assert phase_timings["time_to_full_hydration"] == 12.0
 
 
@@ -5065,7 +5700,7 @@ def test_phase3_reload_reuses_live_runtime_without_reset(monkeypatch) -> None:
     }
     fake_ctx = SimpleNamespace(bus=SimpleNamespace(publish=lambda _event: None))
     project_calls: list[tuple[str, str, bool]] = []
-    seed_calls: list[tuple[str, str, bool]] = []
+    seed_calls: list[tuple[str, str]] = []
     reset_calls: list[tuple[str, str]] = []
     rebuilds: list[str] = []
     listing_syncs: list[str] = []
@@ -5084,9 +5719,8 @@ def test_phase3_reload_reuses_live_runtime_without_reset(monkeypatch) -> None:
         scenario_id: str,
         *,
         dev: bool | None = None,  # noqa: ARG001
-        emit_event: bool = True,
     ) -> None:
-        seed_calls.append((webspace_id, scenario_id, emit_event))
+        seed_calls.append((webspace_id, scenario_id))
 
     async def _fake_refresh(
         ctx,  # noqa: ARG001
@@ -5170,7 +5804,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     }
     fake_ctx = SimpleNamespace(bus=SimpleNamespace(publish=lambda _event: None))
     project_calls: list[tuple[str, str, bool]] = []
-    seed_calls: list[tuple[str, str, bool]] = []
+    seed_calls: list[tuple[str, str]] = []
     reset_calls: list[tuple[str, str, bool | None]] = []
     emitted: list[tuple[str, dict[str, object], str]] = []
 
@@ -5188,9 +5822,8 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
         scenario_id: str,
         *,
         dev: bool | None = None,  # noqa: ARG001
-        emit_event: bool = True,
     ) -> None:
-        seed_calls.append((webspace_id, scenario_id, emit_event))
+        seed_calls.append((webspace_id, scenario_id))
 
     async def _fake_refresh(
         ctx,  # noqa: ARG001
@@ -5262,7 +5895,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     )
 
     assert project_calls == []
-    assert seed_calls == [("phase3-hard-reset", "prompt_engineer_scenario", False)]
+    assert seed_calls == [("phase3-hard-reset", "prompt_engineer_scenario")]
     assert reset_calls == [("room", "webspace_reset", False), ("ystore", "reset", None)]
     assert emitted == [
         (

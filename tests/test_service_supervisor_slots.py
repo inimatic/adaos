@@ -109,6 +109,37 @@ def test_service_supervisor_skips_deactivated_runtime_service():
     assert "slot_service" not in supervisor.list()
 
 
+def test_service_supervisor_reuses_unchanged_non_service_manifest(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+
+    skills_root = Path(get_ctx().paths.skills_dir())
+    skill_root = skills_root / "module_skill"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    skill_yaml = skill_root / "skill.yaml"
+    skill_yaml.write_text(
+        "name: module_skill\nversion: 0.1.0\nruntime:\n  kind: module\n",
+        encoding="utf-8",
+    )
+
+    original = mod._read_skill_manifest
+    target_reads = 0
+
+    def _counted_read(path: Path) -> dict:
+        nonlocal target_reads
+        if path == skill_root:
+            target_reads += 1
+        return original(path)
+
+    monkeypatch.setattr(mod, "_read_skill_manifest", _counted_read)
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor.ensure_discovered(force=True)
+    supervisor._discover_last_at = 0.0
+    supervisor.ensure_discovered()
+
+    assert target_reads == 1
+
+
 def test_service_supervisor_refresh_discovery_does_not_block_event_loop():
     from adaos.services.skill import service_supervisor as mod
 

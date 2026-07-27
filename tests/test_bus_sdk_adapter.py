@@ -1,13 +1,11 @@
-# tests/test_bus_sdk_adapter.py
 from __future__ import annotations
-import asyncio, json
-from pathlib import Path
+
+import asyncio
+import logging
+
 from adaos.sdk.data import bus
 from adaos.services.agent_context import get_ctx
-
-
-async def _once():
-    await asyncio.sleep(0)
+from adaos.services.logging import attach_event_logger
 
 
 async def _run_bus_flow(seen: dict) -> None:
@@ -16,22 +14,28 @@ async def _run_bus_flow(seen: dict) -> None:
 
     await bus.on("unit.test", handler)
     await bus.emit("unit.test", {"hello": "world"}, source="testcase", actor="pytest")
-    await _once()
+    await asyncio.sleep(0)
 
 
-def test_bus_emit_and_on(tmp_path):
+def test_bus_emit_and_on(monkeypatch) -> None:
     ctx = get_ctx()
-    seen = {}
+    seen: dict[str, str] = {}
+    records: list[logging.LogRecord] = []
+    monkeypatch.setenv("ADAOS_LOG_EVENTS", "1")
+
+    class _RecordHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger(f"adaos.test.bus-sdk.{id(records)}")
+    logger.handlers = [_RecordHandler()]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    attach_event_logger(ctx.bus, logger)
 
     asyncio.run(_run_bus_flow(seen))
 
-    # payload дошёл
     assert seen.get("hello") == "world"
-
-    # ивент должен был залогироваться (setup_logging + attach_event_logger в conftest)
-    log = Path(get_ctx().paths.logs_dir()) / "adaos.log"
-    assert log.exists()
-    # в последней строке провалидируем, что это JSON
-    last = log.read_text(encoding="utf-8").strip().splitlines()[-1]
-    evt = json.loads(last)
-    assert evt["type"] in {"unit.test", "sys.ready", "sys.bus.ready"}  # хотя бы одно из
+    assert records
+    assert records[-1].msg == "event"
+    assert getattr(records[-1], "extra", {}).get("type") == "unit.test"

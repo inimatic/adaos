@@ -12,8 +12,10 @@ from typing import Any, Callable, Mapping
 import yaml
 
 from adaos.services.builder.workspace import BuilderWorkspaceService
+from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_sources import capture_source_snapshot
 from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
@@ -96,6 +98,7 @@ class BuilderAutomationService:
     worker_factory: Callable[[], LocalSkillFactoryWorker] | None = None
     event_sink: Callable[[Mapping[str, Any]], None] | None = None
     workspace_service: BuilderWorkspaceService | None = None
+    workflow_service: BuilderWorkflowService | None = None
     background: bool = True
     materialize_on_completion: bool = True
     factory: SkillFactoryService = field(init=False)
@@ -130,6 +133,22 @@ class BuilderAutomationService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def _workflow(self) -> BuilderWorkflowService:
+        if self.workflow_service is None:
+            self.workflow_service = BuilderWorkflowService(
+                dev_skills_root=self.dev_skills_root,
+                dev_scenarios_root=self.dev_scenarios_root,
+                state_dir=self.state_dir,
+            )
+        return self.workflow_service
+
+    @staticmethod
+    def _change_id(*, session_id: str, iteration: int, seed: str) -> str:
+        identity = f"{session_id}:{max(0, int(iteration))}:{seed}"
+        return "builder_change_automation_" + hashlib.sha256(
+            identity.encode("utf-8")
+        ).hexdigest()[:16]
+
     def start_from_execute(
         self,
         *,
@@ -144,6 +163,9 @@ class BuilderAutomationService:
         brief = str(implementation_brief or "").strip()
         if not brief:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
+        workflow_before = self._workflow().describe(kind, project_id)
+        if workflow_before.get("archived"):
+            raise ValueError("archived projects cannot start automation")
         with _LOCK:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
@@ -162,6 +184,10 @@ class BuilderAutomationService:
                     self._launch_worker(str(refreshed.get("session_id") or ""))
                     result["worker_relaunched"] = True
                 return result
+            if str(workflow_before.get("active_phase") or "prototype") != "prototype":
+                raise ValueError(
+                    "Automation is already the active process; submit a new Automation iteration instead"
+                )
             companion_skill_id = self._resolve_companion_skill_id(kind, project_id)
             created_artifacts = self._ensure_automation_artifacts_created(
                 kind=kind,
@@ -180,6 +206,7 @@ class BuilderAutomationService:
                 "topic_id": f"prompt-project:{kind}:{project_id}",
                 "implementation_brief": brief,
                 "brief_path": str(brief_path or "").strip() or None,
+                "source_prototype_version": self._project_prototype_ref(kind, project_id),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -189,14 +216,31 @@ class BuilderAutomationService:
                 "created_at": _now_iso(),
                 "updated_at": _now_iso(),
             }
-            session["change_id"] = "builder_change_automation_" + hashlib.sha256(
-                f"{session['session_id']}:{session['created_at']}".encode("utf-8")
-            ).hexdigest()[:16]
+            session["change_id"] = self._change_id(
+                session_id=str(session["session_id"]),
+                iteration=0,
+                seed=str(session["created_at"]),
+            )
             submitted = self._submit(session, iteration_instruction="")
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
             session["task_history"].append(session["current_task_id"])
             self._save_session(session)
+            self._workflow().transition(
+                kind,
+                project_id,
+                "automation_started",
+                actor="builder.automation",
+                reason="approved prototype handed to Automation",
+                metadata={
+                    "source_prototype_revision": (
+                        workflow_before.get("prototype", {}).get("head_revision")
+                        if isinstance(workflow_before.get("prototype"), Mapping)
+                        else session.get("source_prototype_version")
+                    ),
+                    "task_id": session.get("current_task_id"),
+                },
+            )
         self._launch_worker(session["session_id"])
         return {
             "ok": True,
@@ -251,20 +295,14 @@ class BuilderAutomationService:
 
         scenario_root = self.dev_scenarios_root / project_id
         manifest: Mapping[str, Any] = {}
-        for name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-            path = scenario_root / name
-            if not path.is_file():
-                continue
+        path = scenario_root / "scenario.yaml"
+        if path.is_file():
             try:
-                if path.suffix.lower() == ".json":
-                    value = json.loads(path.read_text(encoding="utf-8-sig"))
-                else:
-                    value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+                value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
             except (OSError, ValueError, yaml.YAMLError):
-                continue
+                value = {}
             if isinstance(value, Mapping):
                 manifest = value
-                break
 
         candidates: list[str] = []
 
@@ -299,6 +337,7 @@ class BuilderAutomationService:
         object_type: str | None = None,
         object_id: str | None = None,
         webspace_id: str | None = None,
+        workflow_transition: str | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -322,9 +361,33 @@ class BuilderAutomationService:
                     "automation": self.project_session(session),
                 }
             session["iteration"] = int(session.get("iteration") or 0) + 1
-            session.setdefault("turns", []).append(
-                {"iteration": session["iteration"], "text": instruction, "created_at": _now_iso()}
+            changed_at = _now_iso()
+            previous_change_id = str(session.get("change_id") or "").strip()
+            if previous_change_id:
+                session.setdefault("change_history", []).append(previous_change_id)
+            session["change_id"] = self._change_id(
+                session_id=str(session.get("session_id") or ""),
+                iteration=int(session["iteration"]),
+                seed=changed_at,
             )
+            session.setdefault("turns", []).append(
+                {"iteration": session["iteration"], "text": instruction, "created_at": changed_at}
+            )
+            transition_token = str(workflow_transition or "").strip() or None
+            if transition_token == "return_to_prototype":
+                workflow_before = self._workflow().describe(
+                    str(session.get("object_type") or ""),
+                    str(session.get("object_id") or ""),
+                )
+                capabilities = (
+                    workflow_before.get("capabilities")
+                    if isinstance(workflow_before.get("capabilities"), Mapping)
+                    else {}
+                )
+                if not bool(capabilities.get("can_return_to_prototype")):
+                    raise ValueError("return to Prototype requires the current completed Automation result")
+            if transition_token:
+                session["pending_workflow_transition"] = transition_token
             previous_readiness = session.get("completion_readiness")
             if isinstance(previous_readiness, Mapping):
                 history = [
@@ -358,6 +421,24 @@ class BuilderAutomationService:
             session.setdefault("task_history", []).append(session["current_task_id"])
             session["updated_at"] = _now_iso()
             self._save_session(session)
+            if transition_token == "return_to_prototype":
+                self._workflow().transition(
+                    str(session.get("object_type") or ""),
+                    str(session.get("object_id") or ""),
+                    "request_return_to_prototype",
+                    actor="builder.automation",
+                    reason="Automation result is being adapted into a safe prototype",
+                    metadata={"task_id": session.get("current_task_id")},
+                )
+            else:
+                self._workflow().transition(
+                    str(session.get("object_type") or ""),
+                    str(session.get("object_id") or ""),
+                    "automation_iteration_started",
+                    actor="builder.automation",
+                    reason="a new Automation iteration was queued",
+                    metadata={"task_id": session.get("current_task_id")},
+                )
         self._launch_worker(session["session_id"])
         return {
             "ok": True,
@@ -367,6 +448,85 @@ class BuilderAutomationService:
             "session": session,
             "task": submitted["task"],
             "automation": self.project_session(session),
+        }
+
+    def reconcile_checkpoint(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+        """Explicitly repeat only a failed Forge checkpoint for a validated task.
+
+        This recovery never submits or runs Codex.  It is intentionally limited
+        to a completed task whose entire paired checkpoint failed, so a partially
+        committed artifact set cannot be advanced under a new identity.
+        """
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            current = self.refresh_session(session)
+            failure = (
+                current.get("last_failure")
+                if isinstance(current.get("last_failure"), Mapping)
+                else {}
+            )
+            readiness = (
+                current.get("completion_readiness")
+                if isinstance(current.get("completion_readiness"), Mapping)
+                else {}
+            )
+            checkpoints = [
+                dict(item)
+                for item in readiness.get("vcs_checkpoints") or []
+                if isinstance(item, Mapping)
+            ]
+            task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
+            result = current.get("last_result") if isinstance(current.get("last_result"), Mapping) else {}
+            if str(current.get("status") or "") != "failed" or str(failure.get("stage") or "") != "forge_checkpoint":
+                raise ValueError("checkpoint reconciliation requires a Forge checkpoint failure")
+            if str(task.get("status") or "") != "completed" or not result:
+                raise ValueError("checkpoint reconciliation requires a validated completed Codex result")
+            if not checkpoints or any(bool(item.get("ok")) for item in checkpoints):
+                raise ValueError(
+                    "checkpoint reconciliation requires a complete pre-commit failure; "
+                    "partially committed artifact sets require manual recovery"
+                )
+
+            task_id = str(current.get("current_task_id") or "").strip()
+            reconciliation_id = self._change_id(
+                session_id=str(current.get("session_id") or ""),
+                iteration=int(current.get("iteration") or 0),
+                seed=f"{task_id}:checkpoint-reconcile",
+            )
+            previous_change_id = str(current.get("change_id") or "").strip()
+            history = [
+                dict(item)
+                for item in current.get("reconciliation_history") or []
+                if isinstance(item, Mapping)
+            ]
+            history.append(
+                {
+                    "stage": "forge_checkpoint",
+                    "task_id": task_id,
+                    "previous_change_id": previous_change_id or None,
+                    "change_id": reconciliation_id,
+                    "requested_at": _now_iso(),
+                }
+            )
+            current["reconciliation_history"] = history[-20:]
+            current["change_id"] = reconciliation_id
+            current["status"] = "commit_ready"
+            current["finalizing_task_id"] = task_id or None
+            current.pop("last_failure", None)
+            current["updated_at"] = _now_iso()
+            self._save_session(current)
+
+        self._finalize_completed_session(current)
+        reconciled = self.get_session(object_type, object_id) or current
+        return {
+            "ok": str(reconciled.get("status") or "") == "completed",
+            "reconciled": True,
+            "change_id": reconciliation_id,
+            "session": reconciled,
+            "automation": self.project_session(reconciled),
         }
 
     def status(self, *, object_type: str, object_id: str) -> dict[str, Any]:
@@ -444,6 +604,7 @@ class BuilderAutomationService:
                 "id": str(session.get("object_id") or ""),
                 "companion_skill_id": str(session.get("companion_skill_id") or "") or None,
             },
+            "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
             "iteration": int(session.get("iteration") or 0),
             "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
             "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
@@ -610,10 +771,48 @@ class BuilderAutomationService:
         project_id = str(session["object_id"])
         companion = str(session["companion_skill_id"])
         sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
+        source_artifacts: list[tuple[str, str, Path]] = [
+            (
+                kind,
+                project_id,
+                (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id,
+            )
+        ]
         if kind == "scenario":
             sparse_paths.append(f"skills/{companion}/")
+            source_artifacts.append(("skill", companion, self.dev_skills_root / companion))
         sparse_paths.append(f"docs/requirements/{project_id}/")
+        attachments: list[tuple[str, Path, str]] = []
+        if kind == "scenario":
+            automation_snapshot = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / "scenario"
+                / project_id
+                / "automation"
+            )
+            if automation_snapshot.is_dir():
+                attachments.append(
+                    (
+                        "previous_automation",
+                        automation_snapshot,
+                        f"scenarios/{project_id}/.builder_previous_automation",
+                    )
+                )
+        source_snapshot = capture_source_snapshot(
+            state_dir=self.state_dir,
+            artifacts=source_artifacts,
+            attachments=attachments,
+            created_at=_now_iso(),
+        )
+        request_id = (
+            f"realize.{_safe_token(kind)}.{_safe_token(project_id)}."
+            f"{_safe_token(session.get('change_id'), fallback='change')}."
+            f"{max(0, int(session.get('iteration') or 0))}"
+        )
         request = {
+            "request_id": request_id,
             "target": {"type": kind, "id": project_id},
             "source": {
                 "type": "prompt_ide_execute" if not iteration_instruction else "builder_automation_chat",
@@ -625,9 +824,15 @@ class BuilderAutomationService:
                 "implementation_brief_path": session.get("brief_path"),
                 "companion_skill_id": companion,
                 "iteration_instruction": iteration_instruction,
+                "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
             },
-            "repo": {"sparse_paths": sparse_paths, "base_branch": "dev/local"},
+            "repo": {
+                "sparse_paths": sparse_paths,
+                "base_branch": "dev/local",
+                "base_revision": source_snapshot["digest"],
+                "source_snapshot": source_snapshot,
+            },
             "constraints": {
                 "no_external_api": True,
                 "no_secrets": True,
@@ -692,6 +897,31 @@ class BuilderAutomationService:
                 session = self._find_session_by_id(session_id)
                 if session:
                     session = self.refresh_session(session)
+                    if session.get("status") == "failed":
+                        pending_transition = str(session.get("pending_workflow_transition") or "").strip()
+                        session.pop("pending_workflow_transition", None)
+                        self._save_session(session)
+                        try:
+                            self._workflow().transition(
+                                str(session.get("object_type") or ""),
+                                str(session.get("object_id") or ""),
+                                (
+                                    "return_to_prototype_failed"
+                                    if pending_transition == "return_to_prototype"
+                                    else "automation_failed"
+                                ),
+                                actor="builder.automation",
+                                metadata={
+                                    "task_id": session.get("current_task_id"),
+                                    "error": (
+                                        session.get("last_failure", {}).get("message")
+                                        if isinstance(session.get("last_failure"), Mapping)
+                                        else "Automation worker failed"
+                                    ),
+                                },
+                            )
+                        except Exception:
+                            pass
                     should_finalize = bool(
                         isinstance(worker_result, Mapping)
                         and worker_result.get("ok")
@@ -730,7 +960,22 @@ class BuilderAutomationService:
             "vcs_checkpoints": [],
             "completed_at": None,
         }
+        failed_checkpoints: list[Mapping[str, Any]] = []
         try:
+            pending_transition = str(current.get("pending_workflow_transition") or "").strip()
+            if pending_transition == "return_to_prototype":
+                readiness["workflow_transition"] = self._workflow().snapshot_current_prototype(
+                    object_type,
+                    object_id,
+                    source_task_id=str(current.get("current_task_id") or "").strip() or None,
+                    request_text="Safe prototype derived by the built-in LLM from the Automation result",
+                )
+            else:
+                readiness["automation_snapshot"] = self._workflow().snapshot_current_automation(
+                    object_type,
+                    object_id,
+                    task_id=str(current.get("current_task_id") or "").strip() or None,
+                )
             readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
             failed_checkpoints = [
                 item
@@ -753,25 +998,113 @@ class BuilderAutomationService:
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
 
-                binding = asyncio.run(
-                    BuilderWorkbenchService(state_dir=self.state_dir).ensure_dev_webspace(
-                        webspace_id,
-                        runtime_scenario_id=object_id,
-                        wait_for_rebuild=True,
-                    )
+                workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+                get_binding = getattr(workbench, "get_workspace_binding", None)
+                existing_binding = dict(get_binding(webspace_id) or {}) if callable(get_binding) else {}
+                preview_target = (
+                    existing_binding.get("preview_target")
+                    if isinstance(existing_binding.get("preview_target"), Mapping)
+                    else None
                 )
-                runtime = binding.get("runtime") if isinstance(binding.get("runtime"), Mapping) else {}
-                readiness["materialization"] = {
-                    **dict(runtime),
-                    "preview_webspace_id": str(
-                        binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
-                    ).strip(),
-                }
-                if not bool(readiness["materialization"].get("ok", False)):
-                    raise RuntimeError(
-                        str(readiness["materialization"].get("error") or "dev webspace reload failed")
+                if preview_target:
+                    readiness["materialization"] = {
+                        "ok": True,
+                        "skipped": "explicit_preview_target_preserved",
+                        "preview_webspace_id": str(
+                            existing_binding.get("preview_webspace_id")
+                            or existing_binding.get("dev_webspace_id")
+                            or ""
+                        ).strip(),
+                    }
+                else:
+                    binding = asyncio.run(
+                        workbench.ensure_dev_webspace(
+                            webspace_id,
+                            runtime_scenario_id=object_id,
+                            wait_for_rebuild=True,
+                        )
                     )
+                    runtime = binding.get("runtime") if isinstance(binding.get("runtime"), Mapping) else {}
+                    readiness["materialization"] = {
+                        **dict(runtime),
+                        "preview_webspace_id": str(
+                            binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+                        ).strip(),
+                    }
+                    if not bool(readiness["materialization"].get("ok", False)):
+                        raise RuntimeError(
+                            str(readiness["materialization"].get("error") or "dev webspace reload failed")
+                        )
 
+            if pending_transition == "return_to_prototype":
+                transition_snapshot = (
+                    readiness.get("workflow_transition")
+                    if isinstance(readiness.get("workflow_transition"), Mapping)
+                    else {}
+                )
+                transition_result = self._workflow().transition(
+                    object_type,
+                    object_id,
+                    "return_to_prototype",
+                    actor="builder.automation",
+                    reason="safe prototype adaptation completed",
+                    metadata={
+                        "revision": transition_snapshot.get("revision"),
+                        "task_id": current.get("current_task_id"),
+                    },
+                )
+                readiness["workflow_transition"] = {
+                    **dict(transition_snapshot),
+                    "transition": transition_result,
+                }
+                current.pop("pending_workflow_transition", None)
+            else:
+                workflow_projection = self._workflow().describe(object_type, object_id)
+                if str(workflow_projection.get("active_phase") or "prototype") == "prototype":
+                    self._workflow().transition(
+                        object_type,
+                        object_id,
+                        "automation_started",
+                        actor="builder.automation.recovery",
+                        reason="reconciled a completed legacy Automation session",
+                        metadata={
+                            "source_prototype_revision": current.get("source_prototype_version"),
+                            "task_id": current.get("current_task_id"),
+                        },
+                    )
+                self._workflow().transition(
+                    object_type,
+                    object_id,
+                    "automation_completed",
+                    actor="builder.automation",
+                    metadata={
+                        "task_id": current.get("current_task_id"),
+                        "version": self._project_version(object_type, object_id),
+                        "snapshot_path": (
+                            readiness.get("automation_snapshot", {}).get("path")
+                            if isinstance(readiness.get("automation_snapshot"), Mapping)
+                            else None
+                        ),
+                    },
+                )
+            if object_type == "scenario" and object_id and preview_target and bool(preview_target.get("follow_active")):
+                try:
+                    from adaos.sdk.builder import preview
+
+                    workflow_after = self._workflow().describe(object_type, object_id)
+                    readiness["materialization"] = preview.select_target(
+                        object_type,
+                        object_id,
+                        stage=str(workflow_after.get("active_phase") or "prototype"),
+                        source_webspace_id=webspace_id,
+                        follow_active=True,
+                    )
+                except Exception as exc:
+                    readiness["materialization"] = {
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "preserved_target": dict(preview_target),
+                    }
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
@@ -786,13 +1119,31 @@ class BuilderAutomationService:
             current["completion_readiness"] = readiness
             current["status"] = "failed"
             current.pop("finalizing_task_id", None)
+            current.pop("pending_workflow_transition", None)
             current["last_failure"] = {
-                "stage": "live_readiness",
+                "stage": "forge_checkpoint" if failed_checkpoints else "live_readiness",
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }
             current["updated_at"] = readiness["completed_at"]
             self._save_session(current)
+            try:
+                self._workflow().transition(
+                    object_type,
+                    object_id,
+                    (
+                        "return_to_prototype_failed"
+                        if pending_transition == "return_to_prototype"
+                        else "automation_failed"
+                    ),
+                    actor="builder.automation",
+                    metadata={
+                        "task_id": current.get("current_task_id"),
+                        "error": readiness["error"],
+                    },
+                )
+            except Exception:
+                pass
             if self.event_sink:
                 self.event_sink(self.project_session(current))
             return
@@ -1005,6 +1356,27 @@ class BuilderAutomationService:
         if not project_id:
             raise ValueError("object_id is required")
         return kind, project_id
+
+    def _project_version(self, object_type: str, object_id: str) -> str | None:
+        parent = self.dev_scenarios_root if object_type == "scenario" else self.dev_skills_root
+        manifest_name = "scenario.yaml" if object_type == "scenario" else "skill.yaml"
+        path = parent / object_id / manifest_name
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        except (OSError, ValueError, yaml.YAMLError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        return str(payload.get("version") or "").strip() or None
+
+    def _project_prototype_ref(self, object_type: str, object_id: str) -> str | None:
+        try:
+            revision = self._workflow().current_prototype_revision(object_type, object_id)
+        except Exception:
+            revision = None
+        if revision and object_type == "scenario" and str(revision).isdigit():
+            return f"UI {int(str(revision)):03d}"
+        return str(revision or self._project_version(object_type, object_id) or "").strip() or None
 
     def _session_path(self, object_type: str, object_id: str) -> Path:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"

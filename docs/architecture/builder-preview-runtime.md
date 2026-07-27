@@ -101,17 +101,31 @@ the scenario switch was accepted for background rebuild; only `ready` advances
 
 ## Materialization Boundary
 
-Production defaults `ADAOS_MATERIALIZATION_WORKER=1`. Each materialization is
-performed by `adaos.services.scenario.materialization_worker` in a one-shot
-process. Two modes are supported:
+Production keeps `ADAOS_MATERIALIZATION_WORKER=1` for materializations that
+actually need a fresh isolated document. Two execution classes are supported:
 
-- `payload_only`: resolve immutable effective branches for live-room apply;
-- `fresh_doc`: additionally return encoded snapshot update and state vector.
+- ordinary `scenario_switch_rebuild` resolves `payload_only` in the long-lived
+  core runtime; skill declaration discovery and resolver CPU work run in worker
+  threads, while live YDoc access remains on its owner loop;
+- `fresh_doc` and explicitly isolated materialization run through
+  `adaos.services.scenario.materialization_worker` and additionally return an
+  encoded snapshot update and state vector.
 
-The child initializes read context, creates/reads YDocs, and returns JSON plus
-base64-encoded bytes. It does not mutate the parent live room. The parent
-checks the current request generation, applies the result, and then the child
-exit releases the native `y_py` allocator heap.
+The old path started a complete second AdaOS runtime for every scenario switch.
+On the measured Windows host this spent about 1.9 seconds importing bootstrap
+and scenario modules and another 1.2-1.8 seconds rediscovering unchanged skill
+UI declarations before resolving the scenario. Process exit was not an
+ownership requirement after the patched Yrs release, so ordinary switches no
+longer cross that duplicate boundary.
+
+The process-owned skill declaration catalog is built during API startup and is
+invalidated by skill source changes. An isolated worker receives that bounded
+catalog and its fingerprint in the request instead of scanning every active
+skill again. The child does not mutate the parent live room. The parent checks
+the current request generation and applies the result. Fresh-document workers
+retain explicit timeout, RSS, result-size, and process-tree cancellation
+budgets. Native YDoc lifetime is handled by the patched Yrs ownership model and
+does not depend on worker exit.
 
 The parent supervises the complete Windows process tree (venv launcher and
 base interpreter), not just the launcher PID. Timeout, cancellation, and RSS
@@ -127,10 +141,70 @@ Operational limits:
 | `ADAOS_MATERIALIZATION_WORKER_MAX_RESULT_MB` | 512 MiB |
 | `ADAOS_WEBSPACE_RESOLVED_CACHE_MAX_MB` | 32 MiB |
 | `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_MAX_MB` | 64 MiB |
-| `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_LIMIT` | 1 entry |
+| `ADAOS_WEBSPACE_MATERIALIZATION_CACHE_LIMIT` | 8 entries |
+| `ADAOS_WEBSPACE_SKILL_SOURCE_FINGERPRINT_TTL_S` | 600 seconds |
+| `ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS` | enabled |
 
 Tests disable the process boundary by default under `ADAOS_TESTING`; tests for
 the boundary may explicitly enable it.
+
+Scenario-switch materialization uses an explicit identity derived from
+`webspace_id`, `scenario_id`, source mode, scenario file stamps, active skill UI
+declaration stamps, user/roles, and policy. Resolver caching is split into a
+scenario-invariant core and a per-webspace overlay. The core may be reused by
+two preview webspaces only when scenario, source, skill, user/roles, and policy
+fingerprints match; installed state, pinned widgets, ordering/visibility, and the
+output webspace id are cloned and applied separately. Scenario-owned topbar and
+page schema always come from the new core; stale structural values collected
+from the previous webspace state are not overlaid. Full fresh-doc snapshots
+remain in a separate cache namespace, so a fast switch cannot reuse a payload
+where a Yjs snapshot is required. Runtime mutations without a specific
+scenario id invalidate all materialized entries for the webspace;
+scenario-specific mutations may drop only that scenario.
+
+An ordinary switch preserves the existing YStore base and persists the
+live-room branch diff. It no longer clears YStore and then blocks the switch on
+a full-state snapshot rewrite. Hard reset/restore paths retain full snapshot
+semantics. Browser scenario and go-home commands accept the pointer change in
+background by default; `wait_for_rebuild=true` remains an explicit diagnostic
+or recovery request.
+Skill source fingerprinting is event-invalidated by skill install/update/
+rollback and uses `ADAOS_WEBSPACE_SKILL_SOURCE_FINGERPRINT_TTL_S` only as a
+fallback for out-of-band file edits. It should not rescan active skill source
+trees during ordinary hot scenario switching.
+
+Live-room materialized payload apply trusts runtime-owned
+`registry.runtime_meta.effective_branch_fingerprints` by default when the
+previous materialized payload supplies the same branch fingerprint. This avoids
+reading and hashing large live YDoc branches during ordinary
+builder/web_desktop toggles. The flag
+`ADAOS_WEBSPACE_TRUST_PREVIOUS_MATERIALIZED_BRANCH_FINGERPRINTS=0` is a
+diagnostic escape hatch, not the target architecture.
+
+## Lifecycle Preview Targets
+
+Builder persists an explicit `adaos.builder.preview_target.v1` alongside the
+workbench binding. Clicking a Lifecycle node does not materialize it. The
+separate **Show in Preview** action selects one of these sources:
+
+| Target | Source | Version policy | Header prefix |
+| --- | --- | --- | --- |
+| Prototype | exact DEV `ui_revisions/NNN.json` snapshot | any retained UI revision | `proto:` |
+| Automation | single retained Builder runtime snapshot | current completed result only | `active:` |
+| Publication | workspace artifact | current published version only | `public:` |
+
+Prototype and Automation use DEV skill declarations; Publication uses
+workspace declarations. The Automation snapshot lives outside the DEV
+artifact tree, so publication cannot accidentally package Builder runtime
+history. Materialization applies the selected scenario content as an explicit
+payload override without rewriting the scenario pointer or the selected
+Lifecycle node.
+
+`follow_active=true` means the target is initially resolved from
+`workflow.active_phase`; an explicit historical selection is read-only and
+does not change that phase. The Builder header presents the editable process
+(`WORKING`) and the rendered target (`VIEWING`) separately so a user can move
+through the tree without mistaking navigation for a state transition.
 
 ## Workspace Catalog
 
@@ -184,8 +258,63 @@ A supervisor smoke measured 115.3 MiB peak RSS for the complete launcher plus
 interpreter process tree. Cancelling an active materialization terminated both
 PIDs; no descendant remained alive after cancellation.
 
-The process boundary therefore adds roughly one second to this local cold
-path, while removing native YDoc heap retention from the long-lived API
-process. The acceptance suite also covers 100 identical selections
+This historical run established that process isolation bounded memory, but the
+new phase timings subsequently showed 1.8-2.7 seconds outside the measured
+resolver: interpreter/module startup plus repeated declaration discovery. Native
+YDoc heap release is owned by the patched Yrs store model documented in
+[Yjs Runtime Ownership](yjs-runtime-ownership.md), not by process churn. The
+acceptance suite also covers 100 identical selections
 (one generation/apply), 100 distinct sequential selections (one bounded state
 file), and a superseded in-flight generation converging to the latest target.
+
+The 2026-07-22 browser acceptance used the real `dev1` Builder surface and its
+paired `dev1-dev` preview:
+
+- **Choose project** rendered all 21 projects in 879 ms without a loading state
+  or spinner;
+- selecting `Prototype App E5` kept `dev1` on `builder/ready` for every poll;
+- only `dev1-dev` entered pending materialization and converged to
+  `prototype_app_4d5758e5/ready` in 6.49 seconds;
+- the Builder page remained mounted and displayed the selected project while
+  the preview rebuilt;
+- a 52-switch live soak reached a bounded private-memory plateau; the final
+  40-switch window was 304.1-318.5 MiB with a -0.019 MiB/switch slope over its
+  last 20 samples.
+
+This verifies that project selection is a Builder data/context change. It does
+not switch or reload the Builder host scenario. Scenario materialization is
+owned only by the explicitly related preview webspace.
+
+The 2026-07-23 root-cause benchmark cleared resolved/materialized caches after
+building the process-owned declaration catalog, then materialized the real
+`prototype_app_c6b08e41` scenario. The final API acceptance run on a new DEV
+webspace measured:
+
+- pointer/rebuild acceptance: 54 ms internally and 84 ms over local HTTP;
+- complete cold rebuild: 0.692 seconds, including 0.264 seconds resolver and
+  0.271 seconds cold YRoom creation plus payload apply;
+- second DEV webspace in the isolated resolver benchmark: 0.436 seconds total
+  with a shared-core hit;
+- skill declaration lookup in both operations: below 0.4 ms;
+- the same payload through the retained one-shot worker: 3.269 seconds even
+  with declarations supplied, proving that duplicate runtime startup rather
+  than generated scenario complexity caused the former 4-6 second switch.
+
+The final cold trace contained no `scenario_projection_sync` for the selected
+scenario and no materialization worker. Its full snapshot exposed
+`pageSchema.id=prototype_app_c6b08e41`, proving that the previous scenario's
+structural overlay was not retained. A 40-switch alternating run stabilized at
+0.17-0.24 seconds per hot rebuild; process private bytes moved from 341.2 MiB
+to 342.1 MiB and reached a plateau after the first cache allocations.
+
+Overlay isolation and access-scope separation are regression-tested. A shared
+core hit cannot carry installed/layout state across webspaces, and a different
+user/roles/policy identity forces a different core entry.
+
+Cold live-room creation is part of the same ownership contract. When the
+switch already has a materialized payload, room bootstrap loads persisted Yjs
+state without scenario seeding and applies the payload exactly once. It does
+not emit `scenarios.synced` or invoke the in-room semantic materializer. The
+pre-fix live trace spent 1.139 seconds creating the room and ran an additional
+0.649-second `scenario_projection_sync`; the same stage after the fix took
+0.183 seconds with no duplicate rebuild.

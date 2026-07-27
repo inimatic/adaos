@@ -37,6 +37,12 @@ The current implementation is centered around local and private deployments:
   in the domain roadmaps
 - [Roadmap Inventory](architecture/roadmap-inventory.md): authority map and
   index of the domain architecture and roadmap documents
+- [Artifact Source, Package, and Activation](architecture/artifact-source-package-activation.md):
+  immutable source/package/release contracts, isolated trial, subscriptions,
+  and transactional Workspace activation
+- [Artifact Pipeline Evidence — 2026-07-24](architecture/artifact-pipeline-local-evidence-2026-07-24.md):
+  reproducible local proof plus deployed backend-route and live Builder
+  publication identities
 - [CLI](cli/index.md): command groups and operational workflows
 - [SDK](sdk/index.md): public Python-facing building blocks
 - [Skills](skills.md): skill lifecycle and runtime behavior

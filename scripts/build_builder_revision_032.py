@@ -46,7 +46,6 @@ ACTION_INVALIDATION_TAGS = {
     f"{CONTROL}.start_automation": ["builder.project.automation", "builder.project.lifecycle"],
     f"{CONTROL}.submit_automation": ["builder.project.automation", "builder.project.lifecycle"],
     f"{CONTROL}.push_project": ["builder.project.publication", "builder.project.lifecycle"],
-    f"{CONTROL}.update_project": ["builder.project.publication", "builder.project.metadata", "builder.project.lifecycle"],
     f"{CONTROL}.publish_project": ["builder.project.publication", "builder.project.metadata", "builder.project.lifecycle"],
     f"{CONTROL}.delete_project": ["builder.project.catalog", "builder.project.metadata", "builder.project.lifecycle"],
 }

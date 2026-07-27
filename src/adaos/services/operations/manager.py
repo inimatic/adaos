@@ -10,6 +10,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
@@ -34,7 +35,9 @@ from adaos.services.yjs.webspace import default_webspace_id
 _log = logging.getLogger("adaos.operations")
 _MANAGER_LOCK = threading.RLock()
 _MANAGERS: dict[str, "OperationManager"] = {}
-_ACTIVE_STATUSES = {"accepted", "queued", "running", "waiting_input"}
+_ACTIVE_STATUSES = {"accepted", "queued", "running", "waiting_input", "cancelling"}
+_RETRYABLE_OPERATION_KINDS = {"skill.install", "scenario.install", "scenario.update"}
+_PERSISTENCE_SCHEMA = "adaos.operations.state.v1"
 
 
 def _operations_async_write_meta():
@@ -183,6 +186,9 @@ class OperationState:
     initiator: dict[str, Any] = field(default_factory=dict)
     scope: list[str] = field(default_factory=list)
     can_cancel: bool = False
+    can_retry: bool = False
+    retry_of: str | None = None
+    attempt: int = 1
     webspace_id: str = field(default_factory=default_webspace_id)
 
     def to_dict(self) -> dict[str, Any]:
@@ -244,16 +250,191 @@ class OperationHandle:
 
 
 class OperationManager:
-    def __init__(self, ctx: AgentContext, *, max_finished: int = 20, max_notifications: int = 40) -> None:
+    def __init__(
+        self,
+        ctx: AgentContext,
+        *,
+        max_finished: int = 20,
+        max_notifications: int = 40,
+        state_path: Path | None = None,
+    ) -> None:
         self.ctx = ctx
         self.max_finished = max(1, int(max_finished))
         self.max_notifications = max(1, int(max_notifications))
         self._lock = threading.RLock()
+        self._persist_lock = threading.RLock()
         self._sequence = 0
         self._operations_by_webspace: dict[str, dict[str, OperationState]] = {}
         self._order_by_webspace: dict[str, list[str]] = {}
         self._notifications_by_webspace: dict[str, list[OperationNotification]] = {}
         self._tasks_by_operation_id: dict[str, asyncio.Task[Any]] = {}
+        self._state_path = state_path.resolve() if state_path is not None else self._resolve_state_path()
+        self._persistence_error: str | None = None
+        self._recovered_interrupted_total = self._load_persisted_state()
+        if self._recovered_interrupted_total:
+            self._persist_state()
+
+    def _resolve_state_path(self) -> Path | None:
+        if _env_flag("ADAOS_OPERATIONS_DISABLE_PERSISTENCE", False):
+            return None
+        explicit = str(os.getenv("ADAOS_OPERATIONS_STATE_PATH", "") or "").strip()
+        if explicit:
+            return Path(explicit).expanduser().resolve()
+        try:
+            state_dir = Path(self.ctx.paths.state_dir())
+        except Exception:
+            try:
+                state_dir = Path(self.ctx.paths.base_dir()) / "state"
+            except Exception:
+                return None
+        if not state_dir.is_absolute():
+            return None
+        return (state_dir / "operations" / "operations.json").resolve()
+
+    @staticmethod
+    def _operation_from_dict(payload: Any) -> OperationState | None:
+        if not isinstance(payload, dict):
+            return None
+        fields = OperationState.__dataclass_fields__
+        values = {key: value for key, value in payload.items() if key in fields}
+        try:
+            item = OperationState(**values)
+        except Exception:
+            return None
+        if not item.operation_id or not item.webspace_id:
+            return None
+        return item
+
+    @staticmethod
+    def _notification_from_dict(payload: Any) -> OperationNotification | None:
+        if not isinstance(payload, dict):
+            return None
+        fields = OperationNotification.__dataclass_fields__
+        values = {key: value for key, value in payload.items() if key in fields}
+        try:
+            return OperationNotification(**values)
+        except Exception:
+            return None
+
+    def _load_persisted_state(self) -> int:
+        path = self._state_path
+        if path is None or not path.is_file():
+            return 0
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._persistence_error = f"{type(exc).__name__}: {exc}"
+            _log.warning("failed to load durable operation state path=%s", path, exc_info=True)
+            return 0
+        if not isinstance(payload, dict) or payload.get("schema") != _PERSISTENCE_SCHEMA:
+            self._persistence_error = "unsupported_or_invalid_state_schema"
+            _log.warning("ignored unsupported durable operation state path=%s", path)
+            return 0
+        recovered = 0
+        now = _now_iso()
+        with self._lock:
+            self._sequence = max(0, int(payload.get("sequence") or 0))
+            for webspace_id, raw_state in dict(payload.get("webspaces") or {}).items():
+                if not isinstance(raw_state, dict):
+                    continue
+                ws = str(webspace_id or "").strip()
+                if not ws:
+                    continue
+                ops: dict[str, OperationState] = {}
+                order: list[str] = []
+                for raw_item in list(raw_state.get("operations") or []):
+                    item = self._operation_from_dict(raw_item)
+                    if item is None:
+                        continue
+                    item.webspace_id = ws
+                    if item.status in _ACTIVE_STATUSES:
+                        item.status = "recoverable"
+                        item.message = "Operation was interrupted by runtime restart and requires explicit retry"
+                        item.updated_at = now
+                        item.finished_at = now
+                        item.can_cancel = False
+                        item.can_retry = item.kind in _RETRYABLE_OPERATION_KINDS
+                        item.error = {
+                            "type": "RuntimeRestart",
+                            "message": "operation interrupted by runtime restart",
+                            "retryable": True,
+                        }
+                        recovered += 1
+                    elif item.status in {"failed", "cancelled", "recoverable"}:
+                        retryable = (item.error or {}).get("retryable")
+                        item.can_retry = (
+                            bool(retryable)
+                            if retryable is not None
+                            else item.kind in _RETRYABLE_OPERATION_KINDS
+                        )
+                    ops[item.operation_id] = item
+                    order.append(item.operation_id)
+                notifications = [
+                    item
+                    for item in (self._notification_from_dict(raw) for raw in list(raw_state.get("notifications") or []))
+                    if item is not None
+                ]
+                for item in ops.values():
+                    if item.status != "recoverable":
+                        continue
+                    notification_id = f"notif:{item.operation_id}:recoverable"
+                    if any(existing.id == notification_id for existing in notifications):
+                        continue
+                    notifications.append(
+                        OperationNotification(
+                            id=notification_id,
+                            level="warning",
+                            message=f"{item.target_kind} {item.target_id} requires retry after runtime restart",
+                            operation_id=item.operation_id,
+                            target_kind=item.target_kind,
+                            target_id=item.target_id,
+                            ts=now,
+                        )
+                    )
+                self._operations_by_webspace[ws] = ops
+                self._order_by_webspace[ws] = order
+                self._notifications_by_webspace[ws] = notifications[-self.max_notifications :]
+                self._trim_finished_locked(ws)
+        self._persistence_error = None
+        return recovered
+
+    def _durable_payload(self) -> dict[str, Any]:
+        with self._lock:
+            webspace_ids = sorted(
+                set(self._operations_by_webspace)
+                | set(self._order_by_webspace)
+                | set(self._notifications_by_webspace)
+            )
+            webspaces: dict[str, Any] = {}
+            for ws in webspace_ids:
+                ops = self._operations_by_webspace.get(ws, {})
+                order = self._order_by_webspace.get(ws, [])
+                webspaces[ws] = {
+                    "operations": [ops[operation_id].to_dict() for operation_id in order if operation_id in ops],
+                    "notifications": [item.to_dict() for item in self._notifications_by_webspace.get(ws, [])],
+                }
+            return {
+                "schema": _PERSISTENCE_SCHEMA,
+                "updated_at": _now_iso(),
+                "sequence": self._sequence,
+                "webspaces": webspaces,
+            }
+
+    def _persist_state(self) -> None:
+        path = self._state_path
+        if path is None:
+            return
+        with self._persist_lock:
+            try:
+                payload = self._durable_payload()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                os.replace(temporary, path)
+                self._persistence_error = None
+            except Exception as exc:
+                self._persistence_error = f"{type(exc).__name__}: {exc}"
+                _log.warning("failed to persist operation state path=%s", path, exc_info=True)
 
     def create_operation(
         self,
@@ -265,6 +446,8 @@ class OperationManager:
         initiator: dict[str, Any] | None = None,
         scope: list[str] | None = None,
         message: str = "",
+        retry_of: str | None = None,
+        attempt: int = 1,
     ) -> OperationState:
         ws = str(webspace_id or "").strip() or default_webspace_id()
         with self._lock:
@@ -279,6 +462,8 @@ class OperationManager:
                 message=str(message or "").strip(),
                 initiator=dict(initiator or {}),
                 scope=list(scope or []),
+                retry_of=str(retry_of or "").strip() or None,
+                attempt=max(1, int(attempt)),
                 webspace_id=ws,
             )
             ops = self._operations_by_webspace.setdefault(ws, {})
@@ -318,17 +503,39 @@ class OperationManager:
             item.updated_at = _now_iso()
             if finished or item.status not in _ACTIVE_STATUSES:
                 item.finished_at = item.finished_at or _now_iso()
+                item.can_cancel = False
+                if item.status in {"failed", "cancelled", "recoverable"}:
+                    retryable = (item.error or {}).get("retryable")
+                    item.can_retry = (
+                        bool(retryable)
+                        if retryable is not None
+                        else item.kind in _RETRYABLE_OPERATION_KINDS
+                    )
+                else:
+                    item.can_retry = False
             self._trim_finished_locked(item.webspace_id)
         self._after_change(item, event_type="operations.changed")
         return item.to_dict()
 
-    def launch(self, operation_id: str, worker: Any) -> dict[str, Any]:
+    def launch(self, operation_id: str, worker: Any, *, cancellable: bool = False) -> dict[str, Any]:
         item = self._get_operation(operation_id)
         handle = OperationHandle(self, operation_id)
 
         async def _runner() -> None:
             try:
                 await worker(handle)
+            except asyncio.CancelledError:
+                handle.update(
+                    status="cancelled",
+                    message="Operation cancelled by operator",
+                    error={
+                        "type": "OperationCancelled",
+                        "message": "operation cancelled by operator",
+                        "retryable": item.kind in _RETRYABLE_OPERATION_KINDS,
+                    },
+                    finished=True,
+                )
+                raise
             except Exception as exc:
                 _log.warning("operation failed op=%s kind=%s", item.operation_id, item.kind, exc_info=True)
                 handle.failed(
@@ -344,6 +551,10 @@ class OperationManager:
             task = loop.create_task(_runner(), name=f"operation-{item.operation_id}")
             with self._lock:
                 self._tasks_by_operation_id[item.operation_id] = task
+                item.can_cancel = bool(cancellable)
+                item.updated_at = _now_iso()
+            if cancellable:
+                self._after_change(item, event_type="operations.changed")
 
             def _finalize(done: asyncio.Task[Any]) -> None:
                 with self._lock:
@@ -355,17 +566,29 @@ class OperationManager:
                 if current.status not in _ACTIVE_STATUSES:
                     return
                 if done.cancelled():
-                    handle.failed(
-                        message="operation cancelled",
-                        error={"type": "CancelledError", "message": "operation cancelled"},
+                    handle.update(
+                        status="cancelled",
+                        message="Operation cancelled by operator",
+                        error={
+                            "type": "OperationCancelled",
+                            "message": "operation cancelled by operator",
+                            "retryable": current.kind in _RETRYABLE_OPERATION_KINDS,
+                        },
+                        finished=True,
                     )
                     return
                 try:
                     exc = done.exception()
                 except asyncio.CancelledError:
-                    handle.failed(
-                        message="operation cancelled",
-                        error={"type": "CancelledError", "message": "operation cancelled"},
+                    handle.update(
+                        status="cancelled",
+                        message="Operation cancelled by operator",
+                        error={
+                            "type": "OperationCancelled",
+                            "message": "operation cancelled by operator",
+                            "retryable": current.kind in _RETRYABLE_OPERATION_KINDS,
+                        },
+                        finished=True,
                     )
                     return
                 if exc is not None:
@@ -380,6 +603,32 @@ class OperationManager:
                 )
 
             task.add_done_callback(_finalize)
+        return item.to_dict()
+
+    def operation(self, operation_id: str) -> dict[str, Any]:
+        return self._get_operation(operation_id).to_dict()
+
+    def cancel_operation(self, operation_id: str) -> dict[str, Any]:
+        item = self._get_operation(operation_id)
+        with self._lock:
+            if item.status == "cancelled":
+                return item.to_dict()
+            if item.status == "cancelling":
+                return item.to_dict()
+            if item.status not in _ACTIVE_STATUSES:
+                raise ValueError("operation_not_active")
+            if not item.can_cancel:
+                raise ValueError("operation_not_cancellable")
+            task = self._tasks_by_operation_id.get(item.operation_id)
+            if task is None or task.done():
+                raise ValueError("operation_not_cancellable")
+            item.status = "cancelling"
+            item.message = "Cancellation requested by operator"
+            item.current_step = "cancel.requested"
+            item.can_cancel = False
+            item.updated_at = _now_iso()
+        self._after_change(item, event_type="operations.cancel_requested")
+        task.cancel()
         return item.to_dict()
 
     def snapshot(self, *, webspace_id: str | None = None) -> dict[str, Any]:
@@ -397,6 +646,13 @@ class OperationManager:
             "active": active,
             "active_items": active_items,
             "notifications": notifications,
+            "persistence": {
+                "enabled": self._state_path is not None,
+                "state_file": self._state_path.name if self._state_path is not None else None,
+                "healthy": self._state_path is not None and self._persistence_error is None,
+                "last_error": self._persistence_error,
+                "recovered_interrupted_total": self._recovered_interrupted_total,
+            },
         }
 
     def _get_operation(self, operation_id: str) -> OperationState:
@@ -417,12 +673,24 @@ class OperationManager:
             ops.pop(op_id, None)
         self._order_by_webspace[webspace_id] = [op_id for op_id in order if op_id not in remove]
 
-    def _after_change(self, item: OperationState, *, event_type: str) -> None:
-        if item.status == "succeeded":
-            self._record_notification(item, level="success", message=f"{item.target_kind} {item.target_id} completed")
-        elif item.status == "failed":
-            message = str((item.error or {}).get("message") or item.message or f"{item.target_kind} {item.target_id} failed")
-            self._record_notification(item, level="error", message=message)
+    def _after_change(self, item: OperationState, *, event_type: str, notify: bool = True) -> None:
+        if notify:
+            if item.status == "succeeded":
+                self._record_notification(item, level="success", message=f"{item.target_kind} {item.target_id} completed")
+            elif item.status == "failed":
+                message = str(
+                    (item.error or {}).get("message")
+                    or item.message
+                    or f"{item.target_kind} {item.target_id} failed"
+                )
+                self._record_notification(item, level="error", message=message)
+            elif item.status == "cancelled":
+                self._record_notification(
+                    item,
+                    level="warning",
+                    message=f"{item.target_kind} {item.target_id} cancelled",
+                )
+        self._persist_state()
         self._publish_event(item, event_type=event_type)
         self._project(item.webspace_id)
 
@@ -501,7 +769,14 @@ class OperationManager:
                         runtime_map.set(
                             txn,
                             "operations",
-                            _json_clone({"by_id": snapshot["by_id"], "order": snapshot["order"], "active": snapshot["active"]}),
+                            _json_clone(
+                                {
+                                    "by_id": snapshot["by_id"],
+                                    "order": snapshot["order"],
+                                    "active": snapshot["active"],
+                                    "persistence": snapshot["persistence"],
+                                }
+                            ),
                         )
                         runtime_map.set(txn, "notifications", _json_clone(snapshot["notifications"]))
 
@@ -515,7 +790,14 @@ class OperationManager:
                         runtime_map.set(
                             txn,
                             "operations",
-                            _json_clone({"by_id": snapshot["by_id"], "order": snapshot["order"], "active": snapshot["active"]}),
+                            _json_clone(
+                                {
+                                    "by_id": snapshot["by_id"],
+                                    "order": snapshot["order"],
+                                    "active": snapshot["active"],
+                                    "persistence": snapshot["persistence"],
+                                }
+                            ),
                         )
                         runtime_map.set(txn, "notifications", _json_clone(snapshot["notifications"]))
         else:
@@ -574,6 +856,8 @@ def submit_install_operation(
     initiator: dict[str, Any] | None = None,
     ctx: AgentContext | None = None,
     action: str = "install",
+    retry_of: str | None = None,
+    attempt: int = 1,
 ) -> dict[str, Any]:
     runtime = ctx or get_ctx()
     manager = get_operation_manager(runtime)
@@ -587,7 +871,10 @@ def submit_install_operation(
         initiator=initiator or {"kind": "user", "id": "local"},
         scope=_operation_scope(target_kind=target_kind, target_id=target_id, action=operation_action),
         message=f"Accepted {target_kind} {operation_action}",
+        retry_of=retry_of,
+        attempt=attempt,
     )
+    use_subprocess_install = operation_action == "install" and _use_subprocess_install()
     try:
         invalidate_webspace_materialization_cache(
             ws,
@@ -599,7 +886,7 @@ def submit_install_operation(
         _log.debug("failed to invalidate materialization cache for operation=%s", operation.operation_id, exc_info=True)
 
     async def _worker(handle: OperationHandle) -> None:
-        if operation_action == "install" and _use_subprocess_install():
+        if use_subprocess_install:
             timeout_name = (
                 "ADAOS_SKILL_INSTALL_PROCESS_TIMEOUT_S"
                 if target_kind == "skill"
@@ -618,6 +905,9 @@ def submit_install_operation(
             timeout_s = _timeout_env_seconds(timeout_name, timeout_default_s)
             try:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            except asyncio.CancelledError:
+                await _terminate_subprocess(proc)
+                raise
             except asyncio.TimeoutError:
                 await _terminate_subprocess(proc)
                 handle.failed(
@@ -908,7 +1198,7 @@ def submit_install_operation(
             message=f"{done_verb} scenario {target_id}" + (" with warnings" if warnings else ""),
         )
 
-    manager.launch(operation.operation_id, _worker)
+    manager.launch(operation.operation_id, _worker, cancellable=use_subprocess_install)
     return operation.to_dict()
 
 
@@ -928,3 +1218,38 @@ def submit_update_operation(
         ctx=ctx,
         action="update",
     )
+
+
+def retry_operation(
+    operation_id: str,
+    *,
+    initiator: dict[str, Any] | None = None,
+    ctx: AgentContext | None = None,
+) -> dict[str, Any]:
+    runtime = ctx or get_ctx()
+    manager = get_operation_manager(runtime)
+    with manager._lock:
+        source = manager._get_operation(operation_id)
+        for ops in manager._operations_by_webspace.values():
+            for candidate in ops.values():
+                if candidate.retry_of == source.operation_id:
+                    return candidate.to_dict()
+        if source.status not in {"failed", "cancelled", "recoverable"} or not source.can_retry:
+            raise ValueError("operation_not_retryable")
+        if source.kind not in _RETRYABLE_OPERATION_KINDS:
+            raise ValueError("operation_kind_not_retryable")
+        action = source.kind.rsplit(".", 1)[-1]
+        retried = submit_install_operation(
+            target_kind=source.target_kind,
+            target_id=source.target_id,
+            webspace_id=source.webspace_id,
+            initiator=initiator or {"kind": "user", "id": "local", "reason": "retry"},
+            ctx=runtime,
+            action=action,
+            retry_of=source.operation_id,
+            attempt=source.attempt + 1,
+        )
+        source.can_retry = False
+        source.updated_at = _now_iso()
+    manager._after_change(source, event_type="operations.retry_accepted", notify=False)
+    return retried

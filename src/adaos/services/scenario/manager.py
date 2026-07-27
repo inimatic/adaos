@@ -37,7 +37,7 @@ from adaos.services.workspace_registry import upsert_workspace_registry_entry
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.scenario.manager")
 _RUNTIME_OWNED_DATA_KEYS = {"catalog", "installed", "desktop", "routing"}
-_SCENARIO_MANIFEST_NAMES = ("scenario.yaml", "scenario.yml", "scenario.json")
+_SCENARIO_MANIFEST_NAMES = ("scenario.yaml",)
 
 
 def _env_type() -> str:
@@ -802,27 +802,27 @@ class ScenarioManager:
         try:
             wait_for_materialized(scenario_dir, files=_SCENARIO_MANIFEST_NAMES, attempts=5, delay=0.1)
         except FileNotFoundError:
+            _log.error(
+                "scenario rejected: required declaration is missing path=%s required=scenario.yaml",
+                str(scenario_dir),
+            )
             if not scenario_dir.exists():
                 raise FileNotFoundError(
                     f"scenario '{name}' is not materialized in workspace sparse checkout"
                 ) from None
+            raise FileNotFoundError(f"scenario '{name}' has no scenario.yaml declaration") from None
 
     def _bump_scenario_manifest_patch(self, scenario_dir: Path) -> str | None:
-        candidates = ("scenario.yaml", "scenario.yml", "scenario.json")
-        manifest_path: Path | None = None
-        for candidate in candidates:
-            path = scenario_dir / candidate
-            if path.exists():
-                manifest_path = path
-                break
-        if manifest_path is None:
-            return None
+        manifest_path = scenario_dir / "scenario.yaml"
+        if not manifest_path.exists():
+            _log.error(
+                "scenario rejected: required declaration is missing path=%s required=scenario.yaml",
+                str(scenario_dir),
+            )
+            raise FileNotFoundError(f"scenario '{scenario_dir.name}' has no scenario.yaml declaration")
 
         try:
-            if manifest_path.suffix.lower() == ".json":
-                payload = json.loads(manifest_path.read_text(encoding="utf-8")) or {}
-            else:
-                payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         except Exception:
             return None
         if not isinstance(payload, dict):
@@ -833,10 +833,7 @@ class ScenarioManager:
         payload["version"] = bump_version(existing_version, 2)
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-        if manifest_path.suffix.lower() == ".json":
-            manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        else:
-            manifest_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n", encoding="utf-8")
+        manifest_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n", encoding="utf-8")
         return str(payload.get("version") or "")
 
     def publish(self, name: str, *, bump: Literal["major", "minor", "patch"] = "patch", force: bool = False, dry_run: bool = False, signoff: bool = False) -> ArtifactPublishResult:

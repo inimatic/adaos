@@ -8,10 +8,6 @@ import threading
 from types import SimpleNamespace
 import types
 
-try:
-    import nats  # noqa: F401
-except Exception:
-    sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules and importlib.util.find_spec("ypy_websocket") is None:
@@ -2699,13 +2695,9 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
                     "persisted_up_to_date": False,
                     "compact_total": 3,
                     "backup_total": 4,
-                    "backup_gc_total": 3,
-                    "backup_malloc_trim_total": 2,
                     "auto_backup_total": 4,
                     "auto_backup_large_update_bytes": 262144,
                     "auto_backup_large_update_debounce_sec": 30.0,
-                    "last_backup_gc_collected": 17,
-                    "last_backup_malloc_trimmed": True,
                     "last_auto_backup_reason": "projection_write_amplification",
                     "last_compact_reason": "backup_compaction",
                 }
@@ -2723,12 +2715,8 @@ def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypa
     assert snapshot["recovery"]["ystore"]["runtime_compaction_eligible"] is True
     assert snapshot["recovery"]["ystore"]["replay_window_bytes"] == 57344
     assert snapshot["recovery"]["ystore"]["last_auto_backup_reason"] == "projection_write_amplification"
-    assert snapshot["recovery"]["ystore"]["backup_gc_total"] == 3
-    assert snapshot["recovery"]["ystore"]["backup_malloc_trim_total"] == 2
     assert snapshot["recovery"]["ystore"]["auto_backup_large_update_bytes"] == 262144
     assert snapshot["recovery"]["ystore"]["auto_backup_large_update_debounce_sec"] == 30.0
-    assert snapshot["recovery"]["ystore"]["last_backup_gc_collected"] == 17
-    assert snapshot["recovery"]["ystore"]["last_backup_malloc_trimmed"] is True
     repair = snapshot["builder_repair_packets"][0]
     assert repair["schema"] == "adaos.llm_builder.yjs_projection_repair.v1"
     assert repair["skill"] == "mediaserver"
@@ -2826,6 +2814,16 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                     "last_materialization_at": 1778055331.0,
                     "replay": {"mode": "snapshot_plus_diff", "cursor": "3/32"},
                     "fallback_mode": "off",
+                    "materialization": {
+                        "ready": False,
+                        "readiness_state": "hydrating",
+                        "transition_expected": True,
+                        "pending": True,
+                        "status": "running",
+                        "current_scenario": "builder",
+                        "target_scenario": "builder",
+                        "missing_branches": ["data.catalog"],
+                    },
                     "blockers": [],
                 },
                 "sync_runtime": {
@@ -3034,6 +3032,16 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["browserYwsHandoffReady"] is True
     assert payload["connectivity"]["requiredUpstreamLink"]["transitionState"] == "waiting_restart"
     assert payload["stateSync"]["replay"]["cursor"] == "3/32"
+    assert payload["stateSync"]["materialization"] == {
+        "ready": False,
+        "readinessState": "hydrating",
+        "transitionExpected": True,
+        "pending": True,
+        "status": "running",
+        "currentScenario": "builder",
+        "targetScenario": "builder",
+        "missingBranches": ["data.catalog"],
+    }
     assert payload["memberAvailability"]["total"] == 2
     assert payload["memberAvailability"]["online"] == 1
     assert payload["memberAvailability"]["stale"] == 1
@@ -3275,6 +3283,94 @@ def test_node_reliability_summary_thin_mode_degrades_state_sync_on_yjs_thread_fa
         assert payload["statusPlane"]["cards"][0]["incidentId"]
     finally:
         incident_registry.reset_incident_registry()
+
+
+def test_node_reliability_summary_thin_mode_exposes_materialization_transition(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+    from adaos.services.status import StatusRegistry
+
+    monkeypatch.setattr(
+        "adaos.apps.api.node_api.current_reliability_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("thin summary must not build the full reliability payload")
+        ),
+    )
+    monkeypatch.setattr(
+        node_api,
+        "_thin_sidecar_runtime_fields",
+        lambda: {
+            "sidecarEnablement": {"enabled": False, "source": "role_default"},
+            "sidecarContinuity": {"currentSupport": "not_applicable"},
+            "sidecarProgress": {},
+            "routeTunnel": {},
+            "browserWsHandoffReady": False,
+            "browserYwsHandoffReady": False,
+            "browserWsHandoffState": "disabled",
+            "browserYwsHandoffState": "disabled",
+        },
+    )
+    monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api,
+        "yjs_sync_runtime_snapshot",
+        lambda **_: {
+            "available": True,
+            "assessment": {"state": "nominal", "reason": ""},
+            "transport": {"server_ready": True, "active_yws_connections": 1},
+            "selected_webspace_id": "desktop",
+            "channel_contract": {"recovery_model": "snapshot_plus_diff"},
+            "selected_webspace": {
+                "rebuild": {
+                    "status": "running",
+                    "pending": True,
+                    "scenario_id": "prompt_engineer_scenario",
+                    "materialization": {
+                        "ready": False,
+                        "readiness_state": "pending_structure",
+                        "current_scenario": "prompt_engineer_scenario",
+                        "missing_branches": ["ui.application", "data.catalog"],
+                    },
+                },
+                "gateway_room": {"ready": True, "open_total": 1, "last_open_at": 1783554151.0},
+            },
+            "webspaces": {
+                "desktop": {
+                    "replay_window_entries": 2,
+                    "replay_window_limit": 32,
+                },
+            },
+        },
+    )
+    registry = StatusRegistry()
+    monkeypatch.setattr(
+        node_api,
+        "get_ctx",
+        lambda: SimpleNamespace(status_registry=registry, paths=SimpleNamespace()),
+    )
+
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(router, prefix="/api/node")
+    client = TestClient(app)
+
+    response = client.get("/api/node/reliability/summary?mode=thin&webspace_id=desktop")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["stateSync"]["semanticState"] == "ready"
+    assert payload["stateSync"]["freshnessState"] == "fresh"
+    assert payload["stateSync"]["materialization"] == {
+        "ready": False,
+        "readinessState": "pending_structure",
+        "transitionExpected": True,
+        "pending": True,
+        "status": "running",
+        "currentScenario": "prompt_engineer_scenario",
+        "targetScenario": "prompt_engineer_scenario",
+        "missingBranches": ["ui.application", "data.catalog"],
+    }
+    assert payload["hubBrowserQuality"]["gates"]["stateSync"]["state"] == "ready"
 
 
 def test_node_reliability_summary_thin_mode_keeps_member_runtime_route_ready(monkeypatch) -> None:
@@ -3585,6 +3681,63 @@ def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressur
     assert snapshot["freshness_state"] == "fresh"
     assert snapshot["replay"]["cursor"] == "32/32"
     assert snapshot["blockers"] == ["bounded_replay_window_near_limit"]
+
+
+def test_state_sync_keeps_channel_fresh_during_expected_materialization_transition() -> None:
+    snapshot = _state_sync_snapshot(
+        {
+            "available": True,
+            "selected_webspace_id": "desktop",
+            "assessment": {
+                "state": "nominal",
+                "reason": "",
+            },
+            "transport": {
+                "server_ready": True,
+                "active_yws_connections": 1,
+            },
+            "channel_contract": {
+                "recovery_model": "snapshot_plus_diff",
+            },
+            "selected_webspace": {
+                "webspace_id": "desktop",
+                "rebuild": {
+                    "status": "running",
+                    "pending": True,
+                    "scenario_id": "prompt_engineer_scenario",
+                    "materialization": {
+                        "ready": False,
+                        "readiness_state": "pending_structure",
+                        "current_scenario": "prompt_engineer_scenario",
+                        "missing_branches": [
+                            "ui.application",
+                            "data.catalog.apps",
+                        ],
+                    },
+                },
+                "gateway_room": {
+                    "ready": True,
+                    "last_open_at": 1778055332.0,
+                },
+            },
+            "webspaces": {
+                "desktop": {
+                    "replay_window_entries": 2,
+                    "replay_window_limit": 32,
+                },
+            },
+        }
+    )
+
+    assert snapshot["transport_state"] == "attached"
+    assert snapshot["first_sync_state"] == "complete"
+    assert snapshot["semantic_state"] == "ready"
+    assert snapshot["freshness_state"] == "fresh"
+    assert snapshot["materialization"]["transition_expected"] is True
+    assert snapshot["materialization"]["readiness_state"] == "pending_structure"
+    assert snapshot["semantic_health"]["materialization_seed"]["state"] == "staging"
+    assert snapshot["semantic_health"]["materialization_seed"]["stale"] is False
+    assert not any(str(item).startswith("missing_branch:") for item in snapshot["blockers"])
 
 
 def test_state_sync_marks_ready_room_degraded_when_browser_transport_has_no_live_channel() -> None:

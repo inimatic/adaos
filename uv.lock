@@ -1,10 +1,16 @@
 version = 1
 revision = 3
 requires-python = ">=3.11.9, <3.12"
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "platform_machine == 'AMD64' and sys_platform == 'win32'",
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "(platform_machine != 'arm64' and sys_platform == 'darwin') or (platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+]
 
 [[package]]
 name = "adaos"
-version = "0.1.554"
+version = "0.1.605"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -18,6 +24,7 @@ dependencies = [
     { name = "keyring" },
     { name = "nats-py" },
     { name = "openai" },
+    { name = "packaging" },
     { name = "psutil" },
     { name = "pytest" },
     { name = "python-dotenv" },
@@ -33,7 +40,7 @@ dependencies = [
     { name = "vosk" },
     { name = "watchdog" },
     { name = "websockets" },
-    { name = "y-py" },
+    { name = "y-py", source = { directory = "vendor/y-py" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "ypy-websocket" },
 ]
 
@@ -60,6 +67,7 @@ requires-dist = [
     { name = "keyring", specifier = ">=24.2.0" },
     { name = "nats-py", specifier = ">=2.6.0" },
     { name = "openai", specifier = ">=1.43.0" },
+    { name = "packaging", specifier = ">=24.1" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
@@ -79,7 +87,9 @@ requires-dist = [
     { name = "vosk", specifier = ">=0.3.45" },
     { name = "watchdog", specifier = ">=4.0.1" },
     { name = "websockets", specifier = ">=11.0" },
-    { name = "y-py", specifier = ">=0.6.0" },
+    { name = "y-py", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", directory = "vendor/y-py" },
+    { name = "y-py", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", directory = "vendor/y-py" },
+    { name = "y-py", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", directory = "vendor/y-py" },
     { name = "ypy-websocket", specifier = ">=0.12.4" },
 ]
 provides-extras = ["dev"]
@@ -4103,8 +4113,20 @@ wheels = [
 
 [[package]]
 name = "y-py"
+source = { directory = "vendor/y-py" }
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "platform_machine == 'AMD64' and sys_platform == 'win32'",
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+
+[[package]]
+name = "y-py"
 version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "(platform_machine != 'arm64' and sys_platform == 'darwin') or (platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/4f/af6e0c02d6876fc466f0ae74ac01693f00d822a93830a9c3e84d17b03f8d/y_py-0.6.2.tar.gz", hash = "sha256:4757a82a50406a0b3a333aa0122019a331bd6f16e49fed67dca423f928b3fd4d", size = 53013, upload-time = "2023-10-05T06:00:28.253Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/82/8884c8184f563c3bd78dcd010bfd88d9e9add84ba16f4a4c2fd7c8d5e27c/y_py-0.6.2-cp311-cp311-macosx_10_7_x86_64.whl", hash = "sha256:a21148b8ea09a631b752d975f9410ee2a31c0e16796fdc113422a6d244be10e5", size = 757236, upload-time = "2023-10-05T05:58:12.819Z" },
@@ -4158,7 +4180,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "anyio" },
-    { name = "y-py" },
+    { name = "y-py", source = { directory = "vendor/y-py" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "y-py", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/68/d1/a49775fddf5d1e0c967e8dee21d6eee6f88e4280762e6099f0914cf58491/ypy_websocket-0.12.4.tar.gz", hash = "sha256:cbbf5fdaa9a301a0b5f9455f1f29478b7c05b62773b2dd2a65c6502b4e10afa1", size = 17046, upload-time = "2023-10-04T14:48:06.597Z" }
 wheels = [

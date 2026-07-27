@@ -3,6 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import threading
+import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -23,6 +27,19 @@ DEFAULT_DESKTOP_MODAL_IDS = (
     "notification_history",
 )
 DEFAULT_DESKTOP_APP_IDS = ("nlu_teacher_app",)
+
+_BASELINE_BUCKET_CACHE_LOCK = threading.RLock()
+_BASELINE_BUCKET_CACHE: dict[str, tuple[float, tuple[Any, ...], dict[str, dict[str, dict[str, Any]]]]] = {}
+_SOURCE_DOCUMENT_CACHE_LOCK = threading.RLock()
+_SOURCE_DOCUMENT_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], Any]] = {}
+_SOURCE_DOCUMENT_CACHE_MAX = 4096
+
+
+def _baseline_bucket_cache_ttl_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("ADAOS_NLU_LOOKUP_BASELINE_CACHE_TTL_S", "30") or "30"))
+    except Exception:
+        return 30.0
 
 
 def _hash_payload(payload: Any) -> str:
@@ -73,20 +90,44 @@ def _unique_paths(paths: Iterable[Path | None]) -> list[Path]:
     return out
 
 
+def _read_cached_source_document(path: Path, *, source_type: str) -> Any:
+    cache_key = (source_type, str(path.resolve()))
+    stamp = _path_stamp(path)
+    with _SOURCE_DOCUMENT_CACHE_LOCK:
+        cached = _SOURCE_DOCUMENT_CACHE.get(cache_key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+
+        try:
+            text = path.read_text(encoding="utf-8")
+            if source_type == "json":
+                document = json.loads(text)
+            else:
+                document = yaml.safe_load(text) or {}
+        except Exception:
+            _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
+            document = None
+
+        _SOURCE_DOCUMENT_CACHE[cache_key] = (stamp, document)
+        while len(_SOURCE_DOCUMENT_CACHE) > _SOURCE_DOCUMENT_CACHE_MAX:
+            _SOURCE_DOCUMENT_CACHE.pop(next(iter(_SOURCE_DOCUMENT_CACHE)))
+        return document
+
+
 def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
-        return None
+    return _read_cached_source_document(path, source_type="json")
 
 
 def _read_yaml(path: Path) -> Any:
+    return _read_cached_source_document(path, source_type="yaml")
+
+
+def _path_stamp(path: Path) -> tuple[str, int, int] | tuple[str, str]:
     try:
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        stat = path.stat()
+        return (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
     except Exception:
-        _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
-        return None
+        return (str(path), "missing")
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -340,14 +381,11 @@ def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], 
             continue
         for skill_dir in sorted(child for child in skills_dir.iterdir() if child.is_dir() and not child.name.startswith(".")):
             _add_skill_entry(buckets, skill_dir.name, {}, source=f"skill.{skill_dir.name}.dir")
-            for manifest_name in ("skill.yaml", "skill.yml"):
-                manifest_path = skill_dir / manifest_name
-                if not manifest_path.exists():
-                    continue
+            manifest_path = skill_dir / "skill.yaml"
+            if manifest_path.exists():
                 doc = _read_yaml(manifest_path)
                 if isinstance(doc, Mapping):
-                    _add_skill_entry(buckets, skill_dir.name, doc, source=f"skill.{skill_dir.name}.{manifest_name}")
-                break
+                    _add_skill_entry(buckets, skill_dir.name, doc, source=f"skill.{skill_dir.name}.skill.yaml")
         for path in sorted(skills_dir.glob("*/webui.json")):
             doc = _read_json(path)
             if isinstance(doc, Mapping):
@@ -364,21 +402,81 @@ def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], 
         if not scenarios_dir.exists():
             continue
         for scenario_root in sorted(child for child in scenarios_dir.iterdir() if child.is_dir()):
-            for file_name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-                path = scenario_root / file_name
-                if path.exists() and path.suffix == ".json":
-                    doc = _read_json(path)
-                    if isinstance(doc, Mapping):
-                        _collect_from_manifest(
-                            buckets,
-                            doc,
-                            source=f"scenario.{scenario_root.name}",
-                            scenario_id=scenario_root.name,
-                        )
-                    break
-                if path.exists():
-                    _add(buckets, "scenario_id", scenario_root.name, source=f"scenario.{scenario_root.name}")
-                    break
+            path = scenario_root / "scenario.yaml"
+            if path.exists():
+                doc = _read_yaml(path)
+                if isinstance(doc, Mapping):
+                    _collect_from_manifest(
+                        buckets,
+                        doc,
+                        source=f"scenario.{scenario_root.name}",
+                        scenario_id=scenario_root.name,
+                    )
+                _add(buckets, "scenario_id", scenario_root.name, source=f"scenario.{scenario_root.name}")
+
+
+def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
+    package_workspace = _package_workspace_dir(ctx)
+    parts: list[Any] = []
+    skill_roots = _unique_paths(
+        [
+            _path_from_ctx(ctx, "skills_dir"),
+            package_workspace / "skills" if package_workspace else None,
+        ]
+    )
+    for skills_dir in skill_roots:
+        parts.append(("skills_dir", _path_stamp(skills_dir)))
+        if not skills_dir.exists():
+            continue
+        try:
+            skill_dirs = sorted(
+                child for child in skills_dir.iterdir() if child.is_dir() and not child.name.startswith(".")
+            )
+        except Exception:
+            skill_dirs = []
+        for skill_dir in skill_dirs:
+            parts.append(("skill", skill_dir.name, _path_stamp(skill_dir)))
+            parts.append(("skill_yaml", _path_stamp(skill_dir / "skill.yaml")))
+            parts.append(("webui", _path_stamp(skill_dir / "webui.json")))
+
+    scenario_roots = _unique_paths(
+        [
+            _path_from_ctx(ctx, "scenarios_dir"),
+            package_workspace / "scenarios" if package_workspace else None,
+        ]
+    )
+    for scenarios_dir in scenario_roots:
+        parts.append(("scenarios_dir", _path_stamp(scenarios_dir)))
+        if not scenarios_dir.exists():
+            continue
+        try:
+            scenario_dirs = sorted(child for child in scenarios_dir.iterdir() if child.is_dir())
+        except Exception:
+            scenario_dirs = []
+        for scenario_root in scenario_dirs:
+            parts.append(("scenario", scenario_root.name, _path_stamp(scenario_root)))
+            parts.append(("scenario_yaml", scenario_root.name, _path_stamp(scenario_root / "scenario.yaml")))
+    return tuple(parts)
+
+
+def _collect_cached_baseline_buckets(ctx: AgentContext) -> dict[str, dict[str, dict[str, Any]]]:
+    ttl_s = _baseline_bucket_cache_ttl_s()
+    cache_key = "baseline"
+    stamp = _baseline_bucket_cache_stamp(ctx)
+    now = time.monotonic()
+    if ttl_s > 0:
+        with _BASELINE_BUCKET_CACHE_LOCK:
+            cached = _BASELINE_BUCKET_CACHE.get(cache_key)
+            if cached is not None and cached[0] > now and cached[1] == stamp:
+                return deepcopy(cached[2])
+    buckets = _empty_buckets()
+    _collect_workspace_manifests(buckets, ctx)
+    _collect_builtin_desktop_defaults(buckets)
+    _collect_node_refs(buckets, ctx)
+    if ttl_s > 0:
+        with _BASELINE_BUCKET_CACHE_LOCK:
+            _BASELINE_BUCKET_CACHE[cache_key] = (now + ttl_s, stamp, deepcopy(buckets))
+    return buckets
 
 
 def _collect_node_refs(buckets: dict[str, dict[str, dict[str, Any]]], ctx: AgentContext) -> None:
@@ -436,11 +534,8 @@ def _empty_buckets() -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def _collect_baseline_buckets(ctx: AgentContext, *, webspace_id: str) -> dict[str, dict[str, dict[str, Any]]]:
-    buckets = _empty_buckets()
+    buckets = _collect_cached_baseline_buckets(ctx)
     _add(buckets, "webspace_id", webspace_id, source="request.webspace_id")
-    _collect_workspace_manifests(buckets, ctx)
-    _collect_builtin_desktop_defaults(buckets)
-    _collect_node_refs(buckets, ctx)
     return buckets
 
 

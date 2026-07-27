@@ -636,9 +636,13 @@ lifecycle and update attempt state.
 - [x] `[must]` Automatically prewarm passive candidate runtime when warm-switch
   is admitted, surface its readiness/failure in supervisor/browser-safe status,
   and keep the candidate passive until supervisor explicitly commits cutover.
-- [ ] `[must]` Harden fast-cutover authority handoff so promoted candidate
+- [x] `[must]` Harden fast-cutover authority handoff so promoted candidate
   runtime becomes the sole live root/browser traffic owner without ambiguous
-  overlap.
+  overlap. Promotion now waits for route authority before retiring the old
+  listener, retirement skips node-wide subnet lifecycle, root restart adopts a
+  slot-matched listener even before its API is responsive, supervisor-managed
+  children cannot self-initiate listener takeover, and unfinished retired
+  processes receive bounded detached cleanup.
 - [ ] `[should]` Add stronger soak/recovery coverage for candidate promotion
   fallback, stale candidate cleanup, and low-memory warm-switch downgrade
   paths.

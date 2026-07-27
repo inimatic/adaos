@@ -2,6 +2,18 @@
 
 Target state: [Device Access and Browsers](device-access-and-browsers.md)
 
+## Current MVP Priority
+
+- `[must]` Close canonical endpoint identity, display-name merge rules,
+  detach/logout behavior, LAN route selection, endpoint assignment, and
+  response routing required by MVP M6.
+- `[should]` Finish settings parity, revocation fanout, offline-detach policy,
+  local TLS, and restart continuity for active endpoint media.
+- `[could]` Add richer inventory grouping and assistant/device-policy
+  affordances after the reachability matrix is accepted.
+- `[deferred]` Keep issuer-side autorotation and broad multi-endpoint media
+  arbitration outside the current M6 proof gate.
+
 ## Working principles
 
 - [x] Keep the authoritative access model in core runtime.
@@ -237,7 +249,7 @@ settings". It is:
 - [x] Phase 6: SDK-first `devices` and `device_access` surfaces plus skill migration off direct service imports.
 - [x] Phase 7: unified settings contract and command-profile surface.
 - [~] Phase 8: browser and member convergence cleanup, reconciler rollout, and `connected_to_subnet` migration.
-- [ ] Phase 9: issuer-side autorotation.
+- [ ] `[deferred]` Phase 9: issuer-side autorotation.
 - [~] Phase 10: system-model, voice, and automation integration.
 - [~] Phase 11: ReDevice User Face scenario and Endpoint Registry-backed
   endpoint settings surfaces.

@@ -17,6 +17,18 @@ This note fixes the target architecture for three related tracks:
 
 It is intentionally evolutionary and tied to the AdaOS codebase as it exists today.
 
+Implementation alignment (2026-07-24): the single-user artifact path now has
+content-addressed scenario/skill packages, dependency-locked ProjectRelease
+records, isolated candidates and trials, stable channel records, subscriptions,
+and transactional WorkspaceLock activation. Backend PR
+[inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
+is deployed as `0.1.137`, and live Forge tree lookup matches persisted source
+trees. This closes the local contract and production-route slices, not the
+default-route rollout or marketplace UX gates. A subsequent isolated clean
+stand passed external package/release/channel round-trip and package-only
+Workspace activation through deployed backend `0.1.142`. See
+[Artifact Pipeline Local Evidence](artifact-pipeline-local-evidence-2026-07-24.md).
+
 The governing rule is:
 
 > Yjs is a live projection layer for clients, not the execution transport and not the source of truth for orchestration.
@@ -35,6 +47,21 @@ The current codebase already has most of the raw building blocks, but they are s
 What is missing is one coherent contract that connects them.
 
 ## Current Implementation Slice
+
+Current MVP priority:
+
+- `[must]` preserve runtime declarations during packaging and load them before
+  activation side effects
+- `[must]` make accepted/running operations durable and recoverable
+- `[must]` expose core-owned inventory, lifecycle, scenario-health, and
+  operation-detail contracts to UI, API, and MCP
+- `[should]` finish git-mode policy, catalog/source/runtime drift
+  classification, and member catalog snapshot sync
+- `[deferred]` expand marketplace UX beyond the install/update surfaces needed
+  to prove the MVP lifecycle
+- `[deferred]` restrict source-copy `runtime_update` to dev/debug-only use;
+  current development still depends on this fast path, so enforcement resumes
+  only when slot/package iteration can replace it without slowing routine work
 
 ## What Already Exists
 
@@ -69,8 +96,8 @@ What is missing is one coherent contract that connects them.
 - shared remote `adaos-registry` catalog semantics are still not fully
   normalized across every skill/scenario push path
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
-- operation state is not yet durable across runtime restart
-- cancellation and operator retry policy are not yet a complete contract
+- complete client affordances for the core-owned cancellation and retry API are
+  not yet wired into every operations UI
 
 ## Current Implementation Update: 2026-05-27
 
@@ -87,8 +114,30 @@ The operations part of this roadmap now has a first implementation slice:
 - skill install can run through an isolated subprocess path; scenario
   install/update runs through bounded lifecycle phases and webspace rebuild.
 
+The 2026-07-23 durability slice additionally stores bounded operation history
+under runtime state, atomically rewrites it on every transition, restores
+terminal history, and reclassifies interrupted active work as `recoverable`
+with `retryable=true` and an operator notification. It never auto-retries an
+unknown side effect after restart.
+
+The 2026-07-24 activation slice extends that rule to Forge checkpoints,
+permission admission, migrations, package materialization, runtime reload, and
+health verification. Unknown outcomes require explicit one-shot
+reconciliation. Builder Automation also uses one change identity per iteration;
+a complete pre-commit checkpoint failure can be reconciled without rerunning
+Codex, while a partially committed pair fails closed for manual recovery.
+
+The same slice now exposes authenticated `GET /api/operations`, operation
+detail, `POST /api/operations/{operation_id}/cancel`, and
+`POST /api/operations/{operation_id}/retry`. Cancellation is deliberately
+limited to isolated installer subprocesses, because cancelling an await on
+`asyncio.to_thread` does not stop its side effect. Retry is limited to known
+idempotent install/update kinds. Each retry records `retry_of` and `attempt`;
+repeating retry against the same source operation returns the existing child
+instead of launching duplicate work.
+
 That means Phase 3 and the operation-projection part of Phase 4 are no longer
-pure target-state work. The remaining gaps are durability, cancellation,
+pure target-state work. The remaining gaps are stand restart evidence,
 complete UI affordances, marketplace catalog binding, and registry-sync
 normalization.
 
@@ -261,7 +310,10 @@ Minimum operation fields:
     "skill.install",
     "skill:infrastate_skill"
   ],
-  "can_cancel": false
+  "can_cancel": false,
+  "can_retry": false,
+  "retry_of": null,
+  "attempt": 1
 }
 ```
 
@@ -376,7 +428,7 @@ Define stable contracts before wiring UI and background workers.
 
 ### Deliverables
 
-- [ ] shared catalog entry model for registry sync
+- [ ] `[must]` shared catalog entry model for registry sync
 - [x] shared operation state model
 - [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
 - [x] explicit rule that Yjs is projection-only
@@ -395,8 +447,8 @@ Make `skill push` and `scenario push` update `adaos-registry/registry.json`.
 
 ### Deliverables
 
-- [ ] shared upsert helper reused by both artifact kinds across local and remote registry sync
-- [ ] tests for create/update behavior
+- [ ] `[should]` shared upsert helper reused by both artifact kinds across local and remote registry sync
+- [ ] `[should]` tests for create/update behavior
 - [x] deterministic local workspace registry output ordering
 
 ### Current anchors
@@ -412,10 +464,10 @@ Expose a marketplace catalog in `InfrastateSkill`.
 
 ### Deliverables
 
-- [ ] `Marketplace` action next to `Update skills & scenarios`
-- [ ] catalog adapter service
-- [ ] modal view with skills/scenarios sections
-- [ ] filtering against installed artifacts
+- [ ] `[deferred]` `Marketplace` action next to `Update skills & scenarios`
+- [ ] `[deferred]` catalog adapter service
+- [ ] `[deferred]` modal view with skills/scenarios sections
+- [ ] `[deferred]` filtering against installed artifacts
 
 ## Phase 3: Async Install Operations
 
@@ -429,8 +481,9 @@ Convert install/update flows from blocking request/response into accepted async 
 - [x] async install command handlers
 - [x] `operation_id` response contract
 - [x] operation projection into Yjs
-- [ ] durable recovery for accepted/running operations after runtime restart
-- [ ] cancellation/retry policy
+- [x] durable recovery for accepted/running operations after runtime restart
+- [x] `[must]` governed subprocess cancellation and idempotent retry policy
+- [ ] `[must]` canary restart/cancel/retry evidence
 
 ## Phase 4: UI Binding and Notifications
 
@@ -440,11 +493,11 @@ Make the client react to projected operations instead of waiting on request comp
 
 ### Deliverables
 
-- [ ] disable install button for same target while active
+- [ ] `[should]` disable install button for same target while active
 - [x] show progress and current step through projected operation state
 - [x] show active operations list in infra UI
 - [x] show success/error notifications on completion
-- [ ] remove transitional per-skill active-operation mirrors after status-card
+- [ ] `[deferred]` remove transitional per-skill active-operation mirrors after status-card
   and operation projection consumers are fully migrated
 
 ## Suggested File and Module Changes

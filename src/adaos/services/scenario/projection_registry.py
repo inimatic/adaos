@@ -49,6 +49,8 @@ class ProjectionRegistry:
 
     def __init__(self) -> None:
         self._rules: Dict[tuple[str, str], ProjectionRule] = {}
+        self._skill_rules: Dict[str, Dict[tuple[str, str], ProjectionRule]] = {}
+        self._skill_rule_order: list[str] = []
         self._scenario_rules: Dict[tuple[str, str], ProjectionRule] = {}
         self._active_scenario_id: Optional[str] = None
         self._active_space: str = "workspace"
@@ -91,12 +93,22 @@ class ProjectionRegistry:
         so that skills can define default projections and scenarios can
         override them by calling :meth:`load_from_scenario` later.
         """
+        rules = self._build_rules(entries, route_index=route_index)
+        self._rules.update(rules)
+        return len(rules)
+
+    @classmethod
+    def _build_rules(
+        cls,
+        entries: list[dict],
+        *,
+        route_index: dict[str, dict[str, Any]] | None = None,
+    ) -> Dict[tuple[str, str], ProjectionRule]:
         raw = entries or []
         if not isinstance(raw, list):
-            return 0
+            return {}
         route_lookup = route_index if isinstance(route_index, dict) else {}
-
-        loaded = 0
+        rules: Dict[tuple[str, str], ProjectionRule] = {}
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -128,8 +140,8 @@ class ProjectionRegistry:
                 )
             key = (scope, slot)
             if targets:
-                route, budget, guard_visibility = self._rule_metadata(item, route_lookup)
-                self._rules[key] = ProjectionRule(
+                route, budget, guard_visibility = cls._rule_metadata(item, route_lookup)
+                rules[key] = ProjectionRule(
                     scope=scope,
                     slot=slot,
                     targets=targets,
@@ -137,8 +149,21 @@ class ProjectionRegistry:
                     budget=budget,
                     guard_visibility=guard_visibility,
                 )
-                loaded += 1
-        return loaded
+        return rules
+
+    def replace_skill_manifest(self, skill_name: str, manifest: dict[str, Any]) -> int:
+        """Replace one skill's complete default-rule layer atomically."""
+
+        owner = str(skill_name or "").strip()
+        if not owner:
+            raise ValueError("skill name is required")
+        payload = manifest if isinstance(manifest, dict) else {}
+        entries = payload.get("data_projections") or []
+        rules = self._build_rules(entries, route_index=self._route_index(payload))
+        self._skill_rules[owner] = rules
+        if owner not in self._skill_rule_order:
+            self._skill_rule_order.append(owner)
+        return len(rules)
 
     def replace_scenario_entries(
         self,
@@ -235,7 +260,14 @@ class ProjectionRegistry:
 
     def resolve_rule(self, scope: str, slot: str) -> ProjectionRule | None:
         key = (str(scope).strip(), str(slot).strip())
-        return self._scenario_rules.get(key) or self._rules.get(key)
+        scenario_rule = self._scenario_rules.get(key)
+        if scenario_rule is not None:
+            return scenario_rule
+        for owner in reversed(self._skill_rule_order):
+            rule = self._skill_rules.get(owner, {}).get(key)
+            if rule is not None:
+                return rule
+        return self._rules.get(key)
 
     def resolve(self, scope: str, slot: str) -> List[ProjectionTarget]:
         """
@@ -254,10 +286,15 @@ class ProjectionRegistry:
         return self._active_space
 
     def snapshot(self) -> dict[str, object]:
+        base_keys = set(self._rules)
+        for rules in self._skill_rules.values():
+            base_keys.update(rules)
         return {
             "active_scenario_id": self._active_scenario_id,
             "active_space": self._active_space,
-            "base_rule_count": len(self._rules),
+            "base_rule_count": len(base_keys),
+            "skill_rule_count": sum(len(rules) for rules in self._skill_rules.values()),
+            "skill_owner_count": len(self._skill_rules),
             "scenario_rule_count": len(self._scenario_rules),
         }
 

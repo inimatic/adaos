@@ -1,0 +1,46 @@
+{
+  "schema": "adaos.webui.v1",
+  "generated_by": "scenario_default",
+  "ui": {
+    "application": {
+      "desktop": {
+        "pageSchema": {
+          "id": "template-id",
+          "title": "New Scenario",
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "widgets": [
+            {
+              "id": "builder-empty-canvas",
+              "type": "ui.form",
+              "area": "main",
+              "inputs": {
+                "fields": [
+                  {
+                    "id": "builder-empty-canvas-message",
+                    "type": "staticContent",
+                    "title": "Empty prototype canvas",
+                    "content": "Describe the interface in Builder to create the first prototype revision."
+                  }
+                ]
+              }
+            }
+          ],
+          "meta": {
+            "builder": {
+              "empty_canvas": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

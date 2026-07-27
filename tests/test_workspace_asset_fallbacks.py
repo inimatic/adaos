@@ -739,8 +739,7 @@ def test_skills_loader_imports_repo_workspace_handler_when_workspace_missing(tmp
     loaded: list[Path] = []
     loader = ImportlibSkillsLoader()
     monkeypatch.setattr(loader, "_sync_runtime_from_repo_workspace_if_missing", lambda _root: None)
-    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda _root: None)
-    monkeypatch.setattr(loader, "_load_skill_data_projections", lambda _handler, _loaded: None)
+    monkeypatch.setattr(loader, "_sync_runtime_from_workspace", lambda _root: None)
     monkeypatch.setattr(loader, "_load_handler", lambda handler: loaded.append(handler))
 
     import asyncio
@@ -833,3 +832,68 @@ def test_webspace_reload_handler_ignores_reloaded_completion(monkeypatch) -> Non
     )
 
     assert calls == []
+
+
+def test_publication_reload_rebuilds_only_workspace_consumers(monkeypatch) -> None:
+    import asyncio
+
+    rows = [
+        SimpleNamespace(workspace_id="workspace-builder", effective_source_mode="workspace", effective_home_scenario="builder"),
+        SimpleNamespace(workspace_id="dev-builder", effective_source_mode="dev", effective_home_scenario="builder"),
+        SimpleNamespace(workspace_id="workspace-other", effective_source_mode="workspace", effective_home_scenario="other"),
+    ]
+    calls: list[tuple[str, str, str]] = []
+
+    async def _describe(webspace_id: str):
+        row = next(item for item in rows if item.workspace_id == webspace_id)
+        return SimpleNamespace(current_scenario=None, effective_home_scenario=row.effective_home_scenario)
+
+    async def _reload(webspace_id: str, *, scenario_id: str, action: str, event_payload=None):
+        calls.append((webspace_id, scenario_id, action))
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime_module.workspace_index, "list_workspaces", lambda: rows)
+    monkeypatch.setattr(webspace_runtime_module, "describe_webspace_operational_state", _describe)
+    monkeypatch.setattr(webspace_runtime_module, "reload_webspace_from_scenario", _reload)
+    monkeypatch.setattr(webspace_runtime_module.scenarios_loader, "invalidate_cache", lambda **kwargs: None)
+
+    result = asyncio.run(
+        webspace_runtime_module.reload_workspace_webspaces_for_publication("scenario", "builder")
+    )
+
+    assert result["reloaded_webspaces"] == ["workspace-builder"]
+    assert calls == [("workspace-builder", "builder", "published_scenario_reload")]
+
+
+def test_skill_publication_reload_follows_workspace_scenario_dependencies(monkeypatch) -> None:
+    import asyncio
+
+    rows = [
+        SimpleNamespace(workspace_id="workspace-builder", effective_source_mode="workspace", effective_home_scenario="builder"),
+    ]
+    calls: list[tuple[str, str]] = []
+
+    async def _describe(_webspace_id: str):
+        return SimpleNamespace(current_scenario="builder", effective_home_scenario="builder")
+
+    async def _reload(webspace_id: str, *, scenario_id: str, **kwargs):
+        calls.append((webspace_id, scenario_id))
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime_module.workspace_index, "list_workspaces", lambda: rows)
+    monkeypatch.setattr(webspace_runtime_module, "describe_webspace_operational_state", _describe)
+    monkeypatch.setattr(webspace_runtime_module, "reload_webspace_from_scenario", _reload)
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_manifest",
+        lambda *args, **kwargs: {"depends": ["builder_sdk_control_skill"]},
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.reload_workspace_webspaces_for_publication(
+            "skill", "builder_sdk_control_skill"
+        )
+    )
+
+    assert result["reloaded_webspaces"] == ["workspace-builder"]
+    assert calls == [("workspace-builder", "builder")]

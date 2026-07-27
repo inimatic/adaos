@@ -163,6 +163,12 @@ def _looks_local_write_tool(tool_name: str, public_tool: str) -> bool:
     return full in _LOCAL_WRITE_TOOL_NAMES
 
 
+def _action_risk_may_mutate(action_risk: Mapping[str, Any] | None) -> bool:
+    risk = action_risk if isinstance(action_risk, Mapping) else {}
+    risk_class = str(risk.get("risk_class") or "").strip().lower().replace("-", "_")
+    return risk_class not in {"safe", "none", "read", "read_only", "readonly", "ui_navigation"}
+
+
 def _webspace_uses_dev_runtime(payload: Mapping[str, Any]) -> bool:
     """Resolve DEV execution from authoritative webspace metadata."""
     webspace_id = _resolve_tool_webspace_id(payload)
@@ -693,6 +699,10 @@ def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
         return False
     if _is_readonly_snapshot_tool(tool_name):
         return False
+    full_name = str(tool_name or "").strip()
+    public_tool = full_name.split(":", 1)[-1]
+    if _looks_readonly_tool(public_tool) or _looks_ui_navigation_tool(full_name, public_tool):
+        return False
     return True
 
 
@@ -1179,7 +1189,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     conf = getattr(ctx, "config", None)
     local_node_id = str(getattr(conf, "node_id", "") or "").strip()
     gate_started_at = time.perf_counter()
-    await _enforce_runtime_action_gate(
+    action_risk = await _enforce_runtime_action_gate(
         body=body,
         skill_name=skill_name,
         public_tool=public_tool,
@@ -1198,6 +1208,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         ),
         ctx=ctx,
     )
+    mutating_call = _action_risk_may_mutate(action_risk)
     gate_done_at = time.perf_counter()
     if conf and _should_proxy_tool_call_to_target(
         conf=conf,
@@ -1215,38 +1226,47 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         proxied.setdefault("trace_id", trace)
         return proxied
     # Пробуем локально; если навык отсутствует на узле-хабе — проксируем на member
+    local_execution_started = False
     try:
         started_at = time.perf_counter()
         local_timings: Dict[str, float] = {}
         def _run_local_tool_unlocked() -> Any:
+            nonlocal local_execution_started
             if not body.dev and _should_autosync_workspace_runtime(tool_name=body.tool):
                 stage_started = time.perf_counter()
                 _maybe_sync_workspace_runtime(ctx, mgr, skill_name)
                 local_timings["autosync_ms"] = (time.perf_counter() - stage_started) * 1000.0
+            if (
+                not body.dev
+                and mutating_call
+                and _workspace_skill_source_exists(ctx, skill_name)
+                and not _runtime_ready(mgr, skill_name)
+            ):
+                prepare_started = time.perf_counter()
+                prepared = _repair_workspace_runtime(ctx, mgr, skill_name, webspace_id=webspace_id)
+                local_timings["prepare_ms"] = (time.perf_counter() - prepare_started) * 1000.0
+                if not prepared:
+                    raise FileNotFoundError(f"workspace runtime for skill '{skill_name}' is not ready")
             stage_started = time.perf_counter()
             if body.dev:
                 try:
+                    local_execution_started = True
                     return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
                 finally:
                     local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
             try:
-                try:
-                    return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
-                finally:
-                    local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
-            except (FileNotFoundError, RuntimeError, KeyError):
-                repair_started = time.perf_counter()
-                if not _repair_workspace_runtime(ctx, mgr, skill_name, webspace_id=webspace_id):
-                    raise
-                local_timings["repair_ms"] = (time.perf_counter() - repair_started) * 1000.0
-                stage_started = time.perf_counter()
-                try:
-                    return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
-                finally:
-                    local_timings["run_tool_after_repair_ms"] = (time.perf_counter() - stage_started) * 1000.0
+                local_execution_started = True
+                return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+            finally:
+                local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
 
         def _run_local_tool() -> Any:
-            if body.dev or not _workspace_runtime_guard_required(ctx, skill_name, tool_name=body.tool):
+            guard_required = mutating_call or _workspace_runtime_guard_required(
+                ctx,
+                skill_name,
+                tool_name=body.tool,
+            )
+            if body.dev or not guard_required:
                 return _run_local_tool_unlocked()
             lock_started = time.perf_counter()
             with _workspace_runtime_lock(skill_name):
@@ -1258,7 +1278,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         total_ms = (time.perf_counter() - call_started_at) * 1000.0
         if took_ms >= 2000 or total_ms >= 2000:
             _log.warning(
-                "tools.call slow tool=%s dev=%s total_ms=%.1f pre_local_ms=%.1f setup_ms=%.1f gate_ms=%.1f local_total_ms=%.1f workspace_lock_ms=%.1f autosync_ms=%.1f run_tool_ms=%.1f repair_ms=%.1f run_tool_after_repair_ms=%.1f",
+                "tools.call slow tool=%s dev=%s total_ms=%.1f pre_local_ms=%.1f setup_ms=%.1f gate_ms=%.1f local_total_ms=%.1f workspace_lock_ms=%.1f autosync_ms=%.1f prepare_ms=%.1f run_tool_ms=%.1f",
                 body.tool,
                 body.dev,
                 total_ms,
@@ -1268,11 +1288,20 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
                 took_ms,
                 float(local_timings.get("workspace_lock_ms") or 0.0),
                 float(local_timings.get("autosync_ms") or 0.0),
+                float(local_timings.get("prepare_ms") or 0.0),
                 float(local_timings.get("run_tool_ms") or 0.0),
-                float(local_timings.get("repair_ms") or 0.0),
-                float(local_timings.get("run_tool_after_repair_ms") or 0.0),
             )
     except (FileNotFoundError, RuntimeError, KeyError) as e:
+        if local_execution_started and mutating_call:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "tool_execution_failed_no_retry",
+                    "tool": body.tool,
+                    "retryable": False,
+                    "detail": str(e),
+                },
+            ) from e
         # Если локально не найден навык/слот — попробуем проксировать на участника подсети (только если роль hub)
         if not conf or conf.role != "hub":
             # На member нет прокси — вернём исходную ошибку

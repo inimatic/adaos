@@ -61,7 +61,8 @@ Bootstrap-скрипты поддерживают zonal Root routing через 
 ### Ручная editable-установка
 
 ```bash
-pip install -e ".[dev]"
+rustc --version  # Rust 1.72+
+uv sync --locked --extra dev
 ```
 
 ## Первые команды

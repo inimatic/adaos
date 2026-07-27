@@ -27,6 +27,7 @@ def test_operational_event_domain_helpers_are_bootstrap_promoted() -> None:
     assert "src/adaos/domain/conversation.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/domain/event_envelope.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/domain/personalization_access.py" in BOOTSTRAP_CRITICAL_PATHS
+    assert "src/adaos/domain/project_events.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/domain/projection_keys.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/domain/projection_record.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/domain/projection_subscription.py" in BOOTSTRAP_CRITICAL_PATHS

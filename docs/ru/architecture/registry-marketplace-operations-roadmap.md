@@ -10,6 +10,19 @@
 
 > Yjs используется как live projection layer для клиента, но не как execution transport и не как source of truth для orchestration.
 
+## Актуализация 2026-07-24
+
+Однопользовательский срез уже включает content-addressed packages сценариев и
+навыков, dependency-locked `ProjectRelease`, изолированный candidate trial,
+stable channel, subscriptions и транзакционную активацию через `WorkspaceLock`.
+Неопределенный результат изменяющей операции не запускается повторно:
+используется явная однократная reconciliation. Backend PR
+[inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
+развернут как `0.1.137`, а live Forge tree совпал с сохраненными checkpoint
+trees. Это локальная валидация и проверка production-маршрута, но не замена
+отдельной проверки на чистом stand. Подробные identities и результаты:
+[Artifact Pipeline Local Evidence](../../architecture/artifact-pipeline-local-evidence-2026-07-24.md).
+
 ## Текущий срез
 
 В коде уже есть важные опорные элементы:
@@ -23,9 +36,12 @@
 При этом сейчас:
 
 - `workspace_registry` уже умеет `upsert`, но это локальный helper, а не shared registry sync в `adaos-registry`
-- install endpoints в [skills.py](/d:/git/adaos/src/adaos/apps/api/skills.py) и [scenarios.py](/d:/git/adaos/src/adaos/apps/api/scenarios.py) по сути синхронные
-- reusable operation layer пока нет
-- canonical Yjs subtree для operations и notifications пока нет
+- install/update endpoints уже могут создавать durable operations; полная
+  миграция всех legacy sync-путей остается открытой
+- reusable operation layer и bounded persistence реализованы; UI для всех
+  вариантов cancel/retry/reconcile еще не завершен
+- canonical Yjs projections для operations и notifications реализованы;
+  marketplace catalog binding остается открытым
 - marketplace пока не оформлен как отдельный adapter/service поверх registry catalog
 
 ## Целевая архитектура

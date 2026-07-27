@@ -221,6 +221,25 @@ ProjectionSlot(
 The exact API names can change during implementation, but the ownership split
 must not.
 
+## Runtime Declaration Baseline
+
+Installed runtime slots retain `skill.yaml` and `webui.json` byte-for-byte.
+Their resolved manifest also retains `data_projections` and `data_routes`.
+During activation, core loads those projection rules and caches stream/Yjs
+receiver metadata before smoke import, subscriptions, or target lifecycle
+refreshes. Startup handler discovery follows the same declarations-first order.
+
+When a skill-owned `ProjectionService` publish has no matching `(scope, slot)`
+rule, the call remains a successful no-op but records a bounded diagnostic.
+`/api/node/projection-diagnostics` exposes aggregate count, skill, scope, slot,
+webspace, payload size, and whether active runtime declarations were loaded.
+The runtime warning is rate-limited per miss key.
+
+Skill validation also emits `projection.direct_yjs_write` when runtime code
+calls write-capable core Yjs functions directly. Declared `ctx_*` projection
+setters are the normal projection path; `adaos.sdk.web.yjs` remains available
+for governed non-projection Yjs access.
+
 ## Invariants
 
 - Yjs writes must be fingerprinted before writing unless explicitly marked as a

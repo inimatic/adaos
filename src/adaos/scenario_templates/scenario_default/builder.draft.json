@@ -13,7 +13,9 @@
     "template_id": "scenario_default",
     "draft_root": ".",
     "files": [
-      { "path": "scenario.json", "role": "manifest", "required": true }
+      { "path": "scenario.yaml", "role": "manifest", "required": true },
+      { "path": "scenario.json", "role": "manifest", "required": true },
+      { "path": "webui.json", "role": "webui", "required": true }
     ]
   },
   "metadata": {
@@ -27,6 +29,7 @@
     ],
     "expected_tests": [
       "scenario schema validation",
+      "webui schema validation",
       "scenario dependency bootstrap preview"
     ],
     "route_plan_required": false,
@@ -34,13 +37,15 @@
   },
   "quality_gates": {
     "schemas": [
-      "scenario.schema.json"
+      "scenario.schema.json",
+      "webui.v1.schema.json"
     ],
     "tests": [
       "scenario validation",
       "dependency bootstrap preview"
     ],
     "previews": [
+      "empty canvas materialization",
       "action preview",
       "NLU phrase probe"
     ],

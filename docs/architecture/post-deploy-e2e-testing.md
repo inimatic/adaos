@@ -66,6 +66,151 @@ The result should be one of:
 - `inconclusive`: the runner could not verify the target due to runner,
   network, credentials, or missing-diagnostics problems
 
+## Root-Orchestrated Validation Campaigns
+
+The distributed stand design extends the post-deploy runner without making a
+skill the rollout authority. The ownership boundary should be:
+
+- Root owns test-node registration, campaign policy, assignment, aggregation,
+  release verdicts, quarantine, audit, and developer notification.
+- The Hub control plane accepts a narrow signed assignment, asks supervisor to
+  converge to the exact candidate build, and launches an allowlisted test
+  profile in a bounded subprocess.
+- Supervisor remains the only local authority that activates or rolls back a
+  core slot. Root may request rollback; a skill must not switch slots itself.
+- The existing stand runner remains the deterministic node-side test engine.
+- An optional `release_validation_agent` skill may expose typed tools, status,
+  and operator UI, but it is only an adapter. It must not accept arbitrary
+  commands, pytest arguments, or shell payloads through the Hub API.
+
+This fits the existing control plane: Root already dispatches core update and
+rollback requests, Hub reports update state to Root, and supervisor owns local
+candidate validation and slot recovery. Validation assignments should reuse
+that authenticated routed path rather than introduce an unauthenticated event
+channel.
+
+### Root Records
+
+Keep a reusable test definition separate from one execution:
+
+- `TestSuite`: immutable or versioned scenario id, allowed safety profile,
+  runner version, required capabilities, checks, and timeout policy.
+- `TestNode`: node id, subnet/environment labels, capabilities, allowed
+  profiles, lease expiry, last heartbeat, active core build, and runner build.
+- `ValidationCampaign`: campaign id, exact candidate build id and digest,
+  suite version, node selector, deadline, quorum, rollout id, previous known
+  good build, artifact policy, and requester.
+- `ValidationAssignment`: campaign/node binding, attempt, idempotency key,
+  signed single-use token, deadline, state, and evidence references.
+
+Semantic versions are not sufficient assignment targets. Every campaign must
+bind an immutable build digest or commit plus artifact identity, then wait
+until supervisor reports that exact identity active and ready.
+
+Assignment states are `assigned`, `updating`, `waiting_for_version`, `ready`,
+`running`, `uploading`, and one of `passed`, `failed`, `inconclusive`, or
+`timed_out`. Campaign states are `pending`, `dispatching`, `running`, then
+`passed`, `failed`, or `inconclusive`; release disposition is recorded
+separately as `validated`, `suspect`, `quarantined`, or `defective`.
+
+### Campaign Flow
+
+1. CI publishes an immutable candidate and creates a campaign at Root.
+2. Root selects live, leased test nodes that match the suite capabilities and
+   issues idempotent, short-lived assignments.
+3. Each Hub asks supervisor to update, then waits for exact build identity and
+   readiness. Failure to converge is `inconclusive` or `update_failed`, not a
+   failed product assertion.
+4. The node runs API/Yjs deterministic checks first and Playwright only for a
+   suite that declares browser capability.
+5. The node uploads a redacted manifest, checks, logs, and browser evidence;
+   Root retains content hashes and durable references.
+6. Root applies deterministic quorum and severity policy, records the verdict,
+   updates CI, and creates an operator action when intervention is required.
+
+Delivery is at-least-once, so assignment ids and report sequence numbers must
+be idempotent. Tokens are scoped to campaign, node, version, and suite, have a
+short TTL, and cannot select a different executable profile. Resource, time,
+artifact-size, and secret-redaction limits are enforced on the node.
+
+### Verdict And Rollback Policy
+
+Root must distinguish a product failure from runner/environment failure. One
+flaky browser timeout must not mark a release defective or trigger a broad
+rollback.
+
+- `inconclusive`: retain candidate status, publish a neutral/warning CI result,
+  and retry or replace the test node.
+- non-critical deterministic failure: mark the build `suspect`, fail the CI
+  check, and open a developer action with evidence.
+- critical safety invariant: quarantine immediately; mark `defective` only
+  after the configured quorum/reproduction rule, except for explicitly listed
+  single-node hard safety invariants.
+- automatic rollback: allowed only for the canary/test rollout ring, with a
+  known-good previous slot and an audited policy match. Root requests it and
+  supervisor executes it. Wider production rollback remains a separate
+  governed decision.
+
+Verdict history is append-only. Manual override, retry, quarantine release,
+and rollback acknowledgement require actor and reason fields.
+
+### Developer Notification
+
+Use one durable AdaOS record as the source of truth, then fan out adapters:
+
+1. Root creates or updates a release-validation incident and a Pending Action
+   containing build identity, severity, failed invariants, node/quorum state,
+   evidence links, and allowed actions.
+2. Root updates the CI commit/check status for the exact build. This is the
+   primary developer-workflow signal and can block promotion.
+3. Optional Slack, Teams, email, or generic webhook adapters project the same
+   incident. They are notification channels, not verdict authorities.
+4. AdaOS operator UI and Root MCP expose campaign, incident, evidence, retry,
+   quarantine, and rollback-request state from the durable record.
+
+This ordering prevents a lost chat message from losing the decision and keeps
+CI, operator UI, and external notifications consistent.
+
+### Incremental Delivery
+
+1. Define schemas, states, severity taxonomy, and append-only verdict history.
+2. Add the Root test-node registry with heartbeat leases and capabilities.
+3. Implement one observe-only assignment and report path for one node.
+4. Add exact-version convergence and API/Yjs suites using the current runner.
+5. Add the Playwright capability and permanent browser identity.
+6. Add quorum, CI check callback, incident/Pending Action, and optional webhook
+   adapters.
+7. Enable canary-only rollback policy, then storm and soak profiles.
+
+Do not enable automatic rollback before steps 1-6 have stand evidence.
+
+## Current Executable Slice
+
+The first implementation now lives in:
+
+- `src/adaos/e2e/stand.py`: target config validation, Root/Hub probes,
+  invariant classification, redaction, and evidence manifest;
+- `e2e/stand/target.example.json`: secret-free target contract;
+- `e2e/stand/browser`: pinned Playwright headless Chromium smoke;
+- `e2e/stand/README.md`: local and runner-machine commands.
+
+The observe runner currently records Root/Hub ping, node status, browser-device
+authorization, thin reliability, compact status cards, Yjs runtime, and live
+materialization. It exits `0` for `passed`, `1` for `failed`, and `2` for
+`inconclusive`. The browser slice records redacted console, response/failure,
+and WebSocket lifecycle NDJSON, a screenshot, and the public client runtime
+debug state; it requires connected Yjs and ready materialization.
+
+Playwright trace capture is intentionally off in v1 because a raw trace can
+retain cookies, storage state, and authorization headers. Add traces only
+after a sanitizer or a dedicated non-secret browser credential makes the
+artifact compliant with the redaction rules below.
+
+M0-M3 now have an executable implementation and local unit coverage. Their
+roadmap boxes remain open until a target-stand bundle proves each stated exit
+condition. M4 still requires a permanent access link for the configured E2E
+browser device.
+
 ## Browser Client Machine
 
 The Browser Client Machine is a stable external observer of the deployed
@@ -94,6 +239,28 @@ where the Hub accepts `ADAOS_TOKEN` through `X-AdaOS-Token`,
 The first runner does not have to wait for a dedicated machine. A local or CI
 runner can validate the contract first. The dedicated Browser Client Machine is
 the hardening step that makes repeated post-deploy checks reproducible.
+
+### Operation Recovery Canary
+
+Operation recovery is a mutating check and therefore belongs to the `canary`
+profile, never the initial `observe` profile. Its deterministic sequence is:
+
+1. submit a known isolated canary install and retain its `operation_id`;
+2. verify `GET /api/operations/{operation_id}` exposes `can_cancel=true`;
+3. cancel it and verify the child process exits and the durable state becomes
+   `cancelled` with `can_retry=true`;
+4. submit another bounded canary operation, restart the API while it is active,
+   and verify the restored state is `recoverable` rather than silently retried;
+5. call `/retry` twice for the recovered id and assert both responses identify
+   the same child operation with `retry_of=<source>` and `attempt=2`;
+6. wait for a terminal child state and verify the Yjs operation projection and
+   notification agree with the canonical API record.
+
+Once the operations UI exposes the same actions, Playwright should repeat the
+cancel/retry part through the headless browser and compare the visible state to
+the API. The API sequence remains the primary algorithmic oracle; browser
+automation proves binding and rendering rather than redefining lifecycle
+semantics.
 
 ## Safety Profiles
 
@@ -338,6 +505,8 @@ The postprocessor should identify patterns such as:
   - Classify failures as API, Yjs, stream, fallback, browser, Root route, or
     inconclusive.
   - Map each failure to the shared failure taxonomy.
+  - In the `canary` profile, prove operation cancel, managed-restart recovery,
+    idempotent retry, Yjs projection, and notification convergence.
   - Exit: a failed run reports the broken runtime boundary instead of only a
     browser timeout.
 

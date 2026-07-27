@@ -75,7 +75,11 @@ The production strategy is baseline-first with parallel upgrade:
 6. Demote commands/events to `/ws` and sync to `/yws` quickly on direct-path
    failure. Demotion must not mark the whole browser offline if the baseline
    path is still healthy.
-7. Keep HTTP request-scoped actions, snapshots, and diagnostics as the brownout
+7. While the baseline path remains healthy, keep one bounded recovery timer for
+   the preferred direct path. A disconnect grace period, failed probe, backoff,
+   or cooldown must always end in another scheduled probe; a page reload must
+   never be required to promote the connection back to WebRTC.
+8. Keep HTTP request-scoped actions, snapshots, and diagnostics as the brownout
    fallback. Long polling may be used for last-resort progress/diagnostics, but
    it is not the steady-state realtime channel.
 
@@ -90,6 +94,33 @@ The strategy has two acceptance implications:
 - logical readiness is achieved by the baseline path;
 - quality readiness requires the selected higher-quality path to be stable, or
   a visible and acceptable fallback reason.
+
+## WebRTC Signaling Contract
+
+WebRTC signaling uses `/ws`, but an ordered WebSocket alone is not sufficient:
+browser ICE gathering can emit a candidate before application code has sent the
+offer that creates the server peer. The protocol therefore observes these
+rules:
+
+- Every fresh browser `RTCPeerConnection` has a random `generation_id`.
+- `rtc.offer` declares both `generation_id` and `negotiation_mode`:
+  `fresh_peer`, `ice_restart`, or `renegotiate`.
+- The browser queues local ICE candidates until the matching `rtc.offer` is
+  acknowledged. It then sends `rtc.ice` in order with the same `generation_id`.
+- The runtime replaces an existing peer for `fresh_peer` or a changed
+  `generation_id`. It may reuse a peer only for `ice_restart` or `renegotiate`
+  of the same generation.
+- Candidates are applied only to the matching generation. A bounded,
+  short-lived server buffer covers candidates that arrive before their offer;
+  stale candidates for a different active generation are discarded.
+- A full-recovery attempt must create a fresh browser peer and close the prior
+  server peer before accepting the new offer. Reapplying fresh offers to one
+  aiortc peer is forbidden because old ICE transports can remain allocated.
+
+Compatibility fields are optional for old clients, but current clients must
+send them. Runtime diagnostics expose the active generation, accepted remote
+candidate count/types, and pending pre-offer candidate count without exposing
+candidate addresses.
 
 ## Readiness Model
 
@@ -153,6 +184,11 @@ Required for a reliable hub-browser quality bar:
 - [x] Surface the selected transport and fallback reason per semantic channel.
 - [x] Define the production protocol strategy as baseline-first with parallel
       WebRTC upgrade and explicit demotion.
+- [x] Re-arm WebRTC promotion after disconnect grace, retry backoff, and
+      in-memory cooldown without requiring browser reload.
+- [x] Bind offers and ICE candidates to a peer generation, queue browser
+      candidates until offer acknowledgement, and replace server peers on full
+      recovery instead of reusing an old ICE transport.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
 - [ ] Report Yjs first-sync latency and pressure as hub-browser quality gates.
 - [ ] Record browser route/WebRTC/YWS fallback windows in the incident registry.
@@ -175,6 +211,11 @@ pass in diagnostics and post-deploy tests:
 - A/B slot promotion is detected and recovered without a stale green state.
 - WebRTC direct channel timeout produces a visible fallback and does not block
   operation.
+- Direct recovery after a closed peer reaches WebRTC again without a browser
+  reload; each full retry uses a new generation and the runtime owns at most one
+  active ICE socket generation per browser peer.
+- Runtime diagnostics show at least one accepted remote ICE candidate for an
+  attempted direct connection, or report candidate absence as the blocker.
 - Yjs first sync completes within budget or reports an explicit degraded reason.
 - Reliability summary reports logical state, quality state, active transports,
   and recent failure evidence.

@@ -13,7 +13,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.feedback_examples import save_feedback_example
 from adaos.services.nlu.teacher_artifacts import accepted_artifact_metadata
-from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_events_by_candidate
+from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_teacher_derived_views
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.yjs.doc import async_get_ydoc
@@ -154,7 +154,7 @@ async def _append_revision(webspace_id: str, revision: dict[str, Any]) -> None:
             revisions.append(dict(revision))
             revisions = _bounded(revisions, max_items=_MAX_ITEMS)
             teacher["revisions"] = revisions
-            rebuild_events_by_candidate(teacher)
+            rebuild_teacher_derived_views(teacher)
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
 
@@ -187,7 +187,7 @@ async def _update_revision(
                     cleaned.append(d)
 
             teacher["revisions"] = _bounded(cleaned, max_items=_MAX_ITEMS)
-            rebuild_events_by_candidate(teacher)
+            rebuild_teacher_derived_views(teacher)
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
             return updated
@@ -202,7 +202,7 @@ async def _append_dataset_item(webspace_id: str, item: dict[str, Any]) -> None:
             dataset.append(dict(item))
             dataset = _bounded(dataset, max_items=_MAX_ITEMS)
             teacher["dataset"] = dataset
-            rebuild_events_by_candidate(teacher)
+            rebuild_teacher_derived_views(teacher)
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
 
@@ -250,7 +250,7 @@ async def _patch_candidate_after_example_save(
             if updated is None:
                 return None
             teacher["candidates"] = next_candidates
-            rebuild_events_by_candidate(teacher)
+            rebuild_teacher_derived_views(teacher)
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
             return updated

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping
+from uuid import uuid4
 from fastapi import APIRouter, Depends
 import yaml
 from adaos.services.agent_context import AgentContext, get_ctx
@@ -48,6 +49,14 @@ from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.services.artifact_pipeline import (
+    ArtifactPublicationService,
+    PublicationStaleError,
+    RemoteReleaseRepository,
+    build_artifact_package,
+)
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -102,38 +111,6 @@ def _normalize_draft_commit_message(value: str | None) -> str | None:
     if not text:
         return None
     return text[:240]
-
-
-def _draft_push_attempts() -> int:
-    try:
-        value = int(str(os.getenv("ADAOS_FORGE_DRAFT_PUSH_ATTEMPTS") or "2").strip())
-    except ValueError:
-        value = 2
-    return max(1, min(value, 3))
-
-
-def _retry_transient_draft_push(
-    operation: Callable[[], Mapping[str, Any]],
-    *,
-    attempts: int | None = None,
-    sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, Any]:
-    total = _draft_push_attempts() if attempts is None else max(1, int(attempts))
-    for attempt in range(1, total + 1):
-        try:
-            return dict(operation())
-        except RootHttpError as exc:
-            transient = exc.status_code in {0, 500, 502, 503, 504}
-            if not transient or attempt >= total:
-                raise
-            logger.warning(
-                "transient Forge draft push failure status=%s attempt=%s/%s; retrying the same archive",
-                exc.status_code,
-                attempt,
-                total,
-            )
-            sleep(float(attempt))
-    raise AssertionError("unreachable")
 
 
 _DRAFT_METADATA_TRAILERS = {
@@ -578,6 +555,9 @@ class ArtifactPushResult:
     commit: str | None = None
     message: str | None = None
     metadata: dict[str, Any] | None = None
+    package_digest: str | None = None
+    source_revision: str | None = None
+    source_tree: str | None = None
 
 
 @dataclass(slots=True)
@@ -677,11 +657,54 @@ def archive_bytes_to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def _replace_directory_transactionally(staged: Path, target: Path) -> None:
+    """Activate a staged artifact without deleting the current copy first."""
+
+    staged = staged.expanduser().resolve()
+    target = target.expanduser().resolve()
+    if staged.parent != target.parent:
+        raise RootServiceError("Staged artifact must be on the same filesystem as its target")
+
+    backup = target.parent / f".{target.name}.backup-{os.getpid()}-{uuid4().hex}"
+    target_moved = False
+    activated = False
+    try:
+        if target.exists():
+            target.replace(backup)
+            target_moved = True
+        try:
+            staged.replace(target)
+            activated = True
+        except Exception as activation_error:
+            if target_moved:
+                try:
+                    backup.replace(target)
+                    target_moved = False
+                except Exception as rollback_error:
+                    raise RootServiceError(
+                        "Artifact activation failed and rollback could not restore the previous copy; "
+                        f"backup retained at {backup}: {type(rollback_error).__name__}: {rollback_error}"
+                    ) from activation_error
+            raise
+
+        if target_moved:
+            try:
+                shutil.rmtree(backup)
+                target_moved = False
+            except OSError as cleanup_error:
+                _log.warning(
+                    "Artifact update succeeded but previous-copy cleanup failed; backup retained at %s: %s",
+                    backup,
+                    cleanup_error,
+                )
+    finally:
+        if not activated and staged.exists():
+            shutil.rmtree(staged, ignore_errors=True)
+
+
 def _extract_zip_bytes(data: bytes, target: Path) -> None:
     target = target.expanduser().resolve()
-    temporary = target.parent / f".{target.name}.update-{os.getpid()}-{int(time.time() * 1000)}"
-    if temporary.exists():
-        shutil.rmtree(temporary)
+    temporary = target.parent / f".{target.name}.update-{os.getpid()}-{uuid4().hex}"
     temporary.mkdir(parents=True, exist_ok=False)
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -693,9 +716,7 @@ def _extract_zip_bytes(data: bytes, target: Path) -> None:
                 if temporary not in destination.parents and destination != temporary:
                     raise RootServiceError(f"Archive entry escapes artifact root: {entry.filename}")
             archive.extractall(temporary)
-        if target.exists():
-            shutil.rmtree(target)
-        temporary.replace(target)
+        _replace_directory_transactionally(temporary, target)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -742,6 +763,55 @@ def _rewrite_skill_template_identity(root: Path, name: str) -> None:
         rewritten = text.replace("new_skill", name).replace("New Skill", label)
         if rewritten != text:
             path.write_text(rewritten, encoding="utf-8")
+
+
+def _rewrite_scenario_template_identity(root: Path, name: str) -> None:
+    """Replace identity placeholders in a freshly copied scenario template."""
+
+    label = name.replace("_", " ").replace("-", " ").title()
+    text_suffixes = {".yaml", ".yml", ".json", ".md", ".txt"}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        text = path.read_text(encoding="utf-8")
+        rewritten = text.replace("template-id", name).replace("New Scenario", label)
+        if rewritten != text:
+            path.write_text(rewritten, encoding="utf-8")
+
+
+def _sync_scenario_content_metadata(
+    root: Path,
+    name: str,
+    manifest_meta: Mapping[str, Any] | None,
+) -> None:
+    """Materialize the derived runtime descriptor from canonical YAML and WebUI sources."""
+
+    content_path = root / "scenario.json"
+    if not content_path.is_file():
+        return
+    payload = _load_manifest(content_path)
+    yaml_path = root / "scenario.yaml"
+    canonical = _load_manifest(yaml_path) if yaml_path.is_file() else {}
+    canonical.update(
+        {
+            key: value
+            for key, value in dict(manifest_meta or {}).items()
+            if key in {"version", "updated_at"} and value is not None
+        }
+    )
+    for key, value in canonical.items():
+        payload[key] = value
+    payload["id"] = name
+    payload["name"] = name
+
+    webui_path = root / "webui.json"
+    if webui_path.is_file():
+        webui = _load_manifest(webui_path)
+        ui = webui.get("ui")
+        if not isinstance(ui, Mapping):
+            raise RootServiceError(f"Scenario WebUI at {webui_path} must contain an object ui")
+        payload["ui"] = dict(ui)
+    _write_manifest(content_path, payload)
 
 
 def _ensure_keep_file(directory: Path) -> None:
@@ -803,11 +873,12 @@ class RootDeveloperService:
         config_loader: Callable[[], NodeConfig] | None = None,
         config_saver: Callable[[NodeConfig], None] | None = None,
         client_factory: Callable[[NodeConfig], RootHttpClient] | None = None,
+        ctx: AgentContext | None = None,
     ) -> None:
         self._load_config = config_loader or load_node
         self._save_config = config_saver or save_node
         self._client_factory = client_factory
-        self.ctx: AgentContext = get_ctx()
+        self.ctx: AgentContext = ctx or get_ctx()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1369,58 +1440,30 @@ class RootDeveloperService:
     def update_skill(self, name: str) -> ArtifactUpdateResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
-        emit(self.ctx.bus, "root.dev.skill.update.start", {"name": name, "node_id": node_id}, "root.dev")
-        try:
-            result = self._update_artifact(cfg, "skills", name)
-        except ArtifactNotFoundError:
-            emit(self.ctx.bus, "root.dev.skill.update.missing", {"name": name, "node_id": node_id}, "root.dev")
-            raise
-        except Exception:
-            emit(self.ctx.bus, "root.dev.skill.update.error", {"name": name, "node_id": node_id}, "root.dev")
-            raise
         emit(
             self.ctx.bus,
-            "root.dev.skill.update.done",
-            {
-                "name": result.name,
-                "node_id": node_id,
-                "version": result.version,
-                "updated_at": result.updated_at,
-                "commit": result.commit,
-                "metadata": result.metadata,
-                "recovery": result.recovery,
-            },
+            "root.dev.skill.update.retired",
+            {"name": name, "node_id": node_id, "replacement": "exact_base_rebase"},
             "root.dev",
         )
-        return result
+        raise RootServiceError(
+            "DEV draft update is retired because it can overwrite local changes. "
+            "Create or migrate an exact-base DEV context, then reapply the bounded ChangeSet."
+        )
 
     def update_scenario(self, name: str) -> ArtifactUpdateResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
-        emit(self.ctx.bus, "root.dev.scenario.update.start", {"name": name, "node_id": node_id}, "root.dev")
-        try:
-            result = self._update_artifact(cfg, "scenarios", name)
-        except ArtifactNotFoundError:
-            emit(self.ctx.bus, "root.dev.scenario.update.missing", {"name": name, "node_id": node_id}, "root.dev")
-            raise
-        except Exception:
-            emit(self.ctx.bus, "root.dev.scenario.update.error", {"name": name, "node_id": node_id}, "root.dev")
-            raise
         emit(
             self.ctx.bus,
-            "root.dev.scenario.update.done",
-            {
-                "name": result.name,
-                "node_id": node_id,
-                "version": result.version,
-                "updated_at": result.updated_at,
-                "commit": result.commit,
-                "metadata": result.metadata,
-                "recovery": result.recovery,
-            },
+            "root.dev.scenario.update.retired",
+            {"name": name, "node_id": node_id, "replacement": "exact_base_rebase"},
             "root.dev",
         )
-        return result
+        raise RootServiceError(
+            "DEV draft update is retired because it can overwrite local changes. "
+            "Create or migrate an exact-base DEV context, then reapply the bounded ChangeSet."
+        )
 
     def publish_skill(
         self,
@@ -1482,18 +1525,6 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        if not result.dry_run:
-            emit(
-                self.ctx.bus,
-                "registry.skills.published",
-                {
-                    "name": result.name,
-                    "version": result.version,
-                    "previous_version": result.previous_version,
-                    "updated_at": result.updated_at,
-                },
-                "root.dev",
-            )
         # гарантируем, что подпуть есть в sparse-checkout (на случай узкой sparse-конфигурации)
         if result.dry_run:
             return result
@@ -1513,6 +1544,17 @@ class RootDeveloperService:
         )
         msg = f"publish(skill): {result.name} v{result.version}"
         sha = mgr.push(result.name, msg, signoff=signoff, bump=False)
+        emit(
+            self.ctx.bus,
+            "registry.skills.published",
+            {
+                "name": result.name,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
@@ -1574,18 +1616,6 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        if not result.dry_run:
-            emit(
-                self.ctx.bus,
-                "registry.scenarios.published",
-                {
-                    "name": result.name,
-                    "version": result.version,
-                    "previous_version": result.previous_version,
-                    "updated_at": result.updated_at,
-                },
-                "root.dev",
-            )
         if result.dry_run:
             return result
         try:
@@ -1603,6 +1633,17 @@ class RootDeveloperService:
         )
         msg = f"publish(scenario): {result.name} v{result.version}"
         sha = mgr.push(result.name, msg, signoff=signoff, bump=False)
+        emit(
+            self.ctx.bus,
+            "registry.scenarios.published",
+            {
+                "name": result.name,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
@@ -1986,6 +2027,295 @@ class RootDeveloperService:
         hub_id = cfg.subnet_id or "pending_hub"
         return (self.ctx.paths.base_dir() / "dev" / hub_id).resolve()
 
+    def _artifact_publication_service(self, cfg: NodeConfig) -> ArtifactPublicationService:
+        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
+        remote = RemoteReleaseRepository(
+            self._client(cfg),
+            verify=verify,
+            cert=(cert_path, key_path),
+        )
+        return ArtifactPublicationService(
+            state_root=Path(self.ctx.paths.state_dir()) / "artifact_pipeline",
+            workspace_root=Path(self.ctx.paths.workspace_dir()),
+            remote=remote,
+        )
+
+    def prepare_artifact_candidate(
+        self,
+        kind: Literal["skill", "scenario"],
+        name: str,
+        *,
+        change_ids: tuple[str, ...],
+        validation_evidence: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
+        source = self._workspace_root(cfg) / plural / name
+        if not source.is_dir():
+            raise ArtifactNotFoundError(f"{kind.capitalize()} '{name}' not found at {source}")
+        self._validate_artifact_preflight(plural, name, source)
+        evidence = dict(validation_evidence or {})
+        evidence.setdefault("status", "passed")
+        evidence.setdefault("validator", f"adaos.{kind}.preflight")
+        prepared = self._artifact_publication_service(cfg).prepare_candidate(
+            kind=kind,
+            artifact_id=name,
+            artifact_dir=source,
+            change_ids=change_ids,
+            validation_evidence=evidence,
+        )
+        return {
+            "ok": True,
+            "candidate": prepared.candidate.to_dict(),
+            "release": prepared.plan.release.to_dict(),
+            "trial_workspace": str(prepared.trial_workspace),
+        }
+
+    def decide_artifact_candidate(
+        self,
+        candidate_id: str,
+        *,
+        accepted: bool,
+        observations: tuple[Mapping[str, Any], ...] = (),
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        candidate = self._artifact_publication_service(cfg).decide_candidate(
+            candidate_id,
+            accepted=accepted,
+            observations=observations,
+        )
+        return {"ok": True, "candidate": candidate.to_dict()}
+
+    def prepare_rebased_artifact_candidate(
+        self,
+        stale_candidate_id: str,
+        kind: Literal["skill", "scenario"],
+        name: str,
+        *,
+        validation_evidence: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
+        source = self._workspace_root(cfg) / plural / name
+        if not source.is_dir():
+            raise ArtifactNotFoundError(f"{kind.capitalize()} '{name}' not found at {source}")
+        self._validate_artifact_preflight(plural, name, source)
+        evidence = dict(validation_evidence or {})
+        evidence.setdefault("status", "passed")
+        evidence.setdefault("validator", f"adaos.{kind}.rebase-preflight")
+        prepared = self._artifact_publication_service(cfg).prepare_rebased_candidate(
+            stale_candidate_id,
+            kind=kind,
+            artifact_id=name,
+            artifact_dir=source,
+            validation_evidence=evidence,
+        )
+        return {
+            "ok": True,
+            "candidate": prepared.candidate.to_dict(),
+            "release": prepared.plan.release.to_dict(),
+            "trial_workspace": str(prepared.trial_workspace),
+            "replaces_candidate_id": stale_candidate_id,
+        }
+
+    def promote_artifact_candidate(
+        self,
+        candidate_id: str,
+        *,
+        permission_decision: bool | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        publication = self._artifact_publication_service(cfg)
+        try:
+            promoted = publication.promote(
+                candidate_id,
+                permission_decision=permission_decision,
+                reload_policy={
+                    "mode": "skip",
+                    "approved_by": "root.artifact_publication.mvp",
+                    "reason": "live artifact reload adapter is not connected yet",
+                },
+                health_policy={
+                    "mode": "skip",
+                    "approved_by": "root.artifact_publication.mvp",
+                    "reason": "live artifact health adapter is not connected yet",
+                },
+            )
+        except PublicationStaleError as exc:
+            return {
+                "ok": False,
+                "status": "stale",
+                "candidate_id": candidate_id,
+                "error": "candidate_base_moved",
+                "rebase_plan": exc.plan.to_dict(),
+            }
+        component = next(
+            (
+                item
+                for item in promoted.plan.release.components
+                if item.artifact_id == promoted.candidate.project_id
+            ),
+            None,
+        )
+        if component is None:
+            raise RootServiceError(
+                "Promoted release does not contain its project component; workspace was not reconciled"
+            )
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "kind": component.kind,
+            "name": component.artifact_id,
+            "version": component.version,
+            "release": promoted.pointer.release,
+            "release_digest": promoted.pointer.release_digest,
+            "package_digest": component.digest,
+            "source_revision": component.source_ref.revision,
+            "workspace_lock": promoted.activation.workspace_lock.to_dict(),
+            "subscription": promoted.subscription.to_dict(),
+            "commit": None,
+            "activation_mode": "package_lock",
+        }
+
+    def check_artifact_subscription(self, project_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        notice = self._artifact_publication_service(cfg).check_subscription(project_id)
+        return {"ok": True, **notice.to_dict()}
+
+    def plan_artifact_registry_reconciliation(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plan = self._artifact_publication_service(cfg).plan_registry_reconciliation(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+        return {"ok": True, **plan.to_dict()}
+
+    def apply_artifact_registry_reconciliation(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        reviewed_plan_digest: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        result = self._artifact_publication_service(cfg).apply_registry_reconciliation(
+            project_id,
+            kind=kind,
+            channel=channel,
+            reviewed_plan_digest=reviewed_plan_digest,
+        )
+        return {"ok": True, **result}
+
+    def plan_artifact_remote_registry_recovery(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plan = self._artifact_publication_service(cfg).plan_remote_registry_recovery(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+        return {"ok": True, **plan.to_dict()}
+
+    def revalidate_artifact_remote_registry_recovery(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        result = self._artifact_publication_service(
+            cfg
+        ).revalidate_remote_registry_recovery(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+        return {"ok": True, **result}
+
+    def apply_artifact_remote_registry_recovery(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        reviewed_plan_digest: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        result = self._artifact_publication_service(cfg).apply_remote_registry_recovery(
+            project_id,
+            kind=kind,
+            channel=channel,
+            reviewed_plan_digest=reviewed_plan_digest,
+        )
+        return {"ok": True, **result}
+
+    def plan_artifact_subscription_update(self, project_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        plan = self._artifact_publication_service(cfg).plan_subscription_update(project_id)
+        return {"ok": True, **plan.to_dict()}
+
+    def inspect_artifact_subscription_update(self, project_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        publication = self._artifact_publication_service(cfg)
+        notice = publication.check_subscription(project_id)
+        payload: dict[str, Any] = {"ok": True, **notice.to_dict(), "update_plan": None}
+        if notice.available:
+            payload["update_plan"] = publication.plan_subscription_update(
+                project_id,
+                notice=notice,
+            ).to_dict()
+        return payload
+
+    def activate_artifact_subscription(
+        self,
+        project_id: str,
+        *,
+        idempotency_key: str | None = None,
+        expected_plan_digest: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
+        reload_runtime=None,
+        health_check=None,
+        reload_policy: Mapping[str, Any] | None = None,
+        health_policy: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        updated = self._artifact_publication_service(cfg).activate_subscription_update(
+            project_id,
+            idempotency_key=idempotency_key,
+            expected_plan_digest=expected_plan_digest,
+            permission_decision=permission_decision,
+            reload_runtime=reload_runtime,
+            health_check=health_check,
+            reload_policy=reload_policy,
+            health_policy=health_policy,
+        )
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "release": updated.pointer.release,
+            "release_digest": updated.pointer.release_digest,
+            "workspace_lock": updated.activation.workspace_lock.to_dict(),
+            "subscription": updated.subscription.to_dict(),
+            "activation_mode": "package_lock",
+            "activation_operation_id": updated.activation.operation_id,
+            "activation_status": updated.activation.status,
+            "idempotent_replay": updated.activation.idempotent_replay,
+        }
+
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = self._workspace_root(cfg)
         workspace_root.mkdir(parents=True, exist_ok=True)
@@ -2019,6 +2349,8 @@ class RootDeveloperService:
         _copy_template(template_path, target)
         if kind == "skills":
             _rewrite_skill_template_identity(target, name)
+        else:
+            _rewrite_scenario_template_identity(target, name)
         manifest_meta = self._update_manifest(
             kind,
             target,
@@ -2027,6 +2359,8 @@ class RootDeveloperService:
             version_bump_index=1,
             set_prototype=True,
         )
+        if kind == "scenarios":
+            _sync_scenario_content_metadata(target, name, manifest_meta)
 
         return ArtifactCreateResult(
             kind=kind.rstrip("s"),
@@ -2233,6 +2567,8 @@ class RootDeveloperService:
 
         if isinstance(template, str):
             template = template.strip() or None
+        if isinstance(template, str) and template.lower() == "default":
+            template = None
 
         template_name = template or default_name
 
@@ -2326,7 +2662,7 @@ class RootDeveloperService:
     def _manifest_candidates(self, kind: Literal["skills", "scenarios"]) -> list[str]:
         if kind == "skills":
             return ["skill.yaml"]
-        return ["scenario.json", "scenario.yaml", "scenario.yml"]
+        return ["scenario.yaml"]
 
     def _artifact_manifest_info(
         self,
@@ -2383,102 +2719,371 @@ class RootDeveloperService:
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
         self._validate_artifact_preflight(kind, name, source)
-        source_payload = self._manifest_payload(source, kind)
-        source_data = source_payload[1] if source_payload else {}
-        publish_bump_index = (
-            bump_index(
-                effective_skill_bump(
-                    source_data,
-                    "patch",
-                    has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
-                )
-            )
-            if kind == "skills"
-            else bump_index("patch")
-        )
-        manifest_meta = self._update_manifest(
-            kind,
-            source,
-            name,
-            None,
-            version_bump_index=publish_bump_index,
-            set_prototype=False,
-        )
-        try:
-            upsert_workspace_registry_entry(
-                workspace,
-                kind,
-                source,
-                version=(manifest_meta or {}).get("version"),
-                updated_at=(manifest_meta or {}).get("updated_at"),
-                extra={
-                    "publisher": {
-                        "owner_id": owner_id,
-                        "node_id": cfg.node_settings.id or cfg.node_id,
-                    }
-                },
-            )
-        except Exception:
-            _log.debug("failed to update local workspace registry after push kind=%s name=%s", kind, name, exc_info=True)
-        archive_bytes = create_zip_bytes(source)
-        archive_b64 = archive_bytes_to_b64(archive_bytes)
-        digest = hashlib.sha256(archive_bytes).hexdigest()
+        commit_message = _normalize_draft_commit_message(message)
+        commit_metadata = _normalize_draft_metadata(metadata)
+        change_id = str(commit_metadata.get("change_id") or "").strip()
+        publication = self._artifact_publication_service(cfg)
         cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
-        commit_message = _normalize_draft_commit_message(message)
-        commit_metadata = _normalize_draft_metadata(metadata)
-        if kind == "skills":
-            response = _retry_transient_draft_push(
-                lambda: client.push_skill_draft(
+        intent_path: Path | None = None
+        intent_archive_path: Path | None = None
+        intent: dict[str, Any] = {}
+        if change_id:
+            intent_key = hashlib.sha256(change_id.encode("utf-8")).hexdigest()
+            intent_root = publication.state_root / "checkpoint-intents" / kind / name
+            intent_path = intent_root / f"{intent_key}.json"
+            intent_archive_path = intent_root / f"{intent_key}.zip"
+            if intent_path.is_file():
+                try:
+                    loaded_intent = json.loads(intent_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise RootServiceError("Checkpoint intent journal is unreadable") from exc
+                if not isinstance(loaded_intent, dict) or loaded_intent.get("change_id") != change_id:
+                    raise RootServiceError("Checkpoint intent journal identity mismatch")
+                intent = loaded_intent
+
+        def write_intent(status: str, **extra: Any) -> None:
+            nonlocal intent
+            if not change_id or intent_path is None:
+                return
+            intent = {
+                **intent,
+                "schema": "adaos.artifact.checkpoint_intent.v1",
+                "kind": kind.rstrip("s"),
+                "artifact_id": name,
+                "change_id": change_id,
+                "status": status,
+                "updated_at": _current_timestamp(),
+                **extra,
+            }
+            atomic_write_json(intent_path, intent)
+
+        def result_from_checkpoint(
+            *,
+            source_ref: ArtifactSourceRef,
+            stored_path: str,
+            pushed_source: Any,
+            response_metadata: Mapping[str, Any],
+            archive_bytes: bytes,
+        ) -> ArtifactPushResult:
+            _, version, updated_at = self._artifact_manifest_info(source, kind)
+            return ArtifactPushResult(
+                kind=kind.rstrip("s"),
+                name=name,
+                stored_path=stored_path,
+                sha256=hashlib.sha256(archive_bytes).hexdigest(),
+                bytes_uploaded=len(archive_bytes),
+                version=version,
+                updated_at=updated_at,
+                commit=source_ref.revision,
+                message=commit_message,
+                metadata=_normalize_draft_metadata(response_metadata),
+                package_digest=pushed_source.package.digest,
+                source_revision=source_ref.revision,
+                source_tree=pushed_source.source_tree,
+            )
+
+        def verified_source_tree(
+            response: Mapping[str, Any],
+            *,
+            revision: str,
+        ) -> str:
+            tree = str(response.get("tree_sha") or "").strip().lower()
+            if not tree:
+                verified = client.get_draft_source_tree(
+                    kind=kind,
                     name=name,
-                    archive_b64=archive_b64,
+                    revision=revision,
                     node_id=node_id,
                     verify=verify,
                     cert=(cert_path, key_path),
-                    sha256=digest,
-                    message=commit_message,
-                    metadata=commit_metadata,
                 )
-            )
-        else:
-            response = _retry_transient_draft_push(
-                lambda: client.push_scenario_draft(
-                    name=name,
-                    archive_b64=archive_b64,
-                    node_id=node_id,
-                    verify=verify,
-                    cert=(cert_path, key_path),
-                    sha256=digest,
-                    message=commit_message,
-                    metadata=commit_metadata,
+                tree = str(verified.get("tree_sha") or "").strip().lower()
+            if len(tree) not in {40, 64} or any(
+                char not in "0123456789abcdef" for char in tree
+            ):
+                raise RootServiceError("Root did not return a verifiable Forge source tree")
+            return tree
+
+        if change_id and publication.pushed_source_path(kind.rstrip("s"), name).is_file():
+            recorded = publication.load_pushed_source(kind.rstrip("s"), name)
+            if change_id in recorded.change_ids:
+                try:
+                    publication.verify_pushed_source(recorded, source)
+                except Exception as exc:
+                    raise RootServiceError(
+                        f"checkpoint id {change_id} was already used for different content"
+                    ) from exc
+                archive_bytes = create_zip_bytes(source)
+                stored_path = str(recorded.source_ref.path_scope[0]).rstrip("/")
+                return result_from_checkpoint(
+                    source_ref=recorded.source_ref,
+                    stored_path=stored_path,
+                    pushed_source=recorded,
+                    response_metadata=commit_metadata,
+                    archive_bytes=archive_bytes,
                 )
+
+        if change_id:
+            draft_info: Mapping[str, Any] = {}
+            if intent.get("status") == "remote_confirmed" and isinstance(intent.get("receipt"), Mapping):
+                draft_info = dict(intent["receipt"])
+            try:
+                if not draft_info:
+                    draft_info = client.get_draft_info(
+                        kind=kind,
+                        name=name,
+                        node_id=node_id,
+                        verify=verify,
+                        cert=(cert_path, key_path),
+                    )
+            except Exception as exc:
+                missing = isinstance(exc, FileNotFoundError) or getattr(exc, "status_code", None) == 404
+                if not missing:
+                    if intent:
+                        raise RootServiceError(
+                            "Checkpoint outcome is unresolved; Forge reconciliation must succeed before another write"
+                        ) from exc
+                    raise RootServiceError(
+                        "Forge checkpoint preflight is unavailable; state-changing write was not started"
+                    ) from exc
+                draft_info = {}
+            draft_metadata = _normalize_draft_metadata(
+                draft_info.get("metadata") if isinstance(draft_info.get("metadata"), Mapping) else {}
             )
-        stored = response.get("stored_path")
-        if not isinstance(stored, str) or not stored:
-            raise RootServiceError("Root did not return stored_path")
-        commit = str(response.get("commit") or "").strip()
-        if not commit:
-            raise RootServiceError("Root stored the draft archive but did not confirm a Forge commit")
-        response_metadata = _normalize_draft_metadata(
-            response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
-        )
-        if commit_metadata and response_metadata != commit_metadata:
-            raise RootServiceError("Root returned stale Forge commit metadata for the draft archive")
-        return ArtifactPushResult(
-            kind=kind.rstrip("s"),
-            name=name,
-            stored_path=stored,
-            sha256=digest,
-            bytes_uploaded=len(archive_bytes),
-            version=(manifest_meta or {}).get("version"),
-            updated_at=(manifest_meta or {}).get("updated_at"),
-            commit=commit,
-            message=commit_message,
-            metadata=_normalize_draft_metadata(
-                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else commit_metadata
-            ),
-        )
+            if str(draft_metadata.get("change_id") or "").strip() == change_id:
+                if intent_archive_path is not None and intent_archive_path.is_file():
+                    archive_bytes = intent_archive_path.read_bytes()
+                else:
+                    archive_bytes = create_zip_bytes(source)
+                digest = hashlib.sha256(archive_bytes).hexdigest()
+                expected_digest = str(draft_info.get("sha256") or "").strip().lower()
+                if expected_digest and expected_digest != digest:
+                    raise RootServiceError(
+                        f"checkpoint id {change_id} was already used for different content"
+                    )
+                if intent_archive_path is not None and intent_archive_path.is_file():
+                    _extract_zip_bytes(archive_bytes, source)
+                stored = str(draft_info.get("stored_path") or "").strip()
+                commit = str(draft_info.get("commit") or "").strip()
+                if not stored or not commit:
+                    raise RootServiceError("Root checkpoint receipt is incomplete")
+                source_ref = ArtifactSourceRef(
+                    forge="adaos-root",
+                    repository=str(
+                        getattr(cfg.dev_settings, "forge_repo", None)
+                        or "inimatic/adaos-registry"
+                    ),
+                    revision=commit,
+                    path_scope=(stored.rstrip("/") + "/",),
+                )
+                pushed_source = publication.record_push(
+                    kind=kind.rstrip("s"),
+                    artifact_id=name,
+                    artifact_dir=source,
+                    source_ref=source_ref,
+                    change_ids=(change_id,),
+                    source_tree=verified_source_tree(draft_info, revision=commit),
+                )
+                write_intent(
+                    "completed",
+                    archive_sha256=digest,
+                    receipt=dict(draft_info),
+                    package_digest=pushed_source.package.digest,
+                    source_tree=pushed_source.source_tree,
+                )
+                return result_from_checkpoint(
+                    source_ref=source_ref,
+                    stored_path=stored,
+                    pushed_source=pushed_source,
+                    response_metadata=draft_metadata,
+                    archive_bytes=archive_bytes,
+                )
+            if intent.get("status") in {"dispatching", "uncertain", "remote_confirmed"}:
+                raise RootServiceError(
+                    "Checkpoint outcome is unresolved and does not match the current Forge receipt; refusing a duplicate write"
+                )
+
+        rollback_paths = [
+            source / ("skill.yaml" if kind == "skills" else "scenario.yaml"),
+            workspace / "registry.json",
+        ]
+        if kind == "scenarios":
+            rollback_paths.append(source / "scenario.json")
+        snapshots = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in rollback_paths
+        }
+        remote_committed = False
+        dispatch_started = False
+        try:
+            resume_archive = (
+                intent.get("status") == "prepared"
+                and intent_archive_path is not None
+                and intent_archive_path.is_file()
+            )
+            if resume_archive:
+                archive_bytes = intent_archive_path.read_bytes()
+                expected_archive_sha = str(intent.get("archive_sha256") or "").strip().lower()
+                if hashlib.sha256(archive_bytes).hexdigest() != expected_archive_sha:
+                    raise RootServiceError("Prepared checkpoint archive does not match its journal")
+                _extract_zip_bytes(archive_bytes, source)
+                _, resumed_version, resumed_updated_at = self._artifact_manifest_info(source, kind)
+                manifest_meta = {
+                    "version": resumed_version,
+                    "updated_at": resumed_updated_at,
+                }
+            else:
+                source_payload = self._manifest_payload(source, kind)
+                source_data = source_payload[1] if source_payload else {}
+                publish_bump_index = (
+                    bump_index(
+                        effective_skill_bump(
+                            source_data,
+                            "patch",
+                            has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+                        )
+                    )
+                    if kind == "skills"
+                    else bump_index("patch")
+                )
+                manifest_meta = self._update_manifest(
+                    kind,
+                    source,
+                    name,
+                    None,
+                    version_bump_index=publish_bump_index,
+                    set_prototype=False,
+                )
+                if kind == "scenarios":
+                    _sync_scenario_content_metadata(source, name, manifest_meta)
+
+            build_artifact_package(
+                source,
+                kind=kind.rstrip("s"),  # type: ignore[arg-type]
+                source_ref=ArtifactSourceRef(
+                    forge="checkpoint-preflight",
+                    repository="local-dev",
+                    revision="0" * 40,
+                    path_scope=(f"{kind}/{name}/",),
+                ),
+            )
+            try:
+                upsert_workspace_registry_entry(
+                    workspace,
+                    kind,
+                    source,
+                    version=(manifest_meta or {}).get("version"),
+                    updated_at=(manifest_meta or {}).get("updated_at"),
+                    extra={
+                        "publisher": {
+                            "owner_id": owner_id,
+                            "node_id": node_id,
+                        }
+                    },
+                )
+            except Exception:
+                _log.debug(
+                    "failed to update local workspace registry after push kind=%s name=%s",
+                    kind,
+                    name,
+                    exc_info=True,
+                )
+            if not resume_archive:
+                archive_bytes = create_zip_bytes(source)
+            archive_b64 = archive_bytes_to_b64(archive_bytes)
+            digest = hashlib.sha256(archive_bytes).hexdigest()
+            if change_id and intent_archive_path is not None:
+                atomic_write_bytes(intent_archive_path, archive_bytes)
+                write_intent("prepared", archive_sha256=digest)
+            push_method = (
+                client.push_skill_draft if kind == "skills" else client.push_scenario_draft
+            )
+            write_intent("dispatching", archive_sha256=digest)
+            dispatch_started = True
+            response = push_method(
+                name=name,
+                archive_b64=archive_b64,
+                node_id=node_id,
+                verify=verify,
+                cert=(cert_path, key_path),
+                sha256=digest,
+                message=commit_message,
+                metadata=commit_metadata,
+            )
+            remote_committed = True
+            write_intent(
+                "remote_confirmed",
+                archive_sha256=digest,
+                receipt=dict(response),
+            )
+            stored = str(response.get("stored_path") or "").strip()
+            commit = str(response.get("commit") or "").strip()
+            if not stored:
+                raise RootServiceError("Root did not return stored_path")
+            if not commit:
+                raise RootServiceError(
+                    "Root stored the draft archive but did not confirm a Forge commit"
+                )
+            response_metadata = _normalize_draft_metadata(
+                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            )
+            if commit_metadata and response_metadata != commit_metadata:
+                raise RootServiceError("Root returned stale Forge commit metadata for the draft archive")
+            source_ref = ArtifactSourceRef(
+                forge="adaos-root",
+                repository=str(
+                    getattr(cfg.dev_settings, "forge_repo", None)
+                    or "inimatic/adaos-registry"
+                ),
+                revision=commit,
+                path_scope=(stored.rstrip("/") + "/",),
+            )
+            source_tree = verified_source_tree(response, revision=commit)
+            pushed_source = publication.record_push(
+                kind=kind.rstrip("s"),
+                artifact_id=name,
+                artifact_dir=source,
+                source_ref=source_ref,
+                change_ids=(change_id,) if change_id else (),
+                source_tree=source_tree,
+            )
+            write_intent(
+                "completed",
+                archive_sha256=digest,
+                receipt=dict(response),
+                package_digest=pushed_source.package.digest,
+                source_tree=source_tree,
+            )
+            return result_from_checkpoint(
+                source_ref=source_ref,
+                stored_path=stored,
+                pushed_source=pushed_source,
+                response_metadata=response_metadata or commit_metadata,
+                archive_bytes=archive_bytes,
+            )
+        except Exception as exc:
+            if dispatch_started and not remote_committed:
+                write_intent(
+                    "uncertain",
+                    archive_sha256=(
+                        hashlib.sha256(archive_bytes).hexdigest()
+                        if "archive_bytes" in locals()
+                        else None
+                    ),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            if not remote_committed:
+                for path, content in snapshots.items():
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        temporary = path.with_name(f".{path.name}.rollback-{uuid4().hex}")
+                        temporary.write_bytes(content)
+                        os.replace(temporary, path)
+            raise
 
     def _update_artifact(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"], name: str) -> ArtifactUpdateResult:
         assert_safe_name(name)
@@ -2540,9 +3145,13 @@ class RootDeveloperService:
             checkout_source = repo_dir / relative
             if not checkout_source.exists():
                 raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found in forge repository (expected at {relative})")
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(checkout_source, target)
+            temporary = target.parent / f".{target.name}.update-{os.getpid()}-{uuid4().hex}"
+            try:
+                shutil.copytree(checkout_source, temporary)
+                _replace_directory_transactionally(temporary, target)
+            except Exception:
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise
             source = checkout_source
             try:
                 commit_info = dict(self.ctx.git.latest_commit_for_path(str(repo_dir), relative.as_posix()) or {})

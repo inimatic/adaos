@@ -31,6 +31,17 @@ AdaOS - это Python-платформа для построения распр�
 - [Навыки](skills.md)
 - [Сценарии](scenarios.md)
 - [DevPortal](devportal.md)
+- [Целевая архитектура артефактов](../architecture/artifact-source-package-activation.md)
+- [Проверка pipeline от 2026-07-24](../architecture/artifact-pipeline-local-evidence-2026-07-24.md)
+
+## Pipeline разработки артефактов
+
+Однопользовательский путь `DEV → immutable checkpoint → package → trial →
+publication → Workspace` проверен локально на реальных сценарии и навыке.
+Builder назначает отдельный `change_id` каждой итерации Automation и не
+повторяет автоматически команды с неизвестным результатом. Backend-маршрут
+проверки дерева исходников развернут в production, но до включения package-only
+режима по умолчанию остается проверка на чистом stand/второй машине.
 
 ## Текущий фокус
 

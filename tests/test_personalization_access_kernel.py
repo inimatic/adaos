@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from adaos.domain.personalization_access import (
@@ -23,6 +25,28 @@ from adaos.services.personalization_access import (
 OWNER = SubjectRef("user", "owner")
 MASHA = SubjectRef("user", "masha")
 FAMILY = ScopeRef("workspace", "family")
+
+
+def test_access_store_retries_transient_atomic_replace_denial(tmp_path, monkeypatch):
+    target = tmp_path / "access.json"
+    store = PersonalizationAccessStore(target)
+    original_replace = Path.replace
+    attempts = 0
+
+    def transient_replace(path: Path, destination: Path):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("transient scanner lock")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", transient_replace)
+
+    store.put_user(MASHA)
+
+    assert attempts == 2
+    assert PersonalizationAccessStore(target).get_user("masha")["subject"] == MASHA.to_dict()
+    assert list(tmp_path.glob(".access.json.*.tmp")) == []
 
 
 def test_phase1_policy_grant_revoke_and_audit_roundtrip(tmp_path):

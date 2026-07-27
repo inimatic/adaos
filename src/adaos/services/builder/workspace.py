@@ -401,6 +401,9 @@ class BuilderWorkspaceService:
             "commit": getattr(result, "commit", None),
             "message": getattr(result, "message", None) or " ".join(str(message or "").split()).strip() or None,
             "metadata": dict(getattr(result, "metadata", None) or metadata or {}),
+            "package_digest": getattr(result, "package_digest", None),
+            "source_revision": getattr(result, "source_revision", None),
+            "source_tree": getattr(result, "source_tree", None),
         }
 
     def create_draft(
@@ -723,8 +726,8 @@ class BuilderWorkspaceService:
         _write_yaml(manifest, data)
 
     def _patch_scenario_template(self, artifact_root: Path, artifact_id: str, source_idea: str) -> None:
-        manifest = artifact_root / "scenario.json"
-        data = _read_json(manifest)
+        manifest = artifact_root / "scenario.yaml"
+        data = _read_yaml(manifest)
         data["id"] = artifact_id
         data.setdefault("version", "0.1.0")
         data["name"] = artifact_id
@@ -734,7 +737,15 @@ class BuilderWorkspaceService:
         data.setdefault("nlu", {})
         data["nlu"].setdefault("nlu_hints", {})
         data["nlu"]["nlu_hints"].setdefault("examples", [])
-        _write_json(manifest, data)
+        _write_yaml(manifest, data)
+        content = artifact_root / "scenario.json"
+        if content.exists():
+            payload = _read_json(content)
+            payload["id"] = artifact_id
+            payload.setdefault("version", str(data.get("version") or "0.1.0"))
+            payload["name"] = artifact_id
+            payload["description"] = payload.get("description") or source_idea
+            _write_json(content, payload)
 
     def _create_descriptor_fix_draft(
         self,
@@ -888,7 +899,7 @@ class BuilderWorkspaceService:
         return {"touched": touched, "description": description}
 
     def _descriptor_manifest_path(self, artifact_root: Path, target_kind: str) -> Path | None:
-        names = ("skill.yaml", "skill.yml") if target_kind == "skill" else ("scenario.json", "scenario.yaml", "scenario.yml")
+        names = ("skill.yaml",) if target_kind == "skill" else ("scenario.yaml",)
         for name in names:
             path = artifact_root / name
             if path.exists():
@@ -1012,11 +1023,11 @@ class BuilderWorkspaceService:
             if not path.is_file() or any(part in _SKIP_DIRS for part in path.parts):
                 continue
             rel = _relative_to(path, root)
-            refs.append({"path": rel, "role": self._file_role(rel), "required": rel in {"skill.yaml", "scenario.json"}})
+            refs.append({"path": rel, "role": self._file_role(rel), "required": rel in {"skill.yaml", "scenario.yaml"}})
         return refs
 
     def _file_role(self, rel: str) -> str:
-        if rel in {"skill.yaml", "skill.yml", "scenario.json", "scenario.yaml", "scenario.yml"}:
+        if rel in {"skill.yaml", "scenario.yaml"}:
             return "manifest"
         if rel.startswith("handlers/") and rel.endswith(".py"):
             return "handler"
@@ -1164,9 +1175,9 @@ class BuilderWorkspaceService:
         elif artifact_kind == "scenario":
             manifest_path = self._descriptor_manifest_path(artifact_root, "scenario")
             if manifest_path is None:
-                issues.append(_issue("error", "schema.scenario_manifest_missing", "scenario.json/scenario.yaml is missing", "scenario"))
+                issues.append(_issue("error", "schema.scenario_manifest_missing", "scenario.yaml is missing", "scenario.yaml"))
             else:
-                data = _read_json(manifest_path) if manifest_path.suffix == ".json" else _read_yaml(manifest_path)
+                data = _read_yaml(manifest_path)
                 checks.append(self._validate_schema("scenario.schema.json", _load_abi_schema("scenario.schema.json"), data, "draft7"))
         else:
             issues.append(_issue("warning", "schema.unknown_artifact_kind", f"unknown artifact kind: {artifact_kind}", None))
@@ -1443,7 +1454,7 @@ class BuilderWorkspaceService:
     ) -> dict[str, Any]:
         files = [item.get("path") for item in diff.get("files") or [] if isinstance(item, dict)]
         surfaces = []
-        if any(str(path).endswith(("skill.yaml", "scenario.json", "scenario.yaml")) for path in files):
+        if any(str(path).endswith(("skill.yaml", "scenario.yaml")) for path in files):
             surfaces.append("manifest")
         if any(str(path).endswith("webui.json") for path in files):
             surfaces.append("webui")

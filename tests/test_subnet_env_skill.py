@@ -84,6 +84,8 @@ def test_subnet_env_snapshot_includes_zone_drift_and_effective_views(tmp_path, m
         encoding="utf-8",
     )
     _patch_snapshot_dependencies(monkeypatch, mod, dotenv_path)
+    for key in mod._ALLOWED_ENV_KEYS | {"ADAOS_ZONE_ID"}:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ENV_TYPE", "dev")
 
     snapshot = mod.get_snapshot(webspace_id="ws-1")

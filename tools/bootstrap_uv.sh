@@ -561,6 +561,8 @@ else
 fi
 
 # 2) Python deps
+command -v cargo >/dev/null 2>&1 || die "Rust/Cargo >=1.72 is required to build the repository-pinned vendor/y-py source. Install Rust with rustup."
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
 if [[ -f uv.lock ]]; then
   log "Syncing environment from uv.lock..."
   set +e

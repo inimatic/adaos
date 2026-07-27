@@ -1,0 +1,3 @@
+name: weather_skill
+description: Historical skill without version metadata.
+entry: handlers/main.py

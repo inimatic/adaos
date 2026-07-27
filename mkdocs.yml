@@ -159,6 +159,9 @@ nav:
       - Overview: architecture/index.md
       - Governed Evolution: architecture/governed-evolution.md
       - Governed Evolution Roadmap: architecture/governed-evolution-roadmap.md
+      - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
+      - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
+      - Artifact Pipeline Local Evidence 2026-07-24: architecture/artifact-pipeline-local-evidence-2026-07-24.md
       - Roadmap Inventory and Authority Map: architecture/roadmap-inventory.md
       - Developer Surface Map: architecture/developer-surface-map.md
       - MVP Release Evidence: architecture/mvp-release-evidence.md
@@ -185,6 +188,7 @@ nav:
       - Builder Roadmap: architecture/builder-roadmap.md
       - Builder SDK Boundary: architecture/builder-sdk-boundary.md
       - Builder Preview Runtime: architecture/builder-preview-runtime.md
+      - Yjs Runtime Ownership: architecture/yjs-runtime-ownership.md
       - Infrascope Roadmap: architecture/infrascope-roadmap.md
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
       - Device Access and Browsers: architecture/device-access-and-browsers.md

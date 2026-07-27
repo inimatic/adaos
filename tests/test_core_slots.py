@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from adaos.services import core_slots
 
 
@@ -49,3 +51,21 @@ def test_active_slot_prefers_process_env_override(monkeypatch, tmp_path: Path) -
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
 
     assert core_slots.active_slot() == "B"
+
+
+def test_slot_marker_write_is_atomic_when_replace_fails(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    marker = tmp_path / "state" / "core_slots" / "active"
+    core_slots._write_text(marker, "A")
+
+    monkeypatch.setattr(
+        core_slots.os,
+        "replace",
+        lambda _source, _target: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        core_slots._write_text(marker, "B")
+
+    assert marker.read_text(encoding="utf-8") == "A"
+    assert list(marker.parent.glob(".active.*")) == []

@@ -1,12 +1,25 @@
 {
   "id": "template-id",
+  "name": "template-id",
   "version": "0.1.0",
-  "name": "New Scenario",
-  "triggers": [],
-  "slots": {},
-  "params": {},
+  "title": "New Scenario",
+  "description": "Empty AdaOS desktop canvas ready for Builder authoring.",
+  "type": "desktop",
+  "supported_locales": ["en", "ru"],
+  "depends": [],
+  "runtime": {
+    "skills": {
+      "required": [],
+      "optional": []
+    }
+  },
+  "ui": {
+    "manifest": "webui.json"
+  },
+  "trigger": "manual",
+  "vars": {},
   "llm_hints": {
-    "description": "",
+    "description": "Empty desktop scenario ready for Builder authoring.",
     "aliases": [],
     "primary_actions": [],
     "examples": [],
@@ -19,11 +32,6 @@
       "slot_schemas": {},
       "entities": []
     }
-  },
-  "io": {
-    "input": ["voice", "text"],
-    "output": ["voice", "text"],
-    "settings": { "output.active": "voice" }
   },
   "steps": []
 }

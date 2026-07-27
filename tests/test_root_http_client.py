@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from adaos.services.root import client as root_client_module
-from adaos.services.root.client import RootHttpClient
+from adaos.services.root.client import RootHttpClient, RootHttpError
 
 
 class _FakeRootHttpLogger:
@@ -82,6 +84,74 @@ def test_non_report_control_success_keeps_info(monkeypatch) -> None:
 
     assert fake_logger.calls
     assert fake_logger.calls[-1][0] == "info"
+
+
+def test_binary_response_preserves_bytes_without_text_decoding(monkeypatch) -> None:
+    archive = b"PK\x03\x04\xff\x00artifact"
+
+    class _Response:
+        status_code = 200
+        content = archive
+        text = "must not be used"
+
+        def json(self):
+            raise AssertionError("binary success must not be decoded as JSON")
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def request(self, *args, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    monkeypatch.setattr(root_client_module.httpx, "Client", _Client)
+
+    assert RootHttpClient(base_url="https://api.example.test").request(
+        "GET",
+        "/v1/artifacts/packages/digest/content",
+        response_bytes=True,
+    ) == archive
+
+
+def test_binary_response_keeps_structured_error_contract(monkeypatch) -> None:
+    class _Response:
+        status_code = 404
+        content = b'{"error":"package_not_found"}'
+        text = '{"error":"package_not_found"}'
+
+        def json(self):
+            return {"error": "package_not_found"}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def request(self, *args, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    monkeypatch.setattr(root_client_module.httpx, "Client", _Client)
+
+    with pytest.raises(RootHttpError) as raised:
+        RootHttpClient(base_url="https://api.example.test").request(
+            "GET",
+            "/v1/artifacts/packages/digest/content",
+            response_bytes=True,
+        )
+
+    assert raised.value.status_code == 404
+    assert raised.value.error_code == "package_not_found"
 
 
 def test_hub_control_report_uses_short_configurable_timeout(monkeypatch) -> None:

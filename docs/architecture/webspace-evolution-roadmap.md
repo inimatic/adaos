@@ -390,16 +390,13 @@ The browser-facing rule should be explicit:
 
 ## Current Gaps Relative To That Contract
 
-The current codebase is close, but still fragmented:
+The normal switch path and cold-room bootstrap now have explicit ownership:
+bootstrap loads/validates, the resolver produces a plain payload, and live-room
+apply commits selector plus projection without transport teardown. Remaining
+gaps are in recovery unification and phased rendering:
 
-- bootstrap seeding relies on `scenarios.synced -> rebuild_webspace_async()`
-  as an event side effect rather than an explicit rebuild pipeline
-- reload/reset is closer to the target contract now that soft reload no longer
-  tears down the room or piggybacks on a second rebuild via
-  `scenarios.synced`, but the recovery family is still broader than the final
-  single reconcile contract
-- scenario switch uses a different projection path than reload/reset instead of
-  reusing the same semantic rebuild primitive
+- reload/reset no longer piggyback on `scenarios.synced`, but the recovery
+  family is still broader than the final single reconcile contract
 - snapshot restore restores persisted Yjs state without a follow-up semantic
   reconcile step
 - projection loading is still partly hidden inside rebuild logic, which makes
@@ -882,6 +879,24 @@ Current status:
 - rebuild execution state is now a first-class observable snapshot (`idle /
   scheduled / running / ready / failed`) so fast-accept background reconcile
   paths can still be diagnosed from control surfaces without tailing logs
+- state-sync health now keeps an expected scenario-switch materialization
+  transition separate from link degradation: `state_sync.materialization`
+  reports `transition_expected`, while healthy attached Yjs channels remain
+  availability-usable during `pending_structure`, `first_paint`,
+  `interactive`, and `hydrating`
+- default scenario switching now treats `ui.current_scenario` plus the
+  effective `ui`, `data`, `registry`, and runtime materialization branches as
+  one live-room commit barrier; desired control state may advance while the
+  old render remains visible, but the new selector is not published before its
+  projection
+- scenario-switch and go-home clients validate the final render against the
+  scenario returned by the command acknowledgement; exact-scenario HTTP
+  recovery is render-only, TTL-bounded, and leaves live state-sync degraded
+  until Yjs converges
+- the scenario-switch command no longer opens a read-only YDoc to probe the
+  previous materialized scenario on ordinary transitions; that probe is
+  reserved for same-current idempotency checks where a stale materialization
+  could otherwise be skipped
 - the main remaining cleanup is no longer "make projection refresh explicit",
   but expanding debug/introspection around projection ordering as deeper
   Phase 4 work

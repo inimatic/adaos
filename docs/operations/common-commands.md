@@ -122,7 +122,8 @@ adaos --help
 Manual editable install:
 
 ```bash
-pip install -e ".[dev]"
+rustc --version  # Rust 1.72 or newer
+uv sync --locked --extra dev
 adaos --help
 ```
 

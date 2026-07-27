@@ -24,7 +24,19 @@ adaos scenario run greet_on_boot
 adaos maintenance status --json
 adaos maintenance apply-retention --dry-run
 adaos maintenance run --pressure-only --json
+adaos maintenance artifact-retention --json
+adaos maintenance artifact-retention --apply --json
+adaos maintenance artifact-identity builder --kind scenario --json
 ```
+
+`artifact-retention` is dry-run by default. It removes nothing unless
+`--apply` is present, and even then protects active, pending, uncertain, and
+retained rollback state.
+
+`artifact-identity` is read-only. It explains the canonical manifest id and
+installation alias, selected registry channel, immutable source/package/release
+references, and the corresponding active WorkspaceLock component. Missing or
+different identities are reported as drift; the command never reconciles them.
 
 The service module `adaos.services.skill.runtime` provides the same operations for programmatic Python usage.
 

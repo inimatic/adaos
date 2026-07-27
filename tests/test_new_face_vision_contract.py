@@ -110,6 +110,7 @@ def test_new_face_vision_retries_late_image_dependency_import(tmp_path: Path, mo
 
 def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
+    pytest.importorskip("numpy")
     engine_cls = _load_engine_class()
     engine = engine_cls(tmp_path / "state")
     archive = tmp_path / "frames.zip"
@@ -167,6 +168,7 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
 
 def test_new_face_vision_exposes_calculation_state_only_for_uncached_frames(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
+    pytest.importorskip("numpy")
     engine_cls = _load_engine_class()
     engine = engine_cls(tmp_path / "state")
     archive = tmp_path / "frames.zip"
@@ -191,6 +193,7 @@ def test_new_face_vision_exposes_calculation_state_only_for_uncached_frames(tmp_
 
 def test_new_face_vision_can_step_back_to_previous_cached_frame(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
+    pytest.importorskip("numpy")
     engine_cls = _load_engine_class()
     engine = engine_cls(tmp_path / "state")
     archive = tmp_path / "frames.zip"
@@ -226,6 +229,7 @@ def test_new_face_vision_can_step_back_to_previous_cached_frame(tmp_path: Path) 
 
 def test_new_face_vision_frame_preview_is_compact_jpeg_stream_payload(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
+    pytest.importorskip("numpy")
     engine_cls = _load_engine_class()
     engine = engine_cls(tmp_path / "state")
     archive = tmp_path / "frames.zip"
@@ -247,6 +251,7 @@ def test_new_face_vision_frame_preview_is_compact_jpeg_stream_payload(tmp_path: 
 
 def test_new_face_vision_persists_prediction_cache_across_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("PIL.Image")
+    pytest.importorskip("numpy")
     engine_module = _load_engine_module()
     state_dir = tmp_path / "state"
     archive = tmp_path / "frames.zip"
@@ -276,6 +281,7 @@ def test_new_face_vision_persists_prediction_cache_across_restart(tmp_path: Path
 
 def test_new_face_vision_removes_stale_uploads_after_successful_load(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
+    pytest.importorskip("numpy")
     engine_cls = _load_engine_class()
     engine = engine_cls(tmp_path / "state")
     upload_dir = tmp_path / ".runtime" / "new_face_vision_skill" / "v0.2" / "data" / "files" / "uploads" / "frames"

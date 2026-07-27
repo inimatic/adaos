@@ -6,6 +6,8 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
@@ -204,7 +206,7 @@ def test_skill_push_without_bump_catches_registry_up_to_manifest(monkeypatch, tm
     assert git.commit_calls[0]["subpath"] == ["skills/weather_skill", "registry.json"]
 
 
-def test_skill_push_uses_existing_registry_entry_when_manifest_is_missing(monkeypatch, tmp_path: Path) -> None:
+def test_skill_push_rejects_missing_skill_yaml_declaration(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
     skill_dir = workspace / "skills" / "browsers_skill"
@@ -249,16 +251,13 @@ def test_skill_push_uses_existing_registry_entry_when_manifest_is_missing(monkey
     manager.settings = SimpleNamespace(git_author_name="Ada Tester", git_author_email="tester@adaos.local")
     manager.ctx = _workspace_ctx(workspace, git)
 
-    revision = manager.push("browsers_skill", "publish browsers skill")
+    with pytest.raises(FileNotFoundError, match="skill.yaml"):
+        manager.push("browsers_skill", "publish browsers skill")
 
-    registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
-    assert revision == "rev-1"
-    assert [item["id"] for item in registry["skills"]] == ["browsers_skill"]
-    assert registry["skills"][0]["entry"] == "handlers/main.py"
     assert git.sparse_add_calls == [(str(workspace), "skills/browsers_skill")]
     assert git.pull_calls == [str(workspace)]
-    assert git.commit_calls[0]["subpath"] == ["skills/browsers_skill", "registry.json"]
-    assert git.push_calls == [str(workspace)]
+    assert git.commit_calls == []
+    assert git.push_calls == []
 
 
 def test_private_model_artifacts_are_not_uploaded_by_default(tmp_path: Path) -> None:
@@ -336,14 +335,15 @@ def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Pa
     (workspace / ".git").mkdir(parents=True)
     scenario_dir = workspace / "scenarios" / "welcome_scene"
     scenario_dir.mkdir(parents=True)
-    (scenario_dir / "scenario.json").write_text(
-        json.dumps(
-            {
-                "id": "welcome_scene",
-                "name": "Welcome Scene",
-                "version": "0.1.0",
-                "description": "Initial scenario",
-            }
+    (scenario_dir / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: welcome_scene",
+                "name: Welcome Scene",
+                "version: '0.1.0'",
+                "description: Initial scenario",
+                "",
+            ]
         ),
         encoding="utf-8",
     )
@@ -369,7 +369,7 @@ def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Pa
     assert git.push_calls == [str(workspace)]
 
 
-def test_scenario_push_uses_existing_registry_entry_when_manifest_is_missing(monkeypatch, tmp_path: Path) -> None:
+def test_scenario_push_rejects_missing_scenario_yaml_declaration(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
     scenario_dir = workspace / "scenarios" / "welcome_scene"
@@ -415,15 +415,13 @@ def test_scenario_push_uses_existing_registry_entry_when_manifest_is_missing(mon
     manager.git = git
     manager.ctx = ctx
 
-    revision = manager.push("welcome_scene", "publish welcome scenario")
+    with pytest.raises(FileNotFoundError, match="scenario.yaml"):
+        manager.push("welcome_scene", "publish welcome scenario")
 
-    registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
-    assert revision == "rev-1"
-    assert [item["id"] for item in registry["scenarios"]] == ["welcome_scene"]
     assert git.sparse_add_calls == [(str(workspace), "scenarios/welcome_scene")]
     assert git.pull_calls == [str(workspace)]
-    assert git.commit_calls[0]["subpath"] == ["scenarios/welcome_scene", "registry.json"]
-    assert git.push_calls == [str(workspace)]
+    assert git.commit_calls == []
+    assert git.push_calls == []
 
 
 def test_scenario_project_to_doc_keeps_runtime_owned_effective_data_under_rebuild_ownership(monkeypatch) -> None:

@@ -56,7 +56,7 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
 
   ```
   <SKILLS_DIR>/<skill_name>/
-    manifest.yaml
+    skill.yaml
     handler.py
     prep/
       prep_result.json
@@ -124,7 +124,7 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
 
 * **Dependencies:**
 
-  * Dependencies must be listed in `manifest.yaml` under `dependencies`.
+  * Dependencies must be listed in `skill.yaml` under `dependencies`.
   * Do **not** duplicate dependencies in code.
   * Example:
 
@@ -140,15 +140,15 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
 The skill must consist of **two files only**, formatted exactly as shown below:
 
 ```
---- manifest.yaml ---
-<content of manifest.yaml>
+--- skill.yaml ---
+<content of skill.yaml>
 --- handler.py ---
 <content of handler.py>
 ```
 
 ---
 
-## Requirements for `manifest.yaml`
+## Requirements for `skill.yaml`
 
 * Must be valid YAML.
 * Fields:
@@ -218,7 +218,7 @@ The skill must consist of **two files only**, formatted exactly as shown below:
 ## Additional constraints
 
 * Do not request permissions or dependencies you do not use.
-* Do not generate files other than `manifest.yaml` and `handler.py`.
+* Do not generate files other than `skill.yaml` and `handler.py`.
 * The handler must work correctly in the MVP runtime environment.
 * Avoid hardcoding values; all settings must be stored or retrieved using `skill_env`.
 * For browser-facing state, write the `data_routes` plan before choosing Yjs or

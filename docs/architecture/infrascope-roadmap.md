@@ -4,6 +4,18 @@ This roadmap breaks `Infrascope` into implementation Phases that fit the current
 
 Architecture is defined in [Infrascope](infrascope.md). This page focuses on sequencing, deliverables, and acceptance criteria.
 
+## Current MVP Slice
+
+- `[must]` Split overview, inventory, and object details into demanded,
+  lifecycle-aware projection families for the M3 pilot.
+- `[must]` Stop full inspector pre-materialization and record payload size plus
+  projection lifecycle diagnostics.
+- `[should]` Keep platform-originated warnings outside skill-owned payloads.
+- `[could]` Validate owner/guest/dev display and action treatment over a shared
+  payload.
+- `[deferred]` Keep advanced graph, simulation, and broad cross-skill rollout
+  outside the MVP pilot.
+
 ## Sequencing Principles
 
 1. Contracts before screens.

@@ -9,8 +9,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException, Response
 
-if "nats" not in sys.modules:
-    sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules:
@@ -107,6 +105,89 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert calls[1] == "prompt_engineer_skill:prompt_list_project_objects:None"
     assert result["ok"] is True
     assert result["trace_id"] == "trace-123"
+
+
+def test_call_tool_prepares_workspace_runtime_before_single_mutation(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs):
+            calls.append("run")
+            return {"ok": True}
+
+    def _prepare(*_args, **_kwargs) -> bool:
+        calls.append("prepare")
+        return True
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_workspace_skill_source_exists", lambda *_args: True)
+    monkeypatch.setattr(tool_bridge_module, "_runtime_ready", lambda *_args: False)
+    monkeypatch.setattr(tool_bridge_module, "_repair_workspace_runtime", _prepare)
+    monkeypatch.setattr(tool_bridge_module, "_should_autosync_workspace_runtime", lambda **_kwargs: False)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="notes_skill:save_note",
+                arguments={"side_effect_class": "local_write", "note_id": "note-1"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["prepare", "run"]
+
+
+def test_call_tool_does_not_repeat_or_proxy_failed_mutation(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs):
+            calls.append("run")
+            raise RuntimeError("write failed")
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_workspace_skill_source_exists", lambda *_args: False)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "get_directory",
+        lambda: (_ for _ in ()).throw(AssertionError("failed mutation must not be proxied")),
+    )
+    ctx = _fake_ctx()
+    ctx.config = SimpleNamespace(role="hub", node_id="hub-1", token="hub-token")
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(
+                    tool="notes_skill:save_note",
+                    arguments={"side_effect_class": "local_write", "note_id": "note-1"},
+                ),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=ctx,
+            )
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "tool_execution_failed_no_retry"
+    assert excinfo.value.detail["retryable"] is False
+    assert calls == ["run"]
 
 
 def test_builder_chat_is_dispatched_to_builder_skill_owner(monkeypatch) -> None:
@@ -940,7 +1021,7 @@ def test_call_tool_skips_workspace_autosync_for_readonly_snapshots(monkeypatch, 
     assert calls == ["run_sync", "run:infrastate_skill:get_snapshot"]
 
 
-def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) -> None:
+def test_call_tool_skips_workspace_autosync_for_readonly_tools(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
 
@@ -1008,14 +1089,12 @@ def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) 
     assert result["ok"] is True
     assert calls == [
         "run_sync:start",
-        "runtime_status",
-        "update:prompt_engineer_skill:workspace",
         "run:prompt_engineer_skill:prompt_list_project_objects",
         "run_sync:end",
     ]
 
 
-def test_call_tool_throttles_workspace_autosync_for_repeated_skill_calls(monkeypatch, tmp_path) -> None:
+def test_call_tool_keeps_repeated_readonly_calls_outside_workspace_autosync(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
 
@@ -1073,11 +1152,12 @@ def test_call_tool_throttles_workspace_autosync_for_repeated_skill_calls(monkeyp
 
     assert first["ok"] is True
     assert second["ok"] is True
-    assert calls.count("update:prompt_engineer_skill:workspace") == 1
+    assert calls.count("update:prompt_engineer_skill:workspace") == 0
+    assert calls.count("runtime_status") == 0
     assert calls.count("run:prompt_engineer_skill:prompt_list_project_files") == 2
 
 
-def test_call_tool_repairs_workspace_runtime_when_runtime_missing(monkeypatch, tmp_path) -> None:
+def test_call_tool_prepares_missing_workspace_runtime_before_single_mutation(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "infrascope_skill").mkdir(parents=True, exist_ok=True)
 
@@ -1133,12 +1213,16 @@ def test_call_tool_repairs_workspace_runtime_when_runtime_missing(monkeypatch, t
     async def _fake_run_sync(func, *args, **kwargs):
         return func(*args, **kwargs)
 
+    async def _mutating_action_gate(**_kwargs):
+        return {"risk_class": "local_write"}
+
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
     monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
     monkeypatch.setattr(tool_bridge_module, "default_webspace_id", lambda: "default")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _mutating_action_gate)
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
@@ -1155,14 +1239,13 @@ def test_call_tool_repairs_workspace_runtime_when_runtime_missing(monkeypatch, t
     assert result["ok"] is True
     assert result["trace_id"] == "trace-123"
     assert calls == [
-        "run:False:infrascope_skill:get_overview_summary:None",
         "update:infrascope_skill:workspace",
         "activate:infrascope_skill:default:ws-1:None:None",
         "run:True:infrascope_skill:get_overview_summary:None",
     ]
 
 
-def test_call_tool_repairs_broken_ready_workspace_runtime_to_pending_slot(monkeypatch, tmp_path) -> None:
+def test_call_tool_prepares_broken_workspace_runtime_before_single_mutation(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
     broken_manifest = tmp_path / "runtime" / "slots" / "B" / "resolved.manifest.json"
@@ -1229,6 +1312,9 @@ def test_call_tool_repairs_broken_ready_workspace_runtime_to_pending_slot(monkey
     async def _fake_run_sync(func, *args, **kwargs):
         return func(*args, **kwargs)
 
+    async def _mutating_action_gate(**_kwargs):
+        return {"risk_class": "local_write"}
+
     monkeypatch.setenv("ADAOS_LOG_LEVEL", "DEBUG")
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
     monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
@@ -1236,6 +1322,7 @@ def test_call_tool_repairs_broken_ready_workspace_runtime_to_pending_slot(monkey
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
     monkeypatch.setattr(tool_bridge_module, "default_webspace_id", lambda: "default")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _mutating_action_gate)
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
@@ -1251,7 +1338,6 @@ def test_call_tool_repairs_broken_ready_workspace_runtime_to_pending_slot(monkey
 
     assert result["ok"] is True
     assert calls == [
-        "run:False:prompt_engineer_skill:prompt_list_project_objects",
         "update:prompt_engineer_skill:workspace",
         "activate:prompt_engineer_skill:default:desktop:0.6.3:A",
         "run:True:prompt_engineer_skill:prompt_list_project_objects",

@@ -108,11 +108,7 @@ def _root(kind: str, project_id: str, *, required: bool = True) -> Path:
 
 
 def _manifest_path(kind: ProjectKind, root: Path) -> Path | None:
-    names = (
-        ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
-        if kind == "skill"
-        else ("scenario.yaml", "scenario.yml", "scenario.json")
-    )
+    names = ("skill.yaml",) if kind == "skill" else ("scenario.yaml",)
     return next((root / name for name in names if (root / name).is_file()), None)
 
 
@@ -232,11 +228,7 @@ def update_metadata(
         raise DeveloperProjectError("title must not be empty")
     manifests = [
         root / name
-        for name in (
-            ("scenario.yaml", "scenario.yml", "scenario.json")
-            if normalized_kind == "scenario"
-            else ("skill.yaml", "manifest.yaml", "skill.json", "manifest.json")
-        )
+        for name in (("scenario.yaml",) if normalized_kind == "scenario" else ("skill.yaml",))
         if (root / name).is_file()
     ]
     if not manifests:
@@ -457,13 +449,12 @@ def push(
 
 
 def update(kind: str, project_id: str) -> dict[str, Any]:
-    normalized_kind = _kind(kind)
-    normalized_id = _project_id(project_id)
-    service = _service()
-    method = service.update_skill if normalized_kind == "skill" else service.update_scenario
-    result = _jsonable(method(normalized_id))
-    _publish_content_changed(normalized_kind, normalized_id, reason="project_updated")
-    return result
+    _kind(kind)
+    _project_id(project_id)
+    raise DeveloperProjectError(
+        "DEV draft update is retired because it can overwrite local changes; "
+        "use an exact-base rebase/migration workflow instead"
+    )
 
 
 def publish(
@@ -481,6 +472,252 @@ def publish(
     result = _jsonable(method(normalized_id, bump=bump, force=force, dry_run=dry_run))
     if not dry_run:
         _publish_content_changed(normalized_kind, normalized_id, reason="project_published")
+    return result
+
+
+def prepare_candidate(
+    kind: str,
+    project_id: str,
+    *,
+    change_ids: list[str] | tuple[str, ...],
+    validation_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    bounded_changes = tuple(str(item).strip() for item in change_ids if str(item).strip())
+    if not bounded_changes:
+        raise DeveloperProjectError("candidate requires at least one Builder Change id")
+    result = _jsonable(
+        _service().prepare_artifact_candidate(
+            normalized_kind,
+            normalized_id,
+            change_ids=bounded_changes,
+            validation_evidence=validation_evidence,
+        )
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="candidate_prepared")
+    return result
+
+
+def decide_candidate(
+    candidate_id: str,
+    *,
+    accepted: bool,
+    observations: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, Any]:
+    token = str(candidate_id or "").strip()
+    if not token:
+        raise DeveloperProjectError("candidate_id is required")
+    return _jsonable(
+        _service().decide_artifact_candidate(
+            token,
+            accepted=accepted,
+            observations=tuple(dict(item) for item in observations),
+        )
+    )
+
+
+def prepare_rebased_candidate(
+    stale_candidate_id: str,
+    kind: str,
+    project_id: str,
+    *,
+    validation_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidate_token = str(stale_candidate_id or "").strip()
+    if not candidate_token:
+        raise DeveloperProjectError("stale_candidate_id is required")
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    result = _jsonable(
+        _service().prepare_rebased_artifact_candidate(
+            candidate_token,
+            normalized_kind,
+            normalized_id,
+            validation_evidence=validation_evidence,
+        )
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="candidate_rebased")
+    return result
+
+
+def promote_candidate(
+    candidate_id: str,
+    *,
+    permission_decision: bool | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    token = str(candidate_id or "").strip()
+    if not token:
+        raise DeveloperProjectError("candidate_id is required")
+    kwargs = {"permission_decision": permission_decision} if permission_decision is not None else {}
+    result = _jsonable(_service().promote_artifact_candidate(token, **kwargs))
+    kind = str(result.get("kind") or "").strip()
+    project_id = str(result.get("name") or "").strip()
+    if kind and project_id:
+        _publish_content_changed(kind, project_id, reason="candidate_promoted")
+    return result
+
+
+def check_subscription(project_id: str) -> dict[str, Any]:
+    normalized_id = _project_id(project_id)
+    return _jsonable(_service().check_artifact_subscription(normalized_id))
+
+
+def plan_registry_reconciliation(
+    kind: str,
+    project_id: str,
+    *,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    return _jsonable(
+        _service().plan_artifact_registry_reconciliation(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+        )
+    )
+
+
+def apply_registry_reconciliation(
+    kind: str,
+    project_id: str,
+    *,
+    reviewed_plan_digest: str,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    reviewed = str(reviewed_plan_digest or "").strip().lower()
+    if not reviewed:
+        raise DeveloperProjectError("reviewed_plan_digest is required")
+    return _jsonable(
+        _service().apply_artifact_registry_reconciliation(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+            reviewed_plan_digest=reviewed,
+        )
+    )
+
+
+def plan_remote_registry_recovery(
+    kind: str,
+    project_id: str,
+    *,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    return _jsonable(
+        _service().plan_artifact_remote_registry_recovery(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+        )
+    )
+
+
+def revalidate_remote_registry_recovery(
+    kind: str,
+    project_id: str,
+    *,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    return _jsonable(
+        _service().revalidate_artifact_remote_registry_recovery(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+        )
+    )
+
+
+def apply_remote_registry_recovery(
+    kind: str,
+    project_id: str,
+    *,
+    reviewed_plan_digest: str,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    reviewed = str(reviewed_plan_digest or "").strip().lower()
+    if not reviewed:
+        raise DeveloperProjectError("reviewed_plan_digest is required")
+    return _jsonable(
+        _service().apply_artifact_remote_registry_recovery(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+            reviewed_plan_digest=reviewed,
+        )
+    )
+
+
+def plan_subscription_update(project_id: str) -> dict[str, Any]:
+    normalized_id = _project_id(project_id)
+    return _jsonable(_service().plan_artifact_subscription_update(normalized_id))
+
+
+def inspect_subscription_update(project_id: str) -> dict[str, Any]:
+    normalized_id = _project_id(project_id)
+    return _jsonable(_service().inspect_artifact_subscription_update(normalized_id))
+
+
+async def apply_subscription_update(
+    kind: str,
+    project_id: str,
+    *,
+    expected_plan_digest: str,
+    idempotency_key: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    expected = str(expected_plan_digest or "").strip()
+    if not expected:
+        raise DeveloperProjectError("expected_plan_digest is required")
+    from adaos.services.artifact_subscription_update import (
+        ArtifactSubscriptionUpdateCoordinator,
+    )
+
+    ctx = require_ctx("sdk.developer.projects")
+    coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
+    result = await coordinator.update(
+        normalized_kind,
+        normalized_id,
+        expected_plan_digest=expected,
+        idempotency_key=(str(idempotency_key or "").strip() or None),
+        permission_decision=permission_decision,
+        webspace_id=webspace_id,
+    )
+    _publish_content_changed(normalized_kind, normalized_id, reason="subscription_activated")
+    return _jsonable(result)
+
+
+def activate_subscription(
+    kind: str,
+    project_id: str,
+    *,
+    idempotency_key: str | None = None,
+    expected_plan_digest: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    kwargs: dict[str, Any] = {
+        "idempotency_key": idempotency_key,
+        "expected_plan_digest": expected_plan_digest,
+    }
+    if permission_decision is not None:
+        kwargs["permission_decision"] = permission_decision
+    result = _jsonable(_service().activate_artifact_subscription(normalized_id, **kwargs))
+    _publish_content_changed(normalized_kind, normalized_id, reason="subscription_activated")
     return result
 
 
@@ -508,6 +745,16 @@ __all__ = [
     "DeveloperProjectError",
     "ProjectNotFoundError",
     "create",
+    "check_subscription",
+    "plan_registry_reconciliation",
+    "apply_registry_reconciliation",
+    "plan_remote_registry_recovery",
+    "revalidate_remote_registry_recovery",
+    "apply_remote_registry_recovery",
+    "inspect_subscription_update",
+    "plan_subscription_update",
+    "activate_subscription",
+    "apply_subscription_update",
     "delete",
     "describe",
     "find_scenario_root",
@@ -515,6 +762,10 @@ __all__ = [
     "list_projects",
     "list_templates",
     "publish",
+    "prepare_candidate",
+    "prepare_rebased_candidate",
+    "decide_candidate",
+    "promote_candidate",
     "push",
     "read_file",
     "update",

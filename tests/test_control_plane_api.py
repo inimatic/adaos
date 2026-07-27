@@ -13,7 +13,6 @@ from adaos.services.system_model import CanonicalObject, CanonicalProjection
 
 
 def test_node_control_plane_object_self_returns_canonical_payload(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -49,7 +48,6 @@ def test_node_control_plane_object_self_returns_canonical_payload(monkeypatch) -
 
 
 def test_node_logs_returns_local_category_tail(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -94,7 +92,6 @@ def test_node_logs_returns_local_category_tail(monkeypatch) -> None:
 
 
 def test_node_sidecar_status_proxies_to_supervisor_when_enabled(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -153,7 +150,6 @@ def test_node_sidecar_status_proxies_to_supervisor_when_enabled(monkeypatch) -> 
 
 
 def test_node_sidecar_status_uses_lightweight_runtime_snapshot(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -208,7 +204,6 @@ def test_node_sidecar_status_uses_lightweight_runtime_snapshot(monkeypatch) -> N
 
 
 def test_node_sidecar_restart_proxies_to_supervisor_when_enabled(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -266,7 +261,6 @@ def test_node_sidecar_restart_proxies_to_supervisor_when_enabled(monkeypatch) ->
 
 
 def test_node_control_plane_reliability_projection_returns_canonical_payload(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -308,7 +302,6 @@ def test_node_control_plane_reliability_projection_returns_canonical_payload(mon
 
 
 def test_node_control_plane_overview_projection_returns_canonical_payload(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -377,7 +370,6 @@ def test_node_control_plane_overview_projection_returns_canonical_payload(monkey
 
 
 def test_node_control_plane_inventory_projection_returns_canonical_payload(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -422,7 +414,6 @@ def test_node_control_plane_inventory_projection_returns_canonical_payload(monke
 
 
 def test_current_control_plane_objects_reuses_short_ttl_cache(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     sys.modules.setdefault("y_py", types.SimpleNamespace(YDoc=type("YDoc", (), {}), apply_update=lambda *args, **kwargs: None))
     fake_ystore_module = types.ModuleType("ypy_websocket.ystore")
     fake_ystore_module.BaseYStore = object
@@ -482,7 +473,6 @@ def test_current_control_plane_objects_reuses_short_ttl_cache(monkeypatch) -> No
 
 
 def test_current_control_plane_objects_cache_starts_after_slow_build(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     sys.modules.setdefault("y_py", types.SimpleNamespace(YDoc=type("YDoc", (), {}), apply_update=lambda *args, **kwargs: None))
     fake_ystore_module = types.ModuleType("ypy_websocket.ystore")
     fake_ystore_module.BaseYStore = object
@@ -544,7 +534,6 @@ def test_current_control_plane_objects_cache_starts_after_slow_build(monkeypatch
 
 
 def test_current_node_neighborhood_projection_includes_remote_io_capacity_objects(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     sys.modules.setdefault("y_py", types.SimpleNamespace(YDoc=type("YDoc", (), {}), apply_update=lambda *args, **kwargs: None))
     fake_ystore_module = types.ModuleType("ypy_websocket.ystore")
     fake_ystore_module.BaseYStore = object
@@ -624,7 +613,6 @@ def test_current_node_neighborhood_projection_includes_remote_io_capacity_object
 
 
 def test_current_subnet_planning_context_extracts_summary_nodes_and_constraints(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     sys.modules.setdefault("y_py", types.SimpleNamespace(YDoc=type("YDoc", (), {}), apply_update=lambda *args, **kwargs: None))
     fake_ystore_module = types.ModuleType("ypy_websocket.ystore")
     fake_ystore_module.BaseYStore = object
@@ -681,7 +669,6 @@ def test_current_subnet_planning_context_extracts_summary_nodes_and_constraints(
 
 
 def test_node_control_plane_neighborhood_projection_returns_canonical_payload(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -726,7 +713,6 @@ def test_node_control_plane_neighborhood_projection_returns_canonical_payload(mo
 
 
 def test_node_control_plane_object_topology_and_task_packet_projections_return_payload(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,
@@ -829,7 +815,6 @@ def test_node_control_plane_object_topology_and_task_packet_projections_return_p
 
 
 def test_sdk_control_plane_get_self_object(monkeypatch) -> None:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     sys.modules.setdefault("y_py", types.SimpleNamespace(YDoc=type("YDoc", (), {}), apply_update=lambda *args, **kwargs: None))
     fake_ystore_module = types.ModuleType("ypy_websocket.ystore")
     fake_ystore_module.BaseYStore = object

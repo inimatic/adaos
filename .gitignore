@@ -23,6 +23,8 @@ site
 .pytest-tmp
 artifacts/test_tmp/
 artifacts/client-debug/
+artifacts/y-py/
+vendor/y-py/target/
 src/adaos/integrations/rasa-backup/
 tmp/
 example
@@ -30,5 +32,6 @@ example2
 example3
 /examples/
 .ssh
+.secrets/
 .codex-diagnostics
 .gitignore

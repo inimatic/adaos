@@ -102,19 +102,12 @@ sequence.
   update memory first, and only demanded, fingerprint-changed projections may
   be materialized into Yjs
 
-## Status Labels
+## Priority Labels
 
-Markdown checkboxes only carry two states, so this roadmap uses explicit scope
-labels next to incomplete items:
-
-- `[MVP]`: required for the current merge-ready operational-event-model
-  increment
-- `[deferred]`: preserved as architectural memory, but not planned for this MVP
-- `[vision]`: target-state guidance with no current implementation commitment
-
-An unchecked `[deferred]` or `[vision]` item must not block the MVP merge gate.
-An unchecked `[MVP]` item does block the merge gate unless the checkpoint says
-it was intentionally replaced by an equivalent smaller proof.
+New incomplete work uses the shared priority vocabulary from the
+[Roadmap Inventory](roadmap-inventory.md): `[must]`, `[should]`, `[could]`, and
+`[deferred]`. Older checked `[MVP]` labels record the scope of the closed local
+integration gate; they are completion history, not a second priority system.
 
 ## Global Ordering
 
@@ -133,68 +126,21 @@ The intended order across all workstreams is:
 
 ## Current Execution Slice
 
-The current branch has the reusable ABI foundation: event envelope helpers,
-projection records, client subscription records, demand registry, dispatcher,
-status-card projection bridge, and server read/materialization endpoints.
+The reusable ABI and local platform-emitter integration gate are complete.
+The 2026-07-23 regression run passed the focused projection/service/runtime
+profile, browser projection tests, and production client build.
 
-The next coherent slice is the `merge-ready MVP integration gate`.  It must
-turn those contracts into one working, efficient runtime increment without
-starting the heavy `Infrascope` migration.
+The active order is now:
 
-Priority order:
-
-1. Browser demand truth
-   The browser runtime writes one full `ClientSubscriptionRecord` per
-   client/session into the webspace demand state.  The node reads that state and
-   mirrors it into the in-memory demand registry/API.  Add/remove deltas are not
-   the source of truth.
-2. Demand restore
-   Core and skill runtimes restore active demand from Yjs on startup and skill
-   activation.  Restore must rebuild runtime memory only; it must not write
-   projection payloads directly to Yjs.
-3. Event envelope adoption
-   Add SDK/core emit helpers that enrich legacy `Event(type, payload, source,
-   ts)` payloads with `_meta.event` fields.  Migrate selected platform and
-   projection-related producers first; do not force a repository-wide event
-   rewrite before the MVP.
-4. Skill-facing projection subscription SDK
-   Skills need an explicit SDK path to subscribe and unsubscribe from the
-   runtime projection system.  The SDK should let a skill register projection
-   families or keys it can refresh, bind them to relevant domain/platform event
-   types, restore active demand on activation, and unregister cleanly on
-   deactivation.  Skills may keep rich semantic memory, but they must not
-   select browser demand or write canonical ProjectionRecords/Yjs cache
-   directly.
-5. Live dispatcher bridge
-   Connect real eventbus topics to the shared dispatcher with bounded,
-   coalesced refresh work.  The first bridge should handle
-   `adaos.status.card.changed` -> demanded `status-card:*` refresh ->
-   ProjectionRecord registry -> set-if-changed Yjs materialization.
-6. Reserved node/platform Yjs branch
-   Add and document reserved top-level room for node-owned operational state,
-   such as `platform/nodes/<node_id>/status`,
-   `platform/nodes/<node_id>/diagnostics`, and
-   `platform/nodes/<node_id>/projections`.  The current
-   `data/projectionRecords` cache remains the browser-facing compatibility
-   cache.
-7. Platform emitter MVP
-   Extend the status-card proof to minimal notifications and runtime
-   diagnostics as first-class platform projection families.  Workspace-manager
-   migration is useful, but can remain deferred unless it is needed to validate
-   the same runtime path.
-8. Projection lifecycle and UI intent bridge
-   Publish minimal lifecycle events for requested, refreshing, ready, stale,
-   and failed projection refreshes.  Map browser page/widget/modal/pinned-panel
-   state into subscription records, not ad hoc Yjs observers.
-9. Access and runtime-surface hardening
-   Enforce `ProjectionRecord.meta.access` on browser reads before sensitive
-   diagnostics are published.  Keep the arbitrary `POST
-   /api/node/projection-records` runtime write surface out of the node API;
-   ProjectionRecords must be written by core dispatcher/materializers or
-   controlled platform helpers.
-10. Reference-plan alignment
-    Update the reference plan matrix so implemented contracts are not marked
-    simply `Open`, while adoption gaps remain visible as MVP blockers.
+1. `[must]` reconfirm browser demand, event delivery, Yjs readback, status
+   visibility, and version convergence on the target stand;
+2. `[must]` populate the M2 status/control plane and make operation recovery
+   durable;
+3. `[must]` land the shared M3 activation runtime;
+4. `[must]` migrate `browsers_skill`, `infrastate_skill`, and
+   `infrascope_skill` through the shared projection/stream contract;
+5. `[deferred]` begin broad cross-skill cleanup only after those three pilots
+   pass stand acceptance.
 
 Yjs load guardrails for this slice:
 
@@ -210,9 +156,8 @@ Yjs load guardrails for this slice:
 
 Deferred target-state memory:
 
-- `Infrascope` migration is deferred until this MVP gate is accepted
-- broad cross-skill rollout, monolith cleanup, and compatibility deletion are
-  deferred
+- broad cross-skill rollout beyond the three M3 pilot skills, monolith cleanup,
+  and compatibility deletion are deferred
 - per-user projection payload forks, global event sourcing, universal storage
   layout, and SQL projection backends remain vision items
 
@@ -224,7 +169,7 @@ Deferred target-state memory:
 - [x] `phase0.node_browser_ready`: Realtime Reliability now treats browser/member semantic channels, `Yjs as SyncChannel`, and the current transport-only `/yws` handoff through sidecar local websocket ingress as complete for the current scope
 - [x] `phase0.runtime_comm_ready`: hub-root Class A hardening, browser-safe supervisor transition state, routed-browser active-runtime selection, and the current transport-only `/ws` plus `/yws` sidecar handoff are now explicit and complete for the current scope
 - [x] `phase0.webspace_runtime_baseline`: webspace rebuild/materialization ownership is aligned with the pointer/projection roadmap, and the browser runtime now consumes that baseline through lightweight diagnostics plus shared page-runtime adapters instead of bespoke component-only reads
-- [ ] `phase0.stand_rollout_reconfirmed`: on `.30`, verify the live reliability
+- [ ] `[must]` `phase0.stand_rollout_reconfirmed`: on `.30`, verify the live reliability
   surfaces agree with the completed transport-only scope. The 2026-05-28 check
   reported `event_model.phase0.communication` `in_progress` and sidecar disabled
   by `role_default`, so the implementation checklist is closed but the stand
@@ -395,7 +340,7 @@ Primary sources:
 - [x] `[MVP]` `phase4.lifecycle_consumption`: consume `pending/refreshing/ready/stale/error` as first-class projection state
 - [x] `[MVP]` `phase4.cache_by_projection_key`: cache projection payloads by `projection_key`
 
-Current checkpoint as of 2026-07-21:
+Closed local checkpoint as of 2026-07-23:
 
 - the Angular page runtime now exposes `kind: projection` as a first-class data
   source, ref-counts demand with the existing full-overwrite registry, and
@@ -534,6 +479,8 @@ Current checkpoint as of 2026-07-21:
 - the platform emitter gate is accepted locally for status cards and minimal
   notifications. Workspace-manager migration remains deferred, and real stand
   browser/event/Yjs validation remains an open rollout gate
+- the closure regression passed `80` focused Python tests, `99` focused Angular
+  tests, the Angular production build, and strict English/Russian docs builds
 - the `STATUS-*` issue-tracker track should be executed here, not as a separate
   monitoring-only roadmap: status cards are the smallest useful platform-owned
   projections and should prove fingerprinting, versioning, thin reads, and
@@ -559,9 +506,9 @@ Primary sources:
 ### Phase 7. Heavy Skill Pilot
 
 - [x] `phase7.infrascope_gate`: do not start `Infrascope` migration before Phases 0-6 are materially in place, except for preparatory inventory and tests that do not create a parallel projection contract
-- [ ] `[deferred]` `phase7.infrascope_split`: migrate `Infrascope` from monolithic snapshots to projection families
-- [ ] `[deferred]` `phase7.infrascope_platform_errors_outside_skill`: keep platform-originated diagnostics separate from skill-owned payloads
-- [ ] `[deferred]` `phase7.infrascope_access_metadata`: validate shared payload plus access metadata behavior for owner/guest/dev audiences
+- [ ] `[must]` `phase7.infrascope_split`: migrate `Infrascope` from monolithic snapshots to demanded projection families for the M3 pilot
+- [ ] `[should]` `phase7.infrascope_platform_errors_outside_skill`: keep platform-originated diagnostics separate from skill-owned payloads
+- [ ] `[could]` `phase7.infrascope_access_metadata`: validate shared payload plus access metadata behavior for owner/guest/dev audiences
 
 Primary source:
 
@@ -575,7 +522,8 @@ acceptance remains required before broad rollout.
 
 ### Phase 8. Follow-Up Pilots
 
-- [ ] `[deferred]` `phase8.infrastate_followup`: align `infrastate`-style operational overlays
+- [ ] `[must]` `phase8.browsers_pilot`: migrate `browsers_skill` as the compact projection/stream reference
+- [ ] `[must]` `phase8.infrastate_followup`: align `infrastate`-style operational overlays
 - [ ] `[deferred]` `phase8.dev_scenario_followup`: choose one dev-oriented scenario such as `prompt_engineer_scenario`
 - [ ] `[deferred]` `phase8.bursty_surface_followup`: test one bursty interactive surface such as voice/media/browser-session-heavy UX
 
@@ -590,15 +538,18 @@ Primary source:
 - [ ] `[deferred]` `phase9.compat_cleanup`: remove legacy monolith paths once replacements are stable
 - [ ] `[deferred]` `phase9.test_matrix`: add the broad cross-skill test matrix for multi-webspace, multi-consumer, node-aware Yjs, platform emitters, and access metadata
 
-## Pilot Priority
+## Pilot Selection
 
-The intended pilot order is:
+There is no fixed `browsers_skill -> infrastate_skill -> infrascope_skill`
+rollout order. Platform surfaces in `web_desktop` remain the common baseline;
+after that, select the next pilot from current active demand, measured runtime
+pressure, declaration/diagnostic readiness, and the first failing stand
+invariant. The remaining candidate set is:
 
-1. platform surfaces in `web_desktop`
-2. `Infrascope`
-3. `infrastate` overlays
-4. one dev-oriented scenario
-5. later bursty interactive surfaces
+- `browsers_skill` for compact browser-session projection and churn;
+- `infrastate_skill` for core-owned operator truth overlays;
+- `infrascope_skill` for demand-bound inventory and details;
+- one dev-oriented scenario and later a bursty interactive surface.
 
 Counter-priority:
 
@@ -606,27 +557,10 @@ Counter-priority:
 
 ## Done When
 
-The current MVP merge gate is satisfied when:
-
-- browser clients write full subscription records; full client consumption of
-  demanded ProjectionRecords through the shared cache path remains the last
-  Phase 4 MVP gap
-- core and skill runtimes can restore active demand from Yjs without direct Yjs
-  projection writes
-- selected runtime producers carry shared event envelope metadata through
-  SDK/core helpers
-- skills can register and unregister projection refresh handlers through the
-  SDK instead of creating local subscription systems
-- status-card and diagnostic platform emitters refresh or expose demanded state
-  through the shared dispatcher/Yjs contract; notification projection payload
-  migration remains open
-- the reserved `platform/nodes/<node_id>/...` branch is documented and present
-  as the node-owned operational envelope
-- arbitrary runtime ProjectionRecord write surfaces are removed from browser/API
-  exposure
-- tests prove multi-consumer demand, multi-webspace dispatch, access filtering,
-  lifecycle/error publication, and Yjs load guardrails for the implemented
-  slice
+The local ABI/platform-emitter gate is closed. The current MVP domain gate is
+satisfied when target-stand evidence confirms that path, the M2 operator truth
+plane remains visible under a noisy or quarantined skill, and the three M3
+pilot skills use the shared runtime without their own projection authority.
 
 The full roadmap is successful when:
 

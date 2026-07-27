@@ -66,6 +66,34 @@ def submit(
     return result
 
 
+def return_to_prototype(
+    *,
+    object_type: str,
+    object_id: str,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Ask the built-in Automation LLM to derive a safe, disconnected prototype."""
+
+    instruction = (
+        "Workflow transition: derive a new safe Prototype revision from the current Automation result. "
+        "Preserve the user-facing information architecture, layout, copy, and interaction intent, but remove "
+        "all real service, credential, device, external-network, and production-data bindings. Replace them with "
+        "typed contracts plus local mock or internal declarative data suitable for rapid prototyping. Do not "
+        "publish or activate a release. Validate the resulting scenario and webui declarations and add or update "
+        "tests that prove the prototype has no functional production bindings."
+    )
+    return dict(
+        _service().submit_turn(
+            text=instruction,
+            object_type=object_type,
+            object_id=object_id,
+            webspace_id=webspace_id,
+            workflow_transition="return_to_prototype",
+        )
+        or {}
+    )
+
+
 def get_state(
     *,
     object_type: str | None = None,
@@ -93,4 +121,16 @@ def get_state(
     return result
 
 
-__all__ = ["get_state", "start", "submit"]
+def reconcile_checkpoint(*, object_type: str, object_id: str) -> dict[str, Any]:
+    """Explicitly recover a failed post-Codex Forge checkpoint without rerunning Codex."""
+
+    return dict(
+        _service().reconcile_checkpoint(
+            object_type=object_type,
+            object_id=object_id,
+        )
+        or {}
+    )
+
+
+__all__ = ["get_state", "reconcile_checkpoint", "return_to_prototype", "start", "submit"]

@@ -151,14 +151,36 @@ def _compute_build_date() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def _compute_git_commit() -> str:
+    explicit = str(os.getenv("ADAOS_GIT_COMMIT") or "").strip()
+    if explicit:
+        return explicit
+
+    commit = str(_git("rev-parse", "HEAD") or "").strip()
+    if commit:
+        return commit
+
+    manifest = _active_slot_manifest()
+    if manifest:
+        manifest_commit = str(manifest.get("git_commit") or "").strip()
+        if manifest_commit:
+            return manifest_commit
+    return ""
+
+
 @dataclass(frozen=True, slots=True)
 class BuildInfo:
     version: str
     build_date: str
+    git_commit: str = ""
 
 
 def _load_build_info() -> BuildInfo:
-    return BuildInfo(version=_compute_version(), build_date=_compute_build_date())
+    return BuildInfo(
+        version=_compute_version(),
+        build_date=_compute_build_date(),
+        git_commit=_compute_git_commit(),
+    )
 
 
 BUILD_INFO: Final[BuildInfo] = _load_build_info()

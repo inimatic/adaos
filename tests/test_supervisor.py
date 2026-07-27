@@ -68,6 +68,49 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     assert attempt["last_status"]["state"] == "failed"
 
 
+def test_timeout_rollback_defers_slot_cleanup_until_runtime_stop_is_confirmed(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor, "rollback_to_previous_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "rollback_installed_skill_runtimes", lambda: {})
+    monkeypatch.setattr(
+        supervisor,
+        "remove_inactive_slot",
+        lambda *_args, **_kwargs: pytest.fail("live target slot must not be removed by timeout reconciliation"),
+    )
+    monkeypatch.setattr(supervisor.time, "time", lambda: 120.0)
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_slot": "B",
+            "target_rev": "rev2026",
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_slot": "B",
+            "target_rev": "rev2026",
+            "transitioned_at": 10.0,
+        }
+    )
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
+    payload = supervisor._reconcile_update_status({"ok": True, "status": read_status()})
+
+    cleanup = payload["status"]["slot_cleanup"]
+    assert cleanup == {
+        "ok": True,
+        "removed": False,
+        "deferred": True,
+        "slot": "B",
+        "reason": "runtime_stop_not_confirmed",
+    }
+
+
 def test_update_attempt_read_write_normalizes_contract(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
 
@@ -1743,7 +1786,7 @@ def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch,
 
 def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "0")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1818,9 +1861,9 @@ def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path
     assert cleanup_calls == [("supervisor.candidate.defer_not_ready", "B")]
 
 
-def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_by_default(monkeypatch, tmp_path) -> None:
+def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_if_explicitly_enabled(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "1")
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1880,7 +1923,7 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_by_defaul
 
 def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fails(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "0")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1946,11 +1989,11 @@ def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fa
     assert cleanup_calls == [("supervisor.candidate.cutover_deferred", "B")]
 
 
-def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_by_default(
+def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_if_explicitly_enabled(
     monkeypatch, tmp_path
 ) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "1")
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -2050,6 +2093,10 @@ def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_pat
             return {
                 "ok": True,
                 "accepted": True,
+                "reconnect": {
+                    "ok": True,
+                    "authority": {"required": True, "ready": True},
+                },
                 "runtime": {
                     "transition_role": "active",
                     "runtime_instance_id": "rt-b-c-12345678",
@@ -2074,6 +2121,8 @@ def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_pat
     assert payload["accepted"] is True
     assert captured["url"] == "http://127.0.0.1:8778/api/admin/runtime/promote-active"
     assert captured["kwargs"]["json"]["reason"] == "test.cutover"
+    assert captured["kwargs"]["json"]["reconnect_hub_root"] is True
+    assert captured["kwargs"]["timeout"] == 20.0
     assert manager._proc is not None
     assert manager._candidate_proc is None
     assert manager._managed_runtime_instance_id == "rt-b-c-12345678"
@@ -3912,6 +3961,12 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
         return "new-proc", {"ok": True, "accepted": True, "reason": "restarted"}
 
     monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    sync_calls: list[bool] = []
+    monkeypatch.setattr(
+        manager,
+        "_sync_sidecar_controlled_files_from_validated_slot",
+        lambda: sync_calls.append(True) or {"changed": False},
+    )
     monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart_sidecar)
     monkeypatch.setattr(manager, "_runtime_request_json", lambda **kwargs: {"ok": True, "accepted": True})
     monkeypatch.setattr(manager, "_runtime_sidecar_runtime_payload", lambda: {"transport_owner": "sidecar"})
@@ -3923,14 +3978,135 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
     persisted: list[bool] = []
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: persisted.append(True))
 
-    payload = asyncio.run(manager.restart_sidecar(reconnect_hub_root=True))
+    payload = asyncio.run(manager.restart_sidecar())
 
     assert manager._sidecar_proc == "new-proc"
     assert payload["restart"]["accepted"] is True
     assert payload["reconnect"]["ok"] is True
     assert payload["runtime"]["transport_owner"] == "sidecar"
     assert payload["process"]["proc"] == "new-proc"
+    assert sync_calls == [True]
     assert persisted
+
+
+def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def poll(self):
+            return None
+
+    manager._sidecar_proc = _RunningProc()
+    manager._sidecar_code_fingerprint = "already-restarted"
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _healthy(*_args, **_kwargs):
+        return True
+
+    class _StopMonitor(Exception):
+        pass
+
+    async def _stop_after_sidecar_reconcile():
+        raise _StopMonitor
+
+    async def _unexpected_restart(**_kwargs):
+        raise AssertionError("a restart already absorbed under the manager lock must be coalesced")
+
+    reconnect_calls: list[bool] = []
+
+    async def _unexpected_reconnect():
+        reconnect_calls.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "already-restarted"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _unexpected_reconnect)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _unexpected_restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager.monitor_forever())
+
+    assert reconnect_calls == []
+
+
+def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def poll(self):
+            return None
+
+    old_proc = _RunningProc("old")
+    new_proc = _RunningProc("new")
+    manager._sidecar_proc = old_proc
+    manager._sidecar_code_fingerprint = "old-fingerprint"
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _healthy(*_args, **_kwargs):
+        return True
+
+    class _StopMonitor(Exception):
+        pass
+
+    async def _stop_after_sidecar_reconcile():
+        raise _StopMonitor
+
+    restart_calls: list[object] = []
+
+    async def _restart(*, proc, role=None, repo_root=None):
+        restart_calls.append((proc, role, repo_root))
+        return new_proc, {"ok": True, "accepted": True, "reason": "restarted"}
+
+    reconnect_calls: list[bool] = []
+
+    async def _reconnect():
+        reconnect_calls.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "new-fingerprint"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _reconnect)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager.monitor_forever())
+
+    assert len(restart_calls) == 1
+    assert restart_calls[0][:2] == (old_proc, "hub")
+    assert restart_calls[0][2]
+    assert reconnect_calls == [True]
+    assert manager._sidecar_proc is new_proc
+    assert manager._sidecar_code_fingerprint == "new-fingerprint"
 
 
 def test_supervisor_sidecar_health_uses_managed_listener_snapshot_without_tcp_probe(monkeypatch, tmp_path) -> None:
@@ -5754,6 +5930,143 @@ def test_restart_runtime_records_last_stop_and_start_reason(monkeypatch, tmp_pat
     assert payload["restart_count"] == 1
 
 
+def test_retired_runtime_stop_uses_runtime_lifecycle_scope(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    captured: list[dict[str, object]] = []
+
+    async def _terminate(**kwargs) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(manager, "_terminate_proc_locked", _terminate)
+
+    async def _run() -> None:
+        task = manager._schedule_retired_runtime_stop(
+            proc="old-runtime",
+            base_url="http://127.0.0.1:8777",
+            reason="supervisor.fast_cutover.old_active_stop",
+        )
+        await task
+
+    asyncio.run(_run())
+
+    assert captured == [
+        {
+            "proc": "old-runtime",
+            "base_url": "http://127.0.0.1:8777",
+            "graceful": True,
+            "reason": "supervisor.fast_cutover.old_active_stop",
+            "lifecycle_scope": "runtime_retire",
+        }
+    ]
+
+
+def test_supervisor_adopts_slot_matched_listener_before_runtime_api_is_ready(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _ExistingProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.args = ["/slots/B/venv/bin/python", "-m", "adaos.apps.autostart_runner", "--port", "8778"]
+            self.cwd = "/slots/B/repo"
+            self._created_at = 123.0
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "B", "argv": ["/slots/B/venv/bin/python"], "cwd": "/slots/B/repo"},
+    )
+    monkeypatch.setattr(supervisor, "_listener_owner_pid", lambda host, port: 4242)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
+    monkeypatch.setattr(supervisor, "_AdoptedProcess", _ExistingProc)
+    monkeypatch.setattr(
+        supervisor,
+        "_read_json",
+        lambda _path: {
+            "managed_pid": 4242,
+            "runtime_instance_id": "rt-b-c-existing",
+            "transition_role": "active",
+            "managed_slot": "B",
+        },
+    )
+    monkeypatch.setattr(manager, "slot_runtime_port", lambda slot=None: 8778)
+    monkeypatch.setattr(manager, "slot_runtime_base_url", lambda slot=None: "http://127.0.0.1:8778")
+    monkeypatch.setattr(manager, "_reset_memory_baseline_scope", lambda **_kwargs: None)
+
+    adopted = manager._adopt_active_runtime_listener(reason="supervisor.start")
+
+    assert adopted is True
+    assert manager._proc is not None
+    assert manager._proc.pid == 4242
+    assert manager._managed_runtime_instance_id == "rt-b-c-existing"
+    assert manager._managed_start_reason == "supervisor.start"
+
+
+def test_supervisor_refuses_pre_ready_listener_from_wrong_slot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _WrongSlotProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.args = ["/slots/A/venv/bin/python", "-m", "adaos.apps.autostart_runner", "--port", "8778"]
+            self.cwd = "/slots/A/repo"
+            self._created_at = 123.0
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "B", "argv": ["/slots/B/venv/bin/python"], "cwd": "/slots/B/repo"},
+    )
+    monkeypatch.setattr(supervisor, "_listener_owner_pid", lambda host, port: 4343)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
+    monkeypatch.setattr(supervisor, "_AdoptedProcess", _WrongSlotProc)
+    monkeypatch.setattr(manager, "slot_runtime_port", lambda slot=None: 8778)
+    monkeypatch.setattr(manager, "slot_runtime_base_url", lambda slot=None: "http://127.0.0.1:8778")
+
+    assert manager._adopt_active_runtime_listener(reason="supervisor.start") is False
+    assert manager._proc is None
+
+
+def test_supervisor_schedules_retired_runtime_cleanup_across_self_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    captured: dict[str, object] = {}
+
+    class _RetiredProc:
+        @staticmethod
+        def poll():
+            return None
+
+    class _CleanupProc:
+        pid = 4545
+
+    manager._retired_runtime_procs[4444] = _RetiredProc()
+
+    def _popen(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _CleanupProc()
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _popen)
+
+    result = manager._schedule_retired_runtime_cleanup()
+
+    assert result == {"ok": True, "scheduled": True, "cleanup_pid": 4545, "pids": [4444]}
+    assert "pids = [4444]" in captured["args"][2]
+
+
 def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -5786,6 +6099,114 @@ def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears
     assert captured["terminate"]["reason"] == "test.candidate.stop"
     assert payload["candidate_slot"] is None
     assert payload["candidate_last_stop_reason"] == "test.candidate.stop"
+
+
+def test_absent_candidate_never_falls_back_to_active_runtime(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[object] = []
+
+    class _ActiveProc:
+        pid = 8181
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _terminate(**kwargs):
+        calls.append(kwargs)
+
+    manager._proc = _ActiveProc()
+    manager._candidate_proc = None
+    monkeypatch.setattr(manager, "_terminate_proc_locked", _terminate)
+
+    asyncio.run(
+        manager._terminate_candidate_proc_locked(
+            graceful=True,
+            reason="supervisor.shutdown.candidate",
+        )
+    )
+
+    assert calls == []
+    assert manager._proc is not None
+
+
+def test_supervisor_self_restart_preserves_ready_children(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    stopped: list[str] = []
+
+    class _Proc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _stop(*, reason: str):
+        stopped.append(reason)
+
+    async def _stop_sidecar(*, reason: str):
+        stopped.append(reason)
+        return {"ok": True}
+
+    manager._proc = _Proc(9191)
+    manager._sidecar_proc = _Proc(9292)
+    manager._service_restart_pending = True
+    monkeypatch.setattr(manager, "stop", _stop)
+    monkeypatch.setattr(manager, "stop_sidecar", _stop_sidecar)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(manager, "_schedule_managed_handoff_reaper", lambda: {"ok": True, "scheduled": True})
+
+    asyncio.run(manager.close())
+
+    assert stopped == []
+    assert manager._proc is not None
+    assert manager._sidecar_proc is not None
+
+
+def test_managed_systemd_restart_preserves_children_without_internal_restart_flag(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    stopped: list[str] = []
+    reaper_calls: list[bool] = []
+
+    class _Proc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _stop(*, reason: str):
+        stopped.append(reason)
+
+    async def _stop_sidecar(*, reason: str):
+        stopped.append(reason)
+        return {"ok": True}
+
+    manager._proc = _Proc(9391)
+    manager._sidecar_proc = _Proc(9392)
+    manager._service_restart_pending = False
+    monkeypatch.setattr(manager, "stop", _stop)
+    monkeypatch.setattr(manager, "stop_sidecar", _stop_sidecar)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(
+        manager,
+        "_schedule_managed_handoff_reaper",
+        lambda: reaper_calls.append(True) or {"ok": True, "scheduled": True},
+    )
+
+    asyncio.run(manager.close())
+
+    assert stopped == []
+    assert reaper_calls == [True]
+    assert manager._proc is not None
+    assert manager._sidecar_proc is not None
 
 
 def test_runtime_state_payload_surfaces_candidate_runtime_state(monkeypatch, tmp_path) -> None:

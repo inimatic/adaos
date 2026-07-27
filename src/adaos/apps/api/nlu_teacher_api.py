@@ -24,7 +24,7 @@ from adaos.services.nlu.teacher_read_model import (
     preview_interface_action,
     preview_template_patch,
 )
-from adaos.services.nlu.teacher_events import rebuild_events_by_candidate
+from adaos.services.nlu.teacher_events import read_teacher_history_page, rebuild_teacher_derived_views
 from adaos.services.nlu.teacher_store import save_teacher_state
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
@@ -127,7 +127,7 @@ def _prune_teacher_requests(
         removed[key] = len(raw) - len(kept)
         next_teacher[key] = kept
 
-    rebuild_events_by_candidate(next_teacher)
+    rebuild_teacher_derived_views(next_teacher)
     return next_teacher, removed
 
 
@@ -220,6 +220,25 @@ async def get_lookup_tables(webspace_id: str):
         return await collect_desktop_lookup_tables_async(webspace_id=ws, include_live=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"failed to collect lookup tables: {exc}")
+
+
+@router.get("/nlu/teacher/{webspace_id}/history", dependencies=[Depends(require_token)])
+async def get_teacher_history(
+    webspace_id: str,
+    request_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    before_cursor: Optional[str] = None,
+    limit: int = 32,
+):
+    ws = _resolve_webspace_id(webspace_id)
+    return await asyncio.to_thread(
+        read_teacher_history_page,
+        ws,
+        request_id=request_id,
+        candidate_id=candidate_id,
+        before_cursor=before_cursor,
+        limit=limit,
+    )
 
 
 @router.get("/nlu/teacher/{webspace_id}/trace", dependencies=[Depends(require_token)])

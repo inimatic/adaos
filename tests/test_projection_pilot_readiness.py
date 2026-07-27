@@ -11,7 +11,6 @@ from adaos.services.projection_pilot_readiness import projection_pilot_readiness
 
 
 def _make_client() -> TestClient:
-    sys.modules.setdefault("nats", types.SimpleNamespace())
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
         apply_update=lambda *args, **kwargs: None,

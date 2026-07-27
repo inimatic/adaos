@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.source-ref.v1.schema.json",
+  "title": "AdaOS Artifact Source Reference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "forge", "repository", "revision", "path_scope"],
+  "properties": {
+    "schema": { "const": "adaos.artifact.source_ref.v1" },
+    "forge": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "minLength": 1 },
+    "revision": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{6,255}$"
+    },
+    "path_scope": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "not": { "pattern": "(^/|(^|/)\\.\\.(/|$)|^[A-Za-z]:)" }
+      }
+    }
+  }
+}

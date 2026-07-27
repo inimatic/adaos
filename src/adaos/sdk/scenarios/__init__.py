@@ -72,9 +72,11 @@ def uninstall(sid: str) -> str:
     return _mgr().uninstall(sid)
 
 
-@tool("scenarios.pull", summary="pull/update scenario sources", stability="stable")
 def pull(sid: str) -> str:
-    return _mgr().pull(sid)
+    raise RuntimeError(
+        "scenarios.pull is retired because it mutates Workspace from a mutable source; "
+        "use the stable subscription update-plan and package activation workflow"
+    )
 
 
 @tool("scenarios.push", summary="commit & push scenario changes", stability="experimental")

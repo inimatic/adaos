@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.component-package.v1.schema.json",
+  "title": "AdaOS Component Package Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "artifact_id", "version", "source_ref", "files"],
+  "properties": {
+    "schema": { "const": "adaos.artifact.component_package.v1" },
+    "kind": { "enum": ["skill", "scenario"] },
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "builder_id": { "type": "string", "minLength": 1 },
+    "build_policy_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "materialization_path": {
+      "type": "string",
+      "pattern": "^(scenarios|skills)/[a-z0-9][a-z0-9_.-]*$"
+    },
+    "schema_locks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contractLock" }
+    },
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "forge", "repository", "revision", "path_scope"],
+      "properties": {
+        "schema": { "const": "adaos.artifact.source_ref.v1" },
+        "forge": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 7 },
+        "path_scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size", "digest"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "size": { "type": "integer", "minimum": 0 },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  },
+  "dependentRequired": {
+    "builder_id": ["build_policy_digest", "materialization_path", "schema_locks"],
+    "build_policy_digest": ["builder_id", "materialization_path", "schema_locks"],
+    "materialization_path": ["builder_id", "build_policy_digest", "schema_locks"],
+    "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"]
+  },
+  "$defs": {
+    "contractLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_id", "digest"],
+      "properties": {
+        "lock_id": { "type": "string", "minLength": 1 },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

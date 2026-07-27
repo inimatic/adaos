@@ -16,6 +16,63 @@ if "ypy_websocket" not in sys.modules:
 from adaos.services.scenario import projection_service as projection_service_module
 
 
+def test_projection_service_records_missing_rule_for_skill_publish(monkeypatch, tmp_path) -> None:
+    from adaos.services.skill.declarations import (
+        clear_runtime_skill_declarations,
+        load_runtime_skill_declarations,
+    )
+
+    projection_service_module.reset_projection_rule_miss_diagnostics()
+    clear_runtime_skill_declarations("demo_skill")
+    load_runtime_skill_declarations(
+        "demo_skill",
+        {
+            "data_projections": [{"scope": "subnet", "slot": "declared.snapshot"}],
+            "data_routes": [{"route": "stream", "receiver": "demo.events"}],
+        },
+        artifact_root=tmp_path,
+    )
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="demo_skill"),
+    )
+    registry = SimpleNamespace(resolve_rule=lambda _scope, _slot: None, resolve=lambda _scope, _slot: [])
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    asyncio.run(
+        service.apply(
+            "subnet",
+            "demo.snapshot",
+            {"ok": True},
+            webspace_id="desktop",
+        )
+    )
+
+    snapshot = projection_service_module.projection_rule_miss_snapshot(webspace_id="desktop")
+    assert snapshot["attempt_total"] == 1
+    assert snapshot["items"][0]["owner"] == "skill:demo_skill"
+    assert snapshot["items"][0]["scope"] == "subnet"
+    assert snapshot["items"][0]["slot"] == "demo.snapshot"
+    assert snapshot["items"][0]["last_payload_bytes"] > 0
+    assert snapshot["items"][0]["declarations_loaded"] is True
+    assert snapshot["items"][0]["declared_projection_total"] == 1
+    assert snapshot["items"][0]["declared_route_total"] == 1
+    projection_service_module.reset_projection_rule_miss_diagnostics()
+    clear_runtime_skill_declarations("demo_skill")
+
+
+def test_projection_service_does_not_report_core_rule_miss(monkeypatch) -> None:
+    projection_service_module.reset_projection_rule_miss_diagnostics()
+    monkeypatch.setattr(projection_service_module, "get_current_skill", lambda: None)
+    registry = SimpleNamespace(resolve_rule=lambda _scope, _slot: None, resolve=lambda _scope, _slot: [])
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    asyncio.run(service.apply("subnet", "core.snapshot", {"ok": True}))
+
+    assert projection_service_module.projection_rule_miss_snapshot()["attempt_total"] == 0
+
+
 def test_projection_service_apply_sync_waits_for_async_apply(monkeypatch) -> None:
     calls: list[tuple[str, str, object, str | None, str | None]] = []
 
@@ -210,6 +267,8 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
 
 
 def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None:
+    monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: None)
+
     class _CountingMap(_FakeMap):
         def __init__(self) -> None:
             super().__init__()
@@ -446,7 +505,6 @@ def test_projection_service_compacts_inline_after_detached_write_amplification(m
             "executed": True,
             "compacted": True,
             "released_replay_bytes": 98304,
-            "malloc_trimmed": True,
         }
 
     target = SimpleNamespace(
@@ -525,7 +583,6 @@ def test_projection_service_suppresses_recent_amplified_projection(monkeypatch, 
             "executed": True,
             "compacted": True,
             "released_replay_bytes": 98304,
-            "malloc_trimmed": True,
         }
 
     target = SimpleNamespace(

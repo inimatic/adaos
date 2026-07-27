@@ -20,7 +20,7 @@ def _write_skill_bundle(manifest_text: str, handler_text: str, skill_name_hint: 
     skill_dir = Path(skills_root) / str(skill_name).lower()
     skill_dir.mkdir(parents=True, exist_ok=True)
 
-    (skill_dir / "manifest.yaml").write_text(manifest_text, encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text(manifest_text, encoding="utf-8")
     (skill_dir / "handler.py").write_text(handler_text, encoding="utf-8")
     return skill_dir
 
@@ -54,7 +54,7 @@ def process_llm_output(
 
     Supports two formats:
     - multi-file markers: <<<FILE: path>>>\n...<<<END>>>
-    - legacy skill bundle with --- manifest.yaml --- / --- handler.py ---
+    - skill bundle with --- skill.yaml --- / --- handler.py ---
     """
     if "<<<FILE:" in llm_output:
         ctx = get_ctx()
@@ -65,7 +65,7 @@ def process_llm_output(
         written = _write_multifile_output(llm_output, root.resolve())
         return {"mode": "multifile", "root": str(root), "files": [str(p) for p in written]}
 
-    manifest_match = re.search(r"--- manifest.yaml ---\n(.*?)--- handler.py ---", llm_output, re.S)
+    manifest_match = re.search(r"--- skill.yaml ---\n(.*?)--- handler.py ---", llm_output, re.S)
     handler_match = re.search(r"--- handler.py ---\n(.*)", llm_output, re.S)
     if not manifest_match or not handler_match:
         raise ValueError("Не удалось распарсить ответ LLM. Проверь формат.")

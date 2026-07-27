@@ -9,6 +9,7 @@ def _clear_build_env(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_BASE_VERSION", raising=False)
     monkeypatch.delenv("ADAOS_BUILD_VERSION", raising=False)
     monkeypatch.delenv("ADAOS_BUILD_DATE", raising=False)
+    monkeypatch.delenv("ADAOS_GIT_COMMIT", raising=False)
     monkeypatch.delenv("ADAOS_ACTIVE_CORE_SLOT_DIR", raising=False)
     monkeypatch.delenv("ADAOS_SLOT_REPO_ROOT", raising=False)
     monkeypatch.delenv("ADAOS_BASE_DIR", raising=False)
@@ -59,7 +60,8 @@ def test_build_info_falls_back_to_active_slot_manifest(monkeypatch, tmp_path: Pa
         (
             '{"base_version":"0.1.391",'
             '"build_version":"0.1.391+1.6076dcd",'
-            '"build_date":"2026-06-23T14:05:15+00:00"}'
+            '"build_date":"2026-06-23T14:05:15+00:00",'
+            '"git_commit":"6076dcd123456789"}'
         ),
         encoding="utf-8",
     )
@@ -73,3 +75,12 @@ def test_build_info_falls_back_to_active_slot_manifest(monkeypatch, tmp_path: Pa
     assert build_info.base_version() == "0.1.391"
     assert build_info._compute_version() == "0.1.391+1.6076dcd"
     assert build_info._compute_build_date() == "2026-06-23T14:05:15+00:00"
+    assert build_info._compute_git_commit() == "6076dcd123456789"
+
+
+def test_compute_git_commit_prefers_explicit_identity(monkeypatch) -> None:
+    _clear_build_env(monkeypatch)
+    monkeypatch.setenv("ADAOS_GIT_COMMIT", "abcdef123456")
+    monkeypatch.setattr(build_info, "_git", lambda *args: "ignored")
+
+    assert build_info._compute_git_commit() == "abcdef123456"

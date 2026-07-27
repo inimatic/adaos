@@ -15,6 +15,7 @@ from adaos.services.core_update_policy import core_update_reactions_disabled_rea
 from adaos.services.hub_root_protocol_store import ack_stream_message, prepare_stream_message
 from adaos.services.root.client import RootHttpClient
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_instance_id, runtime_transition_role
+from adaos.services.release_validation_autorun import read_autonomous_release_validation_report
 
 _CORE_UPDATE_STREAM_FLOW_ID = "hub_root.integration.github_core_update"
 
@@ -140,7 +141,7 @@ def _local_update_start_candidates(conf: Any) -> list[tuple[str, str]]:
 
 def build_core_update_report(conf) -> dict[str, Any]:
     identity = runtime_identity_snapshot()
-    return {
+    report = {
         "status": read_status(),
         "slot_status": slot_status(),
         "node_id": str(getattr(conf, "node_id", "") or ""),
@@ -155,6 +156,17 @@ def build_core_update_report(conf) -> dict[str, Any]:
             "hostname": str(identity.get("hostname") or ""),
         },
     }
+    release_validation = read_autonomous_release_validation_report()
+    active_manifest = active_slot_manifest() or {}
+    current_identities = {
+        str(active_manifest.get(key) or "").strip()
+        for key in ("git_commit", "target_version", "resolved_target_version", "build_version", "base_version")
+        if str(active_manifest.get(key) or "").strip()
+    }
+    validation_identity = str((release_validation or {}).get("build_identity") or "").strip()
+    if release_validation is not None and validation_identity and validation_identity in current_identities:
+        report["release_validation"] = release_validation
+    return report
 
 
 def report_hub_core_update_state(conf) -> dict[str, Any] | None:

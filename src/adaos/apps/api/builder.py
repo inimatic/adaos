@@ -9,6 +9,8 @@ from adaos.apps.api.auth import require_token
 from adaos.services.builder import (
     BuilderAutomationService,
     BuilderProjectCatalogService,
+    BuilderWorkflowError,
+    BuilderWorkflowService,
     BuilderWorkbenchService,
     BuilderWorkspaceService,
 )
@@ -31,6 +33,10 @@ def _get_automation_service() -> BuilderAutomationService:
 
 def _get_project_catalog_service() -> BuilderProjectCatalogService:
     return BuilderProjectCatalogService.from_context()
+
+
+def _get_workflow_service() -> BuilderWorkflowService:
+    return BuilderWorkflowService.from_context()
 
 
 class BuilderDraftRequest(BaseModel):
@@ -95,6 +101,15 @@ class BuilderAutomationTurnRequest(BaseModel):
     object_type: str | None = Field(default=None, pattern="^(skill|scenario)$")
     object_id: str | None = None
     webspace_id: str | None = None
+
+
+class BuilderWorkflowTransitionRequest(BaseModel):
+    object_type: str = Field(..., pattern="^(skill|scenario)$")
+    object_id: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+    actor: str = "builder.api"
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @router.get("/approval-profiles")
@@ -207,6 +222,36 @@ def automation_status(
     return service.status(object_type=object_type, object_id=object_id)
 
 
+@router.get("/workflow")
+def workflow_state(
+    object_type: str,
+    object_id: str,
+    service: BuilderWorkflowService = Depends(_get_workflow_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "workflow": service.describe(object_type, object_id)}
+    except (FileNotFoundError, BuilderWorkflowError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workflow/transition")
+def transition_workflow(
+    body: BuilderWorkflowTransitionRequest,
+    service: BuilderWorkflowService = Depends(_get_workflow_service),
+) -> dict[str, Any]:
+    try:
+        return service.transition(
+            body.object_type,
+            body.object_id,
+            body.action,
+            actor=body.actor,
+            reason=body.reason,
+            metadata=body.metadata,
+        )
+    except (FileNotFoundError, BuilderWorkflowError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/previews/{preview_id}")
 def get_preview(preview_id: str, service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     try:
@@ -246,6 +291,7 @@ async def list_workbench_projects(
     selected_object_type: str | None = None,
     selected_object_id: str | None = None,
     webspace_id: str | None = None,
+    include_archived: bool = False,
     service: BuilderProjectCatalogService = Depends(_get_project_catalog_service),
 ) -> list[dict[str, Any]]:
     try:
@@ -256,6 +302,7 @@ async def list_workbench_projects(
             selected_object_type=selected_object_type,
             selected_object_id=selected_object_id,
             webspace_id=webspace_id,
+            include_archived=include_archived,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

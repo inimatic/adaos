@@ -6,8 +6,6 @@ import sys
 import types
 from types import SimpleNamespace
 
-if "nats" not in sys.modules:
-    sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
     try:
         importlib.import_module("y_py")
@@ -444,8 +442,8 @@ def test_node_yjs_go_home_endpoint_uses_helper(monkeypatch) -> None:
 
     assert captured == [("phase2-home", False)]
     assert result["scenario_id"] == "prompt_engineer_scenario"
-    assert result["runtime"]["webspace_id"] == "phase2-home"
-    assert result["rebuild"]["status"] == "scheduled"
+    assert "runtime" not in result
+    assert "rebuild" not in result
     assert published == [("go_home", "phase2-home", "prompt_engineer_scenario")]
 
 
@@ -479,9 +477,13 @@ def test_node_yjs_go_home_endpoint_can_wait_for_rebuild(monkeypatch) -> None:
         )
     )
 
-    assert captured == [("phase2-home", True)]
+    assert captured == [("phase2-home", False)]
     assert result["scenario_id"] == "web_desktop"
-    assert result["rebuild"]["status"] == "ready"
+    assert result["guards"]["wait_for_rebuild"] == {
+        "requested": True,
+        "effective": False,
+        "reason": "go_home_rebuild_runs_in_background_to_protect_route_budget",
+    }
 
 
 def test_node_yjs_set_home_current_publishes_correct_action(monkeypatch) -> None:
@@ -824,7 +826,11 @@ def test_node_infrastate_action_marketplace_install_returns_fast_operation_ack(m
     assert submitted[0]["target_kind"] == "scenario"
     assert submitted[0]["target_id"] == "prompt_engineer_scenario"
     assert submitted[0]["webspace_id"] == "desktop"
-    assert submitted[0]["initiator"] == {"kind": "api.node", "id": "marketplace_install"}
+    assert submitted[0]["initiator"] == {
+        "kind": "api.node",
+        "id": "marketplace_install",
+        "target_node_id": None,
+    }
     assert submitted[0]["ctx"] is not None
     assert result["ok"] is True
     assert result["accepted"] is True
@@ -1237,9 +1243,8 @@ def test_node_yjs_webspace_state_endpoint_returns_operational_snapshot(monkeypat
     assert result["webspace"]["source_mode"] == "dev"
     assert result["projection"]["active_scenario"] == "prompt_engineer_runtime"
     assert result["rebuild"]["status"] == "ready"
-    assert result["state"] == "ready"
-    assert result["degraded"] is False
-    assert result["seed_health"]["source"] == "disk_snapshot"
+    assert result["webspace"]["current_scenario"] == "prompt_engineer_runtime"
+    assert result["validation"]["degraded"] is False
     assert result["materialization"]["ready"] is True
     assert result["materialization"]["catalog_counts"]["apps"] == 3
     assert result["runtime"]["webspace_id"] == "dev_prompt"
@@ -1676,7 +1681,8 @@ def test_describe_yjs_materialization_prefers_cached_rebuild_snapshot_while_pend
     )
 
     assert result["readiness_state"] == "hydrating"
-    assert result["snapshot_source"] == "semantic_rebuild:structure"
+    assert result["snapshot_source"] == "rebuild_cache"
+    assert result["stale_reason"] == "rebuild_pending"
 
 
 def test_describe_yjs_materialization_reports_ready_readiness_and_no_missing_branches(monkeypatch) -> None:
@@ -1877,7 +1883,7 @@ def test_describe_compatibility_caches_reports_runtime_removal_blockers(monkeypa
     }
 
 
-def test_describe_webspace_operational_state_prefers_live_room_fast_path(monkeypatch) -> None:
+def test_describe_webspace_operational_state_prefers_manifest_overlay(monkeypatch) -> None:
     row = SimpleNamespace(
         title="Desktop",
         effective_kind="workspace",
@@ -1885,6 +1891,8 @@ def test_describe_webspace_operational_state_prefers_live_room_fast_path(monkeyp
         is_dev=False,
         home_scenario="web_desktop",
         effective_home_scenario="web_desktop",
+        has_current_scenario_overlay=True,
+        current_scenario_overlay="infrascope",
     )
 
     monkeypatch.setattr(webspace_runtime_module.workspace_index, "get_workspace", lambda webspace_id: row)
@@ -1892,7 +1900,9 @@ def test_describe_webspace_operational_state_prefers_live_room_fast_path(monkeyp
     monkeypatch.setattr(
         webspace_runtime_module,
         "try_read_live_map_value",
-        lambda webspace_id, map_name, key: (True, "infrascope"),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("live room must not override the workspace manifest")
+        ),
     )
     monkeypatch.setattr(
         webspace_runtime_module,
@@ -1907,7 +1917,7 @@ def test_describe_webspace_operational_state_prefers_live_room_fast_path(monkeyp
     assert result.effective_home_scenario == "web_desktop"
 
 
-def test_switch_webspace_scenario_uses_live_room_pointer_fast_path(monkeypatch) -> None:
+def test_switch_webspace_scenario_defers_pointer_to_atomic_materialization(monkeypatch) -> None:
     row = SimpleNamespace(
         effective_kind="workspace",
         effective_source_mode="workspace",
@@ -1939,6 +1949,11 @@ def test_switch_webspace_scenario_uses_live_room_pointer_fast_path(monkeypatch) 
     monkeypatch.setattr(webspace_runtime_module, "describe_webspace_operational_state", _fake_operational_state)
     monkeypatch.setattr(webspace_runtime_module.workspace_index, "get_workspace", lambda webspace_id: row)
     monkeypatch.setattr(webspace_runtime_module.workspace_index, "ensure_workspace", lambda webspace_id: row)
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "set_workspace_current_scenario_overlay",
+        lambda webspace_id, scenario_id: row,
+    )
     monkeypatch.setattr(webspace_runtime_module, "_scenario_switch_mode", lambda: "pointer_only")
     monkeypatch.setattr(webspace_runtime_module, "_scenario_exists_for_switch", lambda scenario_id, space="workspace": True)
     monkeypatch.setattr(
@@ -1967,13 +1982,14 @@ def test_switch_webspace_scenario_uses_live_room_pointer_fast_path(monkeypatch) 
     assert result["accepted"] is True
     assert result["background_rebuild"] is True
     assert result["scenario_switch_mode"] == "pointer_only"
-    assert live_mutations == ["default"]
+    assert live_mutations == []
     assert len(scheduled) == 1
     assert scheduled[0]["scenario_id"] == "infrascope"
     assert scheduled[0]["scenario_resolution"] == "explicit"
     assert scheduled[0]["switch_mode"] == "pointer_only"
     assert isinstance(scheduled[0]["switch_timings_ms"], dict)
-    assert "write_switch_pointer" in result["timings_ms"]
+    assert "defer_switch_pointer" in result["timings_ms"]
+    assert "write_switch_pointer" not in result["timings_ms"]
     assert "open_doc" not in result["timings_ms"]
 
 
@@ -3887,6 +3903,11 @@ def test_webspace_runtime_apply_rewrites_stale_branch_when_registry_fingerprint_
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(ctx=SimpleNamespace())
     monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_trust_previous_materialized_branch_fingerprints_enabled",
+        lambda: False,
+    )
     monkeypatch.setattr(
         webspace_runtime_module,
         "describe_webspace_rebuild_state",

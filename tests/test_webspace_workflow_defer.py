@@ -73,7 +73,7 @@ def test_payload_only_materialize_updates_ready_materialization_from_resolved(mo
     )
     try:
         entry = asyncio.run(
-            runtime.materialize_webspace_payload_async(
+            runtime.resolve_materialized_payload_async(
                 webspace_id,
                 request_id=request_id,
                 scenario_id="prompt_engineer_scenario",
@@ -110,23 +110,40 @@ def test_scenario_switch_rebuild_skips_workflow_sync_by_default(monkeypatch) -> 
             "scenario_resolution": scenario_resolution,
         }
 
-    async def _fake_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+    async def _fake_materialize(self, webspace_id: str, **kwargs):  # noqa: ARG001
         rebuild_kwargs.update(kwargs)
         self._last_rebuild_timings_ms = {"collect_inputs": 1.0, "resolve": 1.0, "apply": 1.0, "total": 3.0}
         self._last_apply_summary = {"changed_branches": 1, "unchanged_branches": 0}
         self._last_rebuild_ydoc_timings_ms = {"total": 3.0}
+        self._last_materialized_payload = {"scenario_id": "prompt_engineer_scenario"}
         return SimpleNamespace(scenario_id="prompt_engineer_scenario", apps=[], widgets=[])
 
     async def _fake_workflow_sync(self, scenario_id: str, webspace_id: str):
         workflow_calls.append((scenario_id, webspace_id))
 
+    async def _fake_live_refresh(webspace_id: str, **_kwargs):
+        return {"ok": True, "webspace_id": webspace_id}
+
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
     monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
     monkeypatch.setitem(
         sys.modules,
+        "adaos.services.yjs.gateway",
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "adaos.services.yjs.store",
-        types.SimpleNamespace(reset_ystore_for_webspace=lambda _webspace_id: None),
+        types.SimpleNamespace(
+            reset_ystore_for_webspace=lambda _webspace_id: (_ for _ in ()).throw(
+                AssertionError("ordinary scenario switch must preserve YStore")
+            )
+        ),
     )
     webspace_runtime_module._WORKFLOW_SYNC_TASKS.clear()
     webspace_runtime_module._WORKFLOW_SYNC_PENDING.clear()
@@ -158,9 +175,7 @@ def test_scenario_switch_rebuild_skips_workflow_sync_by_default(monkeypatch) -> 
 def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_WORKFLOW_SYNC", raising=False)
     monkeypatch.delenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_WORKFLOW_SYNC", raising=False)
-    monkeypatch.delenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_PAYLOAD_ONLY_REBUILD", raising=False)
     monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "1")
-    monkeypatch.setenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH", "0")
     materialize_calls: list[tuple[str, dict[str, object]]] = []
     rebuild_calls: list[tuple[str, dict[str, object]]] = []
     refresh_calls: list[tuple[str, dict[str, object]]] = []
@@ -224,14 +239,14 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh_projection)
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "materialize_webspace_payload_async",
+        "resolve_materialized_payload_async",
         _fake_materialize,
     )
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _unexpected_rebuild)
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.gateway",
-        types.SimpleNamespace(refresh_live_webspace_effective_branches=_fake_live_refresh),
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -252,12 +267,16 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
 
     assert result["accepted"] is True
     assert result["payload_only_rebuild"] is True
+    assert isinstance(result["materialization_identity"], dict)
+    assert result["materialization_identity"]["scenario_id"] == "prompt_engineer_scenario"
+    assert result["materialization_identity"]["key_hash"]
     assert materialize_calls == [
         (
             "phase2-payload-only-switch",
             {
                 "scenario_id": "prompt_engineer_scenario",
                 "materialization_identity": result["materialization_identity"],
+                "isolate_process": False,
             },
         )
     ]
@@ -265,18 +284,16 @@ def test_scenario_switch_rebuild_uses_payload_only_when_live_refresh_inline(monk
     assert refresh_calls
     assert refresh_calls[-1][1]["materialized_payload"]["scenario_id"] == "prompt_engineer_scenario"
     assert refresh_calls[-1][1]["persist_repair"] is True
-    assert refresh_calls[-1][1]["force_full_state_update"] is True
+    assert refresh_calls[-1][1]["force_full_state_update"] is False
     assert result["apply_summary"]["changed_branches"] == 8
     assert result["apply_summary"]["diff_applied_branches"] == 8
-    assert result["force_full_state_update"] is True
+    assert result["force_full_state_update"] is False
 
 
-def test_scenario_switch_rebuild_can_skip_live_room_refresh_for_read_model(monkeypatch) -> None:
+def test_scenario_switch_rebuild_ignores_deprecated_live_refresh_skip_env(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_WORKFLOW_SYNC", raising=False)
     monkeypatch.delenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_WORKFLOW_SYNC", raising=False)
-    monkeypatch.delenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_PAYLOAD_ONLY_REBUILD", raising=False)
     monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "1")
-    monkeypatch.setenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH", "0")
     monkeypatch.setenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_SKIP_LIVE_ROOM_REFRESH", "1")
     materialize_calls: list[tuple[str, dict[str, object]]] = []
     refresh_calls: list[tuple[str, dict[str, object]]] = []
@@ -320,20 +337,26 @@ def test_scenario_switch_rebuild_can_skip_live_room_refresh_for_read_model(monke
         }
         return SimpleNamespace(scenario_id="prompt_engineer_scenario", apps=[], widgets=[])
 
-    async def _unexpected_live_refresh(webspace_id: str, **kwargs):
+    async def _fake_live_refresh(webspace_id: str, **kwargs):
         refresh_calls.append((webspace_id, dict(kwargs)))
-        raise AssertionError("scenario switch read-model mode must not refresh live room")
+        return {
+            "ok": True,
+            "materialized_payload": {
+                "ready": True,
+                "apply_summary": {"changed_branches": 1},
+            },
+        }
 
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh_projection)
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "materialize_webspace_payload_async",
+        "resolve_materialized_payload_async",
         _fake_materialize,
     )
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.gateway",
-        types.SimpleNamespace(refresh_live_webspace_effective_branches=_unexpected_live_refresh),
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -354,13 +377,11 @@ def test_scenario_switch_rebuild_can_skip_live_room_refresh_for_read_model(monke
 
     assert result["accepted"] is True
     assert result["payload_only_rebuild"] is True
-    assert result["live_room_refresh"]["skipped"] is True
-    assert result["live_room_refresh"]["reason"] == "scenario_switch_read_model_only"
-    assert result["live_room_refresh"]["materialized_payload_available"] is True
-    assert result["timings_ms"]["live_room_refresh_skipped"] == 0.0
-    assert "live_room_refresh" not in result["timings_ms"]
+    assert result["live_room_refresh"]["ok"] is True
+    assert result["timings_ms"]["live_room_refresh"] >= 0.0
     assert materialize_calls
-    assert refresh_calls == []
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0][1]["materialized_payload"]["scenario_id"] == "prompt_engineer_scenario"
     payload = webspace_runtime_module.get_webspace_rebuild_materialized_payload("phase2-read-model-switch")
     assert payload is not None
     assert payload["scenario_id"] == "prompt_engineer_scenario"
@@ -385,18 +406,31 @@ def test_scenario_switch_rebuild_can_defer_workflow_sync(monkeypatch) -> None:
             "scenario_resolution": scenario_resolution,
         }
 
-    async def _fake_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+    async def _fake_materialize(self, webspace_id: str, **kwargs):  # noqa: ARG001
         self._last_rebuild_timings_ms = {"collect_inputs": 1.0, "resolve": 1.0, "apply": 1.0, "total": 3.0}
         self._last_apply_summary = {"changed_branches": 1, "unchanged_branches": 0}
         self._last_rebuild_ydoc_timings_ms = {"total": 3.0}
+        self._last_materialized_payload = {"scenario_id": "prompt_engineer_scenario"}
         return SimpleNamespace(scenario_id="prompt_engineer_scenario", apps=[], widgets=[])
 
     async def _fake_workflow_sync(self, scenario_id: str, webspace_id: str):
         workflow_calls.append((scenario_id, webspace_id))
 
+    async def _fake_live_refresh(webspace_id: str, **_kwargs):
+        return {"ok": True, "webspace_id": webspace_id}
+
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
     monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway",
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
+    )
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.store",
@@ -432,7 +466,7 @@ def test_scenario_switch_rebuild_can_defer_workflow_sync(monkeypatch) -> None:
     assert workflow_calls == [("prompt_engineer_scenario", "phase2-deferred-workflow")]
 
 
-def test_scenario_switch_rebuild_can_defer_live_room_refresh(monkeypatch) -> None:
+def test_scenario_switch_rebuild_ignores_deprecated_live_room_defer_env(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH", "1")
     monkeypatch.setenv("ADAOS_WEBSPACE_LIVE_ROOM_REFRESH_DEBOUNCE_S", "0")
     monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "1")
@@ -452,26 +486,40 @@ def test_scenario_switch_rebuild_can_defer_live_room_refresh(monkeypatch) -> Non
             "scenario_resolution": scenario_resolution,
         }
 
-    async def _fake_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+    async def _fake_materialize(self, webspace_id: str, **kwargs):  # noqa: ARG001
         self._last_rebuild_timings_ms = {"collect_inputs": 1.0, "resolve": 1.0, "apply": 1.0, "total": 3.0}
         self._last_apply_summary = {"changed_branches": 1, "unchanged_branches": 0}
         self._last_rebuild_ydoc_timings_ms = {"total": 3.0}
+        self._last_materialized_payload = {
+            "scenario_id": "prompt_engineer_scenario",
+            "application": {"desktop": {"pageSchema": {"id": "page"}}},
+            "catalog": {"apps": [], "widgets": []},
+            "registry": {},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+        }
         return SimpleNamespace(scenario_id="prompt_engineer_scenario", apps=[], widgets=[])
 
     async def _fake_workflow_sync(self, scenario_id: str, webspace_id: str):  # noqa: ARG001
         return None
 
-    async def _fake_live_refresh(webspace_id: str, *, reason: str):
+    async def _fake_live_refresh(webspace_id: str, *, reason: str, **_kwargs):
         refresh_calls.append((webspace_id, reason))
         return {"ok": True}
 
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
     monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.gateway",
-        types.SimpleNamespace(refresh_live_webspace_effective_branches=_fake_live_refresh),
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -490,9 +538,6 @@ def test_scenario_switch_rebuild_can_defer_live_room_refresh(monkeypatch) -> Non
             source_of_truth="scenario_switch",
             reseed_from_scenario=False,
         )
-        task = webspace_runtime_module._LIVE_ROOM_REFRESH_TASKS.get("phase2-deferred-live-room")
-        assert task is not None
-        await task
         return result
 
     try:
@@ -502,9 +547,8 @@ def test_scenario_switch_rebuild_can_defer_live_room_refresh(monkeypatch) -> Non
         webspace_runtime_module._LIVE_ROOM_REFRESH_PENDING.clear()
 
     assert result["accepted"] is True
-    assert result["live_room_refresh"]["deferred"] is True
-    assert result["timings_ms"]["live_room_refresh_deferred"] == 0.0
-    assert "live_room_refresh" not in result["timings_ms"]
+    assert result["live_room_refresh"]["ok"] is True
+    assert result["timings_ms"]["live_room_refresh"] >= 0.0
     assert refresh_calls == [("phase2-deferred-live-room", "semantic_rebuild:scenario_switch_rebuild")]
 
 
@@ -512,7 +556,7 @@ def test_builder_revision_apply_does_not_use_scenario_switch_live_room_defer_fla
     monkeypatch.setenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_DEFER_LIVE_ROOM_REFRESH", "1")
     monkeypatch.delenv("ADAOS_BUILDER_REVISION_DEFER_LIVE_ROOM_REFRESH", raising=False)
 
-    assert webspace_runtime_module._defer_live_room_refresh_for_rebuild("scenario_switch_rebuild") is True
+    assert webspace_runtime_module._defer_live_room_refresh_for_rebuild("scenario_switch_rebuild") is False
     assert webspace_runtime_module._defer_live_room_refresh_for_rebuild("builder_revision_apply") is False
 
     monkeypatch.setenv("ADAOS_BUILDER_REVISION_DEFER_LIVE_ROOM_REFRESH", "1")
@@ -547,7 +591,6 @@ def test_builder_revision_apply_skips_projection_refresh_by_default(monkeypatch)
 
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _unexpected_refresh)
     monkeypatch.setattr(webspace_runtime_module, "_resolve_projection_refresh_space", lambda _webspace_id: "dev")
-    monkeypatch.setattr(webspace_runtime_module, "_trim_allocator_after_yjs_rebuild", lambda: False)
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
 
     result = asyncio.run(

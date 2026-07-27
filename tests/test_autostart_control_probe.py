@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 import types
 
-if "nats" not in sys.modules:
-    sys.modules["nats"] = types.SimpleNamespace()
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),

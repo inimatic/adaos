@@ -53,19 +53,19 @@ def _write_default_manifest(target: Path, scenario_id: str, version: str) -> Non
     manifest.write_text(content, encoding="utf-8")
 
 
-def _patch_json_manifest(target: Path, scenario_id: str, version: str) -> None:
-    manifest = target / "scenario.json"
-    if not manifest.exists():
+def _patch_json_content(target: Path, scenario_id: str, version: str) -> None:
+    content = target / "scenario.json"
+    if not content.exists():
         return
 
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload = json.loads(content.read_text(encoding="utf-8"))
     except Exception:
         return
 
     payload["id"] = scenario_id
     payload.setdefault("version", version)
-    manifest.write_text(json.dumps(payload, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    content.write_text(json.dumps(payload, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
 
 
 def _maybe_init_repo(root: Path, url: Optional[str], branch: Optional[str]) -> bool:
@@ -134,7 +134,7 @@ def create(
     shutil.copytree(template_root, target)
 
     _write_default_manifest(target, name, version)
-    _patch_json_manifest(target, name, version)
+    _patch_json_content(target, name, version)
 
     registry: Optional[SqliteScenarioRegistry] = None
     if register:

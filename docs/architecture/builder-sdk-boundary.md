@@ -41,7 +41,7 @@ of SDK operations into tool responses.
 - expose the initialized project type and reject attempts to change it after
   creation;
 - list templates and create projects;
-- push, update, publish, and delete projects;
+- checkpoint, publish, and delete projects;
 - return plain JSON-compatible results and public SDK errors.
 
 Direct recursive deletion and construction of `.adaos/dev` paths do not belong
@@ -144,8 +144,10 @@ Prompt IDE project operations map directly to public control tools:
 | project metadata, composition, files | `get_project`, `update_project_metadata`, `list_project_objects`, `list_project_file_tree`, `read_project_file`, `save_project_file` |
 | base TZ and addenda | `get_prompt_context`, `save_prompt_context`, `append_prompt_addendum` |
 | LLM and workflow state | `get_llm_options`, `set_llm_profile`, `set_workflow_state` |
-| VCS log/push/update/publish/delete | `list_changes`, `push_project`, `update_project`, `publish_project`, `delete_project` |
+| VCS log/checkpoint/publish/delete | `list_changes`, `push_project`, `publish_project`, `delete_project` |
 | lifecycle, automation, archive, preview | `get_lifecycle`, `start_automation`, `submit_automation`, `get_automation`, `archive_project`, `select_preview`, `get_preview` |
+
+Central-to-DEV update is intentionally absent from Builder. It needs an explicit divergence signal and a dedicated conflict-aware workflow before it can be exposed safely. The CLI/SDK update primitive remains available for controlled maintenance and replaces a DEV artifact transactionally with backup/rollback.
 
 The three preview affordances intentionally use different browser/runtime
 contracts over one binding: Compare calls `select_preview`, Open uses native

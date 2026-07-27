@@ -1989,7 +1989,40 @@ Important lacunae found during Phase 6 implementation:
   the canonical teacher conversation ledger, and
   `write_teacher_projection_from_ledger()` can rebuild `data.nlu_teacher`
   threads, workbench signals, items, candidates, revisions, and LLM logs from
-  ledger messages.
+  ledger messages. The projection does not persist the former
+  `events_by_candidate` expansion because it duplicated complete event rows and
+  had no runtime consumer; candidate grouping is derived from canonical events
+  and candidates when needed. The Teacher store runtime applies this projection
+  migration on `sys.ready` as well as `scenarios.synced`, so a durable snapshot
+  cannot retain the legacy expansion indefinitely when no scenario package is
+  synchronized after restart.
+- [x] `[must]` Bound the replicated Teacher operational projection. The default
+  window retains at most 96 events, 48 LLM log rows, 32 request threads, and 48
+  candidate threads. Request detail text is capped at 12,000 characters and
+  candidate threads carry a compact summary plus a ledger query instead of a
+  duplicate request transcript. These limits can be overridden through the
+  corresponding `ADAOS_NLU_TEACHER_*_MAX` environment settings, but increasing
+  them must be treated as a CRDT replication-budget change. The projection
+  publishes its effective limits under `data.nlu_teacher.projection_window`.
+- [x] `[must]` Serve complete Teacher history from the canonical ledger on
+  demand. `GET /api/nlu/teacher/{webspace_id}/history` returns a cursor-paged
+  ledger reconstruction and accepts optional `request_id` and `candidate_id`
+  filters. Filtered trace and dialog-context reads use the same ledger path and
+  fall back to the bounded projection only when no ledger rows exist. Scenario
+  materialization and ordinary Yjs synchronization never read full history.
+- [x] `[must]` Migrate legacy Teacher snapshots before enforcing projection
+  limits. On the first runtime rehydrate, the unbounded union of disk and YJS
+  `events`/`llm_logs` is written to the conversation ledger with stable
+  idempotency keys. Only a successful backfill permits compaction; a ledger
+  failure leaves the source projection untouched for retry. Completion is
+  recorded under `projection_window.ledger_backfill`, and later startup
+  reconciliation checks the retained window without rewriting an identical
+  YDoc. Live LLM-log create/update versions are now mirrored directly to the
+  ledger as well. Migration upserts threads and messages in bounded SQLite
+  batches instead of opening transactions per row; a full default 144-record
+  legacy window completes in under one second in the local acceptance test.
+  Rows already discarded by an older bounded release cannot be reconstructed
+  by this migration.
 - [x] `[must]` Add Builder approval Pending Actions with `source_refs` before
   enabling browser apply/approve flows. Current responses route to
   `builder.pending_action.response`; applying approved changes and writing a

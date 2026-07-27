@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.subscription.v1.schema.json",
+  "title": "AdaOS Stable Artifact Subscription v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_id", "channel", "policy"],
+  "properties": {
+    "schema": { "const": "adaos.artifact.subscription.v1" },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "channel": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "policy": { "enum": ["notify", "pinned"] },
+    "installed_release": { "type": "string", "minLength": 1 },
+    "installed_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

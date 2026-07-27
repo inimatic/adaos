@@ -3,32 +3,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-sys.modules.setdefault("nats", SimpleNamespace())
-if "y_py" not in sys.modules:
-    sys.modules["y_py"] = types.SimpleNamespace(
-        YDoc=type("YDoc", (), {}),
-        encode_state_vector=lambda *args, **kwargs: b"",
-        encode_state_as_update=lambda *args, **kwargs: b"",
-        apply_update=lambda *args, **kwargs: None,
-    )
-if "ypy_websocket.ystore" not in sys.modules:
-    ystore_module = types.ModuleType("ypy_websocket.ystore")
-    ystore_module.BaseYStore = type("BaseYStore", (), {})
-    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
-    sys.modules["ypy_websocket.ystore"] = ystore_module
-if "ypy_websocket" not in sys.modules:
-    pkg = types.ModuleType("ypy_websocket")
-    pkg.ystore = sys.modules["ypy_websocket.ystore"]
-    sys.modules["ypy_websocket"] = pkg
-
 from adaos.services import bootstrap as bootstrap_mod
 from adaos.services.system_model import service as system_model_service
+
+
+@pytest.fixture(autouse=True)
+def _generic_public_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+    monkeypatch.delenv("ROOT_BASE_URL", raising=False)
 
 
 def test_nats_url_needs_public_ws_refresh_for_legacy_public_tcp_url() -> None:
@@ -200,6 +187,39 @@ async def test_hub_root_reconnect_rearms_completed_bridge_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_candidate_bridge_is_registered_without_connecting_until_promotion() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        started.set()
+        await stop.wait()
+
+    assert service._start_hub_root_bridge_task(bridge, start_immediately=False) is None
+    assert service._find_live_boot_task(service._hub_root_bridge_task_name) is None
+    assert started.is_set() is False
+
+    try:
+        result = await service.request_hub_root_reconnect()
+
+        assert result["ok"] is True
+        assert result["bridge"]["started"] is True
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_hub_root_reconnect_rearms_running_bridge_without_active_connection() -> None:
     service = bootstrap_mod.BootstrapService(
         SimpleNamespace(config=SimpleNamespace(role="hub")),
@@ -239,6 +259,41 @@ async def test_hub_root_reconnect_rearms_running_bridge_without_active_connectio
                 task.cancel()
         old_task.cancel()
         await asyncio.gather(*service._boot_tasks, old_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_hub_root_reconnect_waits_for_active_route_authority() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        await asyncio.sleep(0)
+        service._mark_hub_root_authority_ready()
+        await stop.wait()
+
+    old_task = asyncio.create_task(asyncio.sleep(0), name=service._hub_root_bridge_task_name)
+    await old_task
+    service._hub_root_bridge_factory = bridge
+    service._boot_tasks.append(old_task)
+
+    try:
+        result = await service.request_hub_root_reconnect(wait_for_authority=True)
+
+        assert result["ok"] is True
+        assert result["authority"]["required"] is True
+        assert result["authority"]["ready"] is True
+        assert result["authority"]["ready_at"] is not None
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
 
 
 def test_sidecar_error_tail_is_byte_bounded_for_large_diag_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -618,7 +673,7 @@ def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> No
     )
 
 
-def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
+def test_hub_route_tools_call_never_retries_after_upstream_error() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
@@ -627,6 +682,11 @@ def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
+        error_kind="ConnectionError",
+    ) is False
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="GET",
+        path="/api/ping",
         error_kind="ConnectionError",
     ) is True
 

@@ -57,8 +57,8 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
     )
     scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
     scenario_root.mkdir(parents=True, exist_ok=True)
-    (scenario_root / "scenario.json").write_text(
-        json.dumps(
+    (scenario_root / "scenario.yaml").write_text(
+        yaml.safe_dump(
             {
                 "id": scenario_id,
                 "version": "0.0.1",
@@ -80,10 +80,9 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
                     ],
                 },
             },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
+            allow_unicode=True,
+            sort_keys=False,
+        ),
         encoding="utf-8",
     )
 
@@ -357,8 +356,8 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
         reset_ystore_for_webspace(webspace_id)
 
 
-def test_nlu_teacher_events_build_workbench_signals():
-    from adaos.services.nlu.teacher_events import rebuild_events_by_candidate
+def test_nlu_teacher_events_build_workbench_signals_without_duplicate_event_projection():
+    from adaos.services.nlu.teacher_events import rebuild_teacher_derived_views
 
     teacher = {
         "items": [
@@ -426,8 +425,10 @@ def test_nlu_teacher_events_build_workbench_signals():
         ],
     }
 
-    rebuild_events_by_candidate(teacher)
+    teacher["events_by_candidate"] = [{"stale": True}]
+    rebuild_teacher_derived_views(teacher)
 
+    assert "events_by_candidate" not in teacher
     assert teacher["workbench_summary"]["pending_candidate_count"] == 1
     assert teacher["workbench_summary"]["quarantined_candidate_count"] == 1
     signal_ids = {item["id"] for item in teacher["workbench_signals"]}

@@ -151,13 +151,12 @@ def _read_skill_manifest(skill_id: str, *, ctx: AgentContext | None = None) -> t
         return None, None
     ctx = ctx or get_ctx()
     for root in _skill_roots(ctx):
-        for name in ("skill.yaml", "skill.yml"):
-            path = root / token / name
-            if not path.exists():
-                continue
-            payload = _read_yaml(path)
-            if payload is not None:
-                return payload, path
+        path = root / token / "skill.yaml"
+        if not path.exists():
+            continue
+        payload = _read_yaml(path)
+        if payload is not None:
+            return payload, path
     return None, None
 
 
@@ -168,13 +167,12 @@ def _read_scenario_manifest(scenario_id: str, *, ctx: AgentContext | None = None
     ctx = ctx or get_ctx()
     for root in _scenario_roots(ctx):
         base = root / token
-        for name in ("scenario.json", "scenario.yaml", "scenario.yml"):
-            path = base / name
-            if not path.exists():
-                continue
-            payload = _read_json(path) if name.endswith(".json") else _read_yaml(path)
-            if payload is not None:
-                return payload, path
+        path = base / "scenario.yaml"
+        if not path.exists():
+            continue
+        payload = _read_yaml(path)
+        if payload is not None:
+            return payload, path
     return None, None
 
 
@@ -440,6 +438,24 @@ def get_nlu_trace(
                 request_filter = _request_id(candidate)
                 break
 
+    ledger_history: dict[str, Any] | None = None
+    if request_filter or candidate_filter:
+        from adaos.services.nlu.teacher_events import read_teacher_history_page
+
+        ledger_history = read_teacher_history_page(
+            ws,
+            request_id=request_filter,
+            candidate_id=candidate_filter,
+            limit=max_items,
+        )
+        if not int(ledger_history.get("total_message_count") or 0):
+            ledger_history = None
+        else:
+            events = _as_list(ledger_history.get("events"))
+            ledger_candidates = _as_list(ledger_history.get("candidates"))
+            if ledger_candidates:
+                candidates = ledger_candidates
+
     def _match_request(item: Mapping[str, Any]) -> bool:
         return not request_filter or _request_id(item) == request_filter
 
@@ -470,6 +486,14 @@ def get_nlu_trace(
         "trace": trace_rows,
         "teacher_events": event_rows,
         "candidates": candidate_rows[-max_items:],
+        "history_source": "conversation_ledger" if ledger_history is not None else "durable_projection",
+        "history_page": {
+            "has_more_before": bool(ledger_history.get("has_more_before")),
+            "before_cursor": str(ledger_history.get("before_cursor") or ""),
+            "total_message_count": int(ledger_history.get("total_message_count") or 0),
+        }
+        if ledger_history is not None
+        else None,
         "read_error": snapshot.get("read_error"),
         "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
     }
@@ -496,10 +520,33 @@ def get_nlu_dialog_context(
                 request_filter = _request_id(candidate)
                 break
 
-    events = _as_list(teacher.get("events"))
-    llm_logs = _as_list(teacher.get("llm_logs"))
-    request_threads = _as_list(teacher.get("threads_by_request"))
-    candidate_threads = _as_list(teacher.get("threads_by_candidate"))
+    ledger_history: dict[str, Any] | None = None
+    if request_filter or candidate_filter:
+        from adaos.services.nlu.teacher_events import read_teacher_history_page
+
+        ledger_history = read_teacher_history_page(
+            ws,
+            request_id=request_filter,
+            candidate_id=candidate_filter,
+            limit=max_items,
+        )
+        if not int(ledger_history.get("total_message_count") or 0):
+            ledger_history = None
+
+    events = _as_list(ledger_history.get("events")) if ledger_history is not None else _as_list(teacher.get("events"))
+    llm_logs = _as_list(ledger_history.get("llm_logs")) if ledger_history is not None else _as_list(teacher.get("llm_logs"))
+    request_threads = (
+        _as_list(ledger_history.get("threads_by_request"))
+        if ledger_history is not None
+        else _as_list(teacher.get("threads_by_request"))
+    )
+    candidate_threads = (
+        _as_list(ledger_history.get("threads_by_candidate"))
+        if ledger_history is not None
+        else _as_list(teacher.get("threads_by_candidate"))
+    )
+    if ledger_history is not None and _as_list(ledger_history.get("candidates")):
+        candidates = _as_list(ledger_history.get("candidates"))
 
     if request_filter:
         events = [item for item in events if item.get("request_id") == request_filter]
@@ -545,6 +592,14 @@ def get_nlu_dialog_context(
             "active": bool(correction_target),
             "previous_candidate": correction_target,
         },
+        "history_source": "conversation_ledger" if ledger_history is not None else "durable_projection",
+        "history_page": {
+            "has_more_before": bool(ledger_history.get("has_more_before")),
+            "before_cursor": str(ledger_history.get("before_cursor") or ""),
+            "total_message_count": int(ledger_history.get("total_message_count") or 0),
+        }
+        if ledger_history is not None
+        else None,
         "read_error": snapshot.get("read_error"),
         "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
     }

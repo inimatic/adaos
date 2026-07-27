@@ -655,6 +655,9 @@ if ! venv_is_usable; then
 fi
 . "$VENV_ACTIVATE"
 python -m pip install -U pip >/dev/null
+command -v cargo >/dev/null 2>&1 || fail "Rust/Cargo >=1.72 is required to build vendor/y-py. Prefer tools/bootstrap_uv.sh after installing rustup."
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
+python -m pip install ./vendor/y-py || fail "vendored y-py install failed"
 python -m pip install -e .[dev] || fail "pip install -e .[dev] failed"
 
 log "Bootstrapping .env..."

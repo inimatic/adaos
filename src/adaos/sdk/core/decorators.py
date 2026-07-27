@@ -21,6 +21,7 @@ from adaos.services.skill.activation import (
     subscription_event_admission,
     subscription_strategy_for_policy,
 )
+from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 
 # публичные реестры (стабильные имена)
 subscriptions: List[Tuple[str, Callable]] = []
@@ -417,6 +418,9 @@ def _load_subscription_stream_receiver_patterns(skill_name: str | None) -> tuple
     token = str(skill_name or "").strip()
     if not token or token == "<unknown>" or not _stream_receiver_admission_enabled():
         return ()
+    active_patterns = runtime_stream_receiver_patterns(token)
+    if active_patterns is not None:
+        return active_patterns
     try:
         ctx = require_ctx("sdk.core.decorators.stream_receiver_policy")
         paths = getattr(ctx, "paths", None)

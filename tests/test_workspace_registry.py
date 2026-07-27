@@ -1,17 +1,33 @@
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 import sqlite3
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
+from adaos.domain.artifact_release import (
+    ArtifactPackageRef,
+    ArtifactSourceRef,
+    ProjectRelease,
+    canonical_payload_digest,
+)
+from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
 from adaos.services.workspace_registry import (
     list_workspace_registry_entries,
+    load_workspace_registry,
     rebuild_workspace_registry,
     registry_pattern_set,
+    set_workspace_registry_channel,
     upsert_workspace_registry_entry,
+    WorkspaceRegistryError,
+    write_workspace_registry,
     workspace_registry_path,
 )
 
@@ -40,23 +56,28 @@ def test_rebuild_workspace_registry_reads_skill_and_scenario_manifests(tmp_path:
         ),
         encoding="utf-8",
     )
-    (scenario_dir / "scenario.json").write_text(
-        json.dumps(
-            {
-                "id": "greet_on_boot",
-                "name": "Greeting",
-                "version": "0.4.0",
-                "trigger": "manual",
-                "io": {"input": ["text"], "output": ["text", "voice"]},
-            }
-        )
-        + "\n",
+    (scenario_dir / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: greet_on_boot",
+                "name: Greeting",
+                "version: '0.4.0'",
+                "trigger: manual",
+                "io:",
+                "  input:",
+                "    - text",
+                "  output:",
+                "    - text",
+                "    - voice",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
 
     payload = rebuild_workspace_registry(workspace)
 
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert payload["skills"][0]["name"] == "weather_skill"
     assert payload["skills"][0]["id"] == "weather_skill"
     assert payload["skills"][0]["title"] == "Weather"
@@ -97,6 +118,116 @@ def test_rebuild_workspace_registry_prefers_scenario_yaml_title_and_i18n(tmp_pat
     assert entry["title"] == "Prototype App"
     assert entry["title_i18n"] == {"key": "scenario.prototype_app.title", "fallback": "Prototype App"}
     assert entry["version"] == "0.3.2"
+
+
+def test_rebuild_workspace_registry_accepts_scenario_json_as_derived_runtime_projection(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.WARNING, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "web_desktop"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "\n".join(
+            [
+                "id: web_desktop",
+                "version: '0.3.10'",
+                "updated_at: '2026-07-05T04:58:01+00:00'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (scenario_dir / "scenario.json").write_text(
+        json.dumps({"id": "web_desktop", "version": "0.0.1", "ui": {"application": {}}}) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = rebuild_workspace_registry(workspace)
+
+    entry = payload["scenarios"][0]
+    assert entry["name"] == "web_desktop"
+    assert entry["id"] == "web_desktop"
+    assert entry["manifest"] == "scenarios/web_desktop/scenario.yaml"
+    assert entry["version"] == "0.3.10"
+    assert entry["updated_at"] == "2026-07-05T04:58:01+00:00"
+    assert "unsupported declaration files" not in caplog.text
+
+
+def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "legacy_scene"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.json").write_text(
+        json.dumps({"id": "legacy_scene", "version": "9.9.9"}) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["scenarios"] == []
+    assert "required declaration is missing" in caplog.text
+    assert "unsupported_present=scenario.json" in caplog.text
+
+
+def test_rebuild_workspace_registry_skips_sparse_placeholder_dirs(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "sparse_skill"
+    scenario_dir = workspace / "scenarios" / "sparse_scene"
+    skill_dir.mkdir(parents=True)
+    scenario_dir.mkdir(parents=True)
+    (skill_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+    (scenario_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["skills"] == []
+    assert payload["scenarios"] == []
+    assert "required declaration is missing" not in caplog.text
+
+
+def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    workspace_registry_path(workspace).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "skills": [
+                    {
+                        "kind": "skill",
+                        "id": "weather_skill",
+                        "name": "weather_skill",
+                        "manifest": "skills/weather_skill/skill.yaml",
+                    }
+                ],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "legacy_scene",
+                        "name": "legacy_scene",
+                        "manifest": "scenarios/legacy_scene/scenario.json",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert [item["name"] for item in payload["skills"]] == ["weather_skill"]
+    assert payload["scenarios"] == []
+    assert "workspace registry entry rejected" in caplog.text
+    assert "required=scenario.yaml" in caplog.text
 
 
 def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Path):
@@ -145,7 +276,9 @@ def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Pa
     assert items[1]["version"] == "2.0.0"
 
 
-def test_upsert_workspace_registry_entry_falls_back_to_existing_metadata_when_manifest_missing(tmp_path: Path):
+def test_upsert_workspace_registry_entry_rejects_missing_required_declaration(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "browsers_skill"
     skill_dir.mkdir(parents=True)
@@ -183,12 +316,10 @@ def test_upsert_workspace_registry_entry_falls_back_to_existing_metadata_when_ma
         encoding="utf-8",
     )
 
-    entry = upsert_workspace_registry_entry(workspace, "skills", skill_dir)
+    with pytest.raises(FileNotFoundError):
+        upsert_workspace_registry_entry(workspace, "skills", skill_dir)
 
-    assert entry["name"] == "browsers_skill"
-    assert entry["id"] == "browsers_skill"
-    assert entry["entry"] == "handlers/main.py"
-    assert entry["path"] == "skills/browsers_skill"
+    assert "required declaration is missing" in caplog.text
 
 
 def test_registry_entry_includes_tags_and_publisher(tmp_path: Path):
@@ -301,6 +432,382 @@ def test_registry_pattern_set_keeps_registry_json_first():
     assert patterns.count("registry.json") == 1
 
 
+def test_registry_v1_is_readable_and_rewritten_as_v2_without_losing_fields(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = workspace_registry_path(workspace)
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-07-20T00:00:00Z",
+                "skills": [],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "recipes",
+                        "name": "recipes",
+                        "version": "1.2.3",
+                        "path": "scenarios/recipes",
+                        "manifest": "scenarios/recipes/scenario.yaml",
+                        "custom_legacy_field": "preserve-me",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_workspace_registry(workspace, fallback_to_scan=False)
+    assert loaded["version"] == 2
+    assert loaded["scenarios"][0]["custom_legacy_field"] == "preserve-me"
+
+    write_workspace_registry(workspace, loaded)
+    rewritten = json.loads(registry.read_text(encoding="utf-8"))
+    assert rewritten["version"] == 2
+    assert rewritten["scenarios"][0]["custom_legacy_field"] == "preserve-me"
+
+
+def test_historical_registry_and_incomplete_manifests_migrate_deterministically(tmp_path: Path):
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "artifact_migration"
+        / "workspace_v1_incomplete"
+    )
+    workspace = tmp_path / "workspace"
+    shutil.copytree(fixture, workspace)
+
+    first = load_workspace_registry(workspace, fallback_to_scan=False)
+    second = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert first == second
+    assert first["version"] == 2
+    scenario = first["scenarios"][0]
+    assert scenario["name"] == "recipes_legacy"
+    assert scenario["id"] == "recipes"
+    assert scenario["version"].startswith("0.0.0-legacy.")
+    assert scenario["version"] != "9.9.9"
+    assert scenario["custom_legacy_field"] == "keep-scenario"
+    assert scenario["install"] == {
+        "kind": "scenario",
+        "name": "recipes_legacy",
+        "id": "recipes",
+    }
+    assert scenario["compatibility"] == {
+        "schema": "adaos.workspace.artifact_compatibility.v1",
+        "status": "migration_required",
+        "reason": "canonical_manifest_version_missing",
+        "version_source": "canonical_manifest_digest",
+        "manifest_digest": scenario["compatibility"]["manifest_digest"],
+        "publishable": False,
+    }
+    assert scenario["compatibility"]["manifest_digest"].startswith("sha256:")
+
+    skill = first["skills"][0]
+    assert skill["name"] == "weather_legacy"
+    assert skill["id"] == "weather_skill"
+    assert skill["version"].startswith("0.0.0-legacy.")
+    assert skill["custom_legacy_field"] == "keep-skill"
+    assert skill["install"] == {
+        "kind": "skill",
+        "name": "weather_legacy",
+        "id": "weather_skill",
+    }
+    assert skill["compatibility"]["publishable"] is False
+
+    write_workspace_registry(workspace, first)
+    rewritten = json.loads(workspace_registry_path(workspace).read_text(encoding="utf-8"))
+    assert rewritten == first
+
+
+@pytest.mark.parametrize("payload", ["{", "[]", '{"version": 999}'])
+def test_workspace_registry_load_fails_closed_for_untrusted_payload(
+    tmp_path: Path,
+    payload: str,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_registry_path(workspace).write_text(payload, encoding="utf-8")
+
+    with pytest.raises(WorkspaceRegistryError):
+        load_workspace_registry(workspace, fallback_to_scan=True)
+
+
+def test_workspace_registry_atomic_write_preserves_previous_file_on_replace_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = workspace_registry_path(workspace)
+    original = b'{"version": 1, "skills": [], "scenarios": []}\n'
+    registry.write_bytes(original)
+
+    def fail_atomic_write(path, payload):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(
+        workspace_registry_module,
+        "_atomic_write_registry_json",
+        fail_atomic_write,
+    )
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        write_workspace_registry(
+            workspace,
+            {"version": 2, "skills": [], "scenarios": []},
+        )
+
+    assert registry.read_bytes() == original
+    assert list(workspace.glob(".registry.json.*.tmp")) == []
+
+
+def test_registry_v2_load_keeps_catalog_read_bounded_to_registry_file(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_registry_path(workspace).write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "skills": [],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "recipes",
+                        "name": "recipes",
+                        "version": "1.2.3",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def unexpected_manifest_read(*args, **kwargs):
+        raise AssertionError("registry v2 must not rescan canonical manifests")
+
+    monkeypatch.setattr(
+        workspace_registry_module,
+        "build_registry_entry",
+        unexpected_manifest_read,
+    )
+
+    loaded = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert loaded["scenarios"][0]["version"] == "1.2.3"
+
+
+def test_registry_upsert_serializes_the_complete_read_modify_write_cycle(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_workspace_registry(
+        workspace,
+        {"version": 2, "skills": [], "scenarios": []},
+    )
+    first_dir = workspace / "scenarios" / "first"
+    second_dir = workspace / "scenarios" / "second"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir(parents=True)
+    (first_dir / "scenario.yaml").write_text(
+        "id: first\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (second_dir / "scenario.yaml").write_text(
+        "id: second\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+
+    original_load = workspace_registry_module.load_workspace_registry
+    first_has_read = threading.Event()
+    allow_first_write = threading.Event()
+    second_finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def delayed_load(*args, **kwargs):
+        payload = original_load(*args, **kwargs)
+        if threading.current_thread().name == "registry-first":
+            first_has_read.set()
+            assert allow_first_write.wait(timeout=2)
+        return payload
+
+    def upsert(directory: Path, *, finished: threading.Event | None = None):
+        try:
+            upsert_workspace_registry_entry(
+                workspace,
+                "scenarios",
+                directory,
+            )
+        except BaseException as exc:  # surfaced in the parent test thread
+            errors.append(exc)
+        finally:
+            if finished is not None:
+                finished.set()
+
+    monkeypatch.setattr(
+        workspace_registry_module,
+        "load_workspace_registry",
+        delayed_load,
+    )
+    first = threading.Thread(
+        target=upsert,
+        args=(first_dir,),
+        name="registry-first",
+    )
+    second = threading.Thread(
+        target=upsert,
+        args=(second_dir,),
+        kwargs={"finished": second_finished},
+        name="registry-second",
+    )
+    first.start()
+    assert first_has_read.wait(timeout=2)
+    second.start()
+    assert second_finished.wait(timeout=0.1) is False
+    allow_first_write.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert not first.is_alive()
+    assert not second.is_alive()
+    loaded = original_load(workspace, fallback_to_scan=False)
+    assert [item["id"] for item in loaded["scenarios"]] == ["first", "second"]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [
+            {"id": "recipes", "name": "recipes", "version": "1.0.0"},
+            {"id": "Recipes", "name": "recipes_copy", "version": "1.0.0"},
+        ],
+        [{"id": "escape", "name": "../escape", "version": "1.0.0"}],
+    ],
+)
+def test_workspace_registry_rejects_ambiguous_or_unsafe_install_aliases(
+    tmp_path: Path,
+    entries: list[dict[str, str]],
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_registry_path(workspace).write_text(
+        json.dumps({"version": 2, "skills": [], "scenarios": entries}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceRegistryError):
+        load_workspace_registry(workspace, fallback_to_scan=False)
+
+
+def test_registry_channel_points_to_sealed_immutable_release(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "recipes"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    upsert_workspace_registry_entry(workspace, "scenarios", scenario_dir)
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("scenarios/recipes/",),
+    )
+    package = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="recipes",
+        version="1.2.3",
+        digest="sha256:" + "a" * 64,
+        manifest_digest="sha256:" + "b" * 64,
+        source_ref=source,
+    )
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=source,
+        components=(package,),
+    ).seal()
+
+    set_workspace_registry_channel(
+        workspace,
+        "scenarios",
+        "recipes",
+        channel="stable",
+        release=release,
+    )
+
+    entry = load_workspace_registry(workspace, fallback_to_scan=False)["scenarios"][0]
+    assert entry["channels"]["stable"] == {
+        "release": "recipes@1.2.3",
+        "release_digest": release.release_digest,
+        "source_revision": source.revision,
+        "package_digest": package.digest,
+        "version": "1.2.3",
+    }
+    assert entry["source"]["path"] == "scenarios/recipes"
+    assert entry["source"]["revision"] == source.revision
+
+
+def test_registry_channel_compare_and_swap_rejects_changed_entry(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "recipes"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\n",
+        encoding="utf-8",
+    )
+    upsert_workspace_registry_entry(workspace, "scenarios", scenario_dir)
+    observed = load_workspace_registry(workspace, fallback_to_scan=False)["scenarios"][0]
+    observed_digest = canonical_payload_digest(observed)
+
+    registry = load_workspace_registry(workspace, fallback_to_scan=False)
+    registry["scenarios"][0]["operator_note"] = "changed-after-review"
+    write_workspace_registry(workspace, registry)
+
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("scenarios/recipes/",),
+    )
+    package = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="recipes",
+        version="1.2.3",
+        digest="sha256:" + "a" * 64,
+        manifest_digest="sha256:" + "b" * 64,
+        source_ref=source,
+    )
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=source,
+        components=(package,),
+    ).seal()
+
+    with pytest.raises(WorkspaceRegistryError, match="changed after review"):
+        set_workspace_registry_channel(
+            workspace,
+            "scenarios",
+            "recipes",
+            channel="stable",
+            release=release,
+            expected_entry_digest=observed_digest,
+        )
+
+    entry = load_workspace_registry(workspace, fallback_to_scan=False)["scenarios"][0]
+    assert entry["operator_note"] == "changed-after-review"
+    assert "channels" not in entry
+
+
 class _Sql:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -333,6 +840,10 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert result["scenarios"] == ["greet_on_boot"]
     assert result["skills_removed"] == ["ghost_skill"]
     assert result["scenarios_removed"] == ["ghost_scene"]
+
+    registry_payload = json.loads(workspace_registry_path(workspace).read_text(encoding="utf-8"))
+    assert [item["id"] for item in registry_payload["skills"]] == ["weather_skill"]
+    assert [item["manifest"] for item in registry_payload["scenarios"]] == ["scenarios/greet_on_boot/scenario.yaml"]
 
     skill_rows = {row.name: row for row in skill_registry.list()}
     scenario_rows = {row.name: row for row in scenario_registry.list()}

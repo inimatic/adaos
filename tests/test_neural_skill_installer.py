@@ -1,5 +1,14 @@
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_dependency_install(monkeypatch):
+    from adaos.services.skill.manager import SkillManager
+
+    monkeypatch.setattr(SkillManager, "_install_python_dependencies", lambda *_args, **_kwargs: [])
+
 
 def _write_neural_skill_fixture(root: Path) -> Path:
     source = root / "neural_nlu_service_skill"

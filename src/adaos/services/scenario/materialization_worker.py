@@ -34,13 +34,23 @@ async def _materialize(request: Mapping[str, Any]) -> dict[str, Any]:
     scenario_id = str(request.get("scenario_id") or "").strip() or None
     identity = request.get("materialization_identity")
     materialization_identity = dict(identity) if isinstance(identity, Mapping) else None
+    raw_skill_decls = request.get("skill_decls_snapshot")
+    skill_decls_snapshot = (
+        [dict(item) for item in raw_skill_decls if isinstance(item, Mapping)]
+        if isinstance(raw_skill_decls, list)
+        else None
+    )
+    skill_decls_fingerprint = str(request.get("skill_decls_fingerprint") or "").strip() or None
     runtime = WebspaceScenarioRuntime()
     if mode == "payload_only":
-        entry = await runtime.materialize_webspace_payload_async(
+        entry = await runtime.resolve_materialized_payload_async(
             webspace_id,
             request_id=request_id,
             scenario_id=scenario_id,
             materialization_identity=materialization_identity,
+            isolate_process=False,
+            skill_decls_snapshot=skill_decls_snapshot,
+            skill_decls_fingerprint=skill_decls_fingerprint,
         )
         return {
             "materialized_payload": _json_clone(runtime._last_materialized_payload or {}),
@@ -61,6 +71,8 @@ async def _materialize(request: Mapping[str, Any]) -> dict[str, Any]:
             request_id=request_id,
             initial_scenario_id=scenario_id,
             materialization_identity=materialization_identity,
+            skill_decls_snapshot=skill_decls_snapshot,
+            skill_decls_fingerprint=skill_decls_fingerprint,
         )
         result.pop("entry", None)
         result["snapshot_update_b64"] = base64.b64encode(

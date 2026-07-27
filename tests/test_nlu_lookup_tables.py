@@ -1,8 +1,40 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+
+def test_lookup_source_yaml_cache_is_stamp_aware_and_single_flight(tmp_path: Path, monkeypatch) -> None:
+    import adaos.services.nlu_lookup_tables as lookups
+
+    path = tmp_path / "skill.yaml"
+    path.write_text("name: first\n", encoding="utf-8")
+    lookups._SOURCE_DOCUMENT_CACHE.clear()
+    calls = 0
+    original_safe_load = lookups.yaml.safe_load
+
+    def _slow_safe_load(value):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.01)
+        return original_safe_load(value)
+
+    monkeypatch.setattr(lookups.yaml, "safe_load", _slow_safe_load)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _index: lookups._read_yaml(path), range(8)))
+
+    assert results == [{"name": "first"}] * 8
+    assert calls == 1
+
+    path.write_text("name: second\n", encoding="utf-8")
+
+    assert lookups._read_yaml(path) == {"name": "second"}
+    assert calls == 2
 
 
 def test_desktop_lookup_tables_collect_workspace_ids() -> None:
@@ -33,6 +65,38 @@ def test_desktop_lookup_tables_collect_workspace_ids() -> None:
     rasa_entries = rasa_lookup_entries(payload)
     assert any(entry.get("lookup") == "modal_id" for entry in rasa_entries)
     assert any(entry.get("lookup") == "scenario_id" for entry in rasa_entries)
+
+
+def test_desktop_lookup_tables_reuses_baseline_cache_across_webspaces(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    import adaos.services.nlu_lookup_tables as lookups
+
+    lookups._BASELINE_BUCKET_CACHE.clear()
+    calls = {"json": 0, "yaml": 0}
+    original_read_json = lookups._read_json
+    original_read_yaml = lookups._read_yaml
+
+    def _count_json(path):
+        calls["json"] += 1
+        return original_read_json(path)
+
+    def _count_yaml(path):
+        calls["yaml"] += 1
+        return original_read_yaml(path)
+
+    monkeypatch.setattr(lookups, "_read_json", _count_json)
+    monkeypatch.setattr(lookups, "_read_yaml", _count_yaml)
+
+    first = lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="desktop")
+    first_calls = dict(calls)
+    second = lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="dev1")
+
+    assert first["webspace_id"] == "desktop"
+    assert second["webspace_id"] == "dev1"
+    assert lookups.lookup_values(first, "webspace_id") == ["desktop"]
+    assert lookups.lookup_values(second, "webspace_id") == ["dev1"]
+    assert calls == first_calls
+    assert first_calls["json"] > 0
 
 
 @pytest.mark.anyio

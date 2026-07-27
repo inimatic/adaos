@@ -116,6 +116,24 @@ For the target browser contract, the same rule can be expressed as:
 Skills and scenarios should not invent a second hidden state vocabulary on top
 of those three families when designing semantic browser surfaces.
 
+Named-entity and lookup projections are part of the reconnect-stable Yjs
+contract, but their source aggregation is not a foreground UI action. Runtime
+diagnostics expose `named_entities.projection.last_timings_ms` with source
+breakdown keys such as `source.devices`, `source.lookups`,
+`registry.collect_sources`, and `registry.payload`. A projection may report
+`last_snapshot_mode=deferred_room_not_ready`; that means the registry refresh
+was intentionally left pending until the live room became ready instead of
+building a payload that could not be applied.
+
+`collect_desktop_lookup_tables` caches baseline skill/scenario lookup buckets
+by manifest file stamps for a short TTL. The requested `webspace_id` is added
+after the cache read, so repeated desktop/dev preview refreshes do not rescan
+all manifests while still preserving workspace-local lookup identity. Parsed
+JSON/YAML source documents are also cached by their own file stamps and loaded
+under a process-local single-flight lock. Directory churn can invalidate the
+aggregate bucket without making concurrent named-entity refreshes parse every
+unchanged skill manifest again under the GIL.
+
 ## Stream Receivers
 
 `webui.json` can now declare transport-independent browser receivers:
@@ -720,6 +738,7 @@ pointer-only scenario switch can be evaluated against real runtime slices:
 * `apply_summary.phases.structure`
 * `apply_summary.phases.interactive`
 * `apply_summary.fingerprint_unchanged_branches`
+* `apply_summary.trusted_previous_fingerprint_patch_branches`
 
 For repeated operator measurements, use:
 
@@ -787,12 +806,24 @@ grew too large.
 
 When replay pressure does trigger compaction, YStore can now also schedule a
 debounced auto-backup to disk and attempt to collapse the in-memory log to a
-single base snapshot. This is intended to shorten later cold-room replay
-paths, not to change the semantic source of truth. The related knobs are:
+single base snapshot. If concurrent writes append while the snapshot is being
+encoded, the compacted prefix is kept as the new base and the newer updates
+remain as the replay tail; a short retry is scheduled when that tail is still
+over the soft pressure threshold. This is intended to shorten later cold-room
+replay paths, not to change the semantic source of truth. The related knobs are:
 
 * `ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT`
 * `ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC`
 * `ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC`
+* `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_BYTES` (default 1 MiB)
+* `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_ENTRIES` (default half of the
+  replay window, at least 4)
+* `ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_DEBOUNCE_SEC` (default 1s)
+
+The replay-pressure auto-backup is a soft latency guard. It can compact long
+before the hard replay byte or entry limits are reached, so repeated UI
+switching does not leave the next detached YDoc open paying for megabytes of
+bounded-but-slow replay.
 
 Operator-triggered room reset/reload now also uses that same storage path more
 deliberately: after a live YRoom is dropped, the runtime releases the old room
@@ -811,6 +842,14 @@ updated on the active room first, then persisted stale-safely in the
 background. This reduces hot-path store reopen cost and improves time to first
 visible switch reaction for attached clients.
 
+Browser `desktop.scenario.set` and `desktop.webspace.go_home` commands default
+to `wait_for_rebuild=false`. Their acknowledgement means that the pointer and
+reconcile request were accepted; readiness remains observable through the
+materialization state. Callers may request `wait_for_rebuild=true` explicitly
+for recovery or diagnostics. Ordinary switches preserve the current YStore
+base and append the live-room branch diff, so acknowledgement is not coupled
+to a full snapshot disk write.
+
 If the requested local control endpoint becomes stale during supervisor
 prewarm/candidate activity, the benchmark CLI can now consult supervisor
 public status and retry against the currently active local runtime URL before
@@ -828,6 +867,30 @@ failing the measurement.
 The important distinction is that `hydrating` is an expected staged state,
 while `degraded` means the runtime could not account for required desktop
 branches and the client should surface a stronger recovery hint.
+
+During a scenario switch, `pending_structure`, `first_paint`,
+`interactive`, and `hydrating` are materialization phases, not transport
+freshness failures. Runtime reliability now exposes this as
+`state_sync.materialization.transition_expected=true` while keeping the Yjs
+transport fields attached/fresh when the room/provider are healthy. The
+browser availability indicator must therefore treat the channel as usable and
+surface the phase as `materialization=transition:<state>` rather than showing
+`Limited (sync_limited)`. State-dependent desktop actions may still block on
+full materialization readiness; that guard belongs to the action/data layer,
+not to link availability.
+
+The compact browser endpoint `/api/node/reliability/summary` must preserve the
+same signal as `stateSync.materialization.transitionExpected` with
+`readinessState`, `currentScenario`, `targetScenario`, and `missingBranches`.
+The client should not have to call the full reliability endpoint only to learn
+that hydration is an expected staged transition.
+
+For hot scenario switches, the backend should also avoid opening a read-only
+YDoc only to compare the previous materialized scenario. That check is needed
+only when the requested scenario already matches the current selector and the
+runtime might otherwise skip a stale materialization. Ordinary transitions
+should update the selector first and let the semantic rebuild publish phase
+progress through the lightweight rebuild/materialization surfaces.
 
 `compatibility_caches` exposes the migration-era legacy cache surface for
 operators:
@@ -1102,6 +1165,36 @@ Per-action overrides use the same policy through `params.presentation`,
 Most manifests should omit this block and rely on the runtime defaults. Use
 explicit focus policy only for unusual overlay flows, such as nested overlays
 or flows that intentionally do not return focus to the opener.
+
+### NLU Teacher History
+
+`data.nlu_teacher` is a bounded operational projection, not a transcript
+store. Its `projection_window` object reports the active event, LLM-log,
+thread, and detail-size limits. Consumers must not assume that an absent older
+row was deleted from the Teacher history.
+
+For upgraded nodes, `projection_window.ledger_backfill.completed=true` means
+that all Teacher events and LLM-log rows still present in the pre-compaction
+disk/YJS state were idempotently ensured in the ledger before the projection
+was shortened. If the ledger is unavailable, this marker is not written and
+the unbounded source state is retained. Independent LLM-log versions are
+ledger records, so they remain available after their YJS window rolls over.
+
+Use the authenticated ledger endpoint for older or request-specific data:
+
+```text
+GET /api/nlu/teacher/{webspace_id}/history
+    ?request_id={request_id}
+    &candidate_id={candidate_id}
+    &before_cursor={cursor}
+    &limit=32
+```
+
+The response uses schema `adaos.nlu_teacher.ledger_history.v1` and returns
+`messages`, reconstructed `events`, `llm_logs`, request/candidate threads,
+`has_more_before`, and `before_cursor`. The maximum page size is 64. This API is
+an explicit read path; it is not called by scenario switching or CRDT room
+bootstrap.
 
 ## Simplifications and Limitations
 

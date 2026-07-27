@@ -38,6 +38,7 @@ from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget, heavy_dependency_names
+from adaos.services.skill.declarations import load_runtime_skill_declarations
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
 from adaos.services.skill.tests_runner import TestResult, run_tests as run_skill_tests
 from adaos.services.models.artifacts import (
@@ -59,7 +60,7 @@ import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.skill.manager")
-_SKILL_MANIFEST_NAMES = ("skill.yaml", "manifest.yaml", "adaos.skill.yaml")
+_SKILL_MANIFEST_NAMES = ("skill.yaml",)
 
 
 def _resolve_sync_tool_result(result: Any) -> Any:
@@ -1646,10 +1647,15 @@ class SkillManager:
         try:
             wait_for_materialized(skill_dir, files=_SKILL_MANIFEST_NAMES, attempts=5, delay=0.1)
         except FileNotFoundError:
+            _log.error(
+                "skill rejected: required declaration is missing path=%s required=skill.yaml",
+                str(skill_dir),
+            )
             if not skill_dir.exists():
                 raise FileNotFoundError(
                     f"skill '{name}' is not materialized in workspace sparse checkout"
                 ) from None
+            raise FileNotFoundError(f"skill '{name}' has no skill.yaml declaration") from None
 
     def _bump_skill_manifest_for_push(self, skill_dir: Path) -> str | None:
         skill_yaml = skill_dir / "skill.yaml"
@@ -2068,6 +2074,11 @@ class SkillManager:
             metadata=metadata,
         )
         lifecycle["persist"] = persist_state
+        self._load_runtime_declarations(
+            name,
+            target_manifest,
+            artifact_root=slot_source_root,
+        )
         self._smoke_import(env=env, name=name, version=target_version, slot=target_slot)
         env.set_active_slot(target_version, target_slot)
         env.active_version_marker().write_text(target_version, encoding="utf-8")
@@ -2744,7 +2755,7 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self._load_runtime_data_projections(data)
+        self._load_runtime_data_projections(data, skill_name=name)
         tools = data.get("tools") or {}
         target_tool = _resolve_runtime_tool_name(tool, data.get("default_tool"), tools)
         if not target_tool:
@@ -2925,7 +2936,7 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self._load_runtime_data_projections(data)
+        self._load_runtime_data_projections(data, skill_name=name)
         tools = data.get("tools") or {}
         if tool:
             target_tool = tool
@@ -3074,24 +3085,32 @@ class SkillManager:
         )
 
     def _load_manifest(self, skill_dir: Path) -> Dict[str, Any]:
-        candidates = ["resolved.manifest.json", "skill.yaml", "manifest.yaml", "manifest.json", "skill.json"]
-        for name in candidates:
-            path = skill_dir / name
-            if not path.exists():
-                continue
-            if path.suffix in {".yaml", ".yml"}:
-                return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            return json.loads(path.read_text(encoding="utf-8"))
-        raise FileNotFoundError("skill manifest not found")
+        path = skill_dir / "skill.yaml"
+        if not path.exists():
+            _log.error("skill rejected: required declaration is missing path=%s required=skill.yaml", str(skill_dir))
+            raise FileNotFoundError("skill.yaml declaration not found")
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            _log.error("skill rejected: required declaration must contain an object manifest=%s", str(path))
+            raise ValueError("skill.yaml declaration must contain an object")
+        return payload
 
-    def _load_runtime_data_projections(self, manifest: Mapping[str, Any]) -> int:
+    def _load_runtime_data_projections(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        skill_name: str | None = None,
+    ) -> int:
         entries = manifest.get("data_projections") if isinstance(manifest, Mapping) else []
-        if not isinstance(entries, list) or not entries:
-            return 0
         projections = getattr(self.ctx, "projections", None)
         if projections is None:
             return 0
         try:
+            replace_skill_manifest = getattr(projections, "replace_skill_manifest", None)
+            if skill_name and callable(replace_skill_manifest):
+                return int(replace_skill_manifest(skill_name, dict(manifest)))
+            if not isinstance(entries, list) or not entries:
+                return 0
             load_manifest = getattr(projections, "load_manifest", None)
             if callable(load_manifest):
                 return int(load_manifest(dict(manifest)))
@@ -3101,6 +3120,22 @@ class SkillManager:
         except Exception:
             _log.debug("failed to load runtime data_projections", exc_info=True)
         return 0
+
+    def _load_runtime_declarations(
+        self,
+        name: str,
+        manifest: Mapping[str, Any],
+        *,
+        artifact_root: Path,
+    ) -> dict[str, Any]:
+        projection_total = self._load_runtime_data_projections(manifest, skill_name=name)
+        loaded = load_runtime_skill_declarations(
+            name,
+            manifest,
+            artifact_root=artifact_root,
+        )
+        loaded["loaded_projection_total"] = projection_total
+        return loaded
 
     def _prepare_runtime_environment(
         self,
@@ -3140,6 +3175,7 @@ class SkillManager:
             "*.safetensors",
         )
         shutil.copytree(source, target, ignore=ignore)
+        self._verify_staged_declaration_artifacts(source, target)
         package_init = target / "__init__.py"
         if not package_init.exists():
             package_init.write_text("", encoding="utf-8")
@@ -3157,6 +3193,18 @@ class SkillManager:
                 encoding="utf-8",
             )
         return target
+
+    @staticmethod
+    def _verify_staged_declaration_artifacts(source: Path, target: Path) -> None:
+        for name in ("skill.yaml", "webui.json"):
+            source_path = source / name
+            if not source_path.is_file():
+                continue
+            target_path = target / name
+            if not target_path.is_file():
+                raise RuntimeError(f"staged skill artifact is missing {name}: {target_path}")
+            if source_path.read_bytes() != target_path.read_bytes():
+                raise RuntimeError(f"staged skill artifact changed during packaging: {name}")
 
     def _smoke_import(self, *, env: SkillRuntimeEnvironment, name: str, version: str, slot: str | None = None) -> None:
         module_name = f"skills.{name}.handlers.main"
@@ -4569,10 +4617,7 @@ class SkillManager:
         if not skill_dir.exists():
             raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
 
-        try:
-            manifest = self._load_manifest(skill_dir)
-        except FileNotFoundError:
-            manifest = {}
+        manifest = self._load_manifest(skill_dir)
         self._ensure_core_compatible(manifest, skill_name=name, stage="prepare")
         version = version_override or str(manifest.get("version") or "dev")
 
@@ -4701,13 +4746,7 @@ class SkillManager:
 
         target_version = str(version or "").strip()
         if not target_version:
-            # A source activation follows the DEV manifest by default. The
-            # active marker is only a fallback for legacy sources without a
-            # manifest version.
-            try:
-                manifest = self._load_manifest(skill_dir)
-            except FileNotFoundError:
-                manifest = {}
+            manifest = self._load_manifest(skill_dir)
             target_version = str(manifest.get("version") or "").strip()
         if not target_version:
             target_version = str(env.resolve_active_version() or "dev").strip() or "dev"
@@ -4742,6 +4781,11 @@ class SkillManager:
         self._ensure_core_compatible(target_manifest, skill_name=name, stage="activate")
         lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=target_slot)
         lifecycle["persist"] = {"ok": True, "skipped": True, "hook": "persist_before_switch", "reason": "dev_runtime"}
+        self._load_runtime_declarations(
+            name,
+            target_manifest,
+            artifact_root=slot_source_root,
+        )
         previous_active_version = env.resolve_active_version()
         previous_active_slot = env.read_active_slot(previous_active_version) if previous_active_version else None
         previous_deactivation = env.read_deactivation()

@@ -68,8 +68,8 @@ def _read_manifest(dirpath: Path) -> SkillMeta:
             name = str(data.get("name") or sid)
             ver = str(data.get("version") or "0.0.0")
             return SkillMeta(id=SkillId(sid), name=name, version=ver, path=str(dirpath.resolve()))
-    sid = dirpath.name
-    return SkillMeta(id=SkillId(sid), name=sid, version="0.0.0", path=str(dirpath.resolve()))
+    _log.error("scenario rejected: required declaration is missing path=%s required=scenario.yaml", str(dirpath))
+    raise FileNotFoundError(f"scenario '{dirpath.name}' has no scenario.yaml declaration")
 
 
 def _read_catalog(paths: PathProvider) -> list[str]:
@@ -205,7 +205,10 @@ class GitScenarioRepository(ScenarioRepository):
                 continue
             for ch in sorted(root.iterdir()):
                 if ch.is_dir() and not ch.name.startswith("."):
-                    items.append(_read_manifest(ch))
+                    try:
+                        items.append(_read_manifest(ch))
+                    except FileNotFoundError:
+                        continue
         return items
 
     def get(self, scenario_id: str) -> Optional[SkillMeta]:
@@ -213,7 +216,10 @@ class GitScenarioRepository(ScenarioRepository):
         for root in self._candidate_roots():
             p = root / scenario_id
             if p.exists():
-                m = _read_manifest(p)
+                try:
+                    m = _read_manifest(p)
+                except FileNotFoundError:
+                    return None
                 if m.id.value == scenario_id:
                     return m
         for m in self.list():

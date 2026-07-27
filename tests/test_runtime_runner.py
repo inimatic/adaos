@@ -153,6 +153,9 @@ def test_execute_tool_uses_exact_active_slot_when_old_skills_package_is_loaded(t
     before_snapshots = dict(runtime_runner_module._SKILL_SOURCE_SNAPSHOTS)
     try:
         runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        for key in list(sys.modules.keys()):
+            if key == "skills" or key.startswith(tracked_prefixes):
+                sys.modules.pop(key, None)
         sys.path.insert(0, str(slot_a))
         old_module = importlib.import_module("skills.builder_skill.handlers.main")
         assert old_module.get_snapshot()["marker"] == "old-slot"

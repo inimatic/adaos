@@ -22,6 +22,10 @@ from adaos.services.skill.artifacts import (
     store_skill_upload,
 )
 from adaos.services.skill.update import SkillUpdateService
+from adaos.services.artifact_subscription_update import (
+    ArtifactSubscriptionUpdateCoordinator,
+    ArtifactSubscriptionUpdateError,
+)
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
@@ -136,6 +140,9 @@ class UpdateReq(BaseModel):
     webspace_id: str | None = None
     defer_webspace_rebuild: bool = False
     force: bool | None = None
+    expected_plan_digest: str | None = None
+    permission_decision: dict[str, Any] | None = None
+    idempotency_key: str | None = None
 
 
 class UninstallReq(BaseModel):
@@ -210,6 +217,37 @@ def _repo_workspace_skills_root(ctx: AgentContext) -> Path | None:
     except Exception:
         return None
     return None
+
+
+def _ctx_path(ctx: AgentContext, attr_name: str) -> Path | None:
+    try:
+        attr = getattr(ctx.paths, attr_name, None)
+        value = attr() if callable(attr) else attr
+        if value:
+            return Path(value).expanduser().resolve()
+    except Exception:
+        return None
+    return None
+
+
+def _workspace_skill_manifest_exists(ctx: AgentContext, skill_name: str) -> bool:
+    token = str(skill_name or "").strip()
+    if not token:
+        return False
+
+    roots: list[Path] = []
+    for attr_name in ("skills_workspace_dir", "skills_dir"):
+        root = _ctx_path(ctx, attr_name)
+        if root is not None and root not in roots:
+            roots.append(root)
+
+    repo_root = _repo_workspace_skills_root(ctx)
+    if repo_root is not None and repo_root not in roots:
+        roots.append(repo_root)
+
+    if not roots:
+        return True
+    return any((root / token / "skill.yaml").is_file() for root in roots)
 
 
 def _resolve_workspace_skill_source(ctx: AgentContext, skill_name: str, workspace_root: Path, workspace_skills_root: Path) -> Path:
@@ -321,6 +359,12 @@ async def list_skills(
             continue
         item = _to_mapping(row)
         name = str(item.get("name") or item.get("id") or item.get("repr") or "").strip()
+        if name and not _workspace_skill_manifest_exists(ctx, name):
+            log.error(
+                "installed skill hidden: required declaration is missing name=%s required=skill.yaml",
+                name,
+            )
+            continue
         if name:
             item["version"] = _resolve_list_skill_version(
                 ctx=ctx,
@@ -356,6 +400,12 @@ async def installed_status(mgr: SkillManager = Depends(_get_manager), ctx: Agent
             continue
         name = str(getattr(row, "name", "") or "").strip()
         if not name:
+            continue
+        if not _workspace_skill_manifest_exists(ctx, name):
+            log.error(
+                "installed skill status hidden: required declaration is missing name=%s required=skill.yaml",
+                name,
+            )
             continue
 
         meta = mgr.get(name)
@@ -761,6 +811,27 @@ async def runtime_setup(body: RuntimeSetupReq, mgr: SkillManager = Depends(_get_
 
 @router.post("/update")
 async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
+    coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
+    try:
+        update_route = coordinator.select_route(body.name)
+    except ArtifactSubscriptionUpdateError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+    if update_route.package_required:
+        try:
+            return await coordinator.update(
+                "skill",
+                body.name,
+                dry_run=body.dry_run,
+                expected_plan_digest=body.expected_plan_digest,
+                permission_decision=body.permission_decision,
+                idempotency_key=body.idempotency_key,
+                webspace_id=body.webspace_id,
+                defer_webspace_rebuild=body.defer_webspace_rebuild,
+            )
+        except ArtifactSubscriptionUpdateError as exc:
+            raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     service = SkillUpdateService(ctx)
     try:
         kwargs: dict[str, Any] = {"dry_run": body.dry_run}
@@ -855,6 +926,10 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         "ok": True,
         "updated": result.updated,
         "version": result.version,
+        "mode": "legacy_source_pull",
+        "update_route": update_route.to_dict(),
+        "legacy_materialization": True,
+        "warning": "no stable package subscription; compatibility git pull was used",
         "runtime_refresh": runtime_refresh,
         "handler_reload": handler_reload,
         "materialization_cache": materialization_cache if not body.dry_run else {},

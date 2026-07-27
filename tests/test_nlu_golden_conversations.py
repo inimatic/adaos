@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 def _fixture(name: str) -> dict:
@@ -61,6 +62,10 @@ async def test_gate1_golden_conversation_learn_replay_rollback():
             indent=2,
         )
         + "\n",
+        encoding="utf-8",
+    )
+    (scenario_root / "scenario.yaml").write_text(
+        yaml.safe_dump(json.loads(scenario_json.read_text(encoding="utf-8")), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
 

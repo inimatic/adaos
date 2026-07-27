@@ -268,6 +268,111 @@ def select_project(
     }
 
 
+def select_target(
+    object_type: str,
+    object_id: str,
+    *,
+    stage: str,
+    revision: str | None = None,
+    source_webspace_id: str = "desktop",
+    follow_active: bool = False,
+) -> dict[str, Any]:
+    """Materialize an explicit Lifecycle snapshot without changing its active phase."""
+
+    kind = str(object_type or "").strip().lower().rstrip("s")
+    project_id = str(object_id or "").strip()
+    if kind != "scenario":
+        raise ValueError("only scenario Lifecycle nodes can be shown in Preview")
+    if not project_id:
+        raise ValueError("object_id is required")
+    source = canonical_source_webspace_id(source_webspace_id)
+
+    from adaos.services.builder.workflow import BuilderWorkflowService
+
+    workflow = BuilderWorkflowService.from_context().describe(kind, project_id)
+    stage_token = str(stage or "").strip().lower()
+    if follow_active:
+        stage_token = str(workflow.get("active_phase") or "prototype")
+    if stage_token not in {"prototype", "automation", "publication"}:
+        raise ValueError("stage must be prototype, automation, or publication")
+    capability = {
+        "prototype": "can_preview_prototype",
+        "automation": "can_preview_automation",
+        "publication": "can_preview_publication",
+    }[stage_token]
+    if not bool(_plain(workflow.get("capabilities")).get(capability)):
+        raise ValueError(f"{stage_token} Preview is not available for this project")
+
+    prototype = _plain(workflow.get("prototype"))
+    automation_state = _plain(workflow.get("automation"))
+    publication = _plain(workflow.get("publication"))
+    target_revision = str(revision or "").strip()
+    display_revision = ""
+    if stage_token == "prototype" and not target_revision:
+        target_revision = str(prototype.get("head_revision") or "").strip()
+        display_revision = f"UI {target_revision}" if target_revision else "current"
+    elif stage_token == "prototype":
+        display_revision = f"UI {target_revision}"
+    elif stage_token == "automation":
+        current_automation = str(
+            automation_state.get("snapshot_task_id") or automation_state.get("head_task_id") or "current"
+        ).strip() or "current"
+        if target_revision and target_revision != current_automation:
+            raise ValueError("only the current Automation result can be shown in Preview")
+        target_revision = current_automation
+        display_revision = str(automation_state.get("result_version") or "current")
+    elif stage_token == "publication":
+        current_publication = str(publication.get("current_version") or "current").strip() or "current"
+        if target_revision and target_revision != current_publication:
+            raise ValueError("only the current Publication can be shown in Preview")
+        target_revision = current_publication
+        display_revision = current_publication
+
+    selected = select_project(
+        kind,
+        project_id,
+        source_webspace_id=source,
+        ensure_ready=True,
+        wait_for_rebuild=True,
+        publish_event=False,
+    )
+    preview_id = str(selected.get("preview_webspace_id") or selected.get("dev_webspace_id") or "").strip()
+    if not preview_id:
+        raise RuntimeError("Builder preview relation is missing")
+    prefix = {"prototype": "proto", "automation": "active", "publication": "public"}[stage_token]
+    label = f"{prefix}: {project_id} · {display_revision or target_revision or 'current'}"
+    materialized = materialize_revision(
+        webspace_id=preview_id,
+        scenario_id=project_id,
+        revision=target_revision or None,
+        preview_stage=stage_token,
+        preview_label=label,
+        event_payload={
+            "source": "sdk.builder.preview.select_target",
+            "source_webspace_id": source,
+            "preview_stage": stage_token,
+            "preview_revision": target_revision or None,
+        },
+    )
+    target = {
+        "schema": "adaos.builder.preview_target.v1",
+        "object_type": kind,
+        "object_id": project_id,
+        "stage": stage_token,
+        "revision": target_revision or None,
+        "label": label,
+        "follow_active": bool(follow_active),
+    }
+    binding = _plain(_service().set_preview_target(source_webspace_id=source, target=target))
+    return {
+        "ok": bool(materialized.get("ok", True)),
+        "target": target,
+        "materialization": materialized,
+        "binding": binding,
+        "preview_webspace_id": preview_id,
+    }
+
+
 def open_workspace(source_webspace_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
     source = canonical_source_webspace_id(source_webspace_id)
     return _plain(_service().open_dev_webspace(source, base_url=base_url))
@@ -381,6 +486,7 @@ __all__ = [
     "reload",
     "reload_async",
     "select_project",
+    "select_target",
     "set_active_draft",
     "snapshot",
     "canonical_source_webspace_id",

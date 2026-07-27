@@ -6,7 +6,6 @@ import time
 import contextlib
 import contextvars
 import asyncio
-import gc
 import inspect
 import subprocess
 import sys
@@ -56,31 +55,12 @@ def _env_flag(name: str, default: bool = False) -> bool:
 _YSTORE_APPLY_YIELD_BYTES = _env_int("ADAOS_YSTORE_APPLY_YIELD_BYTES", 512 * 1024, minimum=0)
 _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum=0.0)
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
-_YSTORE_BACKUP_MALLOC_TRIM = _env_flag("ADAOS_YSTORE_BACKUP_MALLOC_TRIM", True)
-_YSTORE_BACKUP_FORCE_GC = _env_flag("ADAOS_YSTORE_BACKUP_FORCE_GC", False)
 _YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
 _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
 
 
 def _is_fatal_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
-
-
-def _trim_allocator_after_backup_compaction() -> bool:
-    if not _YSTORE_BACKUP_MALLOC_TRIM:
-        return False
-    if os.name != "posix":
-        return False
-    try:
-        import ctypes  # pylint: disable=import-outside-toplevel
-
-        libc = ctypes.CDLL("libc.so.6")
-        trim = getattr(libc, "malloc_trim", None)
-        if not callable(trim):
-            return False
-        return bool(trim(0))
-    except Exception:
-        return False
 
 
 def add_ystore_write_listener(cb: Callable[..., Any]) -> Callable[[], None]:
@@ -442,6 +422,25 @@ class AdaosMemoryYStore(BaseYStore):
             30.0,
             minimum=0.0,
         )
+        self.auto_backup_replay_pressure_bytes = _env_int(
+            "ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_BYTES",
+            1024 * 1024,
+            minimum=0,
+        )
+        default_replay_pressure_entries = min(
+            max(4, int(self.replay_window) // 2),
+            int(self.replay_window),
+        )
+        self.auto_backup_replay_pressure_entries = _env_int(
+            "ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_ENTRIES",
+            default_replay_pressure_entries,
+            minimum=0,
+        )
+        self.auto_backup_replay_pressure_debounce_sec = _env_float(
+            "ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_DEBOUNCE_SEC",
+            1.0,
+            minimum=0.0,
+        )
         self._lock = threading.RLock()
         self._updates: List[Tuple[bytes, bytes, float]] = []
         self._base_snapshot_present = False
@@ -456,9 +455,6 @@ class AdaosMemoryYStore(BaseYStore):
         self._backup_fast_path_total = 0
         self._backup_skipped_total = 0
         self._backup_failed_total = 0
-        self._backup_gc_total = 0
-        self._backup_gc_skipped_total = 0
-        self._backup_malloc_trim_total = 0
         self._backup_by_kind: dict[str, int] = {}
         self._backup_written_by_kind: dict[str, int] = {}
         self._backup_skipped_by_kind: dict[str, int] = {}
@@ -476,15 +472,13 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_backup_at = 0.0
         self._last_auto_backup_at = 0.0
         self._last_auto_backup_reason = ""
+        self._auto_backup_retry_reason = ""
         self._last_backup_kind = ""
         self._last_backup_mode = ""
         self._last_backup_skip_reason = ""
         self._last_backup_written_bytes = 0
         self._last_backup_error = ""
         self._last_backup_failed_at = 0.0
-        self._last_backup_gc_collected = 0
-        self._last_backup_gc_skip_reason = ""
-        self._last_backup_malloc_trimmed = False
         self._last_apply_at = 0.0
         self._last_loaded_from_disk_at = 0.0
         self._last_update_bytes = 0
@@ -618,6 +612,7 @@ class AdaosMemoryYStore(BaseYStore):
         self._loaded_from_disk = False
         self._running = False
         self._auto_backup_inflight = False
+        self._auto_backup_retry_reason = ""
         self._generation = 0
         self._persisted_generation = -1
         self._persisted_snapshot_bytes = 0
@@ -764,11 +759,30 @@ class AdaosMemoryYStore(BaseYStore):
                 and self.auto_backup_large_update_bytes > 0
                 and len(payload) >= int(self.auto_backup_large_update_bytes)
                 and not self._auto_backup_inflight
-                and (self._last_auto_backup_at <= 0.0 or now - self._last_auto_backup_at >= self.auto_backup_cooldown_sec)
             ):
+                cooldown_remaining = (
+                    0.0
+                    if self._last_auto_backup_at <= 0.0
+                    else max(0.0, float(self.auto_backup_cooldown_sec) - (now - self._last_auto_backup_at))
+                )
                 self._auto_backup_inflight = True
                 auto_backup_reason = "large_update"
-                auto_backup_debounce_override = float(self.auto_backup_large_update_debounce_sec)
+                auto_backup_debounce_override = float(self.auto_backup_large_update_debounce_sec) + cooldown_remaining
+            if (
+                auto_backup_reason is None
+                and self.auto_backup_after_compact
+                and not self._auto_backup_inflight
+            ):
+                pressure_reason = self._replay_pressure_reason_locked()
+                if pressure_reason:
+                    cooldown_remaining = (
+                        0.0
+                        if self._last_auto_backup_at <= 0.0
+                        else max(0.0, float(self.auto_backup_cooldown_sec) - (now - self._last_auto_backup_at))
+                    )
+                    self._auto_backup_inflight = True
+                    auto_backup_reason = pressure_reason
+                    auto_backup_debounce_override = float(self.auto_backup_replay_pressure_debounce_sec) + cooldown_remaining
             self._generation += 1
         if notify:
             try:
@@ -889,6 +903,24 @@ class AdaosMemoryYStore(BaseYStore):
             return 0
         start_idx = 1 if self._base_snapshot_present and len(snapshot) > 0 else 0
         return sum(len(update) for update, _meta, _ts in snapshot[start_idx:])
+
+    def _replay_pressure_reason_locked(self) -> str | None:
+        replay_entries = max(
+            0,
+            len(self._updates) - (1 if self._base_snapshot_present and self._updates else 0),
+        )
+        replay_bytes = self._replay_window_bytes_locked()
+        pressure_by_entries = (
+            self.auto_backup_replay_pressure_entries > 0
+            and replay_entries >= int(self.auto_backup_replay_pressure_entries)
+        )
+        pressure_by_bytes = (
+            self.auto_backup_replay_pressure_bytes > 0
+            and replay_bytes >= int(self.auto_backup_replay_pressure_bytes)
+        )
+        if replay_entries > 0 and (pressure_by_entries or pressure_by_bytes):
+            return "replay_pressure"
+        return None
 
     def _replay_compaction_reason_locked(self) -> str | None:
         total = len(self._updates)
@@ -1064,8 +1096,21 @@ class AdaosMemoryYStore(BaseYStore):
                     exc_info=True,
                 )
             finally:
+                retry_reason = ""
                 with self._lock:
                     self._auto_backup_inflight = False
+                    retry_reason = self._auto_backup_retry_reason
+                    self._auto_backup_retry_reason = ""
+                    if retry_reason:
+                        self._auto_backup_inflight = True
+                if retry_reason:
+                    scheduled = self._schedule_auto_backup(
+                        reason=retry_reason,
+                        debounce_sec=float(self.auto_backup_replay_pressure_debounce_sec),
+                    )
+                    if not scheduled:
+                        with self._lock:
+                            self._auto_backup_inflight = False
 
         try:
             loop = asyncio.get_running_loop()
@@ -1217,27 +1262,41 @@ class AdaosMemoryYStore(BaseYStore):
                 self._last_auto_backup_at = now
                 self._last_auto_backup_reason = str(backup_kind_token.partition(":")[2] or "").strip()
             compacted_runtime = False
+            compacted_tail_entries = 0
             if (
                 compact_runtime
                 and (written_bytes or skip_write)
                 and snapshot
-                and self._generation == generation
-                and (
-                    len(self._updates) != 1
-                    or not self._base_snapshot_present
-                    or bytes(self._updates[0][0] or b"") != bytes(snapshot)
-                )
             ):
-                self._updates = [(bytes(snapshot), metadata, now)]
-                self._base_snapshot_present = True
-                self._base_state_vector = bytes(snapshot_state_vector or b"") or None
-                self._compact_total += 1
-                self._last_compact_at = now
-                self._last_compact_reason = "backup_compaction"
-                self._generation += 1
-                compacted_runtime = True
+                current_updates = list(self._updates)
+                appended_tail: list[tuple[bytes, bytes, float]] = []
+                prefix_matches = self._generation == generation
+                if not prefix_matches and len(current_updates) >= len(updates):
+                    prefix_matches = all(
+                        bytes(current_updates[idx][0] or b"") == bytes(update[0] or b"")
+                        and bytes(current_updates[idx][1] or b"") == bytes(update[1] or b"")
+                        for idx, update in enumerate(updates)
+                    )
+                    if prefix_matches:
+                        appended_tail = list(current_updates[len(updates) :])
+                already_compacted = bool(
+                    not appended_tail
+                    and len(current_updates) == 1
+                    and self._base_snapshot_present
+                    and bytes(current_updates[0][0] or b"") == bytes(snapshot)
+                )
+                if prefix_matches and not already_compacted:
+                    self._updates = [(bytes(snapshot), metadata, now), *appended_tail]
+                    self._base_snapshot_present = True
+                    self._base_state_vector = (bytes(snapshot_state_vector or b"") or None) if not appended_tail else None
+                    self._compact_total += 1
+                    self._last_compact_at = now
+                    self._last_compact_reason = "backup_compaction" if not appended_tail else "backup_prefix_compaction"
+                    self._generation += 1
+                    compacted_runtime = True
+                    compacted_tail_entries = len(appended_tail)
             if compacted_runtime:
-                self._persisted_generation = int(self._generation)
+                self._persisted_generation = generation if compacted_tail_entries else int(self._generation)
                 self._persisted_snapshot_bytes = len(snapshot)
             elif skip_write:
                 self._persisted_generation = generation
@@ -1258,34 +1317,10 @@ class AdaosMemoryYStore(BaseYStore):
                 # Keep the last auto-backup reason observable even when concurrent
                 # writes made runtime-side collapse unsafe for this round.
                 self._last_auto_backup_reason = self._last_auto_backup_reason
-        if compacted_runtime:
-            gc_collected = 0
-            gc_skip_reason = ""
-            gc_attempted = bool(_env_flag("ADAOS_YSTORE_BACKUP_FORCE_GC", _YSTORE_BACKUP_FORCE_GC))
-            if gc_attempted:
-                try:
-                    gc_collected = int(gc.collect() or 0)
-                except BaseException as exc:
-                    if _is_fatal_base_exception(exc):
-                        raise
-                    gc_collected = 0
-                    gc_skip_reason = f"error:{type(exc).__name__}:{exc}"[:500]
-            else:
-                gc_skip_reason = "disabled:ADAOS_YSTORE_BACKUP_FORCE_GC"
-            try:
-                malloc_trimmed = _trim_allocator_after_backup_compaction()
-            except Exception:
-                malloc_trimmed = False
-            with self._lock:
-                if gc_attempted:
-                    self._backup_gc_total += 1
-                else:
-                    self._backup_gc_skipped_total += 1
-                self._last_backup_gc_collected = int(gc_collected)
-                self._last_backup_gc_skip_reason = gc_skip_reason
-                self._last_backup_malloc_trimmed = bool(malloc_trimmed)
-                if malloc_trimmed:
-                    self._backup_malloc_trim_total += 1
+            if backup_kind_token.startswith("auto_after_compact:"):
+                retry_reason = self._replay_pressure_reason_locked()
+                if retry_reason:
+                    self._auto_backup_retry_reason = retry_reason
 
     def runtime_snapshot(self, *, now_ts: float | None = None) -> dict[str, Any]:
         now = time.time() if now_ts is None else float(now_ts)
@@ -1344,9 +1379,6 @@ class AdaosMemoryYStore(BaseYStore):
             "backup_fast_path_total": int(self._backup_fast_path_total),
             "backup_skipped_total": int(self._backup_skipped_total),
             "backup_failed_total": int(self._backup_failed_total),
-            "backup_gc_total": int(self._backup_gc_total),
-            "backup_gc_skipped_total": int(self._backup_gc_skipped_total),
-            "backup_malloc_trim_total": int(self._backup_malloc_trim_total),
             "backup_by_kind": _top_counts(dict(self._backup_by_kind)),
             "backup_written_by_kind": _top_counts(dict(self._backup_written_by_kind)),
             "backup_skipped_by_kind": _top_counts(dict(self._backup_skipped_by_kind)),
@@ -1364,7 +1396,12 @@ class AdaosMemoryYStore(BaseYStore):
             "auto_backup_debounce_sec": float(self.auto_backup_debounce_sec),
             "auto_backup_large_update_bytes": int(self.auto_backup_large_update_bytes),
             "auto_backup_large_update_debounce_sec": float(self.auto_backup_large_update_debounce_sec),
+            "auto_backup_replay_pressure_bytes": int(self.auto_backup_replay_pressure_bytes),
+            "auto_backup_replay_pressure_entries": int(self.auto_backup_replay_pressure_entries),
+            "auto_backup_replay_pressure_debounce_sec": float(self.auto_backup_replay_pressure_debounce_sec),
             "auto_backup_inflight": bool(self._auto_backup_inflight),
+            "auto_backup_retry_pending": bool(self._auto_backup_retry_reason),
+            "auto_backup_retry_reason": self._auto_backup_retry_reason or None,
             "snapshot_file_exists": bool(snapshot_exists),
             "snapshot_file_size": int(snapshot_size),
             "persisted_generation": int(self._persisted_generation) if self._persisted_generation >= 0 else None,
@@ -1389,9 +1426,6 @@ class AdaosMemoryYStore(BaseYStore):
             "last_backup_failed_ago_s": round(max(0.0, now - self._last_backup_failed_at), 3)
             if self._last_backup_failed_at
             else None,
-            "last_backup_gc_collected": int(self._last_backup_gc_collected),
-            "last_backup_gc_skip_reason": self._last_backup_gc_skip_reason or None,
-            "last_backup_malloc_trimmed": bool(self._last_backup_malloc_trimmed),
             "last_apply_update_total": int(self._last_apply_update_total),
             "last_apply_bytes": int(self._last_apply_bytes),
             "last_apply_yield_total": int(self._last_apply_yield_total),

@@ -7,6 +7,15 @@ human-signal -> Issue -> Builder -> release -> runtime-evidence loop is defined
 by [Governed Evolution](governed-evolution.md); its cross-domain proof order is
 tracked in the [Governed Evolution Roadmap](governed-evolution-roadmap.md).
 
+Implementation alignment (2026-07-24): the single-user Builder delivery path
+now uses immutable source checkpoints, component packages, a dependency-locked
+project release, an isolated candidate trial, explicit acceptance, and
+transactional Workspace activation. Builder assigns a distinct `change_id` to
+every Automation iteration and never automatically repeats an uncertain
+state-changing phase. See the
+[Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
+and its [local evidence](artifact-pipeline-local-evidence-2026-07-24.md).
+
 AdaOS Builder is the role and workflow that turns an idea into governed AdaOS
 artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests, and
 runtime-ready changes.
@@ -54,7 +63,8 @@ The Builder owns the development path for:
 - new scenarios
 - updates to scenario flows, bindings, and desktop surfaces
 - `webui.json` UI descriptors and browser-facing data contracts
-- `skill.yaml` and `scenario.json` / `scenario.yaml` metadata
+- `skill.yaml` and canonical `scenario.yaml` metadata; `scenario.json` is a
+  derived compatibility projection and is never the version authority
 - NLU hints, examples, aliases, and descriptor fixes
 - tests, smoke checks, runtime validation evidence, and release notes
 
@@ -104,6 +114,50 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
     evidence.
 12. **Observe and repair**: guard, quarantine, NLU Teacher, status, and
     runtime diagnostics feed new Builder tasks when the design needs repair.
+
+## Prototype And Automation Workflow
+
+Builder has one mutable process at a time. `Prototype` and `Automation` are
+the only possible values of `workflow.active_phase`; `Publication` is an
+immutable release snapshot and is never an active editing phase. The
+authoritative persisted contract is `adaos.builder.workflow.v1` in the DEV
+project's `prompt_state.json`.
+
+Lifecycle selection, workflow state, and Preview are independent:
+
+- selecting a Lifecycle node only changes local Builder navigation;
+- `workflow.active_phase` controls which conversation and files may be edited;
+- `preview_target` controls what the paired Preview renders and may point to a
+  read-only snapshot that is different from the active process.
+
+The supported transitions are:
+
+| From | Action | To | Durable effect |
+| --- | --- | --- | --- |
+| Prototype | hand off/start Automation | Automation | current Prototype head becomes frozen input |
+| Automation working | Automation completes | Automation completed | replace the single retained Automation snapshot |
+| Automation completed/failed | submit another Automation turn | Automation working | reopen the same Automation process with a new iteration and task id |
+| Automation completed | publish | Automation completed | create or replace the current Publication snapshot |
+| Automation completed | return to Prototype | Prototype | built-in LLM derives a new safe Prototype revision |
+
+Returning to Prototype does not thaw or overwrite the completed Automation.
+The local realization worker receives the retained Automation as immutable
+input, may edit only scenario-facing declarative prototype files, and is
+rejected if it changes the companion skill or the retained snapshot. Real
+tool, service, credential, device, external-network, and production-data
+bindings are removed from the new Prototype and replaced with bounded local
+state or mock data. A later handoff receives both that Prototype as the current
+requirement and the retained Automation as its previous implementation.
+If adaptation fails, Builder records the adaptation diagnostic and restores
+the retained Automation to `completed`; the failed side process never
+invalidates the last working implementation or Publication snapshot.
+
+Only one Automation snapshot is retained under Builder runtime state; a new
+completed Automation replaces it. It is not copied into the published
+scenario. Historical implementation recovery remains a Forge/VCS concern.
+
+The scenario version source of truth is `scenario.yaml`. Compatibility
+`scenario.json` content must not override its lifecycle or publication version.
 
 ## Relationship To Skills
 
@@ -514,13 +568,14 @@ Forge commits contain:
 - allowlisted `AdaOS-Change-Id`, conversation/topic/thread, revision, model,
   request/result, and source-message trailers.
 
-Forge never stores the full transcript as commit metadata. During
-`adaos dev scenario|skill update`, core resolves the latest commit for the
-artifact path, parses these trailers, and reconciles the local Builder Change.
-If the referenced project thread is empty, core may recover a request/result
-pair from `ui_revisions/NNN.json`; recovered messages are explicitly marked
-`source=forge_recovery` and are idempotent. Existing chat always wins over this
-fallback.
+Forge never stores the full transcript as commit metadata. The former
+`adaos dev scenario|skill update` draft pull is retired: it replaced the DEV
+tree from a mutable remote draft and could erase unrelated local work. Builder
+reconciliation now occurs at an exact checkpoint or explicit exact-base
+rebase/migration boundary. Historical trailer and `ui_revisions/NNN.json`
+recovery remains available only to that bounded reconciliation path; it is not
+an implicit source update. Recovered messages are marked
+`source=forge_recovery`, are idempotent, and never replace existing chat.
 
 ## Prompt IDE And Dev Webspace
 

@@ -26,6 +26,13 @@ _YJS_PATTERNS = (
     "encode_state_vector",
     "get_ydoc",
 )
+_DIRECT_PROJECTION_WRITE_CALLS = {
+    "adaos.services.yjs.doc.async_get_ydoc",
+    "adaos.services.yjs.doc.get_ydoc",
+    "adaos.services.yjs.doc.mutate_live_room",
+    "adaos.services.yjs.gateway.mutate_live_room",
+    "y_py.apply_update",
+}
 _TRANSCRIPT_FILE_RE = re.compile(r"(transcript|chat_history|conversation_history|voice_chat|dialog_history)", re.I)
 _UNBOUNDED_NAME_RE = re.compile(r"(cache|history|histories|events|logs|frames|sessions|state|buffer|queue|transcript)", re.I)
 _TRANSPORT_MEMORY_PATTERNS = (
@@ -200,6 +207,7 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
     issues.extend(validate_data_route_contract(data))
     issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
+    issues.extend(_direct_projection_write_issues(skill_dir))
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
     return issues
@@ -300,6 +308,66 @@ def _sdk_only_import_issues(skill_dir: Path, *, manifest: Dict[str, Any]) -> Lis
                             rel,
                         )
                     )
+    return issues
+
+
+def _ast_dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _ast_dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _direct_projection_write_issues(skill_dir: Path) -> List[Issue]:
+    """Warn when skill code bypasses projection/SDK ownership for Yjs writes."""
+
+    issues: List[Issue] = []
+    for path in sorted(skill_dir.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        rel = _relative_to(path, skill_dir)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+
+        symbol_aliases: dict[str, str] = {}
+        module_aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    local = alias.asname or alias.name.split(".", 1)[0]
+                    module_aliases[local] = alias.name
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                for alias in node.names:
+                    symbol_aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+
+        violations: list[tuple[int, str]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = _ast_dotted_name(node.func)
+            resolved = symbol_aliases.get(called, called)
+            root, dot, suffix = resolved.partition(".")
+            if resolved not in _DIRECT_PROJECTION_WRITE_CALLS and dot and root in module_aliases:
+                resolved = f"{module_aliases[root]}.{suffix}"
+            if resolved in _DIRECT_PROJECTION_WRITE_CALLS:
+                violations.append((int(getattr(node, "lineno", 0) or 0), resolved))
+        if not violations:
+            continue
+        first_line = min(line for line, _call in violations if line > 0)
+        calls = ", ".join(sorted({call for _line, call in violations}))
+        issues.append(
+            Issue(
+                "warning",
+                "projection.direct_yjs_write",
+                "direct write-capable Yjs access bypasses the declared projection contract "
+                f"({calls}); use ctx_* setters/ProjectionService, or adaos.sdk.web.yjs for non-projection access",
+                f"{rel}:{first_line}",
+            )
+        )
     return issues
 
 
@@ -429,7 +497,7 @@ def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, A
             if pattern in text:
                 issues.append(
                     Issue(
-                        "error",
+                        "error" if install_mode else "warning",
                         "conversation.unsafe_direct_yjs",
                         f"direct Yjs symbol used: {pattern}; generated skills must use declared projections/routes",
                         rel,

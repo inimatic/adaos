@@ -160,7 +160,7 @@ import logging
 import platform, time
 import signal
 import sys
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 def _maybe_set_windows_selector_loop() -> None:
@@ -314,6 +314,72 @@ async def _cancel_background_task(task: asyncio.Task[Any] | None, *, timeout: fl
         pass
     except Exception:
         _startup_log.warning("background startup task did not stop cleanly", exc_info=True)
+
+
+def _artifact_observation_poll_seconds() -> float:
+    try:
+        value = float(os.getenv("ADAOS_ARTIFACT_OBSERVATION_POLL_SEC", "15"))
+    except (TypeError, ValueError):
+        value = 15.0
+    return min(300.0, max(1.0, value))
+
+
+async def _artifact_delayed_verification_worker(ctx: Any) -> None:
+    from adaos.services.artifact_pipeline import (
+        ContentAddressedPackageStore,
+        WorkspaceActivationManager,
+    )
+
+    state_root = Path(ctx.paths.state_dir()) / "artifact_pipeline"
+    manager = WorkspaceActivationManager(
+        workspace_root=Path(ctx.paths.workspace_dir()),
+        package_store=ContentAddressedPackageStore(state_root / "packages"),
+        state_root=state_root / "activation",
+    )
+    interval = _artifact_observation_poll_seconds()
+    while True:
+        try:
+            results = await asyncio.to_thread(
+                manager.run_due_delayed_verifications,
+                limit=32,
+            )
+            for result in results:
+                status = str(result.get("status") or "unknown")
+                payload = {
+                    "observation_id": result.get("observation_id"),
+                    "status": status,
+                    "expected_lock_digest": result.get("expected_lock_digest"),
+                    "observed_lock_digest": result.get("observed_lock_digest"),
+                    "error": result.get("error"),
+                }
+                try:
+                    ctx.bus.publish(
+                        DomainEvent(
+                            type="artifact.activation.observed",
+                            payload=payload,
+                            source="artifact.activation",
+                        )
+                    )
+                except Exception:
+                    _startup_log.debug(
+                        "failed to emit delayed artifact verification event",
+                        exc_info=True,
+                    )
+                if status == "failed":
+                    _startup_log.warning(
+                        "delayed artifact verification failed observation_id=%s lock=%s error=%s",
+                        result.get("observation_id"),
+                        result.get("expected_lock_digest"),
+                        result.get("error"),
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _startup_log.warning(
+                "delayed artifact verification scan failed",
+                exc_info=True,
+            )
+        await asyncio.sleep(interval)
 from adaos.services.runtime_memory_profile import finish_active_runtime_memory_profile
 from adaos.services.root_mcp.logs import aggregate_subnet_logs, list_local_logs, normalize_log_category
 from adaos.services.root_mcp.service import invoke_tool as invoke_root_mcp_tool
@@ -439,6 +505,10 @@ async def _emit_shutdown_event(event_type: str, payload: dict[str, Any], *, drai
 async def _request_process_shutdown(delay_sec: float = _DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC) -> None:
     await asyncio.sleep(max(0.0, float(delay_sec)))
     signal.raise_signal(signal.SIGINT)
+
+
+def _shutdown_emits_subnet_lifecycle(app: FastAPI) -> bool:
+    return str(getattr(app.state, "shutdown_lifecycle_scope", "subnet") or "subnet") != "runtime_retire"
 
 
 async def _run_core_update_shutdown(app: FastAPI, *, reason: str, drain_timeout_sec: float, signal_delay_sec: float) -> None:
@@ -723,7 +793,7 @@ async def lifespan(app: FastAPI):
     # 1) инициализируем AgentContext (публикуется через set_ctx внутри bootstrap_app)
 
     # 2) только теперь импортируем то, что может косвенно дернуть контекст
-    from adaos.apps.api import tool_bridge, subnet_api, observe_api, node_api, scenarios, root_endpoints, skills, stt_api, nlu_teacher_api, join_api, personalization, redevice_api
+    from adaos.apps.api import tool_bridge, subnet_api, observe_api, node_api, operations, release_validation, scenarios, root_endpoints, skills, stt_api, nlu_teacher_api, join_api, personalization, redevice_api
     from adaos.apps.api import builder as builder_api
     from adaos.apps.api import io_webhooks
     from adaos.services.yjs.gateway import router as y_router, start_y_server, stop_y_server
@@ -739,6 +809,8 @@ async def lifespan(app: FastAPI):
     app.include_router(join_api.router, prefix="/api")
     app.include_router(personalization.router, prefix="/api")
     app.include_router(observe_api.router, prefix="/api/observe")
+    app.include_router(operations.router, prefix="/api/operations")
+    app.include_router(release_validation.router, prefix="/api/release-validation")
     app.include_router(scenarios.router, prefix="/api/scenarios")
     app.include_router(skills.router, prefix="/api/skills")
     app.include_router(stt_api.router, prefix="/api")
@@ -758,9 +830,11 @@ async def lifespan(app: FastAPI):
         app.state.shutdown_requested = False
         app.state.shutdown_reason = "signal"
         app.state.shutdown_drain_timeout = _DEFAULT_SHUTDOWN_DRAIN_SEC
+        app.state.shutdown_lifecycle_scope = "subnet"
         app.state.shutdown_stopping_emitted = False
         reset_runtime_lifecycle()
         app.state.core_update_task = None
+        app.state.artifact_delayed_verification_task = None
         app.state.restart_marker = _consume_restart_marker(os.getenv("ADAOS_SELF_BASE_URL"))
         app.state.realtime_sidecar_proc = None
         app.state.status_registry = app.state.ctx.status_registry
@@ -777,6 +851,17 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(BuilderProjectCatalogService.from_context().list_projects, limit=5000)
     except Exception:
         logging.getLogger("adaos.api.server").debug("failed to prewarm Builder project catalog", exc_info=True)
+
+    try:
+        from adaos.services.scenario.webspace_runtime import prewarm_webspace_materialization_sources
+
+        with _StartupTimer("prewarm_webspace_materialization_sources"):
+            await prewarm_webspace_materialization_sources()
+    except Exception:
+        logging.getLogger("adaos.api.server").debug(
+            "failed to prewarm webspace materialization sources",
+            exc_info=True,
+        )
 
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
@@ -1103,6 +1188,17 @@ async def lifespan(app: FastAPI):
         )
 
     try:
+        app.state.artifact_delayed_verification_task = asyncio.create_task(
+            _artifact_delayed_verification_worker(get_ctx()),
+            name="artifact-delayed-verification",
+        )
+    except Exception:
+        logging.getLogger("adaos.artifact.activation").warning(
+            "failed to start delayed artifact verification worker",
+            exc_info=True,
+        )
+
+    try:
         yield
     finally:
         try:
@@ -1120,8 +1216,17 @@ async def lifespan(app: FastAPI):
         finally:
             app.state.runtime_event_loop_lag_task = None
         try:
+            await _cancel_background_task(
+                getattr(app.state, "artifact_delayed_verification_task", None)
+            )
+        finally:
+            app.state.artifact_delayed_verification_task = None
+        try:
             conf = get_ctx().config
-            if not getattr(app.state, "shutdown_stopping_emitted", False):
+            if (
+                _shutdown_emits_subnet_lifecycle(app)
+                and not getattr(app.state, "shutdown_stopping_emitted", False)
+            ):
                 await _emit_shutdown_event(
                     "subnet.stopping",
                     {
@@ -1141,7 +1246,11 @@ async def lifespan(app: FastAPI):
             pass
         # On graceful shutdown, notify Telegram and UI if enabled
         try:
-            if tg_enabled and str(getattr(app.state, "shutdown_reason", "signal") or "signal") != "cli.restart":
+            if (
+                _shutdown_emits_subnet_lifecycle(app)
+                and tg_enabled
+                and str(getattr(app.state, "shutdown_reason", "signal") or "signal") != "cli.restart"
+            ):
                 conf = get_ctx().config
                 ctx = _get_ctx()
                 api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
@@ -1187,15 +1296,16 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         try:
-            conf = get_ctx().config
-            await _emit_shutdown_event(
-                "subnet.stopped",
-                {
-                    "subnet_id": conf.subnet_id,
-                    "reason": getattr(app.state, "shutdown_reason", "signal"),
-                },
-                drain_timeout=float(getattr(app.state, "shutdown_drain_timeout", _DEFAULT_SHUTDOWN_DRAIN_SEC)),
-            )
+            if _shutdown_emits_subnet_lifecycle(app):
+                conf = get_ctx().config
+                await _emit_shutdown_event(
+                    "subnet.stopped",
+                    {
+                        "subnet_id": conf.subnet_id,
+                        "reason": getattr(app.state, "shutdown_reason", "signal"),
+                    },
+                    drain_timeout=float(getattr(app.state, "shutdown_drain_timeout", _DEFAULT_SHUTDOWN_DRAIN_SEC)),
+                )
         except Exception:
             pass
         try:
@@ -1304,6 +1414,7 @@ class ShutdownRequest(BaseModel):
     reason: str = Field(default="cli.stop", min_length=1, max_length=128)
     drain_timeout_sec: float = Field(default=_DEFAULT_SHUTDOWN_DRAIN_SEC, ge=0.0, le=30.0)
     signal_delay_sec: float = Field(default=_DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC, ge=0.0, le=5.0)
+    lifecycle_scope: Literal["subnet", "runtime_retire"] = "subnet"
 
 
 class ShutdownResponse(BaseModel):
@@ -1464,6 +1575,7 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
     app.state.shutdown_requested = True
     app.state.shutdown_reason = body.reason
     app.state.shutdown_drain_timeout = float(body.drain_timeout_sec)
+    app.state.shutdown_lifecycle_scope = body.lifecycle_scope
     profile_mode = str(os.getenv("ADAOS_SUPERVISOR_PROFILE_MODE") or "normal").strip().lower()
     shutdown_debug_payload: dict[str, Any] = {
         "entered_at": time.time(),
@@ -1506,15 +1618,21 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
                 "runtime memory profile finalize during admin shutdown did not complete result=%s",
                 finish_result,
             )
-    stopping_payload = {
-        "subnet_id": conf.subnet_id,
-        "reason": body.reason,
-    }
-    await _emit_shutdown_event(
-        "subnet.stopping",
-        stopping_payload,
-        drain_timeout=body.drain_timeout_sec,
-    )
+    if _shutdown_emits_subnet_lifecycle(app):
+        stopping_payload = {
+            "subnet_id": conf.subnet_id,
+            "reason": body.reason,
+        }
+        await _emit_shutdown_event(
+            "subnet.stopping",
+            stopping_payload,
+            drain_timeout=body.drain_timeout_sec,
+        )
+    else:
+        _runtime_log.info(
+            "runtime-scoped shutdown skips subnet lifecycle events reason=%s",
+            body.reason,
+        )
     app.state.shutdown_stopping_emitted = True
     background.add_task(_request_process_shutdown, body.signal_delay_sec)
     return ShutdownResponse(
@@ -1549,7 +1667,31 @@ async def admin_drain(body: DrainRequest):
 
 @app.get("/api/admin/lifecycle", dependencies=[Depends(require_token)])
 async def admin_lifecycle():
-    return {"ok": True, "lifecycle": runtime_lifecycle_snapshot(), "runtime": _runtime_identity_public_payload()}
+    task = getattr(app.state, "artifact_delayed_verification_task", None)
+    if task is None:
+        observation_worker = {"status": "not_started"}
+    elif task.cancelled():
+        observation_worker = {"status": "cancelled"}
+    elif not task.done():
+        observation_worker = {
+            "status": "running",
+            "poll_seconds": _artifact_observation_poll_seconds(),
+        }
+    else:
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            error = None
+        observation_worker = {
+            "status": "failed" if error is not None else "completed",
+            "error": f"{type(error).__name__}: {error}" if error is not None else None,
+        }
+    return {
+        "ok": True,
+        "lifecycle": runtime_lifecycle_snapshot(),
+        "runtime": _runtime_identity_public_payload(),
+        "artifact_delayed_verification": observation_worker,
+    }
 
 
 @app.get("/api/admin/root_mcp/logs/{category}", dependencies=[Depends(require_token)])
@@ -1845,13 +1987,56 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             "reconnect": None,
         }
 
+    handoff_unit: dict[str, Any] | None = None
+    try:
+        from adaos.services.autostart import ensure_linux_process_handoff_unit
+
+        handoff_unit = ensure_linux_process_handoff_unit()
+    except Exception as exc:
+        handoff_unit = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+    if (
+        sys.platform.startswith("linux")
+        and _truthy_value(os.getenv("ADAOS_AUTOSTART_MANAGED"))
+        and not bool((handoff_unit or {}).get("ok"))
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "error": "supervisor_handoff_unit_unavailable",
+                "handoff_unit": handoff_unit,
+            },
+        )
     os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = "active"
     reconnect_result: dict[str, Any] | None = None
     if bool(body.reconnect_hub_root):
         try:
-            reconnect_result = await request_hub_root_reconnect()
+            node_role = str(getattr(get_ctx().config, "role", "hub") or "hub").strip().lower()
+        except Exception:
+            node_role = "hub"
+        hub_root_authority_required = node_role == "hub"
+        try:
+            reconnect_result = await request_hub_root_reconnect(
+                wait_for_authority=hub_root_authority_required
+            )
         except Exception as exc:
             reconnect_result = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+        authority = (
+            reconnect_result.get("authority")
+            if isinstance(reconnect_result, dict) and isinstance(reconnect_result.get("authority"), dict)
+            else {}
+        )
+        if not bool((reconnect_result or {}).get("ok")) or (
+            hub_root_authority_required and authority.get("ready") is not True
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "ok": False,
+                    "error": "hub_root_authority_not_ready",
+                    "reconnect": reconnect_result,
+                },
+            )
     service_start = _schedule_promoted_runtime_service_start(body.reason)
     return {
         "ok": True,
@@ -1861,6 +2046,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         "runtime": _runtime_identity_public_payload(),
         "reconnect": reconnect_result,
         "service_start": service_start,
+        "supervisor_handoff_unit": handoff_unit,
     }
 
 
@@ -1908,6 +2094,7 @@ async def status():
         "adaos": {
             "version": BUILD_INFO.version,
             "build_date": BUILD_INFO.build_date,
+            "git_commit": getattr(BUILD_INFO, "git_commit", ""),
         },
         "lifecycle": runtime_lifecycle_snapshot(),
         "runtime": _runtime_identity_public_payload(),
@@ -2083,11 +2270,25 @@ async def io_console_print(payload: SayRequestLike):
 # --- health endpoints (без авторизации; удобно для оркестраторов/проб) ---
 @app.get("/health/live")
 async def health_live():
-    return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
+    return {
+        "ok": True,
+        "adaos": {
+            "version": BUILD_INFO.version,
+            "build_date": BUILD_INFO.build_date,
+            "git_commit": getattr(BUILD_INFO, "git_commit", ""),
+        },
+    }
 
 
 @app.get("/health/ready")
 async def health_ready():
     if not is_ready() or is_draining():
         raise HTTPException(status_code=503, detail="not ready")
-    return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
+    return {
+        "ok": True,
+        "adaos": {
+            "version": BUILD_INFO.version,
+            "build_date": BUILD_INFO.build_date,
+            "git_commit": getattr(BUILD_INFO, "git_commit", ""),
+        },
+    }

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from typing import Any, Mapping
 
@@ -12,7 +11,6 @@ import y_py as Y
 from adaos.services.yjs.seed import SEED
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.agent_context import get_ctx
-from adaos.services.eventbus import emit
 from adaos.services.node_config import load_config
 from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.scenario.manager import ScenarioManager
@@ -20,23 +18,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.yjs.store import AdaosMemoryYStore, get_ystore_for_webspace, ystore_write_metadata
 
 _log = logging.getLogger("adaos.yjs.bootstrap")
-_BOOTSTRAP_REBUILD_NUDGE_LAST: dict[tuple[str, str], float] = {}
 BOOTSTRAP_RUNTIME_KEY = "bootstrap"
-
-
-def _bootstrap_rebuild_nudge_min_interval_s() -> float:
-    raw = str(os.getenv("ADAOS_YJS_BOOTSTRAP_REBUILD_NUDGE_MIN_INTERVAL_S") or "").strip()
-    if not raw:
-        return 30.0
-    try:
-        value = float(raw)
-    except Exception:
-        return 30.0
-    if value < 0.0:
-        return 0.0
-    if value > 300.0:
-        return 300.0
-    return value
 
 
 def _scenario_manager() -> ScenarioManager:
@@ -232,41 +214,6 @@ def _has_projected_scenario_seed(ui_map: Any, data_map: Any, scenario_id: str) -
     return bool(catalog or "catalog" in scenario_data)
 
 
-def _emit_bootstrap_rebuild_nudge(webspace_id: str, scenario_id: str, *, force: bool = False) -> bool:
-    effective_webspace_id = str(webspace_id or "").strip() or default_webspace_id()
-    effective_scenario_id = str(scenario_id or "").strip() or "web_desktop"
-    now = time.time()
-    key = (effective_webspace_id, effective_scenario_id)
-    min_interval_s = _bootstrap_rebuild_nudge_min_interval_s()
-    last_at = float(_BOOTSTRAP_REBUILD_NUDGE_LAST.get(key) or 0.0)
-    if min_interval_s > 0.0 and last_at > 0.0 and now - last_at < min_interval_s:
-        _log.debug(
-            "suppressed repeated bootstrap rebuild nudge webspace=%s scenario=%s age_s=%.3f min_interval_s=%.3f force=%s",
-            effective_webspace_id,
-            effective_scenario_id,
-            now - last_at,
-            min_interval_s,
-            bool(force),
-        )
-        return False
-    _BOOTSTRAP_REBUILD_NUDGE_LAST[key] = now
-    ctx = get_ctx()
-    emit(
-        ctx.bus,
-        "scenarios.synced",
-        {
-            "scenario_id": effective_scenario_id,
-            "webspace_id": effective_webspace_id,
-            "origin": "yjs.bootstrap",
-            "bootstrap_nudge": True,
-            "force": bool(force),
-            "emitted_at": now,
-        },
-        "yjs.bootstrap",
-    )
-    return True
-
-
 def _project_seed_payload_to_compat_branches(ydoc: Y.YDoc, *, scenario_id: str) -> None:
     application = _clone_json_like(_seed_application_payload())
     registry_payload = _clone_json_like(_seed_registry_payload())
@@ -313,12 +260,53 @@ def _project_seed_payload_to_compat_branches(ydoc: Y.YDoc, *, scenario_id: str) 
 
 def _project_runtime_environment(ydoc: Y.YDoc) -> bool:
     runtime_map = ydoc.get_map("runtime")
-    payload = runtime_environment_payload()
-    if _coerce_dict(runtime_map.get("environment") or {}) == payload:
+    current = _coerce_dict(runtime_map.get("environment") or {})
+    payload = dict(current)
+    payload.update(runtime_environment_payload())
+    if current == payload:
         return False
     with ydoc.begin_transaction() as txn:
         runtime_map.set(txn, "environment", _clone_json_like(payload))
     return True
+
+
+def _persisted_effective_state_ready(ydoc: Y.YDoc, *, scenario_id: str) -> bool:
+    """Validate a materialized snapshot without decoding its large branches."""
+
+    expected = str(scenario_id or "").strip()
+    if not expected:
+        return False
+    try:
+        ui_map = ydoc.get_map("ui")
+        runtime_map = ydoc.get_map("runtime")
+        current = str(ui_map.get("current_scenario") or "").strip()
+        environment = _coerce_dict(runtime_map.get("environment") or {})
+        materialization = _coerce_dict(environment.get("materialization") or {})
+        materialized = str(materialization.get("scenario_id") or "").strip()
+        bootstrap = _coerce_dict(runtime_map.get(BOOTSTRAP_RUNTIME_KEY) or {})
+        bootstrap_scenario = str(bootstrap.get("scenario_id") or "").strip()
+        if current != expected or materialized != expected:
+            return False
+        if not bool(bootstrap.get("ready")) or bootstrap_scenario != expected:
+            return False
+        required = materialization.get("required_branches")
+        if not isinstance(required, list) or not required:
+            return False
+        root_keys: dict[str, set[str]] = {}
+        for raw_path in required:
+            parts = [part for part in str(raw_path or "").split(".") if part]
+            if len(parts) != 2:
+                return False
+            root_name, key = parts
+            keys = root_keys.get(root_name)
+            if keys is None:
+                keys = {str(item) for item in ydoc.get_map(root_name).keys()}
+                root_keys[root_name] = keys
+            if key not in keys:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def _encode_bootstrap_diff(ydoc: Y.YDoc, before_state_vector: bytes | None) -> bytes | None:
@@ -379,9 +367,9 @@ async def ensure_webspace_seeded_from_scenario(
     default_scenario_id: str = "web_desktop",
     *,
     space: str = "workspace",
-    emit_event: bool = True,
     ydoc: Y.YDoc | None = None,
     prefer_default_scenario: bool = False,
+    seed_if_missing: bool = True,
 ) -> dict[str, Any]:
     """
     If the YDoc has no ui.application yet, try to seed it from a scenario
@@ -395,11 +383,11 @@ async def ensure_webspace_seeded_from_scenario(
         "space": str(space or "").strip() or "workspace",
         "used_provided_ydoc": bool(ydoc is not None),
         "prefer_default_scenario": bool(prefer_default_scenario),
+        "seed_if_missing": bool(seed_if_missing),
         "mode": "unknown",
         "persisted_via": None,
         "apply_updates_ms": 0.0,
         "total_ms": 0.0,
-        "emitted_rebuild_nudge": False,
     }
 
     def _finish(mode: str) -> dict[str, Any]:
@@ -488,7 +476,6 @@ async def ensure_webspace_seeded_from_scenario(
             return False
         return True
 
-    application = ui_map.get("application")
     requested_scenario_id = _resolve_requested_scenario(
         ui_map,
         default_scenario_id,
@@ -503,6 +490,20 @@ async def ensure_webspace_seeded_from_scenario(
             ui_map.set(txn, "current_scenario", requested_scenario_id)
         current_scenario_overridden = True
         result["current_scenario_overridden"] = True
+    if not current_scenario_overridden and _persisted_effective_state_ready(
+        target_doc,
+        scenario_id=requested_scenario_id,
+    ):
+        result["persisted_effective_state_ready"] = True
+        if runtime_environment_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
+        return _finish("persisted_effective_state")
+
+    application = ui_map.get("application")
     bootstrap_marker_changed = write_runtime_bootstrap_state(
         target_doc,
         webspace_id=webspace_id,
@@ -542,6 +543,16 @@ async def ensure_webspace_seeded_from_scenario(
         )
         return _finish("already_seeded_runtime_refreshed" if runtime_environment_changed else "already_seeded")
 
+    if not seed_if_missing:
+        result["materialization_required"] = True
+        if runtime_environment_changed or bootstrap_marker_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
+        return _finish("loaded_for_materialized_payload")
+
     if not apply_updates_failed and _has_projected_scenario_seed(ui_map, data_map, requested_scenario_id):
         bootstrap_marker_changed = write_runtime_bootstrap_state(
             target_doc,
@@ -560,12 +571,10 @@ async def ensure_webspace_seeded_from_scenario(
                 before_state_vector=before_state_vector,
             )
         _log.info(
-            "webspace %s has projected scenario seed for %s; nudging semantic rebuild",
+            "webspace %s reused projected scenario seed for %s; room owner will materialize effective branches",
             webspace_id,
             requested_scenario_id,
         )
-        if emit_event:
-            result["emitted_rebuild_nudge"] = _emit_bootstrap_rebuild_nudge(webspace_id, requested_scenario_id)
         return _finish("projected_seed_reuse")
 
     try:
@@ -589,9 +598,6 @@ async def ensure_webspace_seeded_from_scenario(
                 before_state_vector=before_state_vector,
             )
             result["persisted_via"] = persisted_via
-            if emit_event:
-                _emit_bootstrap_rebuild_nudge(webspace_id, requested_scenario_id, force=True)
-                result["emitted_rebuild_nudge"] = True
             return _finish("scenario_projection")
 
         if runtime_environment_changed or bootstrap_marker_changed:
@@ -604,9 +610,8 @@ async def ensure_webspace_seeded_from_scenario(
             requested_scenario_id,
             webspace_id,
             space=space,
-            emit_event=emit_event,
+            emit_event=False,
         )
-        result["emitted_rebuild_nudge"] = bool(emit_event)
         return _finish("scenario_sync")
     except Exception as exc:
         _log.warning(
@@ -658,9 +663,6 @@ async def ensure_webspace_seeded_from_scenario(
             target_doc,
             before_state_vector=before_state_vector,
         )
-        if emit_event:
-            _emit_bootstrap_rebuild_nudge(webspace_id, fallback_scenario_id, force=True)
-            result["emitted_rebuild_nudge"] = True
         result["persisted_via"] = persisted_via
         _log.info(
             "webspace %s seeded via compatibility fallback for scenario %s (persisted=%s, ui keys=%s, data keys=%s)",

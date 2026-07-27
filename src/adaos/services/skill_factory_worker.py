@@ -11,10 +11,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from uuid import uuid4
 
 import yaml
 
+from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_sources import (
+    SourceSnapshotError,
+    materialize_source_snapshot,
+    source_tree_digest,
+    verify_source_snapshot,
+)
 
 
 RUNNER_VERSION = "adaos-local-codex-worker/0.1.0"
@@ -274,7 +282,11 @@ class LocalSkillFactoryWorker:
             if workspace.exists():
                 shutil.rmtree(workspace)
             workspace.mkdir(parents=True)
-            self._materialize_sources(assignment, workspace)
+            source_snapshot = self._materialize_sources(assignment, workspace)
+            # Generated caches from an earlier DEV run are not source.  Drop
+            # them before the git baseline so their later cleanup cannot look
+            # like a forbidden edit to an immutable companion skill.
+            self._cleanup_generated_files(workspace)
             _write_json(input_dir / "assignment.json", dict(assignment))
             packet = self._build_packet(assignment, workspace, input_dir)
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
@@ -329,6 +341,13 @@ class LocalSkillFactoryWorker:
                 "instruction_packet_hash": packet_hash,
                 "dependency_changes": self._dependency_changes(workspace),
                 "source_refs": dict(assignment.get("source_refs") or {}),
+                "base_revision": str((assignment.get("forge") or {}).get("base_revision") or "") or None,
+                "source_snapshot": {
+                    "snapshot_id": source_snapshot.get("snapshot_id"),
+                    "digest": source_snapshot.get("digest"),
+                }
+                if source_snapshot
+                else None,
                 "tool_versions": {"python": sys.version.split()[0]},
                 "created_at": _now_iso(),
             }
@@ -403,7 +422,19 @@ class LocalSkillFactoryWorker:
             except Exception:
                 _log.warning("local worker progress callback failed task=%s status=%s", task_id, status, exc_info=True)
 
-    def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> None:
+    def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any] | None:
+        forge = dict(assignment.get("forge") or {})
+        snapshot_reference = dict(forge.get("source_snapshot") or {})
+        if snapshot_reference:
+            base_revision = str(forge.get("base_revision") or "").strip()
+            if base_revision != str(snapshot_reference.get("digest") or "").strip():
+                raise SourceSnapshotError("task base revision differs from its immutable source snapshot")
+            return materialize_source_snapshot(
+                state_dir=self.state_dir,
+                reference=snapshot_reference,
+                workspace=workspace,
+            )
+
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill").strip().lower()
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
@@ -421,6 +452,16 @@ class LocalSkillFactoryWorker:
                     f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
                 )
             shutil.copytree(skill_source, skill_destination)
+            automation_snapshot = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / "scenario"
+                / target_id
+                / "automation"
+            )
+            if automation_snapshot.is_dir():
+                shutil.copytree(automation_snapshot, destination / ".builder_previous_automation")
         elif target_type == "skill":
             source = self.dev_skills_root / target_id
             destination = workspace / "skills" / target_id
@@ -431,6 +472,7 @@ class LocalSkillFactoryWorker:
             shutil.copytree(source, destination)
         else:
             raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
+        return None
 
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
         request = dict(assignment.get("realize_request") or {})
@@ -448,6 +490,7 @@ class LocalSkillFactoryWorker:
         artifacts = dict(request.get("artifacts") or {})
         brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()
         iteration = str(artifacts.get("iteration_instruction") or "").strip()
+        workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
         packet = {
             "schema": PACKET_SCHEMA,
@@ -459,9 +502,40 @@ class LocalSkillFactoryWorker:
             "constraints": dict(assignment.get("constraints") or {}),
             "brief": brief,
             "iteration_instruction": iteration,
+            "workflow_transition": workflow_transition or None,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
+        transition_requirements = """
+## Workflow transition constraints
+
+This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill or the retained `.builder_previous_automation` snapshot. The functional Automation implementation remains frozen for Preview and for the next Automation cycle.
+""" if workflow_transition == "return_to_prototype" else """
+## Previous Automation
+
+When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as the immutable previous Automation edition supplied alongside the current Prototype requirements. Use it as implementation context, but never edit it.
+"""
+        required_result = """1. Inspect all existing files under the target paths before editing.
+2. Edit only the current scenario's declarative prototype files; do not modify the companion skill.
+3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
+4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
+5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
+6. Run relevant bounded checks and fix failures caused by your changes.
+7. Do not edit anything outside these task paths: {allowed_paths}.
+8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect all existing files under the target paths before editing.
+2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
+3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
+4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
+5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
+6. Run relevant bounded checks. Fix failures caused by your changes.
+7. Do not edit anything outside these task paths: {allowed_paths}.
+8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
+9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields."""
+        required_result = required_result.format(
+            target_id=target_id,
+            companion=companion,
+            allowed_paths=", ".join(allowed),
+        )
         prompt = f"""# AdaOS local realization task
 
 You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
@@ -480,16 +554,11 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 
 {iteration or 'This is the initial realization. Implement the complete first working version.'}
 
+{transition_requirements}
+
 ## Required result
 
-1. Inspect all existing files under the target paths before editing.
-2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
-3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
-4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: either keep `ui.application` in `scenario.json`, or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
-5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
-6. Run relevant bounded checks. Fix failures caused by your changes.
-7. Do not edit anything outside these task paths: {', '.join(allowed)}.
-8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
+{required_result}
 
 Conclude with a concise summary of implemented behavior and checks. The worker, not you, creates result/provenance files and the git commit.
 """
@@ -528,10 +597,28 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         invalid = [path for path in changed_paths if not any(path == item.rstrip("/") or path.startswith(item) for item in allowed)]
         if invalid:
             raise ValueError(f"Codex changed paths outside the task scope: {invalid}")
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        transition = str(artifacts.get("workflow_transition") or "").strip()
+        if transition == "return_to_prototype":
+            forbidden = [
+                path
+                for path in changed_paths
+                if path.startswith("skills/") or "/.builder_previous_automation/" in f"/{path}"
+            ]
+            if forbidden:
+                raise ValueError(
+                    "return_to_prototype may not modify the frozen Automation implementation: "
+                    f"{forbidden}"
+                )
 
     def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
         errors: list[str] = []
         checks: list[dict[str, Any]] = []
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
+        self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -580,8 +667,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 from jsonschema import Draft202012Validator
 
                 validator = Draft202012Validator(_read_json(scenario_schema_path))
-                for path in sorted(workspace.glob("scenarios/*/scenario.json")):
-                    payload = _read_json(path)
+                for path in sorted(workspace.glob("scenarios/*/scenario.yaml")):
+                    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                    if not isinstance(payload, Mapping):
+                        payload = {}
                     validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
                     if validation_errors:
                         errors.extend(
@@ -625,17 +714,178 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         skill_id = self._companion_skill_id(assignment) if target.get("type") == "scenario" else target_id
         required = [workspace / "skills" / skill_id / "skill.yaml", workspace / "skills" / skill_id / "handlers" / "main.py"]
         if target.get("type") == "scenario":
-            required.append(workspace / "scenarios" / target_id / "scenario.json")
+            required.append(workspace / "scenarios" / target_id / "scenario.yaml")
         for path in required:
             if not path.exists():
                 errors.append(f"required file missing: {path.relative_to(workspace)}")
-        self._run_generated_tests(workspace, checks, errors)
+        if workflow_transition == "return_to_prototype" and target.get("type") == "scenario":
+            self._validate_safe_prototype(workspace, target_id, checks, errors)
+        self._run_generated_tests(
+            workspace,
+            checks,
+            errors,
+            skip_frozen_skills=workflow_transition == "return_to_prototype",
+        )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
 
-    def _run_generated_tests(self, workspace: Path, checks: list[dict[str, Any]], errors: list[str]) -> None:
+    @staticmethod
+    def _validate_checkpoint_owned_manifest_metadata(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        for path in sorted(
+            [
+                *workspace.glob("scenarios/*/scenario.yaml"),
+                *workspace.glob("skills/*/skill.yaml"),
+            ]
+        ):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                baseline_text = _git(["show", f"HEAD:{relative}"], cwd=workspace)
+            except Exception:
+                # A manifest created by the task has no checkpoint-owned baseline yet.
+                continue
+            try:
+                baseline = yaml.safe_load(baseline_text) or {}
+                current = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                errors.append(f"{relative}: checkpoint metadata validation failed: {type(exc).__name__}: {exc}")
+                continue
+            if not isinstance(baseline, Mapping) or not isinstance(current, Mapping):
+                continue
+            changed = [
+                key
+                for key in ("version", "updated_at")
+                if current.get(key) != baseline.get(key)
+            ]
+            if changed:
+                errors.append(
+                    f"{relative}: Automation may not change checkpoint-owned metadata: {', '.join(changed)}"
+                )
+            else:
+                checks.append(
+                    {"kind": "checkpoint_metadata", "path": relative, "ok": True}
+                )
+
+    @staticmethod
+    def _validate_safe_prototype(
+        workspace: Path,
+        scenario_id: str,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        scenario_root = workspace / "scenarios" / scenario_id
+        manifest_path = scenario_root / "scenario.yaml"
+        webui_path = scenario_root / "webui.json"
+        try:
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            manifest = {}
+        if not isinstance(manifest, Mapping):
+            manifest = {}
+
+        bindings: list[str] = []
+        depends = manifest.get("depends")
+        if isinstance(depends, str):
+            depends = [depends]
+        if isinstance(depends, (list, tuple)) and any(str(item).strip() for item in depends):
+            bindings.append("scenario.yaml depends")
+        for section_name in ("runtime", "skills"):
+            section = manifest.get(section_name)
+            if not isinstance(section, Mapping):
+                continue
+            skills = section.get("skills") if section_name == "runtime" else section
+            if not isinstance(skills, Mapping):
+                continue
+            required = skills.get("required")
+            if isinstance(required, str):
+                required = [required]
+            if isinstance(required, (list, tuple)) and any(str(item).strip() for item in required):
+                bindings.append(f"scenario.yaml {section_name}.skills.required")
+
+        try:
+            webui = _read_json(webui_path)
+        except Exception:
+            webui = {}
+        binding_kinds = {
+            "api",
+            "device",
+            "http",
+            "remote",
+            "service",
+            "skill",
+            "stream",
+            "tool",
+            "websocket",
+        }
+        binding_actions = {
+            "callapi",
+            "callskill",
+            "invokedevice",
+            "invokeservice",
+            "invoketool",
+            "requesthttp",
+        }
+        external_prefixes = ("http://", "https://", "ws://", "wss://", "file://", "device://")
+
+        def visit(value: Any, path: str) -> None:
+            if isinstance(value, Mapping):
+                kind = str(value.get("kind") or "").strip().lower()
+                action_type = str(value.get("type") or "").replace("_", "").strip().lower()
+                if kind in binding_kinds:
+                    bindings.append(f"{path}.kind={kind}")
+                if action_type in binding_actions or action_type == "fileupload":
+                    bindings.append(f"{path}.type={value.get('type')}")
+                for key, item in value.items():
+                    visit(item, f"{path}.{key}")
+                return
+            if isinstance(value, list):
+                for index, item in enumerate(value):
+                    visit(item, f"{path}[{index}]")
+                return
+            if isinstance(value, str) and value.strip().lower().startswith(external_prefixes):
+                bindings.append(path)
+
+        visit(webui, "webui.json")
+        if bindings:
+            unique = list(dict.fromkeys(bindings))
+            errors.append(
+                "return_to_prototype left functional or external bindings in the safe Prototype: "
+                + ", ".join(unique[:20])
+            )
+        else:
+            checks.append(
+                {
+                    "kind": "safe_prototype",
+                    "path": scenario_root.relative_to(workspace).as_posix(),
+                    "ok": True,
+                }
+            )
+
+    def _run_generated_tests(
+        self,
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        skip_frozen_skills: bool = False,
+    ) -> None:
         for tests_dir in sorted(path for path in workspace.glob("skills/*/tests") if path.is_dir()):
             test_files = list(tests_dir.glob("test_*.py"))
             if not test_files:
+                continue
+            relative = tests_dir.relative_to(workspace).as_posix()
+            if skip_frozen_skills:
+                checks.append(
+                    {
+                        "kind": "pytest",
+                        "path": relative,
+                        "ok": True,
+                        "status": "skipped",
+                        "reason": "companion skill is immutable input during return_to_prototype",
+                    }
+                )
                 continue
             environment = SubprocessCodexExecutor._bounded_environment()
             environment["PYTHONPATH"] = str(self.repo_root / "src")
@@ -645,7 +895,6 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 timeout=180.0,
                 env=environment,
             )
-            relative = tests_dir.relative_to(workspace).as_posix()
             checks.append(
                 {
                     "kind": "pytest",
@@ -683,6 +932,43 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             sources.append((workspace / "skills" / skill_id, self.dev_skills_root / skill_id))
         else:
             sources.append((workspace / "skills" / target_id, self.dev_skills_root / target_id))
+        snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+        if snapshot_reference:
+            manifest = verify_source_snapshot(state_dir=self.state_dir, reference=snapshot_reference)
+            expected = {
+                str(item.get("path") or "").strip().replace("\\", "/"): str(item.get("digest") or "")
+                for item in manifest.get("artifacts") or []
+                if isinstance(item, Mapping)
+            }
+            for _source, destination in sources:
+                relative = (
+                    f"scenarios/{destination.name}"
+                    if destination.parent == self.dev_scenarios_root
+                    else f"skills/{destination.name}"
+                )
+                expected_digest = expected.get(relative)
+                if not expected_digest:
+                    raise SourceSnapshotError(f"task snapshot does not contain mutable source {relative}")
+                actual_digest = source_tree_digest(destination)
+                if actual_digest != expected_digest:
+                    raise SourceSnapshotError(
+                        f"DEV source changed while Codex was running: {relative}; "
+                        "the completed result was preserved in the task workspace and was not applied"
+                    )
+            expected_by_destination = {
+                destination: expected[
+                    f"scenarios/{destination.name}"
+                    if destination.parent == self.dev_scenarios_root
+                    else f"skills/{destination.name}"
+                ]
+                for _source, destination in sources
+            }
+            self._replace_artifacts_transactionally(
+                sources,
+                expected_by_destination=expected_by_destination,
+            )
+            return
+
         for source, destination in sources:
             if not source.exists():
                 continue
@@ -692,6 +978,70 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             else:
                 shutil.copytree(source, destination)
             self._cleanup_generated_files(destination)
+
+    def _replace_artifacts_transactionally(
+        self,
+        sources: Sequence[tuple[Path, Path]],
+        *,
+        expected_by_destination: Mapping[Path, str],
+    ) -> None:
+        transaction_id = uuid4().hex
+        staged_rows: list[tuple[Path, Path, Path]] = []
+        switched: list[tuple[Path, Path]] = []
+        try:
+            for source, destination in sources:
+                if not source.is_dir():
+                    raise FileNotFoundError(f"task result is missing source directory: {source}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                staged = destination.parent / f".{destination.name}.apply.{transaction_id}"
+                backup = destination.parent / f".{destination.name}.backup.{transaction_id}"
+                shutil.copytree(source, staged)
+                prompt_state = destination / "prompt_state.json"
+                if prompt_state.is_file():
+                    shutil.copy2(prompt_state, staged / "prompt_state.json")
+                previous_automation = staged / ".builder_previous_automation"
+                if previous_automation.exists():
+                    shutil.rmtree(previous_automation)
+                self._cleanup_generated_files(staged)
+                staged_rows.append((staged, destination, backup))
+
+            for staged, destination, backup in staged_rows:
+                expected_digest = str(expected_by_destination.get(destination) or "")
+                if not expected_digest or source_tree_digest(destination) != expected_digest:
+                    raise SourceSnapshotError(
+                        f"DEV source changed during result activation: {destination.name}; "
+                        "the transaction was rolled back"
+                    )
+                if destination.exists():
+                    replace_with_retry(destination, backup)
+                try:
+                    replace_with_retry(staged, destination)
+                except Exception:
+                    if backup.exists() and not destination.exists():
+                        replace_with_retry(backup, destination)
+                    raise
+                switched.append((destination, backup))
+        except Exception as apply_error:
+            rollback_errors: list[str] = []
+            for destination, backup in reversed(switched):
+                try:
+                    if destination.exists():
+                        shutil.rmtree(destination)
+                    if backup.exists():
+                        replace_with_retry(backup, destination)
+                except Exception as exc:
+                    rollback_errors.append(f"{destination}: {type(exc).__name__}: {exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"DEV result activation failed ({apply_error}); rollback also failed: {rollback_errors}"
+                ) from apply_error
+            raise
+        finally:
+            for staged, _destination, backup in staged_rows:
+                if staged.exists():
+                    shutil.rmtree(staged, ignore_errors=True)
+                if backup.exists():
+                    shutil.rmtree(backup, ignore_errors=True)
 
 
 __all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor"]

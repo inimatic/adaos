@@ -106,3 +106,37 @@ def test_projection_registry_loads_yjs_route_budget_from_manifest() -> None:
     assert rule.budget == {"max_payload_bytes": 8192, "max_items": 25}
     assert rule.route["surface"] == "widget:media"
     assert rule.guard_visibility == {"degraded_state": "media library summary degraded"}
+
+
+def test_projection_registry_replaces_skill_rules_without_leaving_stale_entries() -> None:
+    registry = ProjectionRegistry()
+    manifest = {
+        "data_projections": [
+            {
+                "scope": "subnet",
+                "slot": "shared.snapshot",
+                "targets": [{"backend": "yjs", "path": "data/first"}],
+            }
+        ]
+    }
+
+    registry.replace_skill_manifest("first_skill", manifest)
+    registry.replace_skill_manifest(
+        "second_skill",
+        {
+            "data_projections": [
+                {
+                    "scope": "subnet",
+                    "slot": "shared.snapshot",
+                    "targets": [{"backend": "yjs", "path": "data/second"}],
+                }
+            ]
+        },
+    )
+    assert registry.resolve("subnet", "shared.snapshot")[0].path == "data/second"
+
+    registry.replace_skill_manifest("second_skill", {"data_projections": []})
+    assert registry.resolve("subnet", "shared.snapshot")[0].path == "data/first"
+
+    registry.replace_skill_manifest("first_skill", {"data_projections": []})
+    assert registry.resolve_rule("subnet", "shared.snapshot") is None

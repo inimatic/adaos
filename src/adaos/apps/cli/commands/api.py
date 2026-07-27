@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,6 +20,7 @@ import uvicorn
 from click.core import ParameterSource
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.core_slots import active_slot_manifest
 from adaos.services.node_config import load_config, save_config
 from adaos.services.runtime_dotenv import apply_runtime_dotenv_overrides, merged_runtime_dotenv_env
 from adaos.apps.cli.active_control import resolve_control_token
@@ -26,6 +28,12 @@ from adaos.apps.cli.active_control import resolve_control_token
 apply_runtime_dotenv_overrides()
 
 app = typer.Typer(help="HTTP API for AdaOS")
+
+
+@dataclass(frozen=True, slots=True)
+class DetachedServerLaunch:
+    pid: int
+    log_path: Path
 
 
 _RUNTIME_PREFLIGHT_REQUIRED_FILES: tuple[str, ...] = (
@@ -1317,6 +1325,7 @@ def _stop_previous_server(host: str, port: int) -> None:
                 candidate_port,
                 token=token,
                 reason=f"{current_owner}.takeover",
+                lifecycle_scope="runtime_retire",
             )
         if stopped:
             continue
@@ -1356,17 +1365,99 @@ def _wait_for_server_exit(host: str, port: int, *, timeout: float) -> bool:
     return False
 
 
-def _wait_for_server_start(host: str, port: int, *, timeout: float) -> bool:
+def _wait_for_server_start(
+    host: str,
+    port: int,
+    *,
+    timeout: float,
+    expected_git_commit: str | None = None,
+    stability: float | None = None,
+) -> bool:
     deadline = time.monotonic() + max(0.0, float(timeout))
+    stability_window = (
+        _api_restart_stability_seconds()
+        if stability is None
+        else max(0.0, float(stability))
+    )
+    ready_since: float | None = None
     while time.monotonic() < deadline:
         owner_pid = _find_listening_server_pid(host, port)
-        if owner_pid and owner_pid != os.getpid():
-            return True
+        if (
+            not owner_pid
+            or owner_pid == os.getpid()
+        ):
+            ready_since = None
+            time.sleep(0.1)
+            continue
+        try:
+            response = requests.get(
+                f"http://{host}:{int(port)}/health/ready",
+                timeout=0.75,
+            )
+            payload = response.json() if response.status_code == 200 else {}
+            adaos_payload = payload.get("adaos") if isinstance(payload, dict) else None
+            observed_commit = str(
+                adaos_payload.get("git_commit")
+                if isinstance(adaos_payload, dict)
+                else ""
+            ).strip()
+            expected_commit = str(expected_git_commit or "").strip()
+            identity_matches = not expected_commit or observed_commit.lower() == expected_commit.lower()
+            ready = (
+                isinstance(payload, dict)
+                and payload.get("ok") is True
+                and identity_matches
+            )
+        except Exception:
+            ready = False
+        if ready:
+            if ready_since is None:
+                ready_since = time.monotonic()
+            if time.monotonic() - ready_since >= stability_window:
+                return True
+        else:
+            ready_since = None
         time.sleep(0.1)
     return False
 
 
-def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: bool = False) -> None:
+def _api_restart_start_timeout_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_RESTART_START_TIMEOUT_SEC") or "90").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 90.0
+    return max(20.0, min(value, 300.0))
+
+
+def _api_restart_stability_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_RESTART_STABILITY_SEC") or "10").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 10.0
+    return max(0.0, min(value, 60.0))
+
+
+def _api_restart_expected_git_commit() -> str:
+    manifest = active_slot_manifest() or {}
+    return str(manifest.get("git_commit") or "").strip()
+
+
+def _restart_log_path(host: str, port: int) -> Path:
+    safe_host = str(host or "127.0.0.1").replace(":", "_").replace("/", "_").replace("\\", "_")
+    root = _state_dir() / "api"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / f"restart-{safe_host}-{int(port)}.log"
+
+
+def _spawn_detached_server(
+    host: str,
+    port: int,
+    *,
+    token: str | None,
+    reload: bool = False,
+) -> DetachedServerLaunch:
     args = [
         sys.executable,
         "-m",
@@ -1385,13 +1476,13 @@ def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: b
 
     env = merged_runtime_dotenv_env(os.environ.copy())
     creationflags = 0
+    log_path = _restart_log_path(host, port)
     popen_kwargs: dict[str, object] = {
         "args": args,
         "cwd": os.getcwd(),
         "env": env,
         "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        "stderr": subprocess.STDOUT,
     }
     if os.name == "nt":
         creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) | int(
@@ -1403,10 +1494,25 @@ def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: b
         popen_kwargs["creationflags"] = creationflags
     else:
         popen_kwargs["start_new_session"] = True
-    subprocess.Popen(**popen_kwargs)
+    with log_path.open("ab", buffering=0) as output:
+        output.write(
+            f"\n[AdaOS restart] spawned_at={time.time():.3f} host={host} port={int(port)}\n".encode(
+                "utf-8"
+            )
+        )
+        popen_kwargs["stdout"] = output
+        process = subprocess.Popen(**popen_kwargs)
+    return DetachedServerLaunch(pid=int(process.pid), log_path=log_path)
 
 
-def _request_graceful_shutdown(host: str, port: int, *, token: str | None, reason: str = "cli.stop") -> bool:
+def _request_graceful_shutdown(
+    host: str,
+    port: int,
+    *,
+    token: str | None,
+    reason: str = "cli.stop",
+    lifecycle_scope: str = "subnet",
+) -> bool:
     url = f"http://{host}:{int(port)}/api/admin/shutdown"
     headers = {"Content-Type": "application/json"}
     if token:
@@ -1414,7 +1520,12 @@ def _request_graceful_shutdown(host: str, port: int, *, token: str | None, reaso
     try:
         response = requests.post(
             url,
-            json={"reason": reason, "drain_timeout_sec": 5.0, "signal_delay_sec": 0.2},
+            json={
+                "reason": reason,
+                "drain_timeout_sec": 5.0,
+                "signal_delay_sec": 0.2,
+                "lifecycle_scope": str(lifecycle_scope or "subnet"),
+            },
             headers=headers,
             timeout=(2.0, 15.0),
         )
@@ -1718,9 +1829,21 @@ def restart():
             ):
                 raise RuntimeError(f"failed to stop api server at {host}:{port}")
 
-        _spawn_detached_server(host, port, token=token, reload=False)
-        if not _wait_for_server_start(host, port, timeout=20.0):
-            raise RuntimeError(f"api server did not start at {host}:{port}")
+        launch = _spawn_detached_server(host, port, token=token, reload=False)
+        start_timeout = _api_restart_start_timeout_seconds()
+        expected_git_commit = _api_restart_expected_git_commit()
+        if not _wait_for_server_start(
+            host,
+            port,
+            timeout=start_timeout,
+            expected_git_commit=expected_git_commit,
+        ):
+            alive = psutil.pid_exists(launch.pid)
+            raise RuntimeError(
+                f"api server did not start at {host}:{port} within {start_timeout:g}s; "
+                f"spawned_pid={launch.pid} alive={str(alive).lower()} "
+                f"expected_git_commit={expected_git_commit or '-'} log={launch.log_path}"
+            )
     except Exception as exc:
         _clear_restart_marker(marker)
         typer.secho(f"[AdaOS] restart failed: {exc}", fg=typer.colors.RED)

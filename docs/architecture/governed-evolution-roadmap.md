@@ -2,7 +2,7 @@
 
 Status: cross-cutting product and architecture roadmap.
 
-Last reviewed: 2026-07-20.
+Last reviewed: 2026-07-24.
 
 AdaOS is intended to make software change a governed, observable lifecycle:
 
@@ -99,9 +99,9 @@ work and evidence.
 
 | Milestone | User-visible outcome | Current assessment | Horizon |
 | --- | --- | --- | --- |
-| GE0 | A governed runtime can install, activate, observe, and recover a capability. | `integrated`; exit proof open | now |
+| GE0 | A governed runtime can install, activate, observe, and recover a capability. | `validated-stand` bounded artifact slice; default rollout and broader runtime acceptance open | now |
 | GE1 | AdaOS can be delivered and supported as a managed deployment. | `implemented`; exit proof open | now / next |
-| GE2 | One user can take a request to a validated, reversible release through a Personal Builder. | `integrated`; autonomous-from-empty and isolated acceptance open | next |
+| GE2 | One user can take a request to a validated, reversible release through a Personal Builder. | `validated-stand` bounded artifact slice; autonomous Builder-from-empty acceptance open | next |
 | GE3 | Issues, rather than chat transcripts, become durable support and repair work. | `hypothesis`; not admitted | later |
 | GE4 | Independent Builders collaborate without sharing a writable DEV workspace. | `hypothesis`; not admitted | later |
 | GE5 | A verified capability can be reused across deployments with provenance and evidence. | `hypothesis`; not admitted | long-term |
@@ -110,6 +110,14 @@ The assessment reports the most mature meaningful slice, not completion of the
 milestone. The exit-proof column in the milestone section remains decisive.
 GE0 is the active cross-cutting gate; GE1 and GE2 may continue bounded proof
 work where they do not bypass GE0 acceptance.
+
+The current evidence is
+[Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md):
+it includes deterministic packages, dependency and permission rejection,
+transactional activation/rollback, subscription update, the built-in
+LLM → isolated Codex → trial → publication path, deployed backend routes, and a
+fresh empty-cache/Workspace activation through the external package backend.
+Its maturity remains explicitly below broad production acceptance.
 
 Milestones are cumulative. Work may explore a later milestone, but it must not
 be reported as the active delivery goal until the preceding exit gate has
@@ -129,7 +137,7 @@ be tested.
 repeatable install/validate/prepare/test/activate/observe/rollback path; policy
 denials and failures produce durable, user-actionable evidence.
 
-- [ ] `[must]` `GE0-01` Record the end-to-end lifecycle proof and its rollback
+- [x] `[must]` `GE0-01` Record the end-to-end lifecycle proof and its rollback
   evidence. Owner: [MVP Roadmap](../mvp_roadmap.md),
   [Skill Runtime Lifecycle](../skill_runtime.md).
 - [ ] `[must]` `GE0-02` Demonstrate stable runtime projections, readiness, and

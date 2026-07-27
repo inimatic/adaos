@@ -13,6 +13,14 @@ The [Governed Evolution Roadmap](governed-evolution-roadmap.md) places Builder
 inside the larger managed-deployment, Issue-first repair, and trusted-reuse
 sequence. It references Builder gates but does not duplicate this checklist.
 
+The 2026-07-24 package-pipeline slice is `validated-local`: Builder itself was
+advanced by the built-in LLM and isolated Codex, checkpointed as scenario
+`0.2.20` plus skill `0.1.28`, trialed, accepted, and materialized into
+Workspace. The exact evidence is recorded in
+[Artifact Pipeline Local Evidence](artifact-pipeline-local-evidence-2026-07-24.md).
+Clean-stand repetition remains open, so this is not a production-acceptance
+claim.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
@@ -56,9 +64,9 @@ gate easy to read by priority.
 | 1. Context | Complete: Root MCP context, schemas, hints, redaction, descriptor sets. | Complete: descriptor freshness/provenance in task context. | None. | None. |
 | 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
 | 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates, dev lifecycle CLI facade. | Complete: scenario-specific Builder guidance and artifact listing ergonomics. | None. | None. |
-| 4. Validation/Preview | Partial: preview bundle, static checks, route-budget validation, dependency-aware push/publish preflight, and Builder validation facade are complete; durable scenario Forge acknowledgement is open. | Complete: blast radius, webui preview, scenario dependency bootstrap, Forge push facade, and bounded transient retry. | None. | None. |
+| 4. Validation/Preview | Complete locally: preview bundle, static checks, route-budget validation, dependency-aware checkpoint/publish preflight, durable Forge receipt, and Builder validation facade. | Complete locally: blast radius, webui preview, scenario dependency bootstrap, and explicit reconciliation without automatic mutation replay. | None. | None. |
 | 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, NLU Teacher candidate-confirmation, and initial service-supervisor runtime recovery slices exist; Builder/pairing/broader runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
-| 6. Activation | Open: release record, post-activation repair routing, and setup-plan contract. | Open: durable operation recovery, rollback UX, and governed setup execution. | Optional setup-assistant UX. | Automatic setup authoring/execution is postponed until Publication owns its contract. |
+| 6. Activation | Partial: immutable ProjectRelease, accepted trial, stable promotion, WorkspaceLock activation, permission/migration gates, health verification, rollback, and external-backend clean-stand activation are validated; setup-plan completion and default-route rollout remain open. | Partial: durable operation, one-shot reconciliation, and exact-lock delayed observation exist; rollback UX remains open. | Optional setup-assistant UX. | Automatic setup authoring/execution is postponed until Publication owns its contract. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
