@@ -15,6 +15,9 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   validation, preview, approval, and runtime apply
 - `artifact.attestation.v1.schema.json` - detached Ed25519 package/release
   provenance statement bound to immutable subject and predicate digests
+- `artifact.release-attestation-set.v1.schema.json` - immutable exact
+  attestation references bound to one ProjectRelease without changing its
+  canonical release digest
 - `artifact.trust-store.v1.schema.json` - local publisher trust keys, allowed
   signing purposes, validity windows, rotation, and fail-closed revocation state
 - `endpoint-audio-events.v1.schema.json` - MVP endpoint audio event wire

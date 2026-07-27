@@ -44,6 +44,12 @@ from .attestation_publication import (
     AttestationPublicationUncertain,
     PublishedAttestationRef,
 )
+from .attestation_sets import (
+    RELEASE_ATTESTATION_SET_SCHEMA,
+    ArtifactAttestationRef,
+    ReleaseAttestationSet,
+    ReleaseAttestationSetError,
+)
 from .candidates import (
     CANDIDATE_SCHEMA,
     GENESIS_RELEASE_DIGEST,
@@ -92,7 +98,11 @@ from .releases import (
     normalize_version_spec,
     parse_artifact_requirements,
 )
-from .remote import ArtifactRegistryClient, RemoteReleaseRepository
+from .remote import (
+    ArtifactRegistryClient,
+    RemoteArtifactAttestationStore,
+    RemoteReleaseRepository,
+)
 from .reconciliation import (
     REGISTRY_RECONCILIATION_OPERATION_SCHEMA,
     REGISTRY_RECONCILIATION_PLAN_SCHEMA,
@@ -115,6 +125,11 @@ from .retention import (
     ArtifactRetentionError,
     ArtifactRetentionPolicy,
     run_artifact_retention,
+)
+from .runtime_trust import (
+    ArtifactTrustRuntime,
+    ArtifactTrustRuntimeError,
+    compose_artifact_trust_runtime,
 )
 from .publication import (
     PROMOTION_OPERATION_SCHEMA,
@@ -151,6 +166,7 @@ __all__ = [
     "LOCK_HISTORY_STATUS_SCHEMA",
     "PACKAGE_PROVENANCE_PREDICATE",
     "RELEASE_PROVENANCE_PREDICATE",
+    "RELEASE_ATTESTATION_SET_SCHEMA",
     "ActivationConflictError",
     "ActivationError",
     "ActivationReplayBlocked",
@@ -162,11 +178,14 @@ __all__ = [
     "ArtifactAttestationStore",
     "ArtifactAttestationVerificationError",
     "ArtifactAttestationPublisher",
+    "ArtifactAttestationRef",
     "AttestationPublicationConflict",
     "AttestationPublicationError",
     "AttestationPublicationResult",
     "AttestationPublicationUncertain",
     "ArtifactTrustStore",
+    "ArtifactTrustRuntime",
+    "ArtifactTrustRuntimeError",
     "ArtifactRegistryClient",
     "ArtifactPipelineRetentionManager",
     "ArtifactPublicationService",
@@ -222,8 +241,11 @@ __all__ = [
     "DependencyResolutionError",
     "PackageCatalog",
     "ReleasePlan",
+    "ReleaseAttestationSet",
+    "ReleaseAttestationSetError",
     "ReleaseRepository",
     "RemoteReleaseRepository",
+    "RemoteArtifactAttestationStore",
     "RegistryProjectionRemote",
     "RegistryReconciliationError",
     "RegistryReconciliationPlan",
@@ -245,6 +267,7 @@ __all__ = [
     "build_project_release",
     "candidate_from_release",
     "complete_trial",
+    "compose_artifact_trust_runtime",
     "mark_stale",
     "normalize_version_spec",
     "parse_artifact_requirements",

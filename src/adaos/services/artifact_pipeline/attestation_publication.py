@@ -17,6 +17,10 @@ from adaos.services.artifact_pipeline.attestations import (
     package_provenance_digest,
     release_provenance_digest,
 )
+from adaos.services.artifact_pipeline.attestation_sets import (
+    ArtifactAttestationRef,
+    ReleaseAttestationSet,
+)
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
@@ -92,6 +96,34 @@ class AttestationPublicationResult:
             "release_digest": self.release_digest,
             "attestations": [item.to_dict() for item in self.attestations],
         }
+
+    def release_attestation_set(self, plan: ReleasePlan) -> ReleaseAttestationSet:
+        if self.status != "completed" or any(
+            item.status != "completed" for item in self.attestations
+        ):
+            raise AttestationPublicationError(
+                "only a completed publication can bind a release attestation set"
+            )
+        if str(plan.release.seal().release_digest) != self.release_digest:
+            raise AttestationPublicationError(
+                "attestation publication belongs to another release plan"
+            )
+        return ReleaseAttestationSet.from_references(
+            plan,
+            (
+                ArtifactAttestationRef(
+                    subject_kind=item.subject_kind,
+                    subject_digest=item.subject_digest,
+                    project_id=plan.release.project_id,
+                    attestation_digest=item.attestation_digest,
+                    issuer=item.issuer,
+                    key_id=item.key_id,
+                    predicate_type=item.predicate_type,
+                    predicate_digest=item.predicate_digest,
+                )
+                for item in self.attestations
+            ),
+        )
 
 
 class ArtifactAttestationPublisher:

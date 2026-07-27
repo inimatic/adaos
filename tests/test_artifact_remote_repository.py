@@ -8,10 +8,18 @@ import pytest
 
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
+    PACKAGE_PROVENANCE_PREDICATE,
+    RELEASE_PROVENANCE_PREDICATE,
+    ArtifactAttestationRef,
+    Ed25519ArtifactSigner,
     PackageCatalog,
+    ReleaseAttestationSet,
+    RemoteArtifactAttestationStore,
     RemoteReleaseRepository,
     build_artifact_package,
     build_project_release,
+    package_provenance_digest,
+    release_provenance_digest,
 )
 from adaos.services.root.client import RootHttpError
 
@@ -21,6 +29,8 @@ class _Client:
         self.packages: dict[str, str] = {}
         self.releases: dict[tuple[str, str], dict[str, Any]] = {}
         self.channels: dict[tuple[str, str], dict[str, Any]] = {}
+        self.attestations: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self.attestation_sets: dict[tuple[str, str], dict[str, Any]] = {}
 
     def put_artifact_package(self, *, digest: str, archive_b64: str, **kwargs: Any) -> dict:
         self.packages[digest] = archive_b64
@@ -42,6 +52,52 @@ class _Client:
 
     def get_project_release(self, *, project_id: str, release_digest: str, **kwargs: Any) -> dict:
         return {"ok": True, "release_plan": self.releases[(project_id, release_digest)]}
+
+    def put_artifact_attestation(self, *, attestation: dict[str, Any], **kwargs: Any) -> dict:
+        key = (attestation["subject_kind"], attestation["subject_digest"])
+        values = self.attestations.setdefault(key, [])
+        if attestation not in values:
+            values.append(attestation)
+        return {"ok": True, "attestation_digest": attestation["attestation_digest"]}
+
+    def list_artifact_attestations(
+        self,
+        *,
+        subject_kind: str,
+        subject_digest: str,
+        **kwargs: Any,
+    ) -> dict:
+        return {
+            "ok": True,
+            "attestations": self.attestations.get((subject_kind, subject_digest), []),
+        }
+
+    def put_release_attestation_set(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        attestation_set: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict:
+        key = (project_id, release_digest)
+        existing = self.attestation_sets.get(key)
+        if existing is not None and existing != attestation_set:
+            raise RuntimeError("immutable attestation set conflict")
+        self.attestation_sets[key] = attestation_set
+        return {"ok": True, "attestation_set": attestation_set}
+
+    def get_release_attestation_set(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        **kwargs: Any,
+    ) -> dict:
+        return {
+            "ok": True,
+            "attestation_set": self.attestation_sets[(project_id, release_digest)],
+        }
 
     def set_artifact_channel(
         self,
@@ -182,3 +238,81 @@ def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> N
             {built.ref.digest: built.archive_bytes},
         )
     assert uncertain_client.packages == {}
+
+
+def test_remote_attestations_are_content_addressed_and_bound_to_exact_release(
+    tmp_path: Path,
+) -> None:
+    scenario = tmp_path / "recipes"
+    scenario.mkdir()
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    source = ArtifactSourceRef(
+        forge="adaos-root",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("subnets/dev/nodes/node/scenarios/recipes/",),
+    )
+    built = build_artifact_package(scenario, kind="scenario", source_ref=source)
+    plan = build_project_release(
+        project_id="recipes",
+        version="1.0.0",
+        source_ref=source,
+        components=(built.ref,),
+        catalog=PackageCatalog(),
+    )
+    signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    signed = (
+        signer.sign(
+            subject_kind="package",
+            subject_digest=built.ref.digest,
+            project_id="recipes",
+            predicate_type=PACKAGE_PROVENANCE_PREDICATE,
+            predicate_digest=package_provenance_digest(built.ref),
+            issued_at="2026-07-27T00:00:00Z",
+        ),
+        signer.sign(
+            subject_kind="release",
+            subject_digest=str(plan.release.release_digest),
+            project_id="recipes",
+            predicate_type=RELEASE_PROVENANCE_PREDICATE,
+            predicate_digest=release_provenance_digest(plan.release),
+            issued_at="2026-07-27T00:00:00Z",
+        ),
+    )
+    client = _Client()
+    remote = RemoteReleaseRepository(client)
+    store = RemoteArtifactAttestationStore(client)
+    remote.put_release(plan, {built.ref.digest: built.archive_bytes})
+
+    for attestation in signed:
+        assert store.put(attestation) == attestation.attestation_digest
+    exact_set = ReleaseAttestationSet.from_references(
+        plan,
+        (ArtifactAttestationRef.from_attestation(item) for item in signed),
+    )
+    assert remote.put_release_attestation_set(exact_set) == exact_set
+    assert remote.get_release_attestation_set(
+        "recipes",
+        str(plan.release.release_digest),
+    ) == exact_set
+    assert store.list_for_subject("package", built.ref.digest) == (signed[0],)
+
+    with pytest.raises(ValueError, match="does not cover every release subject"):
+        ReleaseAttestationSet.from_references(
+            plan,
+            (ArtifactAttestationRef.from_attestation(signed[0]),),
+        )
+    wrong_release_ref = ArtifactAttestationRef(
+        **{
+            **ArtifactAttestationRef.from_attestation(signed[1]).to_dict(),
+            "predicate_digest": "sha256:" + "0" * 64,
+        }
+    )
+    with pytest.raises(ValueError, match="does not match exact release provenance"):
+        ReleaseAttestationSet.from_references(
+            plan,
+            (ArtifactAttestationRef.from_attestation(signed[0]), wrong_release_ref),
+        )

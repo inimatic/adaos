@@ -99,17 +99,35 @@ changing historical PackageRef or ProjectRelease digests. Evidence covers:
 - deterministic package-then-release signature issuance persisted before the
   first external write and stable across resume;
 - fail-closed timeout/crash handling: no implicit replay, read-only
-  reconciliation by exact digest, and separate explicit continuation;
+  reconciliation by exact digest, and separate explicit continuation for both
+  assets and the release-binding mutation;
 - idempotency-key/plan conflict rejection and journal-integrity validation.
 - configured stable promotion ordering that persists the completed exact
-  attestation receipt before channel movement and verifies it again on resume.
+  attestation receipt and immutable release binding before channel movement,
+  then verifies both again on resume;
+- versioned complete-set validation, ABI schema, Root HTTP client paths, remote
+  attestation store/release binding adapters, and required activation policy
+  injection for stable promotion and subscription updates;
+- explicit runtime `off`/`publish`/`required` composition, persistent key-file
+  parsing, no automatic publisher trust enrollment, and fail-closed startup
+  when required trust is absent.
 
 The focused `tests/test_artifact_attestations.py` and
-`tests/test_attestation_publication.py` set passes 17 tests. The post-change
-gate passes 148 artifact/attestation tests across 17 files plus 54 API runtime
-identity, management, and build-info tests (202 total). This is a local trust
-foundation with journaled publisher issuance. Remote exact attestation
-references and clean-stand required-mode activation remain open under AP1-07.
+`tests/test_attestation_publication.py` set passes 18 tests. The post-change
+gate passes 155 artifact/attestation tests across 18 files plus 71 API runtime
+identity, management, build-info, Root client/composition, and verification
+tests (226 total across 24 files). This is a local trust foundation with
+journaled publisher issuance and exact remote-binding contracts. Deployment
+and clean-stand required-mode activation remain open under AP1-07.
+
+Backend commits `cd5da95` and `4f5cb80` add content-addressed attestation
+assets, canonical ordering, and one immutable exact binding per release.
+`npm run test:artifact-packages` passed the
+TypeScript build and storage smoke, including idempotent writes, exact
+package/release coverage, durable reads, and incomplete-set rejection. The
+commit is pushed to `codex/artifact-binary-transport`; deployment evidence is
+not claimed because the previous PR #3 for that branch is already merged and
+the available GitHub API credentials could not create the new PR.
 
 The representative implementation was not hand-programmed as proof setup.
 The built-in LLM produced the UI revision and the isolated Codex process

@@ -758,16 +758,35 @@ Migration uses adapters instead of a flag-day rewrite:
   state that blocks replay; a separate reconciliation performs remote reads
   only and must find the exact attestation digest before another explicit
   publication call can continue still-pending items.
+- The release-binding PUT follows the same no-replay rule. Its dispatch intent
+  is persisted first; an unknown outcome blocks promotion until an explicit
+  read-only lookup finds the exact set. Promotion never repeats that PUT by
+  itself.
 - When an attestation publisher is configured, stable promotion records its
-  exact completed publication result before channel compare-and-switch. Resume
-  re-reads the publisher journal and rejects a receipt that no longer matches;
-  compatibility mode remains explicit until remote trust policy is deployed.
+  exact completed publication result, binds one immutable
+  `adaos.artifact.release_attestation_set.v1` to that release, and only then
+  performs channel compare-and-switch. Resume re-reads both journals/remote
+  binding and rejects a receipt that no longer matches; compatibility mode
+  remains explicit until remote trust policy is deployed.
+- A release attestation set covers the release plus every selected package,
+  including exact subject, issuer/key, predicate, and attestation digests. The
+  registry validates canonical identity and coverage but does not grant trust;
+  the installing AdaOS verifies Ed25519 signatures against its local policy.
+- The MVP binding is immutable per release. If the only signing key for an old
+  release is revoked, recovery uses a new patch release and a new attestation
+  set rather than mutating historical authorization metadata.
 - Admission recomputes package and release provenance predicates from the exact
   reviewed `PackageRef` and `ProjectRelease`. A valid publisher signature over
   a different provenance statement is rejected.
 - Historical package activation remains compatible when no attestation policy
   is configured. A project/publisher policy that requires attestations never
   falls back to unsigned activation.
+- Runtime composition is explicit through
+  `ADAOS_ARTIFACT_ATTESTATIONS_MODE=off|publish|required`. Publishing requires a
+  persistent 32-byte Ed25519 key file and issuer; required admission requires a
+  non-empty, separately provisioned trust store and may restrict issuers. AdaOS
+  neither generates a production publisher key nor trusts its public half on
+  first use.
 - GitHub identities and signatures may provide issuer evidence but never
   replace AdaOS trial approval, reviewed activation, or health records.
 

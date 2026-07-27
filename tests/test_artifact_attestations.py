@@ -18,12 +18,14 @@ from adaos.services.artifact_pipeline import (
     ArtifactAttestationAdmission,
     ArtifactAttestationError,
     ArtifactAttestationPolicy,
+    ArtifactAttestationRef,
     ArtifactAttestationVerificationError,
     ArtifactTrustStore,
     ContentAddressedAttestationStore,
     ContentAddressedPackageStore,
     Ed25519ArtifactSigner,
     ExternalImmutableAttestationStore,
+    ReleaseAttestationSet,
     WorkspaceActivationManager,
     build_artifact_package,
     package_provenance_digest,
@@ -485,3 +487,27 @@ def test_attestation_and_trust_store_payloads_match_abi_schemas(tmp_path: Path) 
     jsonschema.Draft202012Validator(trust_schema).validate(
         json.loads((tmp_path / "trust.json").read_text(encoding="utf-8"))
     )
+
+
+def test_release_attestation_set_matches_abi_schema(tmp_path: Path) -> None:
+    plan, _ = _release_plan(tmp_path / "source")
+    _, _, _, stored = _attested_admission(tmp_path / "authority", plan)
+    attestations = [
+        *stored.list_for_subject("package", plan.packages[0].digest),
+        *stored.list_for_subject("release", str(plan.release.release_digest)),
+    ]
+    exact_set = ReleaseAttestationSet.from_references(
+        plan,
+        (ArtifactAttestationRef.from_attestation(item) for item in attestations),
+    )
+    schema = json.loads(
+        (
+            Path(__file__).parents[1]
+            / "src"
+            / "adaos"
+            / "abi"
+            / "artifact.release-attestation-set.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    jsonschema.Draft202012Validator(schema).validate(exact_set.to_dict())

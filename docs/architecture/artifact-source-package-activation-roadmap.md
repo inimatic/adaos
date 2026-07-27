@@ -179,7 +179,7 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
-| AP1 | 9/13 | validated-stand + local-trust-foundation (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport whose durable host store survived a blue/green redeploy, detached Ed25519 trust/admission, and deterministic no-replay attestation publication journal | remote attestation references/discovery, required-mode stand proof, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
+| AP1 | 9/13 | validated-stand + local-trust-foundation (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport whose durable host store survived a blue/green redeploy, detached Ed25519 trust/admission, deterministic no-replay publication journal, and immutable exact release-attestation-set contract | backend route deployment, explicit runtime signer/trust provisioning, required-mode stand proof, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
@@ -270,9 +270,16 @@ symlink, size, and corruption tests.
     movement on its completed receipt when the publisher policy is configured.
   - [x] Treat an interrupted or failed dispatch as uncertain, prohibit
     automatic replay, and require read-only exact-digest reconciliation before
-    a separate explicit continuation.
-  - [ ] Carry exact immutable attestation references in remote release/channel
-    discovery and bind their fetch to the reviewed release plan.
+    a separate explicit continuation. The same rule covers both attestation
+    assets and their immutable release-binding PUT.
+  - [x] Define one immutable exact attestation set per release, validate complete
+    package/release provenance coverage, expose remote asset/set adapters, and
+    gate configured promotion on binding that set before channel movement.
+  - [x] Wire explicit `off`/`publish`/`required` runtime composition with a
+    persistent externally supplied signing key and a separately provisioned
+    fail-closed subscriber trust store; never generate or auto-trust a key.
+  - [ ] Merge/deploy the backend binding routes and provision the actual
+    publisher secret/trusted public keys on the stand.
   - [ ] Prove required-mode activation from those remote assets on a clean
     stand, including timeout/reconciliation recovery.
 - [ ] `[could]` `AP1-08` Add package deduplication and bounded garbage collection
@@ -329,9 +336,15 @@ is never replayed: an explicit read-only reconciliation must find the exact
 attestation digest before a later explicit publish call may continue pending
 items. The idempotency key cannot be rebound to a different plan, and package
 and release predicates are recomputed from the exact reviewed refs rather than
-trusted as signer-supplied labels. `AP1-07` remains open until remote
-release/channel discovery carries exact attestation references and a clean
-stand proves required-mode activation from those external assets.
+trusted as signer-supplied labels. The next local slice adds
+`adaos.artifact.release_attestation_set.v1`, remote clients/stores, and promotion
+ordering `assets -> immutable release binding -> channel`. Backend commits
+`cd5da95` and `4f5cb80` are published on
+`codex/artifact-binary-transport`; they still need a
+new PR/merge because the earlier PR for that branch was already merged.
+`AP1-07` remains open until those routes are deployed, runtime signer/trust
+policy is provisioned explicitly, and a clean stand proves required-mode
+activation from the external assets.
 
 ## Milestone AP2: Dependency-Locked Project Releases
 

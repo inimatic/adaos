@@ -24,6 +24,8 @@ from adaos.services.artifact_pipeline.attestation_publication import (
     ArtifactAttestationPublisher,
     AttestationPublicationResult,
 )
+from adaos.services.artifact_pipeline.attestation_sets import ReleaseAttestationSet
+from adaos.services.artifact_pipeline.attestations import ArtifactAttestationAdmission
 from adaos.services.artifact_pipeline.candidates import (
     CandidateRecord,
     CandidateStore,
@@ -93,6 +95,17 @@ class PublicationRemote(Protocol):
     def put_release(self, plan: ReleasePlan, archives: Mapping[str, bytes]) -> None: ...
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan: ...
+
+    def put_release_attestation_set(
+        self,
+        attestation_set: ReleaseAttestationSet,
+    ) -> ReleaseAttestationSet: ...
+
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> ReleaseAttestationSet: ...
 
     def set_channel(
         self,
@@ -294,11 +307,13 @@ class ArtifactPublicationService:
         workspace_root: Path,
         remote: PublicationRemote,
         attestation_publisher: ArtifactAttestationPublisher | None = None,
+        attestation_admission: ArtifactAttestationAdmission | None = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.remote = remote
         self.attestation_publisher = attestation_publisher
+        self.attestation_admission = attestation_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
@@ -321,6 +336,55 @@ class ArtifactPublicationService:
         if self.attestation_publisher is None:
             raise PublicationError("artifact attestation publication is not configured")
         return self.attestation_publisher.reconcile(operation_id)
+
+    def reconcile_release_attestation_binding(
+        self,
+        candidate_id: str,
+    ) -> ReleaseAttestationSet:
+        try:
+            with mutation_lock(self.promotion_lock_path(candidate_id)):
+                operation = self.load_promotion(candidate_id)
+                if operation is None:
+                    raise PublicationError("candidate promotion has no binding operation")
+                state = operation.get("attestation_binding")
+                if not isinstance(state, dict):
+                    raise PublicationError("candidate promotion has no attestation binding intent")
+                if state.get("status") == "completed":
+                    receipt = operation.get("receipts", {}).get("attestations_bound")
+                    if not isinstance(receipt, Mapping):
+                        raise PublicationError("completed attestation binding has no receipt")
+                    return ReleaseAttestationSet.from_mapping(
+                        receipt["attestation_set"]
+                    )
+                if state.get("status") not in {"dispatching", "uncertain"}:
+                    raise PublicationError("attestation binding is not reconcilable")
+                state["status"] = "uncertain"
+                state["updated_at"] = _now()
+                self._write_promotion(operation)
+                raw_set = state.get("attestation_set")
+                if not isinstance(raw_set, Mapping):
+                    raise PublicationError("attestation binding intent has no exact set")
+                expected = ReleaseAttestationSet.from_mapping(raw_set)
+                observed = self.remote.get_release_attestation_set(
+                    expected.project_id,
+                    expected.release_digest,
+                )
+                if observed != expected:
+                    raise PublicationError(
+                        "remote release attestation binding differs from dispatch intent"
+                    )
+                state["status"] = "completed"
+                state["completed_via"] = "reconciliation"
+                state["updated_at"] = _now()
+                state.pop("last_error", None)
+                self._promotion_receipt(
+                    operation,
+                    "attestations_bound",
+                    {"attestation_set": observed.to_dict()},
+                )
+                return observed
+        except MutationLockTimeout as exc:
+            raise PublicationError("candidate promotion is already running") from exc
 
     def plan_registry_reconciliation(
         self,
@@ -490,6 +554,7 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             package_store=self.package_store,
             state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
         )
         activation_plan = activation_manager.plan_activation(release_plan)
         return SubscriptionUpdatePlan(notice, release_plan, activation_plan)
@@ -519,6 +584,7 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             package_store=self.package_store,
             state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
         ).activate(
             plan,
             idempotency_key=(
@@ -1167,6 +1233,7 @@ class ArtifactPublicationService:
         self._write_promotion(operation)
         receipts = operation.setdefault("receipts", {})
         try:
+            published_result: AttestationPublicationResult | None = None
             attestation_receipt = receipts.get("attestations_published")
             if isinstance(attestation_receipt, Mapping):
                 if self.attestation_publisher is None:
@@ -1178,25 +1245,90 @@ class ArtifactPublicationService:
                     raise PublicationError(
                         "promotion attestation receipt has no publication result"
                     )
-                persisted = self.attestation_publisher.load(
+                published_result = self.attestation_publisher.load(
                     str(raw_publication.get("operation_id") or "")
-                ).to_dict()
-                if persisted != dict(raw_publication) or persisted.get("status") != "completed":
+                )
+                persisted = published_result.to_dict()
+                if persisted != dict(raw_publication) or published_result.status != "completed":
                     raise PublicationError(
                         "promotion attestation receipt does not match completed publisher state"
                     )
             elif self.attestation_publisher is not None:
-                published = self.attestation_publisher.publish(
+                published_result = self.attestation_publisher.publish(
                     plan,
                     idempotency_key=f"stable-attestations:{candidate.release_digest}",
                 )
-                if published.status != "completed":
+                if published_result.status != "completed":
                     raise PublicationError("release attestations are not fully published")
                 self._promotion_receipt(
                     operation,
                     "attestations_published",
-                    {"publication": published.to_dict()},
+                    {"publication": published_result.to_dict()},
                 )
+
+            if published_result is not None:
+                exact_set = published_result.release_attestation_set(plan)
+                binding_receipt = receipts.get("attestations_bound")
+                if isinstance(binding_receipt, Mapping):
+                    raw_set = binding_receipt.get("attestation_set")
+                    if not isinstance(raw_set, Mapping):
+                        raise PublicationError(
+                            "promotion attestation binding receipt has no exact set"
+                        )
+                    expected_set = ReleaseAttestationSet.from_mapping(raw_set).validate_plan(plan)
+                    observed_set = self.remote.get_release_attestation_set(
+                        candidate.project_id,
+                        candidate.release_digest,
+                    ).validate_plan(plan)
+                    if observed_set != expected_set or observed_set != exact_set:
+                        raise PublicationError(
+                            "remote release attestation binding differs from promotion receipt"
+                        )
+                else:
+                    binding_state = operation.get("attestation_binding")
+                    if isinstance(binding_state, dict):
+                        if binding_state.get("status") in {"dispatching", "uncertain"}:
+                            if binding_state.get("status") == "dispatching":
+                                binding_state["status"] = "uncertain"
+                                binding_state["last_error"] = (
+                                    "promotion interrupted after binding dispatch intent"
+                                )
+                                binding_state["updated_at"] = _now()
+                                self._write_promotion(operation)
+                            raise PublicationError(
+                                "release attestation binding outcome is uncertain; "
+                                "reconcile it explicitly before resuming promotion"
+                            )
+                        raise PublicationError(
+                            "promotion has an invalid attestation binding state"
+                        )
+                    binding_state = {
+                        "status": "dispatching",
+                        "attestation_set": exact_set.to_dict(),
+                        "updated_at": _now(),
+                    }
+                    operation["attestation_binding"] = binding_state
+                    self._write_promotion(operation)
+                    try:
+                        bound = self.remote.put_release_attestation_set(exact_set).validate_plan(plan)
+                    except Exception as exc:
+                        binding_state["status"] = "uncertain"
+                        binding_state["last_error"] = f"{type(exc).__name__}: {exc}"[:1024]
+                        binding_state["updated_at"] = _now()
+                        self._write_promotion(operation)
+                        raise
+                    if bound != exact_set:
+                        raise PublicationError(
+                            "remote registry bound a different release attestation set"
+                        )
+                    binding_state["status"] = "completed"
+                    binding_state["completed_via"] = "write_acknowledgement"
+                    binding_state["updated_at"] = _now()
+                    self._promotion_receipt(
+                        operation,
+                        "attestations_bound",
+                        {"attestation_set": bound.to_dict()},
+                    )
 
             channel_receipt = receipts.get("channel_moved")
             if isinstance(channel_receipt, Mapping):
@@ -1259,6 +1391,7 @@ class ArtifactPublicationService:
                     workspace_root=self.workspace_root,
                     package_store=self.package_store,
                     state_root=self.state_root / "activation",
+                    attestation_admission=self.attestation_admission,
                 )
                 activation = activation_manager.activate(
                     plan,

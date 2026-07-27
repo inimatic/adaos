@@ -7,12 +7,15 @@ import pytest
 from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef, StableSubscription
 from adaos.services.artifact_pipeline import (
     ActivationError,
+    ArtifactAttestationAdmission,
     ArtifactAttestationPublisher,
     ArtifactPublicationService,
+    ArtifactTrustStore,
     ContentAddressedAttestationStore,
     Ed25519ArtifactSigner,
     PublicationError,
     PublicationStaleError,
+    ReleaseAttestationSet,
     ReleasePlan,
     ReleaseRepository,
     WorkspaceActivationManager,
@@ -26,6 +29,9 @@ class _Remote:
         self.tree = "f" * 40
         self.channel_writes = 0
         self.fail_after_channel_once = False
+        self.attestation_sets: dict[str, ReleaseAttestationSet] = {}
+        self.attestation_binding_writes = 0
+        self.fail_after_attestation_binding_once = False
 
     def put_release(self, plan: ReleasePlan, archives: dict[str, bytes]) -> None:
         self.archives.update(archives)
@@ -33,6 +39,30 @@ class _Remote:
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
         return self.releases.get_release(project_id, release_digest)
+
+    def put_release_attestation_set(
+        self,
+        attestation_set: ReleaseAttestationSet,
+    ) -> ReleaseAttestationSet:
+        sealed = attestation_set.seal()
+        self.attestation_binding_writes += 1
+        existing = self.attestation_sets.get(sealed.release_digest)
+        if existing is not None and existing != sealed:
+            raise RuntimeError("immutable attestation set conflict")
+        self.attestation_sets[sealed.release_digest] = sealed
+        if self.fail_after_attestation_binding_once:
+            self.fail_after_attestation_binding_once = False
+            raise TimeoutError("attestation binding acknowledgement was lost")
+        return sealed
+
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> ReleaseAttestationSet:
+        result = self.attestation_sets[release_digest]
+        assert result.project_id == project_id
+        return result
 
     def set_channel(
         self,
@@ -182,16 +212,23 @@ def test_configured_promotion_publishes_exact_attestations_before_channel(
     workspace = tmp_path / "workspace"
     remote = _Remote(tmp_path / "remote")
     attestation_store = ContentAddressedAttestationStore(tmp_path / "attestations")
+    signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    trust_store = ArtifactTrustStore(tmp_path / "trust.json")
+    trust_store.add(signer.trusted_key())
     attestation_publisher = ArtifactAttestationPublisher(
         state_root=tmp_path / "state",
         store=attestation_store,
-        signer=Ed25519ArtifactSigner.generate(issuer="inimatic.release"),
+        signer=signer,
     )
     service = ArtifactPublicationService(
         state_root=tmp_path / "state",
         workspace_root=workspace,
         remote=remote,
         attestation_publisher=attestation_publisher,
+        attestation_admission=ArtifactAttestationAdmission(
+            store=attestation_store,
+            trust_store=trust_store,
+        ),
     )
     service.record_push(
         kind="scenario",
@@ -214,6 +251,7 @@ def test_configured_promotion_publishes_exact_attestations_before_channel(
     assert operation is not None
     phases = [event["phase"] for event in operation["events"]]
     assert phases.index("attestations_published") < phases.index("channel_moved")
+    assert phases.index("attestations_bound") < phases.index("channel_moved")
     publication = operation["receipts"]["attestations_published"]["publication"]
     assert publication["status"] == "completed"
     assert [item["subject_kind"] for item in publication["attestations"]] == [
@@ -221,6 +259,57 @@ def test_configured_promotion_publishes_exact_attestations_before_channel(
         "release",
     ]
     assert remote.get_channel("recipes").release_digest == promoted.pointer.release_digest
+
+
+def test_unknown_attestation_binding_is_reconciled_without_second_write(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    attestation_store = ContentAddressedAttestationStore(tmp_path / "attestations")
+    publisher = ArtifactAttestationPublisher(
+        state_root=tmp_path / "state",
+        store=attestation_store,
+        signer=Ed25519ArtifactSigner.generate(issuer="inimatic.release"),
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+        attestation_publisher=publisher,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-binding-timeout",),
+        validation_evidence={"status": "passed"},
+    )
+    candidate_id = prepared.candidate.candidate_id
+    service.decide_candidate(candidate_id, accepted=True)
+    remote.fail_after_attestation_binding_once = True
+
+    with pytest.raises(TimeoutError, match="acknowledgement was lost"):
+        _promote(service, candidate_id)
+    assert remote.attestation_binding_writes == 1
+    with pytest.raises(PublicationError, match="outcome is uncertain"):
+        _promote(service, candidate_id)
+    assert remote.attestation_binding_writes == 1
+
+    reconciled = service.reconcile_release_attestation_binding(candidate_id)
+    promoted = _promote(service, candidate_id)
+
+    assert reconciled.release_digest == promoted.pointer.release_digest
+    assert remote.attestation_binding_writes == 1
+    operation = service.load_promotion(candidate_id)
+    assert operation is not None
+    assert operation["attestation_binding"]["completed_via"] == "reconciliation"
 
 
 def test_candidate_rejects_legacy_workspace_downgrade_before_trial(tmp_path: Path) -> None:

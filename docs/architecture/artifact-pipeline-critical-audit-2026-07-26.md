@@ -71,7 +71,7 @@ broader frontend/WebSocket handoff remains separate.
 | B18 update-route policy drift | corrected, validated-local | REST, WebSocket, and Builder now share a versioned subscription-based route decision; subscribed package failure cannot fall through to legacy source pull and malformed subscription state fails closed |
 | B19 local slot/restart identity | corrected, validated-local | active/previous markers use durable replacement; restart requires ready health, the exact active-slot Git commit, and a stability window rather than accepting a listener or bootstrap PID |
 | B20 untrusted initial Yjs reconnect | contained, validated-local (bounded) | malformed/native-risk payloads are subprocess-preflighted and initial browser state is server-authoritative; real reconnects survived, while offline initial draft merge remains deliberately unsupported |
-| B21 builder identity is self-declared | partially corrected, validated-local foundation | detached Ed25519 subject/predicate attestations, purpose-scoped trust, revocation, immutable stores, activation admission, and no-replay journaled publisher emission exist; remote exact-reference discovery and stand evidence remain open in AP1-07 |
+| B21 builder identity is self-declared | partially corrected, validated-local foundation | detached Ed25519 subject/predicate attestations, purpose-scoped trust, revocation, immutable stores, activation admission, no-replay emission, and exact release-set binding exist locally; backend deployment, runtime trust provisioning, and stand evidence remain open in AP1-07 |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
@@ -426,8 +426,10 @@ attestation set before dispatch, refuses to replay an uncertain write, and
 separates read-only exact-digest reconciliation from explicit continuation. It
 also recomputes each expected predicate from the reviewed release plan, so a
 valid signature over different provenance is not admitted. AP1-07 remains open
-until remote release/channel metadata carries exact immutable refs and
-required-mode activation passes on a clean stand.
+until the published backend immutable asset/release-set routes are merged and
+deployed, runtime signer/trust composition is explicit, and required-mode
+activation passes on a clean stand. The registry validates the exact set and
+its release coverage but deliberately cannot make its signatures trusted.
 
 ## Reliability And Performance Gaps
 

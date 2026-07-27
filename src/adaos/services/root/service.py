@@ -55,6 +55,7 @@ from adaos.services.artifact_pipeline import (
     PublicationStaleError,
     RemoteReleaseRepository,
     build_artifact_package,
+    compose_artifact_trust_runtime,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
 
@@ -2034,10 +2035,19 @@ class RootDeveloperService:
             verify=verify,
             cert=(cert_path, key_path),
         )
+        state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
+        trust = compose_artifact_trust_runtime(
+            state_root=state_root,
+            client=remote.client,
+            verify=remote.verify,
+            cert=remote.cert,
+        )
         return ArtifactPublicationService(
-            state_root=Path(self.ctx.paths.state_dir()) / "artifact_pipeline",
+            state_root=state_root,
             workspace_root=Path(self.ctx.paths.workspace_dir()),
             remote=remote,
+            attestation_publisher=trust.publisher,
+            attestation_admission=trust.admission,
         )
 
     def prepare_artifact_candidate(
