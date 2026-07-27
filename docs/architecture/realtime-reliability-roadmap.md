@@ -671,6 +671,11 @@ lifecycle and update attempt state.
   A/B slot without ad-hoc root mutation and retain a durable recovery marker.
 - [x] `[must]` Allow only the supervisor control plane—not a surviving active or
   candidate runtime—to confirm completion of a root restart.
+- [x] `[must]` Bridge the supervisor-owned `root_promoted -> validate` commit
+  back into the new runtime event bus and make Infra State materialize
+  `sys.ready` plus terminal core-update state inline. Live recovery proof on
+  `192.168.0.30` and `91.98.89.76` converged both persisted widgets to
+  `slot A | 0.1.618 | 5d59c42` without repeating an update command.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.
