@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Last reviewed: 2026-07-26.
+Last reviewed: 2026-07-27.
 
 ## Outcome
 
@@ -99,6 +99,10 @@ Validated-local implementation now provides:
 - a source-faithful local verifier that compares mutable DEV against the exact
   pushed package file inventory before rebuilding under a newer package policy,
   and exercises the current channel-CAS and explicit runtime-reload contracts.
+- exact-build core-slot admission with durable active/previous markers, one-shot
+  restart semantics, and server-authoritative initial Yjs reconnect protection;
+- a read-only subscribed-project update plan that reports an explicit
+  `up_to_date` no-op instead of converting current state into an HTTP conflict.
 
 The reproducible result and exact digests are recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
@@ -180,8 +184,8 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
-| AP6 | 11/13 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, and one fail-closed package/legacy route contract | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
-| AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 304 final focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
+| AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
+| AP7 | 14/15 | validated-stand + production-route-verified + local-runtime-recovered (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 375 final core/Yjs/artifact regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, continuous backend HTTP health across two clean blue/green control runs, and exact-build local A/B recovery under real browser reconnects | frontend/WebSocket continuity across process cutover, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -565,6 +569,9 @@ injected failure.
   subscribed projects require package activation, only subscription absence
   admits labelled legacy source pull, corrupt subscription state fails closed,
   and package-path failures never trigger compatibility fallback.
+- [x] `[must]` `AP6-14` Make read-only update inspection total for a valid
+  subscription: an already-current project returns a typed `up_to_date` no-op
+  plan, while real activation remains fail-closed and separately reviewed.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and channel/subscription regressions in
@@ -623,6 +630,12 @@ coordinator regressions prove the package route for subscribed projects and
 fail-closed handling of a malformed subscription store. The legacy bridge
 remains only for projects with no subscription and stays explicitly labelled;
 its eventual retirement is not required for this bounded rollout.
+AP6-14 is closed by the `adaos.artifact.subscription_update_noop.v1` response
+and live Builder inspection on core commit `bc603cb8`. `POST
+/api/scenarios/update` with `dry_run=true` returned HTTP 200,
+`mode=package_plan`, `updated=false`, `package_required=true`,
+`legacy_allowed=false`, and `status=up_to_date`; it did not mutate Workspace or
+turn an already-current subscription into `409 Conflict`.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 
@@ -663,6 +676,9 @@ dependency-conflict, interruption, and rollback cases.
 - [x] `[should]` `AP7-14` Eliminate the public-route gap during blue/green
   upstream handoff and prove continuous health while replacing a backend that
   serves persisted artifact state.
+- [x] `[must]` `AP7-15` Recover the local runtime through an exact-build A/B
+  slot, one bounded restart, and real browser Yjs reconnects without accepting
+  listener-only readiness or automatically repeating a state-changing phase.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 including its reproducible verifier command, immutable digests, operation
@@ -696,6 +712,15 @@ opposite-direction controls `30229653248` and `30229788369` passed with
 recreates. This closes bounded backend HTTP handoff only; frontend replacement,
 long-lived WebSocket continuity, and a future dynamic proxy control plane are
 not implied by this checkbox.
+`AP7-15` is closed for the bounded local topology by commit `bc603cb8`. Slot A
+was built from that exact local revision, passed structural/import validation
+and all 35 installed handler imports, then became active through durable
+markers. One API restart reached the same full Git commit and remained ready
+under one PID for seven samples over 36 seconds. Real `dev1`, `dev1-dev`, and
+`desktop-dev` browser handshakes exercised server-authoritative initial Yjs
+admission without reproducing the native Yrs panic. This does not prove
+long-lived WebSocket continuity across cutover, and initial offline-only browser
+drafts are deliberately not merged in this MVP safety mode.
 
 ## Explicit Deferred Backlog
 

@@ -191,6 +191,21 @@ This identity must flow through:
 
 Without that, a candidate process can look indistinguishable from the active process and accidentally steal or overwrite control-plane state.
 
+### Restart acceptance boundary
+
+A local restart is successful only when the runtime API is ready, reports the
+full Git commit recorded by the active-slot manifest, and remains continuously
+ready for the configured stability window. A bound listener is not sufficient,
+and the detached bootstrap PID is not the runtime identity because Windows may
+hand listener ownership to a child process.
+
+The `active` and `previous` slot markers are durable pointer commits: write a
+same-directory temporary file, flush and `fsync` it, then atomically replace the
+marker. Candidate structure, required imports, and installed handler imports
+must pass before that pointer switch. Restart/start is issued once; an unknown
+or failed state-changing attempt is recorded for operator recovery and is not
+automatically repeated.
+
 ## Candidate passive mode
 
 Before cutover is explicitly committed, a prewarmed `candidate` runtime must stay passive on root-facing traffic subjects.

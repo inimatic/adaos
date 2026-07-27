@@ -41,6 +41,40 @@ empty-Workspace activation through the deployed external package backend.
   `task.01KYAF6Q0F4ZRNDPN5E8118ECC`, source commit
   `fde3e2854d2f...`.
 
+### Local runtime recovery addendum, 2026-07-27
+
+The post-pipeline runtime audit is tied to local core commit
+`bc603cb8f5f5cf5bac59209a9d83a4f2924fbb5a`:
+
+- inactive slot A was prepared from the local source commit without a remote
+  fetch or push, producing build `0.1.604+4039.bc603cb8`;
+- preparation took 246.6 seconds, including 169.115 seconds for venv seed/copy
+  and 29.6 seconds for project installation;
+- slot structure, core imports, and all 35 installed skill handlers passed
+  before activation;
+- durable markers moved `active B -> A` and `previous A -> B` only after those
+  gates, preserving an explicit rollback target;
+- one API restart completed in 80.6 seconds including exact-commit readiness
+  and a 12-second stability window; no state-changing retry was issued;
+- seven independent samples from `2026-07-27T08:13:57+03:00` through
+  `08:14:34+03:00` stayed ready on PID `21936` and the same full commit;
+- real browser reconnects for `dev1`, `dev1-dev`, and `desktop-dev` exercised
+  server-authoritative initial Yjs `SYNC_STEP1`/`SYNC_STEP2` handling without
+  reproducing the native Yrs panic;
+- the focused Yjs suite and the broader core/update/Yjs/artifact/API suite
+  passed, the latter with 375 tests.
+
+The Yjs result is deliberately bounded. Initial browser state is validated but
+not merged into the live YDoc; server durable state wins and subsequent browser
+updates resume normally. Offline-only browser drafts at reconnect are therefore
+not preserved until a generation-aware merge protocol exists.
+
+A live read-only Builder update inspection also returned HTTP 200 with
+`adaos.artifact.update_route.v1`, `package_required=true`,
+`legacy_allowed=false`, and
+`adaos.artifact.subscription_update_noop.v1/status=up_to_date`. The installed
+release remained `builder@0.2.20`; no Workspace mutation occurred.
+
 The representative implementation was not hand-programmed as proof setup.
 The built-in LLM produced the UI revision and the isolated Codex process
 implemented and tested the automation. The pipeline work in AdaOS then
