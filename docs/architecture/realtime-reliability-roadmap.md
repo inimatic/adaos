@@ -584,6 +584,19 @@ lifecycle and update attempt state.
   supervisor/root updates.
 - [x] `[must]` Validate every candidate in an inactive slot before allowing any
   root/bootstrap promotion.
+- [x] `[must]` Validate the exact projected post-promotion root imports before
+  mutation and enforce bootstrap re-export dependency closure by regression
+  test.
+- [x] `[must]` Make root promotion transactional: confine relative paths, back
+  up the complete change set before apply, atomically persist metadata, and
+  roll back every partial apply/commit failure.
+- [x] `[must]` Keep an independent Linux recovery path in the managed wrapper:
+  if root imports fail, launch the supervisor from a verified active/previous
+  A/B slot without ad-hoc root mutation and retain a durable recovery marker.
+- [x] `[must]` Allow only the supervisor control plane—not a surviving active or
+  candidate runtime—to confirm completion of a root restart.
+- [ ] `[must]` Prove the hardened root promotion and slot fallback through two
+  consecutive release updates on the affected second machine.
 - [x] `[must]` Detect bootstrap-managed file changes and surface
   `root_promotion_required` explicitly instead of silently mixing slot and
   root drift.
@@ -663,6 +676,11 @@ lifecycle and update attempt state.
   deterministically.
 - [x] `[must]` Rollback decision is owned by supervisor logic rather than only
   runtime-side best effort.
+- [x] `[must]` A failed root import cannot be reported as a successful root
+  restart by a surviving runtime process.
+- [ ] `[must]` A second-machine recovery record shows root import failure,
+  verified-slot fallback, transactional root repair, and a subsequent clean
+  release cycle.
 - [x] `[must]` Sidecar remains transport-only and does not absorb
   process/update authority.
 - [x] `[must]` Operators can identify which installed skill failed during a

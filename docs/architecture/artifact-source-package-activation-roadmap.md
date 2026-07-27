@@ -727,6 +727,9 @@ dependency-conflict, interruption, and rollback cases.
 - [x] `[must]` `AP7-15` Recover the local runtime through an exact-build A/B
   slot, one bounded restart, and real browser Yjs reconnects without accepting
   listener-only readiness or automatically repeating a state-changing phase.
+- [ ] `[must]` `AP7-16` Prove second-machine core-release convergence after a
+  partial root promotion: verified-slot supervisor fallback, transactional root
+  repair, truthful restart authority, and one subsequent clean update cycle.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 including its reproducible verifier command, immutable digests, operation

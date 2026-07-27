@@ -458,11 +458,31 @@ Rules:
 - root promotion should use the same validated candidate source, not a fresh mutable branch tip
 - current implementation promotes bootstrap-managed and operator-control files
   into the explicit validated root target recorded for that slot, writes a
-  backup snapshot plus restore metadata, refreshes the autostart wrapper so the
-  next supervisor process uses the stable root checkout/root `.venv`, records
-  an explicit supervisor attempt state while waiting for restart, and on
-  autostart-managed Linux deployments requests the service restart
-  automatically so the new supervisor/bootstrap code becomes active
+  backup snapshot plus restore metadata, and validates the exact projected
+  post-promotion package by importing the supervisor, CLI, and autostart runner
+  with the root interpreter before mutating root. Promotion paths are confined
+  to the source/root/backup trees; apply and metadata commit are one transaction,
+  and any partial copy or commit failure restores the complete snapshot before
+  returning failure
+- bootstrap dependency closure is a tested contract. A package re-export added
+  to a root-controlled `__init__.py` must bring its imported module into the
+  bootstrap path set; the projected import preflight remains the final guard
+  against an omitted transitive dependency
+- root promotion refreshes the autostart wrapper before restart. On every Linux
+  service start the wrapper verifies root imports without changing root. If
+  that check fails, it starts the supervisor from the first importable active,
+  previous, A, or B slot and records `state/root_recovery/latest.env`. This
+  preserves an independent recovery/update plane; it replaces file-specific
+  startup repair scripts and does not treat the fallback slot as proof that root
+  is healthy
+- a slot runtime may validate its application boot, but only the supervisor
+  control plane may commit `root_promoted` as a completed root restart. The
+  supervisor rechecks source parity before success, so an old surviving runtime
+  cannot turn a failed root import into a false successful update
+- managed systemd services rate-limit a completely unrecoverable restart loop
+  while retaining normal `Restart=always` behavior. On autostart-managed Linux
+  deployments the supervisor requests the service restart automatically so the
+  new supervisor/bootstrap code becomes active
 - managed Linux units use `KillMode=process`. During a supervisor-requested
   root restart, the supervisor deliberately preserves the already-ready active
   runtime and realtime sidecar. The replacement supervisor adopts both
