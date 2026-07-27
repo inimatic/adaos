@@ -99,9 +99,9 @@ work and evidence.
 
 | Milestone | User-visible outcome | Current assessment | Horizon |
 | --- | --- | --- | --- |
-| GE0 | A governed runtime can install, activate, observe, and recover a capability. | `validated-local`; clean-stand and delayed-observation exit proof open | now |
+| GE0 | A governed runtime can install, activate, observe, and recover a capability. | `validated-stand` bounded artifact slice; default rollout and broader runtime acceptance open | now |
 | GE1 | AdaOS can be delivered and supported as a managed deployment. | `implemented`; exit proof open | now / next |
-| GE2 | One user can take a request to a validated, reversible release through a Personal Builder. | `validated-local` bounded slice; clean-stand and autonomous-from-empty acceptance open | next |
+| GE2 | One user can take a request to a validated, reversible release through a Personal Builder. | `validated-stand` bounded artifact slice; autonomous Builder-from-empty acceptance open | next |
 | GE3 | Issues, rather than chat transcripts, become durable support and repair work. | `hypothesis`; not admitted | later |
 | GE4 | Independent Builders collaborate without sharing a writable DEV workspace. | `hypothesis`; not admitted | later |
 | GE5 | A verified capability can be reused across deployments with provenance and evidence. | `hypothesis`; not admitted | long-term |
@@ -115,9 +115,9 @@ The current evidence is
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md):
 it includes deterministic packages, dependency and permission rejection,
 transactional activation/rollback, subscription update, the built-in
-LLM → isolated Codex → trial → publication path, and a deployed backend
-source-tree route. Its maturity remains explicitly below clean-stand and broad
-production acceptance.
+LLM → isolated Codex → trial → publication path, deployed backend routes, and a
+fresh empty-cache/Workspace activation through the external package backend.
+Its maturity remains explicitly below broad production acceptance.
 
 Milestones are cumulative. Work may explore a later milestone, but it must not
 be reported as the active delivery goal until the preceding exit gate has

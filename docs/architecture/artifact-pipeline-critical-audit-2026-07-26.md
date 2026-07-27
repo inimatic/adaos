@@ -369,7 +369,9 @@ operator view.
 10. **Completed locally:** rerun the representative proof against the current
     CAS/reload contracts and bind mutable DEV to the exact checkpoint package
     inventory before rebuilding.
-11. Repeat the proof on a clean stand.
+11. **Completed:** repeat the proof on a fresh isolated stand through deployed
+    hub-mTLS package, release, and channel routes, with an empty cache and
+    Workspace plus exact-lock delayed verification.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

@@ -1,12 +1,14 @@
 # Artifact Pipeline Local Evidence — 2026-07-24
 
-Status: `validated-local`, with the production backend route deployed and
-verified; this record is not stand or marketplace acceptance.
+Status: `validated-stand` for the bounded artifact path on an isolated
+same-host stand with the production backend; this record is not broad
+production or marketplace acceptance.
 
 This evidence closes the bounded single-machine implementation proof for the
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
-It also records the subsequent live Builder publication proof and closes the
-bounded Forge/backend deployment gate. A clean stand remains a separate gate.
+It also records the subsequent live Builder publication proof, closes the
+bounded Forge/backend deployment gate, and records a fresh empty-cache and
+empty-Workspace activation through the deployed external package backend.
 
 ## Exact Scope
 
@@ -18,6 +20,10 @@ bounded Forge/backend deployment gate. A clean stand remains a separate gate.
   [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
   at `1329ecb3371b25869ad78acf51814704d2862b04` and deployed as backend
   `0.1.137`.
+- Backend package admission and channel-CAS hardening: merged by
+  [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
+  at `5570f330fe7aa8c109db3d8d21ccfc44342bad3b`, CI-validated, and deployed as
+  backend `0.1.142`.
 - Representative scenario: `streaming_recipe_book_eval`.
 - Representative companion skill: `streaming_recipe_book_eval_skill`.
 - Builder change/checkpoint:
@@ -58,6 +64,31 @@ The latest durable local record for this run is:
 ```text
 .adaos/state/artifact_pipeline/proofs/20260726T233544441263Z/evidence.json
 ```
+
+Run the external clean-stand gate only with an explicit mutation acknowledgement:
+
+```powershell
+.\.venv\Scripts\python.exe tools\verify_artifact_pipeline_stand.py `
+  --evidence .adaos\state\artifact_pipeline\proofs\20260726T233544441263Z\evidence.json `
+  --stand-root .adaos\state\artifact_pipeline\stand-proofs\<new-run-id> `
+  --base-url https://ru.api.inimatic.com `
+  --ca .adaos\keys\ca.cert `
+  --cert .adaos\keys\hub_cert.pem `
+  --key .adaos\keys\hub_private.pem `
+  --expected-backend-commit 5570f330 `
+  --publish
+```
+
+The latest durable stand record is:
+
+```text
+.adaos/state/artifact_pipeline/stand-proofs/20260727T030000Z/evidence.json
+```
+
+The command writes only immutable package/release identities plus the dedicated
+`stand-afb87148014b` channel; it does not move `stable`. It then constructs a
+new cache and Workspace below the new run directory and fetches all installable
+bytes back through hub mTLS.
 
 This rerun uses the post-audit package policy. Before any new proof package is
 built, the verifier compares every publishable DEV path, size, and content
@@ -121,6 +152,9 @@ redacted identities and conclusions required for review.
 | Single-pass cached activation | passed | 134 focused artifact/Root/worker regressions plus the complete representative proof; each cached package is verified and extracted in one ZIP/file-hash traversal, and staging I/O failure preserves the valid immutable package |
 | Durable filesystem switch | passed | atomic JSON replacement and cross-directory metadata regressions; Windows uses `MOVEFILE_WRITE_THROUGH`, while POSIX fsyncs the target and source directory entries best-effort without replaying the enclosing operation |
 | Terminal lock history | passed | successful commit records an operation-bound `active` sidecar; injected failure after raw history write restores Workspace and records `rolled_back`; retention audits but does not let rolled-back history pin packages |
+| Backend admission CI/deployment | passed | PR `#2` required locked TypeScript build/package smoke, merged at `5570f330`, deployed as `0.1.142`, and live health reported commit `5570f33` ready |
+| Live fail-closed admission probes | passed | hub-mTLS requests returned missing-channel `404`, missing channel CAS `400`, and partial-release `400` without creating state |
+| External clean-stand round-trip | passed | two packages (15,370 archive bytes), exact release and dedicated channel traversed deployed backend; a new empty cache/Workspace activated 12 files in 1.388 s and exact-lock delayed verification passed |
 
 Original checkpoint-package identities retained as the source inventory
 witness:
@@ -213,20 +247,20 @@ reconciliation, and no automatic repeat of the modifying command.
 
 ## Open Acceptance Gates
 
-- A clean stand/second-machine run is required before package-only activation
-  becomes the default and before legacy sparse Workspace compatibility is
-  retired.
-- The production backend routes are deployed, but external package storage is
-  still a transport boundary rather than the default Workspace activation
-  source; the stand proof must exercise that path end to end.
+- Package-only activation has stand evidence, but making it the default and
+  retiring legacy sparse Workspace compatibility still requires an explicit
+  rollout decision and bounded operational observation.
+- Base64-in-JSON remains the production package transport; replace it with
+  bounded streaming before larger artifacts or broad usage.
 - The pre-existing client submodule change was not modified or included.
 - The backend builder/lock admission hardening was validated locally and by the
   locked GitHub Actions artifact-contract gate, then merged through
   [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
   at `5570f330`. Infrastructure deployment completed as backend `0.1.142`; its
   public health record identifies `5570f33`, and hub-mTLS rejection probes
-  confirmed channel-CAS and complete-release admission. A successful external
-  package round-trip and clean-stand proof remain separate gates.
+  confirmed channel-CAS and complete-release admission. The subsequent stand
+  proof exercised successful package, release, and dedicated-channel writes and
+  reads plus package-only activation from an empty cache and Workspace.
 
-These gates keep the maturity at `validated-local`; they are not failures of the
-bounded local proof.
+These gates keep the bounded artifact path below broad production acceptance;
+they do not invalidate its `validated-stand` evidence.

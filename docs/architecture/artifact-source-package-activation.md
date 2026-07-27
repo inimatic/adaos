@@ -3,11 +3,11 @@
 Status: target architecture for the single-user artifact development,
 publication, installation, update, and rollback pipeline.
 
-This document defines the target boundaries and contracts. The bounded
-single-machine package path is now `validated-local`; it is not yet stand or
-production accepted. Delivery maturity is owned by
+This document defines the target boundaries and contracts. The bounded package
+path is now `validated-stand` on an isolated same-host stand using the deployed
+external backend; it is not yet broadly production accepted. Delivery maturity is owned by
 [Artifact Source, Package, and Activation Roadmap](artifact-source-package-activation-roadmap.md),
-and the exact local result is recorded in
+and the exact local/stand result is recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
 
 ## Purpose

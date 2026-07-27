@@ -113,16 +113,12 @@ record remains valid for its narrower stated cases.
 
 Remaining acceptance blockers:
 
-- exercise successful external package upload, release admission, channel CAS,
-  and package-only activation from an empty clean stand; backend admission
-  hardening merged by
-  [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
-  at `5570f330`, deployed as `0.1.142`, and passed fail-closed live mTLS probes;
-- a live stand/second-machine run is required before package-only activation is
-  the default or legacy sparse Workspace compatibility is retired;
-- streaming package transport and full filesystem directory durability remain
-  broader performance/durability gates; neither changes the current bounded
-  local acceptance status.
+- make an explicit rollout decision before package-only activation becomes the
+  default or legacy sparse Workspace compatibility is retired;
+- replace base64-in-JSON package transfer with bounded streaming transport
+  before larger artifacts or broad usage;
+- add historical registry/manifest migration fixtures before removing the
+  compatibility readers; production and marketplace acceptance remain deferred.
 
 The original backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
@@ -136,9 +132,11 @@ the same locked test in GitHub Actions, and merged through PR `#2`. The
 infrastructure deployment completed successfully, and live `0.1.142` reported
 commit `5570f33`. Hub-mTLS probes confirmed missing-channel `404`, mandatory
 channel-CAS `400`, and partial-release rejection `400` without creating state.
-Successful external package transport and clean-stand activation remain a
-separate gate; merge and rejection probes alone do not promote AP5 to broad
-production acceptance.
+The follow-up clean stand then uploaded and read back both representative
+packages and their exact release through hub mTLS, advanced only the dedicated
+`stand-afb87148014b` channel with CAS, and activated a fresh empty package cache
+and Workspace. This raises the bounded path to `validated-stand`; it does not
+by itself authorize a default-route cutover or broad production acceptance.
 
 ## Delivery Snapshot
 
@@ -152,11 +150,11 @@ proof is not silently promoted to stand or production acceptance.
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
 | AP1 | 7/10 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, and single-pass verified extraction for cached activation | external signing and package-store lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
-| AP3 | 12/13 | validated-local (bounded) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, and terminal lock-history states | stand validation |
+| AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
-| AP5 | 7/10 | validated-local + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, and durable post-CAS continuation | successful external package round-trip and clean-stand promotion |
+| AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip | metadata rebase policy and later merge-queue support |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
-| AP7 | 11/13 | validated-local | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, and live Builder `0.2.20` publication with explicit checkpoint recovery | clean stand run; production and marketplace acceptance remain open |
+| AP7 | 12/13 | validated-stand (bounded, isolated same-host) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, and external-backend clean-stand activation | production and marketplace acceptance remain deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -550,7 +548,7 @@ dependency-conflict, interruption, and rollback cases.
   revisions, operation ids, validation results, and acceptance decision.
 - [x] `[must]` `AP7-10` Update Builder, registry, operations, runtime, and governed
   evolution documentation only from the recorded implementation evidence.
-- [ ] `[should]` `AP7-11` Repeat the proof on a clean stand or second machine
+- [x] `[should]` `AP7-11` Repeat the proof on a clean stand or second machine
   before defaulting new installs to package-only mode.
 - [x] `[could]` `AP7-12` Compare local package storage with an external immutable
   release backend.
@@ -563,8 +561,12 @@ records, regression counts, backend deployment, and live Builder publication.
 The verifier was rerun on 2026-07-26 after the critical audit. Its contract
 regression now fails if DEV publishable content differs from the recorded
 checkpoint package, while allowing the same exact files to be rebuilt under an
-explicitly identified newer package policy. `AP7-11` remains unchecked because
-this was a same-machine isolated run, not a clean stand or second machine.
+explicitly identified newer package policy. `AP7-11` is closed by the fresh
+same-host stand rooted at `20260727T030000Z`: it started with an empty package
+cache and Workspace, used deployed backend `0.1.142` over hub mTLS for package,
+release, and channel reads/writes, and passed immediate exact-lock delayed
+verification. It remains deliberately narrower than second-machine and broad
+production acceptance.
 
 ## Explicit Deferred Backlog
 

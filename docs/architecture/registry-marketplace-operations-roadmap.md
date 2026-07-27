@@ -24,7 +24,9 @@ and transactional WorkspaceLock activation. Backend PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
 is deployed as `0.1.137`, and live Forge tree lookup matches persisted source
 trees. This closes the local contract and production-route slices, not the
-clean-stand or marketplace UX gates. See
+default-route rollout or marketplace UX gates. A subsequent isolated clean
+stand passed external package/release/channel round-trip and package-only
+Workspace activation through deployed backend `0.1.142`. See
 [Artifact Pipeline Local Evidence](artifact-pipeline-local-evidence-2026-07-24.md).
 
 The governing rule is:
