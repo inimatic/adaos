@@ -20,6 +20,7 @@ import uvicorn
 from click.core import ParameterSource
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.core_slots import active_slot_manifest
 from adaos.services.node_config import load_config, save_config
 from adaos.services.runtime_dotenv import apply_runtime_dotenv_overrides, merged_runtime_dotenv_env
 from adaos.apps.cli.active_control import resolve_control_token
@@ -1369,7 +1370,7 @@ def _wait_for_server_start(
     port: int,
     *,
     timeout: float,
-    expected_pid: int | None = None,
+    expected_git_commit: str | None = None,
     stability: float | None = None,
 ) -> bool:
     deadline = time.monotonic() + max(0.0, float(timeout))
@@ -1384,7 +1385,6 @@ def _wait_for_server_start(
         if (
             not owner_pid
             or owner_pid == os.getpid()
-            or (expected_pid is not None and owner_pid != int(expected_pid))
         ):
             ready_since = None
             time.sleep(0.1)
@@ -1395,7 +1395,19 @@ def _wait_for_server_start(
                 timeout=0.75,
             )
             payload = response.json() if response.status_code == 200 else {}
-            ready = isinstance(payload, dict) and payload.get("ok") is True
+            adaos_payload = payload.get("adaos") if isinstance(payload, dict) else None
+            observed_commit = str(
+                adaos_payload.get("git_commit")
+                if isinstance(adaos_payload, dict)
+                else ""
+            ).strip()
+            expected_commit = str(expected_git_commit or "").strip()
+            identity_matches = not expected_commit or observed_commit.lower() == expected_commit.lower()
+            ready = (
+                isinstance(payload, dict)
+                and payload.get("ok") is True
+                and identity_matches
+            )
         except Exception:
             ready = False
         if ready:
@@ -1425,6 +1437,11 @@ def _api_restart_stability_seconds() -> float:
     except (TypeError, ValueError):
         value = 10.0
     return max(0.0, min(value, 60.0))
+
+
+def _api_restart_expected_git_commit() -> str:
+    manifest = active_slot_manifest() or {}
+    return str(manifest.get("git_commit") or "").strip()
 
 
 def _restart_log_path(host: str, port: int) -> Path:
@@ -1814,16 +1831,18 @@ def restart():
 
         launch = _spawn_detached_server(host, port, token=token, reload=False)
         start_timeout = _api_restart_start_timeout_seconds()
+        expected_git_commit = _api_restart_expected_git_commit()
         if not _wait_for_server_start(
             host,
             port,
             timeout=start_timeout,
-            expected_pid=launch.pid,
+            expected_git_commit=expected_git_commit,
         ):
             alive = psutil.pid_exists(launch.pid)
             raise RuntimeError(
                 f"api server did not start at {host}:{port} within {start_timeout:g}s; "
-                f"spawned_pid={launch.pid} alive={str(alive).lower()} log={launch.log_path}"
+                f"spawned_pid={launch.pid} alive={str(alive).lower()} "
+                f"expected_git_commit={expected_git_commit or '-'} log={launch.log_path}"
             )
     except Exception as exc:
         _clear_restart_marker(marker)

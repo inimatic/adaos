@@ -323,7 +323,7 @@ def test_wait_for_server_start_requires_expected_pid_and_ready_health(monkeypatc
 
         @staticmethod
         def json():
-            return {"ok": True}
+            return {"ok": True, "adaos": {"git_commit": "abc123"}}
 
     monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda _host, _port: 4321)
     monkeypatch.setattr(api_cmd.requests, "get", lambda *_args, **_kwargs: _ReadyResponse())
@@ -332,14 +332,14 @@ def test_wait_for_server_start_requires_expected_pid_and_ready_health(monkeypatc
         "127.0.0.1",
         8777,
         timeout=0.5,
-        expected_pid=4321,
+        expected_git_commit="abc123",
         stability=0,
     )
     assert not api_cmd._wait_for_server_start(
         "127.0.0.1",
         8777,
         timeout=0.01,
-        expected_pid=9999,
+        expected_git_commit="other-build",
         stability=0,
     )
 
@@ -350,7 +350,7 @@ def test_wait_for_server_start_rejects_listener_without_ready_health(monkeypatch
 
         @staticmethod
         def json():
-            return {"detail": "not ready"}
+            return {"detail": "not ready", "adaos": {"git_commit": "abc123"}}
 
     monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda _host, _port: 4321)
     monkeypatch.setattr(api_cmd.requests, "get", lambda *_args, **_kwargs: _UnreadyResponse())
@@ -359,7 +359,7 @@ def test_wait_for_server_start_rejects_listener_without_ready_health(monkeypatch
         "127.0.0.1",
         8777,
         timeout=0.01,
-        expected_pid=4321,
+        expected_git_commit="abc123",
         stability=0,
     )
 
@@ -390,12 +390,13 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     monkeypatch.setattr(api_cmd, "_request_graceful_shutdown", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(api_cmd, "_spawn_detached_server", lambda *_args, **_kwargs: launch)
     monkeypatch.setattr(api_cmd, "_api_restart_start_timeout_seconds", lambda: 75.0)
+    monkeypatch.setattr(api_cmd, "_api_restart_expected_git_commit", lambda: "abc123")
     monkeypatch.setattr(
         api_cmd,
         "_wait_for_server_start",
-        lambda _host, _port, *, timeout, expected_pid: observed.update(
+        lambda _host, _port, *, timeout, expected_git_commit: observed.update(
             timeout=timeout,
-            expected_pid=expected_pid,
+            expected_git_commit=expected_git_commit,
         )
         or False,
     )
@@ -404,9 +405,10 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     result = runner.invoke(app, ["restart"])
 
     assert result.exit_code == 1
-    assert observed == {"timeout": 75.0, "expected_pid": 4321}
+    assert observed == {"timeout": 75.0, "expected_git_commit": "abc123"}
     assert "within 75s" in result.stdout
     assert "alive=true" in result.stdout
+    assert "expected_git_commit=abc123" in result.stdout
     assert str(launch.log_path) in result.stdout
 
 

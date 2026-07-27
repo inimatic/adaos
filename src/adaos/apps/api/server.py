@@ -2094,6 +2094,7 @@ async def status():
         "adaos": {
             "version": BUILD_INFO.version,
             "build_date": BUILD_INFO.build_date,
+            "git_commit": getattr(BUILD_INFO, "git_commit", ""),
         },
         "lifecycle": runtime_lifecycle_snapshot(),
         "runtime": _runtime_identity_public_payload(),
@@ -2269,11 +2270,25 @@ async def io_console_print(payload: SayRequestLike):
 # --- health endpoints (без авторизации; удобно для оркестраторов/проб) ---
 @app.get("/health/live")
 async def health_live():
-    return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
+    return {
+        "ok": True,
+        "adaos": {
+            "version": BUILD_INFO.version,
+            "build_date": BUILD_INFO.build_date,
+            "git_commit": getattr(BUILD_INFO, "git_commit", ""),
+        },
+    }
 
 
 @app.get("/health/ready")
 async def health_ready():
     if not is_ready() or is_draining():
         raise HTTPException(status_code=503, detail="not ready")
-    return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
+    return {
+        "ok": True,
+        "adaos": {
+            "version": BUILD_INFO.version,
+            "build_date": BUILD_INFO.build_date,
+            "git_commit": getattr(BUILD_INFO, "git_commit", ""),
+        },
+    }
