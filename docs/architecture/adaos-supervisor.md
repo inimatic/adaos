@@ -464,11 +464,21 @@ Rules:
   to the source/root/backup trees; apply and metadata commit are one transaction,
   and any partial copy or commit failure restores the complete snapshot before
   returning failure
+- promotion execution belongs to the validated candidate generation, not to
+  the older supervisor that requested the transition. The supervisor confines
+  the manifest repository and interpreter to the selected A/B slot, then runs
+  `adaos.apps.core_update_root_promote` with that slot's interpreter and only
+  that slot's source on `PYTHONPATH`. The candidate performs root promotion and
+  generates the replacement wrapper; the old supervisor accepts the structured
+  receipt and must not regenerate that wrapper from old code
 - bootstrap dependency closure is a tested contract. A package re-export added
   to a root-controlled `__init__.py` must bring its imported module into the
   bootstrap path set; the projected import preflight remains the final guard
   against an omitted transitive dependency
-- root promotion refreshes the autostart wrapper before restart. On every Linux
+- root promotion refreshes the autostart wrapper before restart. Shell wrappers
+  and the managed Linux CLI shim use a same-directory temporary file, `fsync`,
+  `bash -n` validation where Bash is native, and atomic replace; a failed write
+  or syntax check preserves the previous executable. On every Linux
   service start the wrapper verifies root imports without changing root. If
   that check fails, it starts the supervisor from the first importable active,
   previous, A, or B slot and records `state/root_recovery/latest.env`. This
@@ -483,6 +493,11 @@ Rules:
   the direct root mTLS client, not by realtime hub-root route readiness. A
   degraded WS/Yjs/control route therefore cannot strand an otherwise healthy
   node on an old core release; retries remain bounded by the supervisor interval
+- the supervisor monitor is a reconciler, not an ephemeral command owner. An
+  iteration exception is recorded and retried with bounded exponential backoff
+  against durable status/attempt guards; status exposes the monitor heartbeat,
+  last failure, and recovery count so a dead control scheduler cannot remain a
+  silent partial failure
 - a slot runtime may validate its application boot, but only the supervisor
   control plane may commit `root_promoted` as a completed root restart. The
   supervisor rechecks source parity before success, so an old surviving runtime

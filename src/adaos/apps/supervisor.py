@@ -2760,6 +2760,12 @@ class SupervisorManager:
         self._stopping = False
         self._lock = asyncio.Lock()
         self._monitor_task: asyncio.Task[Any] | None = None
+        self._monitor_loop_started_at: float | None = None
+        self._monitor_last_iteration_at: float | None = None
+        self._monitor_last_failure_at: float | None = None
+        self._monitor_last_failure: str | None = None
+        self._monitor_failure_total = 0
+        self._monitor_recovery_total = 0
         self._retired_runtime_tasks: set[asyncio.Task[Any]] = set()
         self._retired_runtime_procs: dict[int, Any] = {}
         self._restart_count = 0
@@ -6593,6 +6599,15 @@ class SupervisorManager:
             "last_exit_at": self._last_exit_at,
             "last_exit_code": self._last_exit_code,
             "last_error": self._last_error,
+            "monitor": {
+                "running": bool(self._monitor_task is not None and not self._monitor_task.done()),
+                "loop_started_at": self._monitor_loop_started_at,
+                "last_iteration_at": self._monitor_last_iteration_at,
+                "last_failure_at": self._monitor_last_failure_at,
+                "last_failure": self._monitor_last_failure,
+                "consecutive_failure_total": int(self._monitor_failure_total),
+                "recovery_total": int(self._monitor_recovery_total),
+            },
             "runtime_self_heal": self._runtime_self_heal_status_payload(),
             "updated_at": time.time(),
         }
@@ -8285,9 +8300,10 @@ class SupervisorManager:
             self._persist_runtime_state()
         return payload
 
-    async def monitor_forever(self) -> None:
+    async def _monitor_iteration_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            self._monitor_last_iteration_at = time.time()
             reconnect_hub_root_after_sidecar_restart = False
             sidecar_proc = self._sidecar_proc
             if sidecar_proc is not None and sidecar_proc.poll() is not None:
@@ -8552,6 +8568,44 @@ class SupervisorManager:
                         reason="supervisor.monitor.respawn_after_exit",
                         adopt_existing=True,
                     )
+
+    async def monitor_forever(self) -> None:
+        """Resume monitoring after a bounded iteration failure.
+
+        Mutating transitions retain their durable status and attempt guards, so
+        restarting this scheduler resumes reconciliation instead of blindly
+        replaying a completed command.
+        """
+        while not self._stopping:
+            started_at = time.time()
+            self._monitor_loop_started_at = started_at
+            try:
+                await self._monitor_iteration_loop()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                lived_for = max(0.0, time.time() - started_at)
+                if lived_for >= 60.0:
+                    self._monitor_failure_total = 0
+                self._monitor_failure_total += 1
+                self._monitor_recovery_total += 1
+                self._monitor_last_failure_at = time.time()
+                self._monitor_last_failure = f"{type(exc).__name__}: {exc}"
+                self._last_error = f"supervisor monitor recovered after {self._monitor_last_failure}"
+                self._persist_runtime_state()
+                delay_sec = min(30.0, float(2 ** min(4, max(0, self._monitor_failure_total - 1))))
+                _LOG.exception(
+                    "supervisor monitor iteration failed; resuming from durable state in %.1fs",
+                    delay_sec,
+                )
+                await asyncio.sleep(delay_sec)
+            else:
+                if not self._stopping:
+                    self._monitor_failure_total += 1
+                    self._monitor_recovery_total += 1
+                    self._monitor_last_failure_at = time.time()
+                    self._monitor_last_failure = "RuntimeError: monitor loop returned unexpectedly"
+                    await asyncio.sleep(1.0)
 
     async def start(self) -> None:
         try:

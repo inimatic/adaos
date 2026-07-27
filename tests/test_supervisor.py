@@ -4015,6 +4015,34 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
     assert persisted
 
 
+def test_supervisor_monitor_recovers_scheduler_after_iteration_failure(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    async def _iteration_loop() -> None:
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            raise RuntimeError("transient monitor failure")
+        manager._stopping = True
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(manager, "_monitor_iteration_loop", _iteration_loop)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(supervisor.asyncio, "sleep", _sleep)
+
+    asyncio.run(manager.monitor_forever())
+
+    assert calls == [1, 2]
+    assert sleeps == [1.0]
+    assert manager._monitor_recovery_total == 1
+    assert manager._monitor_failure_total == 1
+    assert manager._monitor_last_failure == "RuntimeError: transient monitor failure"
+
+
 def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
@@ -4063,7 +4091,7 @@ def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tm
     )
 
     with pytest.raises(_StopMonitor):
-        asyncio.run(manager.monitor_forever())
+        asyncio.run(manager._monitor_iteration_loop())
 
     assert reconnect_calls == []
 
@@ -4125,7 +4153,7 @@ def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatc
     )
 
     with pytest.raises(_StopMonitor):
-        asyncio.run(manager.monitor_forever())
+        asyncio.run(manager._monitor_iteration_loop())
 
     assert len(restart_calls) == 1
     assert restart_calls[0][:2] == (old_proc, "hub")
