@@ -64,7 +64,8 @@ broader frontend/WebSocket handoff remains separate.
 | B11 operator retry identity | corrected, validated-local | Builder binds confirmation and idempotency to the exact reviewed plan digest |
 | B12 verifier source fidelity | corrected, validated-local | proof adapter tracks current CAS/reload contracts and rejects DEV content that differs from the exact checkpoint inventory |
 | B13 registry trust boundary | corrected, validated-local | corrupt or unknown registry payloads, unsafe paths, and ambiguous aliases fail closed; read-modify-write mutations are serialized, durable writes are atomic, and historical incomplete manifests receive deterministic non-publishable compatibility identities |
-| B14 identity drift visibility | corrected, validated-local | read-only diagnostics distinguish registry/channel, immutable source/package/release, and active WorkspaceLock identities; the current Builder activation-without-channel drift is an explicit AP6 rollout gate |
+| B14 identity drift visibility | corrected, validated-local | read-only diagnostics distinguish registry/channel, installed subscription, immutable source/package/release, and active WorkspaceLock identities; Builder's installed subscription and lock agree while its missing discovery pointer is an explicit AP6 rollout gate |
+| B15 channel/subscription admission | corrected, validated-local | malformed or partial ChannelPointers, inconsistent channel indexes, and malformed/duplicate subscription records fail closed before reconciliation |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
@@ -432,13 +433,15 @@ readiness.
     migration fixtures, fail-closed registry admission, and atomic registry
     replacement without turning derived JSON into version authority.
 16. **Completed locally:** add a read-only identity explanation command and use
-    it on the current Builder installation. WorkspaceLock proves the package is
-    active, while the registry has no stable channel/source pointer; the tool
-    reports this drift and does not mutate either authority.
-17. **Next:** define and prove explicit registry-to-WorkspaceLock reconciliation,
-    then make a bounded package-only rollout decision. Replace single-zone
-    buffered storage with streamed/object-store multi-zone durability before
-    broad rollout.
+    it on the current Builder installation. The installed subscription and
+    WorkspaceLock agree, while the registry has no stable channel/source
+    pointer; the tool reports this drift and does not mutate either authority.
+17. **Completed locally:** make ChannelPointer, channel-index, and subscription
+    readers fail closed so malformed discovery data cannot authorize repair.
+18. **Next:** define reconciliation from a freshly validated remote channel and
+    immutable release plan into the local registry projection, then make a
+    bounded package-only rollout decision. Replace single-zone buffered storage
+    with streamed/object-store multi-zone durability before broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

@@ -11,6 +11,7 @@ from adaos.services.artifact_pipeline import (
     CandidateError,
     ChannelConflictError,
     ChannelError,
+    ChannelPointer,
     ContentAddressedPackageStore,
     PackageCatalog,
     ReleasePlan,
@@ -328,3 +329,87 @@ def test_pinned_subscription_reports_but_does_not_activate(tmp_path: Path) -> No
     assert notice.available is True
     assert notice.activation_allowed is False
     assert notice.reason == "pinned"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"future": True}, "unsupported fields"),
+        ({"release_digest": "sha256:bad"}, "release_digest"),
+        ({"source_revision": "main"}, "source revision"),
+        ({"release": "other@1.0.0"}, "does not match"),
+        ({"updated_at": "yesterday"}, "ISO-8601"),
+    ],
+)
+def test_channel_pointer_reader_rejects_untrusted_identity_fields(
+    mutation: dict[str, object],
+    message: str,
+) -> None:
+    payload = ChannelPointer(
+        project_id="recipes",
+        channel="stable",
+        release="recipes@1.0.0",
+        release_digest="sha256:" + "a" * 64,
+        source_revision="1" * 40,
+        updated_at="2026-07-27T00:00:00+00:00",
+    ).to_dict()
+    payload.update(mutation)
+
+    with pytest.raises(ChannelError, match=message):
+        ChannelPointer.from_mapping(payload)
+
+
+def test_channel_index_rejects_pointer_key_identity_mismatch(tmp_path: Path) -> None:
+    repository = ReleaseRepository(tmp_path / "registry-packages")
+    path = repository.channel_path("recipes")
+    path.parent.mkdir(parents=True)
+    pointer = ChannelPointer(
+        project_id="recipes",
+        channel="candidate",
+        release="recipes@1.0.0",
+        release_digest="sha256:" + "a" * 64,
+        source_revision="1" * 40,
+        updated_at="2026-07-27T00:00:00+00:00",
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.artifact.channel_index.v1",
+                "project_id": "recipes",
+                "channels": {"stable": pointer.to_dict()},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ChannelError, match="key does not match"):
+        repository.get_channel("recipes", "stable")
+
+
+@pytest.mark.parametrize(
+    "subscriptions",
+    [
+        ["not-an-object"],
+        [
+            StableSubscription(project_id="recipes").to_dict(),
+            StableSubscription(project_id="recipes").to_dict(),
+        ],
+    ],
+)
+def test_subscription_store_rejects_malformed_or_duplicate_records(
+    tmp_path: Path,
+    subscriptions: list[object],
+) -> None:
+    path = tmp_path / "subscriptions.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.artifact.subscription_set.v1",
+                "subscriptions": subscriptions,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ChannelError):
+        SubscriptionStore(path).load()

@@ -12,6 +12,7 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     ProjectRelease,
+    StableSubscription,
     WorkspaceLock,
     WorkspaceSlot,
 )
@@ -88,6 +89,18 @@ def _sealed_workspace(workspace: Path) -> tuple[ProjectRelease, ArtifactPackageR
         components=(package,),
     )
     atomic_write_json(workspace / ".adaos" / "workspace.lock.json", lock.to_dict())
+    subscription = StableSubscription(
+        project_id="recipes",
+        installed_release="recipes@1.2.3",
+        installed_digest=release.release_digest,
+    )
+    atomic_write_json(
+        workspace / ".adaos" / "subscriptions.json",
+        {
+            "schema": "adaos.artifact.subscription_set.v1",
+            "subscriptions": [subscription.to_dict()],
+        },
+    )
     return release, package
 
 
@@ -113,6 +126,7 @@ def test_identity_explanation_keeps_historical_alias_and_yaml_authority(tmp_path
     assert result["release"]["status"] == "not_resolved"
     assert result["package"]["status"] == "not_resolved"
     assert result["activation"]["status"] == "legacy_unlocked"
+    assert result["subscription"]["status"] == "not_subscribed"
     assert "canonical_manifest_version_missing" in result["warnings"]
 
 
@@ -140,6 +154,7 @@ def test_identity_explanation_links_channel_pointer_to_active_workspace_lock(tmp
     assert result["package"]["digest"] == package.digest
     assert result["package"]["active"] == package.to_dict()
     assert result["activation"]["status"] == "active_selected_package"
+    assert result["subscription"]["status"] == "active_installed"
     assert result["activation"]["component"] == package.to_dict()
     assert result["activation"]["slots"][0]["slot_id"] == "primary"
     assert result["warnings"] == []

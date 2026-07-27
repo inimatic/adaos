@@ -121,10 +121,11 @@ Remaining acceptance blockers:
 - keep frontend replacement, long-lived WebSocket continuity, and proxy
   control-plane evolution separate from the now-proven bounded backend HTTP
   handoff before claiming broad zero-downtime operation;
-- explicitly reconcile legacy registry discovery with the active WorkspaceLock
-  before rollout: the local Builder diagnostic currently reports an active
-  package without a stable channel/source pointer; production and marketplace
-  acceptance remain deferred.
+- revalidate the authoritative remote stable channel and explicitly project it
+  into legacy registry discovery before rollout. The local Builder diagnostic
+  proves its installed subscription matches the active WorkspaceLock, while the
+  registry cache has no stable channel/source pointer; production and
+  marketplace acceptance remain deferred.
 
 The original backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
@@ -227,9 +228,11 @@ and v2 catalog reads do not rescan manifests.
 `AP0-08` adds the read-only `adaos maintenance artifact-identity` command. It
 keeps registry/channel identity separate from active WorkspaceLock identity and
 reports drift instead of synthesizing missing pointers. On this machine the
-Builder scenario is correctly active in WorkspaceLock, while its local registry
-still has no stable channel/source pointer; that is now an explicit AP6 rollout
-gate rather than hidden compatibility state.
+Builder scenario's installed subscription and active WorkspaceLock agree, while
+its local registry still has no stable channel/source pointer. That cache can be
+reconciled only from a newly validated remote ChannelPointer, not inferred from
+the active package; this is now an explicit AP6 rollout gate rather than hidden
+compatibility state.
 
 ## Milestone AP1: Deterministic Immutable Packages
 
@@ -512,6 +515,9 @@ candidate-scoped writer lease and durable receipts for admission, channel CAS,
 Workspace activation, registry projection, and subscription observation.
 Regressions cover both a lost channel response and a failure after successful
 activation; retry continues without a second channel write or activation.
+ChannelPointer and subscription-set readers now reject missing or unknown
+fields, malformed digests/revisions/timestamps, inconsistent index keys, and
+duplicate subscriptions before their identity can enter reconciliation.
 
 ## Milestone AP6: Stable Subscription And Package Update
 

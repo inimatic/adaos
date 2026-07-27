@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from adaos.domain.artifact_release import ProjectRef, StableSubscription
+from adaos.domain.artifact_release import (
+    ArtifactReleaseContractError,
+    ArtifactSourceRef,
+    ProjectRef,
+    StableSubscription,
+)
 from adaos.services.artifact_pipeline.activation import (
     ActivationResult,
     WorkspaceActivationManager,
@@ -20,6 +26,8 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 RELEASE_PLAN_SCHEMA = "adaos.artifact.release_plan.v1"
 CHANNEL_INDEX_SCHEMA = "adaos.artifact.channel_index.v1"
 SUBSCRIPTION_SET_SCHEMA = "adaos.artifact.subscription_set.v1"
+_SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ChannelError(RuntimeError):
@@ -49,6 +57,48 @@ class ChannelPointer:
     source_revision: str
     updated_at: str
 
+    def __post_init__(self) -> None:
+        try:
+            project_id = ProjectRef(self.project_id).project_id
+        except ArtifactReleaseContractError as exc:
+            raise ChannelError(str(exc)) from exc
+        channel = str(self.channel or "").strip()
+        if not channel or not all(
+            char.isalnum() or char in {"-", "_", "."} for char in channel
+        ):
+            raise ChannelError("channel must be a safe canonical name")
+        release = str(self.release or "").strip()
+        if "@" not in release:
+            raise ChannelError("channel release must be <project_id>@<semantic-version>")
+        release_project, release_version = release.rsplit("@", 1)
+        if release_project != project_id or not _SEMVER_RE.fullmatch(release_version):
+            raise ChannelError("channel release does not match project identity and semantic version")
+        release_digest = str(self.release_digest or "").strip().lower()
+        if not _DIGEST_RE.fullmatch(release_digest):
+            raise ChannelError("channel release_digest must be sha256:<64 lowercase hex characters>")
+        source_revision = str(self.source_revision or "").strip()
+        try:
+            source_revision = ArtifactSourceRef(
+                forge="channel",
+                repository="channel-pointer",
+                revision=source_revision,
+            ).revision
+        except ArtifactReleaseContractError as exc:
+            raise ChannelError(f"invalid channel source revision: {exc}") from exc
+        updated_at = str(self.updated_at or "").strip()
+        try:
+            parsed = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ChannelError("channel updated_at must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ChannelError("channel updated_at must include a timezone")
+        object.__setattr__(self, "project_id", project_id)
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(self, "release", release)
+        object.__setattr__(self, "release_digest", release_digest)
+        object.__setattr__(self, "source_revision", source_revision)
+        object.__setattr__(self, "updated_at", updated_at)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
@@ -61,6 +111,26 @@ class ChannelPointer:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ChannelPointer":
+        allowed = {
+            "project_id",
+            "channel",
+            "release",
+            "release_digest",
+            "source_revision",
+            "updated_at",
+        }
+        unknown = set(value) - allowed
+        missing = allowed - set(value)
+        if unknown:
+            raise ChannelError(
+                "channel pointer contains unsupported fields: "
+                + ", ".join(sorted(str(item) for item in unknown))
+            )
+        if missing:
+            raise ChannelError(
+                "channel pointer is missing required fields: "
+                + ", ".join(sorted(missing))
+            )
         return cls(
             project_id=str(value.get("project_id") or ""),
             channel=str(value.get("channel") or ""),
@@ -157,6 +227,7 @@ class ReleaseRepository:
         return plan
 
     def _read_channels(self, project_id: str) -> dict[str, Any]:
+        project_id = ProjectRef(project_id).project_id
         path = self.channel_path(project_id)
         if not path.is_file():
             return {
@@ -167,6 +238,23 @@ class ReleaseRepository:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("schema") != CHANNEL_INDEX_SCHEMA:
             raise ChannelError("unsupported channel index")
+        unknown = set(payload) - {"schema", "project_id", "channels", "updated_at"}
+        if unknown:
+            raise ChannelError(
+                "channel index contains unsupported fields: "
+                + ", ".join(sorted(str(item) for item in unknown))
+            )
+        if payload.get("project_id") != project_id:
+            raise ChannelError("channel index belongs to a different project")
+        channels = payload.get("channels")
+        if not isinstance(channels, Mapping):
+            raise ChannelError("channel index channels must be an object")
+        for channel, raw_pointer in channels.items():
+            if not isinstance(raw_pointer, Mapping):
+                raise ChannelError("channel index entries must be objects")
+            pointer = ChannelPointer.from_mapping(raw_pointer)
+            if pointer.project_id != project_id or pointer.channel != channel:
+                raise ChannelError("channel index key does not match pointer identity")
         return payload
 
     def set_channel(
@@ -282,11 +370,28 @@ class SubscriptionStore:
         payload = json.loads(self.path.read_text(encoding="utf-8"))
         if not isinstance(payload, Mapping) or payload.get("schema") != SUBSCRIPTION_SET_SCHEMA:
             raise ChannelError("unsupported subscription set")
+        unknown = set(payload) - {"schema", "subscriptions"}
+        if unknown:
+            raise ChannelError(
+                "subscription set contains unsupported fields: "
+                + ", ".join(sorted(str(item) for item in unknown))
+            )
+        raw_subscriptions = payload.get("subscriptions")
+        if not isinstance(raw_subscriptions, list) or any(
+            not isinstance(item, Mapping) for item in raw_subscriptions
+        ):
+            raise ChannelError("subscription set must contain a list of objects")
         result: dict[str, StableSubscription] = {}
-        for item in payload.get("subscriptions") or ():
-            if isinstance(item, Mapping):
+        for item in raw_subscriptions:
+            try:
                 subscription = StableSubscription.from_mapping(item)
-                result[subscription.project_id] = subscription
+            except ArtifactReleaseContractError as exc:
+                raise ChannelError(f"invalid subscription: {exc}") from exc
+            if subscription.project_id in result:
+                raise ChannelError(
+                    f"duplicate subscription for {subscription.project_id}"
+                )
+            result[subscription.project_id] = subscription
         return result
 
     def save(self, subscription: StableSubscription) -> None:

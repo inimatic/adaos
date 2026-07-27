@@ -9,6 +9,7 @@ from adaos.domain.artifact_release import (
     ArtifactReleaseContractError,
     ArtifactSourceRef,
     ProjectRef,
+    StableSubscription,
     WorkspaceLock,
 )
 from adaos.services.workspace_registry import (
@@ -88,6 +89,12 @@ def explain_workspace_artifact_identity(
         selected_project_id=release.get("project_id"),
         warnings=warnings,
     )
+    subscription = _explain_subscription(
+        root,
+        project_id=str(release.get("project_id") or canonical_id),
+        activation=activation,
+        warnings=warnings,
+    )
     _correlate_active_identity(
         source=source,
         release=release,
@@ -135,6 +142,7 @@ def explain_workspace_artifact_identity(
             "available": sorted(str(item) for item in channel_map),
             "pointer": pointer,
         },
+        "subscription": subscription,
         "release": release,
         "package": package,
         "activation": activation,
@@ -318,6 +326,78 @@ def _explain_activation(
         "component": component.to_dict() if component is not None else None,
         "slots": slots,
         "bindings": bindings,
+    }
+
+
+def _explain_subscription(
+    workspace_root: Path,
+    *,
+    project_id: str,
+    activation: Mapping[str, Any],
+    warnings: list[str],
+) -> dict[str, Any]:
+    path = workspace_root / ".adaos" / "subscriptions.json"
+    if not path.is_file():
+        warnings.append("subscription_not_present")
+        return {"status": "not_subscribed", "path": str(path), "record": None}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise ArtifactIdentityDiagnosticError("subscription set must contain an object")
+        if payload.get("schema") != "adaos.artifact.subscription_set.v1":
+            raise ArtifactIdentityDiagnosticError("unsupported subscription set schema")
+        unknown = set(payload) - {"schema", "subscriptions"}
+        if unknown:
+            raise ArtifactIdentityDiagnosticError(
+                "subscription set contains unsupported fields: "
+                + ", ".join(sorted(str(item) for item in unknown))
+            )
+        raw_subscriptions = payload.get("subscriptions")
+        if not isinstance(raw_subscriptions, list) or any(
+            not isinstance(item, Mapping) for item in raw_subscriptions
+        ):
+            raise ArtifactIdentityDiagnosticError(
+                "subscription set must contain a list of objects"
+            )
+        subscriptions: dict[str, StableSubscription] = {}
+        for item in raw_subscriptions:
+            subscription = StableSubscription.from_mapping(item)
+            if subscription.project_id in subscriptions:
+                raise ArtifactIdentityDiagnosticError(
+                    f"duplicate subscription for {subscription.project_id}"
+                )
+            subscriptions[subscription.project_id] = subscription
+    except ArtifactIdentityDiagnosticError:
+        raise
+    except (OSError, json.JSONDecodeError, ArtifactReleaseContractError) as exc:
+        raise ArtifactIdentityDiagnosticError(
+            f"cannot trust subscription set: {exc}"
+        ) from exc
+
+    subscription = subscriptions.get(project_id)
+    if subscription is None:
+        warnings.append("subscription_not_present")
+        return {"status": "not_subscribed", "path": str(path), "record": None}
+
+    active_slots = activation.get("slots")
+    slots = [item for item in active_slots if isinstance(item, Mapping)] if isinstance(active_slots, list) else []
+    matches = any(
+        item.get("release") == subscription.installed_release
+        and item.get("release_digest") == subscription.installed_digest
+        for item in slots
+    )
+    if matches:
+        status = "active_installed"
+    elif slots:
+        status = "active_differs_from_installed"
+        warnings.append("active_release_differs_from_subscription")
+    else:
+        status = "installed_not_active"
+        warnings.append("subscribed_release_not_active")
+    return {
+        "status": status,
+        "path": str(path),
+        "record": subscription.to_dict(),
     }
 
 
