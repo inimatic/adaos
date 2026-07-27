@@ -52,6 +52,10 @@ from adaos.services.artifact_pipeline.reconciliation import (
     RegistryReconciliationPlan,
     WorkspaceRegistryReconciler,
 )
+from adaos.services.artifact_pipeline.recovery import (
+    RemoteRegistryRecoveryManager,
+    RemoteRegistryRecoveryPlan,
+)
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     atomic_write_json,
@@ -298,6 +302,11 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             remote=self.remote,
         )
+        self.remote_registry_recovery = RemoteRegistryRecoveryManager(
+            state_root=self.state_root,
+            workspace_root=self.workspace_root,
+            remote=self.remote,
+        )
 
     def plan_registry_reconciliation(
         self,
@@ -325,6 +334,53 @@ class ArtifactPublicationService:
         if kind not in {"skill", "scenario"}:
             raise PublicationError("artifact kind must be skill or scenario")
         return self.registry_reconciler.apply(
+            project_id,
+            kind=kind,
+            channel=channel,
+            reviewed_plan_digest=reviewed_plan_digest,
+        )
+
+    def plan_remote_registry_recovery(
+        self,
+        project_id: str,
+        *,
+        kind: str,
+        channel: str = "stable",
+    ) -> RemoteRegistryRecoveryPlan:
+        if kind not in {"skill", "scenario"}:
+            raise PublicationError("artifact kind must be skill or scenario")
+        return self.remote_registry_recovery.plan(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+
+    def revalidate_remote_registry_recovery(
+        self,
+        project_id: str,
+        *,
+        kind: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        if kind not in {"skill", "scenario"}:
+            raise PublicationError("artifact kind must be skill or scenario")
+        return self.remote_registry_recovery.revalidate(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+
+    def apply_remote_registry_recovery(
+        self,
+        project_id: str,
+        *,
+        kind: str,
+        reviewed_plan_digest: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        if kind not in {"skill", "scenario"}:
+            raise PublicationError("artifact kind must be skill or scenario")
+        return self.remote_registry_recovery.apply(
             project_id,
             kind=kind,
             channel=channel,

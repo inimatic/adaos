@@ -230,6 +230,49 @@ class _DeveloperService:
             "status": "completed",
         }
 
+    def plan_artifact_remote_registry_recovery(self, kind, project_id, *, channel="stable"):
+        return {
+            "ok": True,
+            "kind": kind,
+            "project_id": project_id,
+            "channel": channel,
+            "action": "restore_remote_registry",
+            "plan_digest": "sha256:" + "c" * 64,
+        }
+
+    def revalidate_artifact_remote_registry_recovery(
+        self,
+        kind,
+        project_id,
+        *,
+        channel="stable",
+    ):
+        return {
+            "ok": True,
+            "kind": kind,
+            "project_id": project_id,
+            "channel": channel,
+            "status": "completed",
+            "legacy_candidate": True,
+        }
+
+    def apply_artifact_remote_registry_recovery(
+        self,
+        kind,
+        project_id,
+        *,
+        reviewed_plan_digest,
+        channel="stable",
+    ):
+        return {
+            "ok": True,
+            "kind": kind,
+            "project_id": project_id,
+            "channel": channel,
+            "reviewed_plan_digest": reviewed_plan_digest,
+            "status": "completed",
+        }
+
     def plan_artifact_subscription_update(self, project_id):
         return {
             "ok": True,
@@ -317,6 +360,16 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         "builder",
         reviewed_plan_digest=reconciliation_plan["plan_digest"],
     )
+    recovery_plan = projects.plan_remote_registry_recovery("scenario", "builder")
+    revalidation = projects.revalidate_remote_registry_recovery(
+        "scenario",
+        "builder",
+    )
+    recovery = projects.apply_remote_registry_recovery(
+        "scenario",
+        "builder",
+        reviewed_plan_digest=recovery_plan["plan_digest"],
+    )
     inspection = projects.inspect_subscription_update("builder")
     update_plan = projects.plan_subscription_update("builder")
     subscription_update = projects.activate_subscription(
@@ -335,6 +388,10 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
     assert reconciliation_plan["action"] == "project_remote_channel"
     assert reconciliation["status"] == "completed"
     assert reconciliation["reviewed_plan_digest"] == reconciliation_plan["plan_digest"]
+    assert recovery_plan["action"] == "restore_remote_registry"
+    assert revalidation["legacy_candidate"] is True
+    assert recovery["status"] == "completed"
+    assert recovery["reviewed_plan_digest"] == recovery_plan["plan_digest"]
     assert inspection["update_plan"]["activation"]["target_release"] == "builder@1.1.0"
     assert update_plan["plan_digest"].startswith("sha256:")
     assert subscription_update["idempotency_key"] == "update-builder-1"

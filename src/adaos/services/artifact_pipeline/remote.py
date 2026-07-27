@@ -97,6 +97,11 @@ class RemoteReleaseRepository:
             if archive is None:
                 raise ValueError(f"archive is missing for {package.key}@{package.digest}")
             self.put_package(package, archive)
+        self.put_release_record(plan)
+
+    def put_release_record(self, plan: ReleasePlan) -> None:
+        """Publish only the immutable release record after packages are durable."""
+
         digest = plan.release.release_digest or plan.release.computed_digest()
         self.client.put_project_release(
             project_id=plan.release.project_id,

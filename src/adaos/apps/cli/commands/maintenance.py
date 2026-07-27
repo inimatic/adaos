@@ -160,3 +160,86 @@ def artifact_registry_reconcile_cmd(
     except (ValueError, FileNotFoundError, RuntimeError, OSError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     _emit(payload, json_output=json_output)
+
+
+@app.command("artifact-registry-recover")
+def artifact_registry_recover_cmd(
+    project_id: str = typer.Argument(..., help="Canonical installed project id."),
+    kind: str = typer.Option(..., "--kind", help="Artifact kind: scenario or skill."),
+    channel: str = typer.Option("stable", "--channel", help="Missing remote channel to restore."),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the exact reviewed remote recovery; otherwise only return a plan.",
+    ),
+    reviewed_plan_digest: str | None = typer.Option(
+        None,
+        "--reviewed-plan-digest",
+        help="Exact recovery plan digest returned by the preceding read-only invocation.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit formatted JSON."),
+) -> None:
+    """Restore missing remote package/release/channel state from attested receipts."""
+
+    normalized_kind = str(kind or "").strip().lower().rstrip("s")
+    if normalized_kind not in {"scenario", "skill"}:
+        raise typer.BadParameter("kind must be scenario or skill", param_hint="--kind")
+    service = _root_developer_service()
+    try:
+        if apply:
+            reviewed = str(reviewed_plan_digest or "").strip().lower()
+            if not reviewed:
+                raise typer.BadParameter(
+                    "--reviewed-plan-digest is required with --apply",
+                    param_hint="--reviewed-plan-digest",
+                )
+            payload = service.apply_artifact_remote_registry_recovery(
+                normalized_kind,
+                project_id,
+                channel=channel,
+                reviewed_plan_digest=reviewed,
+            )
+        else:
+            payload = service.plan_artifact_remote_registry_recovery(
+                normalized_kind,
+                project_id,
+                channel=channel,
+            )
+    except typer.BadParameter:
+        raise
+    except (ValueError, FileNotFoundError, RuntimeError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("artifact-registry-revalidate")
+def artifact_registry_revalidate_cmd(
+    project_id: str = typer.Argument(..., help="Canonical installed project id."),
+    kind: str = typer.Option(..., "--kind", help="Artifact kind: scenario or skill."),
+    channel: str = typer.Option("stable", "--channel", help="Recovery channel identity."),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Run the exact installed release in a new isolated empty-data Workspace.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit formatted JSON."),
+) -> None:
+    """Create current-contract trial evidence for a legacy accepted release."""
+
+    normalized_kind = str(kind or "").strip().lower().rstrip("s")
+    if normalized_kind not in {"scenario", "skill"}:
+        raise typer.BadParameter("kind must be scenario or skill", param_hint="--kind")
+    if not confirm:
+        raise typer.BadParameter(
+            "--confirm is required to create an isolated revalidation Workspace",
+            param_hint="--confirm",
+        )
+    try:
+        payload = _root_developer_service().revalidate_artifact_remote_registry_recovery(
+            normalized_kind,
+            project_id,
+            channel=channel,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)

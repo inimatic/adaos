@@ -663,6 +663,11 @@ class ContentAddressedPackageStore:
         data, _ = self._read_verified(digest)
         return data
 
+    def read_verified(self, digest: str) -> tuple[bytes, VerifiedArtifactPackage]:
+        """Read and verify one cached archive in a single traversal."""
+
+        return self._read_verified(digest)
+
     def verify(self, digest: str) -> VerifiedArtifactPackage:
         _, verified = self._read_verified(digest)
         return verified

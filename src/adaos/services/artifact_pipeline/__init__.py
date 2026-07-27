@@ -66,6 +66,15 @@ from .reconciliation import (
     RegistryReconciliationPlan,
     WorkspaceRegistryReconciler,
 )
+from .recovery import (
+    REMOTE_REGISTRY_RECOVERY_OPERATION_SCHEMA,
+    REMOTE_REGISTRY_RECOVERY_PLAN_SCHEMA,
+    REMOTE_REGISTRY_REVALIDATION_SCHEMA,
+    RemoteRegistryRecoveryError,
+    RemoteRegistryRecoveryManager,
+    RemoteRegistryRecoveryPlan,
+    RemoteRegistryRecoveryRemote,
+)
 from .retention import (
     ArtifactPipelineRetentionManager,
     ArtifactRetentionError,
@@ -130,6 +139,9 @@ __all__ = [
     "REBASE_PLAN_SCHEMA",
     "REGISTRY_RECONCILIATION_OPERATION_SCHEMA",
     "REGISTRY_RECONCILIATION_PLAN_SCHEMA",
+    "REMOTE_REGISTRY_RECOVERY_OPERATION_SCHEMA",
+    "REMOTE_REGISTRY_RECOVERY_PLAN_SCHEMA",
+    "REMOTE_REGISTRY_REVALIDATION_SCHEMA",
     "CandidateRebasePlan",
     "PreparedCandidate",
     "PromotionResult",
@@ -155,6 +167,10 @@ __all__ = [
     "RegistryProjectionRemote",
     "RegistryReconciliationError",
     "RegistryReconciliationPlan",
+    "RemoteRegistryRecoveryError",
+    "RemoteRegistryRecoveryManager",
+    "RemoteRegistryRecoveryPlan",
+    "RemoteRegistryRecoveryRemote",
     "SourceProvider",
     "SourceProviderError",
     "SubscriptionManager",

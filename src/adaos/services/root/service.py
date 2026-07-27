@@ -2214,6 +2214,55 @@ class RootDeveloperService:
         )
         return {"ok": True, **result}
 
+    def plan_artifact_remote_registry_recovery(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plan = self._artifact_publication_service(cfg).plan_remote_registry_recovery(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+        return {"ok": True, **plan.to_dict()}
+
+    def revalidate_artifact_remote_registry_recovery(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        result = self._artifact_publication_service(
+            cfg
+        ).revalidate_remote_registry_recovery(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+        return {"ok": True, **result}
+
+    def apply_artifact_remote_registry_recovery(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        reviewed_plan_digest: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        result = self._artifact_publication_service(cfg).apply_remote_registry_recovery(
+            project_id,
+            kind=kind,
+            channel=channel,
+            reviewed_plan_digest=reviewed_plan_digest,
+        )
+        return {"ok": True, **result}
+
     def plan_artifact_subscription_update(self, project_id: str) -> dict[str, Any]:
         cfg = self._load_config()
         plan = self._artifact_publication_service(cfg).plan_subscription_update(project_id)
