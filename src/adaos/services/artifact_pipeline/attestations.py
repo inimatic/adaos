@@ -629,6 +629,14 @@ class ArtifactAttestationStore(Protocol):
     ) -> tuple[ArtifactAttestation, ...]: ...
 
 
+class ReleaseAttestationBindingStore(Protocol):
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> Any: ...
+
+
 class ContentAddressedAttestationStore:
     def __init__(self, root: Path) -> None:
         self.root = Path(root).expanduser().resolve()
@@ -874,10 +882,12 @@ class ArtifactAttestationAdmission:
         store: ArtifactAttestationStore,
         trust_store: ArtifactTrustStore,
         policy: ArtifactAttestationPolicy | None = None,
+        release_sets: ReleaseAttestationBindingStore | None = None,
     ) -> None:
         self.store = store
         self.trust_store = trust_store
         self.policy = policy or ArtifactAttestationPolicy()
+        self.release_sets = release_sets
 
     def policy_summary(self) -> dict[str, Any]:
         return {
@@ -885,6 +895,7 @@ class ArtifactAttestationAdmission:
             "required_subjects": list(self.policy.required_subjects),
             "allowed_issuers": list(self.policy.allowed_issuers),
             "minimum_signatures": self.policy.minimum_signatures,
+            "release_binding_required": self.release_sets is not None,
         }
 
     def verify_subject(
@@ -895,6 +906,7 @@ class ArtifactAttestationAdmission:
         project_id: str,
         predicate_type: str,
         predicate_digest: str,
+        attestations: Iterable[ArtifactAttestation] | None = None,
     ) -> dict[str, Any]:
         if subject_kind not in self.policy.required_subjects:
             return {
@@ -903,11 +915,15 @@ class ArtifactAttestationAdmission:
                 "subject_digest": subject_digest,
                 "reason": "subject_not_required_by_policy",
             }
-        attestations = self.store.list_for_subject(subject_kind, subject_digest)
+        candidates = (
+            tuple(attestations)
+            if attestations is not None
+            else self.store.list_for_subject(subject_kind, subject_digest)
+        )
         valid: list[dict[str, Any]] = []
         rejected: list[str] = []
         seen_keys: set[str] = set()
-        for attestation in attestations:
+        for attestation in candidates:
             try:
                 receipt = verify_artifact_attestation(
                     attestation,
@@ -941,7 +957,55 @@ class ArtifactAttestationAdmission:
         }
 
     def verify_release_plan(self, plan: ReleasePlan) -> dict[str, Any]:
+        from adaos.services.artifact_pipeline.attestation_sets import (
+            ArtifactAttestationRef,
+            ReleaseAttestationSet,
+        )
+
         release_digest = plan.release.release_digest or plan.release.computed_digest()
+        binding: ReleaseAttestationSet | None = None
+        bound_assets: dict[tuple[str, str], tuple[ArtifactAttestation, ...]] = {}
+        if self.release_sets is not None:
+            try:
+                observed = self.release_sets.get_release_attestation_set(
+                    plan.release.project_id,
+                    release_digest,
+                )
+                binding = (
+                    observed
+                    if isinstance(observed, ReleaseAttestationSet)
+                    else ReleaseAttestationSet.from_mapping(observed)
+                ).validate_plan(plan)
+                grouped: dict[tuple[str, str], list[Any]] = {}
+                for reference in binding.attestations:
+                    grouped.setdefault(
+                        (reference.subject_kind, reference.subject_digest), []
+                    ).append(reference)
+                for subject, references in grouped.items():
+                    available = {
+                        str(item.attestation_digest): item
+                        for item in self.store.list_for_subject(*subject)
+                    }
+                    selected: list[ArtifactAttestation] = []
+                    for reference in references:
+                        asset = available.get(reference.attestation_digest)
+                        if asset is None:
+                            raise ArtifactAttestationVerificationError(
+                                "release attestation binding references a missing immutable asset: "
+                                f"{reference.attestation_digest}"
+                            )
+                        if ArtifactAttestationRef.from_attestation(asset) != reference:
+                            raise ArtifactAttestationVerificationError(
+                                "release attestation binding reference differs from its immutable asset"
+                            )
+                        selected.append(asset)
+                    bound_assets[subject] = tuple(selected)
+            except ArtifactAttestationVerificationError:
+                raise
+            except Exception as exc:
+                raise ArtifactAttestationVerificationError(
+                    f"release attestation binding verification failed: {exc}"
+                ) from exc
         receipts = [
             self.verify_subject(
                 subject_kind="release",
@@ -949,6 +1013,7 @@ class ArtifactAttestationAdmission:
                 project_id=plan.release.project_id,
                 predicate_type=RELEASE_PROVENANCE_PREDICATE,
                 predicate_digest=release_provenance_digest(plan.release),
+                attestations=bound_assets.get(("release", release_digest)) if binding else None,
             )
         ]
         receipts.extend(
@@ -958,15 +1023,26 @@ class ArtifactAttestationAdmission:
                 project_id=plan.release.project_id,
                 predicate_type=PACKAGE_PROVENANCE_PREDICATE,
                 predicate_digest=package_provenance_digest(package),
+                attestations=(
+                    bound_assets.get(("package", package.digest)) if binding else None
+                ),
             )
             for package in sorted(plan.packages, key=lambda value: value.key)
         )
-        return {
+        result = {
             "schema": "adaos.artifact.attestation_admission.v1",
             "status": "verified",
             "policy": self.policy_summary(),
             "subjects": receipts,
         }
+        if binding is not None:
+            result["release_attestation_set"] = {
+                "project_id": binding.project_id,
+                "release_digest": binding.release_digest,
+                "attestation_set_digest": binding.attestation_set_digest,
+                "references": len(binding.attestations),
+            }
+        return result
 
 
 __all__ = [
@@ -981,6 +1057,7 @@ __all__ = [
     "ArtifactAttestationError",
     "ArtifactAttestationPolicy",
     "ArtifactAttestationStore",
+    "ReleaseAttestationBindingStore",
     "ArtifactAttestationVerificationError",
     "ArtifactTrustStore",
     "ContentAddressedAttestationStore",

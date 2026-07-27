@@ -87,6 +87,8 @@ def test_required_mode_fails_closed_until_trust_store_is_provisioned(
 
     assert runtime.admission is not None
     assert runtime.admission.policy.allowed_issuers == ("inimatic.release",)
+    assert runtime.admission.release_sets is not None
+    assert runtime.admission.policy_summary()["release_binding_required"] is True
     assert runtime.publisher is None
 
 

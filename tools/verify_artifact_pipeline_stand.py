@@ -9,9 +9,14 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager
+from adaos.services.artifact_pipeline.attestation_publication import (
+    ArtifactAttestationPublisher,
+)
+from adaos.services.artifact_pipeline.attestations import ArtifactAttestationAdmission
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.remote import RemoteReleaseRepository
+from adaos.services.artifact_pipeline.runtime_trust import compose_artifact_trust_runtime
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.root.client import RootHttpClient
 
@@ -36,6 +41,14 @@ class StandRemote(Protocol):
     def get_channel(self, project_id: str, channel: str = "stable") -> Any: ...
 
     def fetch_package(self, package: Any) -> bytes: ...
+
+    def put_release_attestation_set(self, attestation_set: Any) -> Any: ...
+
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> Any: ...
 
 
 def _now_iso() -> str:
@@ -125,6 +138,8 @@ def run_external_stand(
     channel: str,
     source_evidence: Path,
     backend_health: Mapping[str, Any],
+    attestation_publisher: ArtifactAttestationPublisher | None = None,
+    attestation_admission: ArtifactAttestationAdmission | None = None,
 ) -> dict[str, Any]:
     stand_root = Path(stand_root).expanduser().resolve()
     if stand_root.exists():
@@ -167,6 +182,28 @@ def run_external_stand(
         remote.put_release(plan, archives)
         record("remote-release-admitted", package_count=len(plan.packages))
 
+        if attestation_publisher is not None:
+            publication = attestation_publisher.publish(
+                plan,
+                idempotency_key=f"clean-stand-attestations:{release_digest}",
+            )
+            if publication.status != "completed":
+                raise RuntimeError("clean stand attestations were not fully published")
+            exact_set = publication.release_attestation_set(plan)
+            bound = remote.put_release_attestation_set(exact_set).validate_plan(plan)
+            observed_set = remote.get_release_attestation_set(
+                plan.release.project_id,
+                release_digest,
+            ).validate_plan(plan)
+            if bound != exact_set or observed_set != exact_set:
+                raise RuntimeError("remote release attestation binding differs from publication")
+            record(
+                "remote-attestations-bound",
+                operation_id=publication.operation_id,
+                attestation_count=len(publication.attestations),
+                attestation_set_digest=exact_set.attestation_set_digest,
+            )
+
         pointer = remote.set_channel(
             plan,
             channel,
@@ -193,6 +230,7 @@ def run_external_stand(
             package_store=package_store,
             state_root=stand_root / "state",
             delayed_verification_seconds=0,
+            attestation_admission=attestation_admission,
         )
         result = manager.activate(
             fetched_plan,
@@ -216,6 +254,7 @@ def run_external_stand(
             operation_id=result.operation_id,
             lock_digest=result.workspace_lock.to_dict()["lock_digest"],
             delayed_verification_id=result.delayed_verification_id,
+            attestations_required=attestation_admission is not None,
         )
 
         evidence.update(
@@ -260,6 +299,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--key", type=Path, required=True)
     parser.add_argument("--channel")
     parser.add_argument("--expected-backend-commit")
+    parser.add_argument("--attestations-required", action="store_true")
+    parser.add_argument("--signing-key", type=Path)
+    parser.add_argument("--signing-issuer")
+    parser.add_argument("--trust-store", type=Path)
+    parser.add_argument("--allowed-issuer", action="append", default=[])
     parser.add_argument(
         "--publish",
         action="store_true",
@@ -304,6 +348,43 @@ def main() -> int:
         raise SystemExit(
             f"backend commit mismatch: expected {expected_commit}, observed {observed_commit}"
         )
+    runtime = None
+    if args.attestations_required:
+        missing = [
+            name
+            for name, value in (
+                ("--signing-key", args.signing_key),
+                ("--signing-issuer", args.signing_issuer),
+                ("--trust-store", args.trust_store),
+            )
+            if not value
+        ]
+        if missing:
+            raise SystemExit(
+                "required attestation stand is missing " + ", ".join(missing)
+            )
+        runtime = compose_artifact_trust_runtime(
+            state_root=args.stand_root.expanduser().resolve() / "state",
+            client=client,
+            verify=str(args.ca.expanduser().resolve()),
+            cert=(
+                str(args.cert.expanduser().resolve()),
+                str(args.key.expanduser().resolve()),
+            ),
+            environ={
+                "ADAOS_ARTIFACT_ATTESTATIONS_MODE": "required",
+                "ADAOS_ARTIFACT_SIGNING_KEY_FILE": str(
+                    args.signing_key.expanduser().resolve()
+                ),
+                "ADAOS_ARTIFACT_SIGNING_ISSUER": str(args.signing_issuer),
+                "ADAOS_ARTIFACT_TRUST_STORE": str(
+                    args.trust_store.expanduser().resolve()
+                ),
+                "ADAOS_ARTIFACT_ALLOWED_ISSUERS": ",".join(
+                    args.allowed_issuer or [str(args.signing_issuer)]
+                ),
+            },
+        )
     result = run_external_stand(
         plan=plan,
         source_store=ContentAddressedPackageStore(source_package_root),
@@ -319,6 +400,8 @@ def main() -> int:
         channel=channel,
         source_evidence=source_evidence,
         backend_health=health,
+        attestation_publisher=runtime.publisher if runtime else None,
+        attestation_admission=runtime.admission if runtime else None,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

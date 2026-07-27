@@ -124,6 +124,18 @@ def _attested_admission(
     return admission, signer, trust, attestations
 
 
+class _ReleaseBindingStore:
+    def __init__(self, binding: ReleaseAttestationSet) -> None:
+        self.binding = binding
+        self.calls = 0
+
+    def get_release_attestation_set(self, project_id: str, release_digest: str):
+        self.calls += 1
+        assert project_id == self.binding.project_id
+        assert release_digest == self.binding.release_digest
+        return self.binding
+
+
 def test_ed25519_attestation_round_trip_detects_signed_field_tampering(tmp_path: Path) -> None:
     signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
     trust = ArtifactTrustStore(tmp_path / "trust.json")
@@ -371,6 +383,93 @@ def test_attested_activation_records_exact_verification_receipt(tmp_path: Path) 
     assert operation["attestation_verification"]["status"] == "verified"
     assert len(operation["attestation_verification"]["subjects"]) == 2
     assert (workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
+
+
+def test_release_binding_limits_admission_to_its_exact_attestations(tmp_path: Path) -> None:
+    plan, _ = _release_plan(tmp_path / "source")
+    _, bound_signer, trust, stored = _attested_admission(tmp_path / "authority", plan)
+    binding = ReleaseAttestationSet.from_references(
+        plan,
+        (
+            ArtifactAttestationRef.from_attestation(item)
+            for subject_kind, subject_digest in (
+                ("release", str(plan.release.release_digest)),
+                ("package", plan.packages[0].digest),
+            )
+            for item in stored.list_for_subject(subject_kind, subject_digest)
+        ),
+    )
+    release_sets = _ReleaseBindingStore(binding)
+    admission = ArtifactAttestationAdmission(
+        store=stored,
+        trust_store=trust,
+        policy=ArtifactAttestationPolicy(allowed_issuers=("inimatic.release",)),
+        release_sets=release_sets,
+    )
+    receipt = admission.verify_release_plan(plan)
+    assert receipt["release_attestation_set"]["attestation_set_digest"] == (
+        binding.attestation_set_digest
+    )
+    replacement = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    trust.add(replacement.trusted_key())
+    for package in plan.packages:
+        stored.put(
+            replacement.sign(
+                subject_kind="package",
+                subject_digest=package.digest,
+                project_id=plan.release.project_id,
+                predicate_type=PACKAGE_PROVENANCE_PREDICATE,
+                predicate_digest=package_provenance_digest(package),
+                issued_at="2026-07-27T00:30:00Z",
+            )
+        )
+    stored.put(
+        replacement.sign(
+            subject_kind="release",
+            subject_digest=str(plan.release.release_digest),
+            project_id=plan.release.project_id,
+            predicate_type=RELEASE_PROVENANCE_PREDICATE,
+            predicate_digest=release_provenance_digest(plan.release),
+            issued_at="2026-07-27T00:30:00Z",
+        )
+    )
+    trust.revoke(
+        str(bound_signer.trusted_key().key_id),
+        reason="bound publisher revoked",
+        revoked_at="2026-07-27T01:00:00Z",
+    )
+    with pytest.raises(ArtifactAttestationVerificationError, match="revoked"):
+        admission.verify_release_plan(plan)
+    assert release_sets.calls == 2
+
+
+def test_release_binding_fails_closed_when_a_referenced_asset_is_missing(
+    tmp_path: Path,
+) -> None:
+    plan, _ = _release_plan(tmp_path / "source")
+    _, _, trust, stored = _attested_admission(tmp_path / "authority", plan)
+    binding = ReleaseAttestationSet.from_references(
+        plan,
+        (
+            ArtifactAttestationRef.from_attestation(item)
+            for subject_kind, subject_digest in (
+                ("release", str(plan.release.release_digest)),
+                ("package", plan.packages[0].digest),
+            )
+            for item in stored.list_for_subject(subject_kind, subject_digest)
+        ),
+    )
+    admission = ArtifactAttestationAdmission(
+        store=ContentAddressedAttestationStore(tmp_path / "missing-assets"),
+        trust_store=trust,
+        release_sets=_ReleaseBindingStore(binding),
+    )
+
+    with pytest.raises(
+        ArtifactAttestationVerificationError,
+        match="references a missing immutable asset",
+    ):
+        admission.verify_release_plan(plan)
 
 
 def test_activation_rechecks_revocation_after_remote_fetch(tmp_path: Path) -> None:

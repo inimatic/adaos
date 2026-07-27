@@ -20,6 +20,7 @@ from adaos.services.artifact_pipeline.attestations import (
 from adaos.services.artifact_pipeline.remote import (
     ArtifactRegistryClient,
     RemoteArtifactAttestationStore,
+    RemoteReleaseRepository,
 )
 
 
@@ -150,6 +151,7 @@ def compose_artifact_trust_runtime(
             store=remote_store,
             trust_store=trust_store,
             policy=ArtifactAttestationPolicy(allowed_issuers=allowed_issuers),
+            release_sets=RemoteReleaseRepository(client, verify=verify, cert=cert),
         )
     return ArtifactTrustRuntime(mode=mode, publisher=publisher, admission=admission)
 
