@@ -9753,7 +9753,8 @@ class SupervisorManager:
                     candidate_memory_guard = candidate_refresh.get("candidate_memory_guard")
 
             if (
-                _warm_switch_strict_cutover_enabled()
+                _warm_switch_enabled()
+                and _warm_switch_strict_cutover_enabled()
                 and not _warm_switch_cold_fallback_enabled()
                 and candidate_prewarm_state != "ready"
             ):
