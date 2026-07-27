@@ -485,54 +485,71 @@ _YROOM_NATIVE_PREFLIGHT_SCRIPT = (
     "import struct, sys\n"
     "import y_py as Y\n"
     "payload = sys.stdin.buffer.read()\n"
-    "if len(payload) < 16:\n"
+    "if len(payload) < 17:\n"
     "    raise SystemExit(2)\n"
-    "current_size, update_size = struct.unpack('>QQ', payload[:16])\n"
-    "if len(payload) != 16 + current_size + update_size:\n"
+    "sync_type = payload[0]\n"
+    "current_size, message_size = struct.unpack('>QQ', payload[1:17])\n"
+    "if len(payload) != 17 + current_size + message_size:\n"
     "    raise SystemExit(3)\n"
-    "current = payload[16:16 + current_size]\n"
-    "update = payload[16 + current_size:]\n"
+    "current = payload[17:17 + current_size]\n"
+    "message = payload[17 + current_size:]\n"
     "doc = Y.YDoc()\n"
     "if current:\n"
     "    Y.apply_update(doc, current)\n"
-    "if update and update != b'\\x00\\x00':\n"
-    "    Y.apply_update(doc, update)\n"
+    "if sync_type == 0:\n"
+    "    Y.encode_state_as_update(doc, message)\n"
+    "elif sync_type in (1, 2):\n"
+    "    if message != b'\\x00\\x00':\n"
+    "        Y.apply_update(doc, message)\n"
+    "else:\n"
+    "    raise SystemExit(4)\n"
     "Y.encode_state_vector(doc)\n"
 )
 
 
-def _extract_inbound_y_sync_update(message: bytes) -> tuple[bool, bytes | None]:
+def _extract_inbound_y_sync_payload(message: bytes) -> tuple[int | None, bytes | None]:
     if (
         not message
         or read_sync_message is None
         or int(message[0]) != int(YMessageType.SYNC)
     ):
-        return False, None
+        return None, None
     if len(message) < 2:
-        return True, None
+        return -1, None
     sync_payload = bytes(message[1:])
     sync_type = int(sync_payload[0])
     if sync_type not in {
+        int(YSyncMessageType.SYNC_STEP1),
         int(YSyncMessageType.SYNC_STEP2),
         int(YSyncMessageType.SYNC_UPDATE),
     }:
-        return False, None
+        return sync_type, None
     try:
-        return True, bytes(read_sync_message(sync_payload[1:]) or b"")
+        return sync_type, bytes(read_sync_message(sync_payload[1:]) or b"")
     except Exception:
-        return True, None
+        return sync_type, None
 
 
-def _preflight_inbound_y_sync_update(current: bytes, update: bytes) -> tuple[bool, str]:
+def _preflight_inbound_y_sync_payload(
+    current: bytes,
+    payload: bytes,
+    *,
+    sync_type: int,
+) -> tuple[bool, str]:
     if not _YROOM_NATIVE_PREFLIGHT_ENABLED:
         return True, "disabled"
-    if len(update) >= int(_YROOM_INBOUND_GUARD_BLOCK_BYTES):
-        return False, "update_too_large"
-    payload = struct.pack(">QQ", len(current), len(update)) + current + update
+    if len(payload) >= int(_YROOM_INBOUND_GUARD_BLOCK_BYTES):
+        return False, "sync_payload_too_large"
+    framed = (
+        bytes([int(sync_type)])
+        + struct.pack(">QQ", len(current), len(payload))
+        + current
+        + payload
+    )
     try:
         completed = subprocess.run(
             [sys.executable, "-c", _YROOM_NATIVE_PREFLIGHT_SCRIPT],
-            input=payload,
+            input=framed,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             timeout=float(_YROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC),
@@ -1890,13 +1907,13 @@ class DiagnosticYRoom(YRoom):
                         continue
                     message_type = message[0]
                     if message_type == YMessageType.SYNC:
-                        is_state_update, inbound_update = _extract_inbound_y_sync_update(message)
-                        if is_state_update and inbound_update is None:
+                        sync_type, inbound_payload = _extract_inbound_y_sync_payload(message)
+                        if sync_type is not None and inbound_payload is None:
                             self._diag_native_preflight_block_total += 1
                             self._diag_native_preflight_block_bytes += len(message)
                             self._diag_native_preflight_last_reason = "malformed_sync_frame"
                             self.log.error(
-                                "blocked malformed inbound Y sync update before native apply "
+                                "blocked malformed inbound Y sync payload before native call "
                                 "webspace=%s bytes=%s digest=%s",
                                 self._diag_room_id(),
                                 len(message),
@@ -1905,12 +1922,13 @@ class DiagnosticYRoom(YRoom):
                             await self._send_initial_effective_state_replay(websocket)
                             continue
                         should_preflight = bool(
-                            is_state_update
-                            and inbound_update
+                            sync_type is not None
+                            and inbound_payload is not None
                             and _YROOM_NATIVE_PREFLIGHT_ENABLED
                             and (
-                                initial_native_update_pending
-                                or len(inbound_update) >= _YROOM_NATIVE_PREFLIGHT_THRESHOLD_BYTES
+                                sync_type == int(YSyncMessageType.SYNC_STEP1)
+                                or initial_native_update_pending
+                                or len(inbound_payload) >= _YROOM_NATIVE_PREFLIGHT_THRESHOLD_BYTES
                             )
                         )
                         if should_preflight:
@@ -1920,28 +1938,33 @@ class DiagnosticYRoom(YRoom):
 
                                 current = Y.encode_state_as_update(self.ydoc)
                                 accepted, reason = await asyncio.to_thread(
-                                    _preflight_inbound_y_sync_update,
+                                    _preflight_inbound_y_sync_payload,
                                     current,
-                                    inbound_update,
+                                    inbound_payload,
+                                    sync_type=int(sync_type),
                                 )
                             except Exception as exc:
                                 accepted = False
                                 reason = f"preflight_error:{type(exc).__name__}"
                             if not accepted:
                                 self._diag_native_preflight_block_total += 1
-                                self._diag_native_preflight_block_bytes += len(inbound_update)
+                                self._diag_native_preflight_block_bytes += len(inbound_payload)
                                 self._diag_native_preflight_last_reason = str(reason or "blocked")
                                 self.log.error(
-                                    "blocked inbound Y sync update after native subprocess preflight "
+                                    "blocked inbound Y sync payload after native subprocess preflight "
                                     "webspace=%s bytes=%s digest=%s reason=%s",
                                     self._diag_room_id(),
-                                    len(inbound_update),
-                                    hashlib.sha256(inbound_update).hexdigest(),
+                                    len(inbound_payload),
+                                    hashlib.sha256(inbound_payload).hexdigest(),
                                     reason,
                                 )
                                 await self._send_initial_effective_state_replay(websocket)
                                 continue
-                            initial_native_update_pending = False
+                            if sync_type in {
+                                int(YSyncMessageType.SYNC_STEP2),
+                                int(YSyncMessageType.SYNC_UPDATE),
+                            }:
+                                initial_native_update_pending = False
                         tg.start_soon(
                             process_sync_message,
                             message[1:],
