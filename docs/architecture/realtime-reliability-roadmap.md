@@ -697,12 +697,18 @@ lifecycle and update attempt state.
   values while materialization is incomplete.
 - [ ] `[must]` Confirm restart-safe Infra State first paint in the existing
   routed browser session on `192.168.0.30` after the cache-boundary client
-  release is installed and the browser has loaded that release.
+  release is installed and the browser has loaded that release. Core
+  `0.1.625` (`5407a0d`) with the cache-boundary fix is active and the live
+  server projection reports `slot B | 0.1.625 | 5407a0d`; confirmation remains
+  open until the existing browser session reloads the released client bundle.
 - [x] `[must]` Provide a pinned one-shot recovery entry point for a node with a
   broken root checkout. `tools/recover-node-update.sh` selects an importable
   root/A/B control runtime, validates an exact remote branch SHA, persists the
   intent before dispatch, invokes the normal transactional updater exactly
   once, and treats a lost acknowledgement as ambiguous instead of retrying.
+  Observation proves active-slot/root-import/replacement-supervisor agreement;
+  the separately guarded `--finalize-root-restart` handles only the legacy
+  `succeeded/root_promoted` boundary and has its own one-shot durable receipt.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.
@@ -713,7 +719,10 @@ lifecycle and update attempt state.
   restart/redeploy and rotate before expiry. Root now issues signed,
   subnet/node-scoped join sessions and accepts one-time legacy-session upgrade;
   member runtime refreshes the credential proactively and reports refresh
-  diagnostics without logging the token.
+  diagnostics without logging the token. An explicit rejoin/reconnect also
+  reuses the original boot-generation readiness callback after successful
+  registration, so recovery cannot leave a connected member permanently at
+  `ready=false`.
 - [x] `[must]` Distinguish scenario Catalog, Workspace source, and active
   Runtime in Infra State. Release `infrastate_skill 0.75.60` labels a missing
   sparse source explicitly and presents its cloud action as source restore;
@@ -807,8 +816,14 @@ lifecycle and update attempt state.
   restart by a surviving runtime process.
 - [ ] `[must]` A second-machine recovery record shows root import failure,
   verified-slot fallback, transactional root repair, and a subsequent clean
-  release cycle. `192.168.0.40` is the active proof target; diagnosis found a
-  partial root checkout plus a Root-proxy member credential lost with Redis.
+  release cycle. `192.168.0.40` recovered transactionally to slot B on
+  `0.1.625` (`5407a0d`): the exact pinned update was dispatched once, root
+  import passed after promotion, the legacy `root_promoted` boundary received
+  one guarded service restart, and the replacement supervisor committed
+  `succeeded/validate`. The checkbox remains open until the next ordinary
+  release converges without break-glass intervention. Its independent
+  Root-proxy member credential, lost with Redis, remains pending signed-session
+  backend deployment and one rejoin.
 - [x] `[must]` Sidecar remains transport-only and does not absorb
   process/update authority.
 - [x] `[must]` Operators can identify which installed skill failed during a

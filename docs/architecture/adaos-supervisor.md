@@ -497,9 +497,16 @@ Rules:
   durable intent under `state/node_recovery/<sha>/intent.env` before issuing one
   normal supervisor update request. If dispatch fails or its acknowledgement is
   lost, inspect the supervisor status and the intent with `--observe`; never
-  repeat the state-changing command automatically. The A/B updater remains the
-  only component that prepares, validates, switches, backs up, or rolls back a
-  slot
+  repeat the state-changing command automatically. Observation also verifies
+  the active commit, root-control imports, and replacement-supervisor terminal
+  validation. A legacy bootstrap may stop at `succeeded/root_promoted` after
+  the promoted root imports successfully but before the replacement supervisor
+  generation starts. Only in that exact state, run
+  `--finalize-root-restart` once. The command requires the original pinned
+  recovery intent, persists a separate root-restart receipt before calling
+  `systemctl`, and refuses a second dispatch even if the acknowledgement is
+  lost. The A/B updater remains the only component that prepares, validates,
+  switches, backs up, or rolls back a slot
 - periodic release reconciliation is gated by the local runtime API that owns
   the direct root mTLS client, not by realtime hub-root route readiness. A
   degraded WS/Yjs/control route therefore cannot strand an otherwise healthy

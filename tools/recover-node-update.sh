@@ -7,7 +7,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: recover-node-update.sh --target-rev <branch> --target-version <40-hex-sha> [--dry-run|--observe]
+Usage: recover-node-update.sh --target-rev <branch> --target-version <40-hex-sha> [--dry-run|--observe|--finalize-root-restart]
 
 Environment overrides:
   ADAOS_BASE_DIR              State root (default: /root/.adaos)
@@ -16,6 +16,7 @@ Environment overrides:
   ADAOS_RECOVERY_REPO_URL     Expected git remote (default: active manifest repo_url)
   ADAOS_RECOVERY_CONTROL_REPO Explicit verified control checkout (advanced/testing)
   ADAOS_RECOVERY_CONTROL_PYTHON Explicit verified control Python (advanced/testing)
+  ADAOS_RECOVERY_ROOT_PYTHON  Root-control Python override (advanced/testing)
 EOF
 }
 
@@ -38,6 +39,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --observe)
       mode="observe"
+      shift
+      ;;
+    --finalize-root-restart)
+      mode="finalize-root-restart"
       shift
       ;;
     --help|-h)
@@ -146,10 +151,14 @@ PY
 
 update_state="$(read_field "${status_path}" state)"
 update_phase="$(read_field "${status_path}" phase)"
+update_target="$(read_field "${status_path}" target_version | tr '[:upper:]' '[:lower:]')"
 active_commit="$(read_field "${manifest_path}" git_commit | tr '[:upper:]' '[:lower:]')"
 active_build="$(read_field "${manifest_path}" build_version)"
 repo_url="${ADAOS_RECOVERY_REPO_URL:-$(read_field "${manifest_path}" repo_url)}"
 repo_url="${repo_url:-https://github.com/inimatic/adaos.git}"
+operation_dir="${base_dir}/state/node_recovery/${target_version}"
+intent_path="${operation_dir}/intent.env"
+finalize_path="${operation_dir}/root-restart.env"
 
 echo "[recovery] control=${selected_source} python=${selected_python}"
 echo "[recovery] active_slot=${active_slot:--} build=${active_build:--} commit=${active_commit:--}"
@@ -157,8 +166,100 @@ echo "[recovery] update_state=${update_state:-idle} phase=${update_phase:--}"
 echo "[recovery] target=${target_rev}@${target_version}"
 
 if [ "${active_commit}" = "${target_version}" ]; then
-  echo "[ok] active slot already matches the requested commit"
+  root_import_ok=0
+  root_python="${ADAOS_RECOVERY_ROOT_PYTHON:-${root_repo}/.venv/bin/python}"
+  if [ -x "${root_python}" ] && [ -d "${root_repo}/src/adaos" ] && \
+    env PYTHONPATH="${root_repo}/src" "${root_python}" -c "${import_smoke}" >/dev/null 2>&1; then
+    root_import_ok=1
+  fi
+  echo "[recovery] root_import=$([ "${root_import_ok}" -eq 1 ] && printf ready || printf failed)"
+
+  if [ "${mode}" = "finalize-root-restart" ]; then
+    if [ "${update_target}" != "${target_version}" ]; then
+      echo "[blocked] update status does not belong to the pinned target; refusing root restart" >&2
+      exit 7
+    fi
+    if [ "${update_state,,}" != "succeeded" ] || [ "${update_phase,,}" != "root_promoted" ]; then
+      echo "[blocked] root restart finalization requires succeeded/root_promoted status" >&2
+      exit 7
+    fi
+    if [ "${root_import_ok}" -ne 1 ]; then
+      echo "[blocked] promoted root control does not pass the import preflight" >&2
+      exit 8
+    fi
+    if [ ! -f "${intent_path}" ]; then
+      echo "[blocked] no durable recovery intent exists for this exact target" >&2
+      exit 7
+    fi
+    if [ -f "${finalize_path}" ]; then
+      echo "[observe] a root-restart finalization intent already exists; it will not be dispatched again"
+      sed -n '1,80p' "${finalize_path}"
+      exit 0
+    fi
+    if ! command -v systemctl >/dev/null 2>&1; then
+      echo "[blocked] systemctl is unavailable; refusing an untracked restart mechanism" >&2
+      exit 9
+    fi
+
+    mkdir -p "${operation_dir}"
+    finalize_tmp="${finalize_path}.$$"
+    before_pid="$(systemctl show adaos -p MainPID --value 2>/dev/null || true)"
+    {
+      printf 'schema=adaos.node-recovery-root-restart.v1\n'
+      printf 'state=dispatching\n'
+      printf 'target_rev=%s\n' "${target_rev}"
+      printf 'target_version=%s\n' "${target_version}"
+      printf 'before_pid=%s\n' "${before_pid}"
+      printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "${finalize_tmp}"
+    mv -f "${finalize_tmp}" "${finalize_path}"
+
+    set +e
+    systemctl restart adaos
+    restart_rc=$?
+    set -e
+    after_pid="$(systemctl show adaos -p MainPID --value 2>/dev/null || true)"
+    finalize_tmp="${finalize_path}.$$"
+    {
+      sed '/^state=/d;/^finished_at=/d;/^restart_rc=/d;/^after_pid=/d' "${finalize_path}"
+      if [ "${restart_rc}" -eq 0 ]; then
+        printf 'state=dispatched\n'
+      else
+        printf 'state=ambiguous\n'
+      fi
+      printf 'restart_rc=%s\n' "${restart_rc}"
+      printf 'after_pid=%s\n' "${after_pid}"
+      printf 'finished_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "${finalize_tmp}"
+    mv -f "${finalize_tmp}" "${finalize_path}"
+    if [ "${restart_rc}" -ne 0 ]; then
+      echo "[fatal] root restart failed or its acknowledgement was lost; inspect status, do not repeat automatically" >&2
+      exit "${restart_rc}"
+    fi
+    echo "[ok] exactly one guarded root-control restart was dispatched"
+    exit 0
+  fi
+
+  if [ "${root_import_ok}" -ne 1 ]; then
+    echo "[blocked] active slot matches, but root control remains unimportable; inspect the root-promotion receipt" >&2
+    exit 8
+  fi
+  if [ "${update_state,,}" = "succeeded" ] && [ "${update_phase,,}" = "root_promoted" ]; then
+    echo "[pending] root promotion is committed but the replacement supervisor has not validated its restart"
+    echo "[next] run --finalize-root-restart once; never repeat the update dispatch"
+    exit 7
+  fi
+  if [ "${update_state,,}" = "succeeded" ] && [ "${update_phase,,}" = "validate" ]; then
+    echo "[ok] recovery complete: active slot, root imports, and replacement-supervisor validation agree"
+    exit 0
+  fi
+  echo "[observe] active slot matches the target; transition is not terminal yet"
   exit 0
+fi
+
+if [ "${mode}" = "finalize-root-restart" ]; then
+  echo "[blocked] pinned target is not active; refusing root restart finalization" >&2
+  exit 7
 fi
 
 case "${update_state,,}" in
@@ -168,8 +269,6 @@ case "${update_state,,}" in
     ;;
 esac
 
-operation_dir="${base_dir}/state/node_recovery/${target_version}"
-intent_path="${operation_dir}/intent.env"
 if [ -f "${intent_path}" ]; then
   echo "[observe] a recovery intent for this exact target already exists; it will not be dispatched again"
   sed -n '1,80p' "${intent_path}"

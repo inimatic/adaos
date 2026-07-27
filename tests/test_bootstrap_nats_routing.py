@@ -1127,6 +1127,61 @@ def test_member_register_and_heartbeat_recovers_after_transient_register_failure
     assert ("net.subnet.registered", {"hub": conf.hub_url}) in events
 
 
+def test_member_reconnect_reuses_boot_readiness_callback(monkeypatch) -> None:
+    conf = SimpleNamespace(
+        role="member",
+        hub_url="https://ru.api.inimatic.com/hubs/sn_test",
+        token="",
+        node_id="member-1",
+        subnet_id="sn_test",
+    )
+    svc = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=conf),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    callback_calls: list[str] = []
+
+    async def _ready_callback() -> None:
+        callback_calls.append("ready")
+        svc._ready.set()
+
+    async def _register(_conf, *, on_registered=None):
+        assert on_registered is _ready_callback
+        await on_registered()
+        return asyncio.create_task(asyncio.sleep(3600), name="adaos-heartbeat")
+
+    class _LinkClient:
+        async def stop(self) -> None:
+            return None
+
+        async def start(self) -> None:
+            return None
+
+    link_client_module = SimpleNamespace(get_member_link_client=lambda: _LinkClient())
+    monkeypatch.setitem(sys.modules, "adaos.services.subnet.link_client", link_client_module)
+    monkeypatch.setattr(bootstrap_mod, "load_config", lambda ctx=None: conf)
+    monkeypatch.setattr(bootstrap_mod, "load_member_hub_token", lambda: "signed-member-session")
+    monkeypatch.setattr(svc, "_member_hub_transition_snapshot", lambda: {"recovery_blocked": False})
+    monkeypatch.setattr(svc, "_member_register_and_heartbeat", _register)
+    svc._member_ready_callback = _ready_callback
+
+    async def _exercise() -> dict[str, object]:
+        result = await svc.request_member_hub_reconnect()
+        for task in list(svc._boot_tasks):
+            task.cancel()
+        await asyncio.gather(*svc._boot_tasks, return_exceptions=True)
+        return result
+
+    result = asyncio.run(_exercise())
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert callback_calls == ["ready"]
+    assert svc.is_ready() is True
+
+
 def test_switch_role_to_hub_runs_root_bootstrap_before_boot(monkeypatch) -> None:
     current = SimpleNamespace(role="member", hub_url="https://ru.api.inimatic.com/hubs/sn_member", subnet_id="sn_member")
     provisional = SimpleNamespace(role="hub", hub_url=None, subnet_id="sn_provisional")

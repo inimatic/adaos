@@ -1446,6 +1446,7 @@ class BootstrapService:
         self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
         self._hub_root_authority_waiters: set[asyncio.Event] = set()
         self._hub_root_authority_ready_at: float | None = None
+        self._member_ready_callback: Callable[[], Awaitable[None]] | None = None
 
     def _mark_hub_root_authority_ready(self) -> None:
         """Release cutover waiters only after the active Root route subscription is flushed."""
@@ -1913,7 +1914,8 @@ class BootstrapService:
         except Exception:
             pass
 
-        heartbeat_task = await self._member_register_and_heartbeat(conf)
+        ready_callback = self._member_ready_callback if callable(self._member_ready_callback) else None
+        heartbeat_task = await self._member_register_and_heartbeat(conf, on_registered=ready_callback)
         if heartbeat_task is not None:
             self._boot_tasks.append(heartbeat_task)
         try:
@@ -3013,6 +3015,13 @@ class BootstrapService:
                     self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
                 _schedule_release_validation_autorun("sys.ready")
 
+            # Keep the original boot-generation callback available to an
+            # explicit member reconnect. If startup registration failed (for
+            # example because a legacy routed token expired), a later
+            # successful rejoin must complete the same readiness/sys.ready
+            # transition instead of leaving the otherwise connected node
+            # permanently at ready=false.
+            self._member_ready_callback = _announce_member_ready
             task = await self._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
             if task:
                 self._boot_tasks.append(task)
