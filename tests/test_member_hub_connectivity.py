@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import base64
+import asyncio
 import json
 import sys
 import types
@@ -218,3 +220,65 @@ def test_member_link_transition_snapshot_reports_drain_reason(monkeypatch) -> No
 
     assert snapshot["transition_state"] == "waiting_restart"
     assert snapshot["reason"] == "supervisor.memory.critical_pressure"
+
+
+def _unsigned_jwt_with_exp(exp: float) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).decode().rstrip("=")
+    return f"{header}.{payload}.signature"
+
+
+def test_member_session_refresh_due_migrates_opaque_and_renews_near_expiry(monkeypatch) -> None:
+    link_client = importlib.import_module("adaos.services.subnet.link_client")
+    client = link_client.MemberLinkClient()
+    monkeypatch.setattr(client, "_member_session_refresh_retry_s", lambda: 60.0)
+    monkeypatch.setattr(client, "_member_session_refresh_ahead_s", lambda: 3600.0)
+
+    assert client._member_session_refresh_due("legacy-opaque", now=1000.0) is True
+    assert client._member_session_refresh_due(_unsigned_jwt_with_exp(2000.0), now=1000.0) is True
+    assert client._member_session_refresh_due(_unsigned_jwt_with_exp(10000.0), now=1000.0) is False
+
+    client._member_session_refresh_attempted_at = 990.0
+    assert client._member_session_refresh_due("legacy-opaque", now=1000.0) is False
+
+
+def test_routed_root_base_is_only_derived_for_root_proxy_urls() -> None:
+    link_client = importlib.import_module("adaos.services.subnet.link_client")
+
+    assert (
+        link_client._routed_root_base("https://ru.api.inimatic.com/hubs/sn_member01")
+        == "https://ru.api.inimatic.com"
+    )
+    assert link_client._routed_root_base("http://192.168.0.30:8777") == ""
+
+
+def test_member_session_refresh_persists_rotated_token(monkeypatch) -> None:
+    link_client = importlib.import_module("adaos.services.subnet.link_client")
+    client = link_client.MemberLinkClient()
+    persisted: dict[str, str] = {}
+    next_token = _unsigned_jwt_with_exp(10_000.0)
+
+    monkeypatch.setattr(link_client, "_resolve_member_hub_token", lambda conf: "legacy-opaque")
+    monkeypatch.setattr(
+        client,
+        "_request_member_session_refresh",
+        lambda **kwargs: {"ok": True, "token": next_token},
+    )
+    monkeypatch.setattr(
+        link_client,
+        "save_node_runtime_state",
+        lambda **kwargs: persisted.update(kwargs),
+    )
+
+    asyncio.run(
+        client._maybe_refresh_member_session(
+            SimpleNamespace(
+                hub_url="https://ru.api.inimatic.com/hubs/sn_member01",
+                node_id="node-1",
+            )
+        )
+    )
+
+    assert persisted == {"member_hub_token": next_token}
+    assert client._member_session_refresh_succeeded_at > 0.0
+    assert client._member_session_refresh_error == ""

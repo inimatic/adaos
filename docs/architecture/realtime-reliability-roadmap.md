@@ -686,18 +686,38 @@ lifecycle and update attempt state.
   explicit named migration, retain backup/rollback semantics, and keep
   background migration from automatically repeating that state-changing
   operation.
-- [x] `[must]` Prove terminal Infra State convergence and restart-safe first
-  paint on both Linux nodes. Automatic release `0.1.624` (`a25f227`) converged
-  `192.168.0.30` and `91.98.89.76` to `slot A | 0.1.624 | a25f227`; a fresh
-  process read the same summary from each disk snapshot, both runtimes retained
-  active `infrastate_skill 0.75.59`, and no update or refresh command was
-  repeated.
+- [x] `[must]` Prove terminal Infra State server/disk convergence on both Linux
+  nodes. Automatic release `0.1.624` (`a25f227`) converged `192.168.0.30` and
+  `91.98.89.76`; fresh processes read the same slot summary from disk, both
+  runtimes retained active `infrastate_skill 0.75.59`, and no update or refresh
+  command was repeated.
+- [x] `[must]` Prevent a structural last-good render snapshot from overriding
+  live operational `data/infrastate` and node-scoped Infra State. The client
+  regression covers stale `slot —` cache versus current local and member Yjs
+  values while materialization is incomplete.
+- [ ] `[must]` Confirm restart-safe Infra State first paint in the existing
+  routed browser session on `192.168.0.30` after the cache-boundary client
+  release is installed and the browser has loaded that release.
+- [x] `[must]` Provide a pinned one-shot recovery entry point for a node with a
+  broken root checkout. `tools/recover-node-update.sh` selects an importable
+  root/A/B control runtime, validates an exact remote branch SHA, persists the
+  intent before dispatch, invokes the normal transactional updater exactly
+  once, and treats a lost acknowledgement as ambiguous instead of retrying.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.
 - [ ] `[should]` Prove that a push-driven update intent cancelled by supervisor
   restart is automatically redelivered and completed without a pinned operator
   request.
+- [x] `[must]` Make routed member credentials survive Root Redis
+  restart/redeploy and rotate before expiry. Root now issues signed,
+  subnet/node-scoped join sessions and accepts one-time legacy-session upgrade;
+  member runtime refreshes the credential proactively and reports refresh
+  diagnostics without logging the token.
+- [x] `[must]` Distinguish scenario Catalog, Workspace source, and active
+  Runtime in Infra State. Release `infrastate_skill 0.75.60` labels a missing
+  sparse source explicitly and presents its cloud action as source restore;
+  equal Catalog/Runtime versions no longer look like a hidden version update.
 - [x] `[must]` Prove the hardened root promotion and slot fallback through two
   consecutive release updates on the affected second machine. Evidence is
   recorded under
@@ -787,7 +807,8 @@ lifecycle and update attempt state.
   restart by a surviving runtime process.
 - [ ] `[must]` A second-machine recovery record shows root import failure,
   verified-slot fallback, transactional root repair, and a subsequent clean
-  release cycle.
+  release cycle. `192.168.0.40` is the active proof target; diagnosis found a
+  partial root checkout plus a Root-proxy member credential lost with Redis.
 - [x] `[must]` Sidecar remains transport-only and does not absorb
   process/update authority.
 - [x] `[must]` Operators can identify which installed skill failed during a

@@ -492,6 +492,14 @@ Rules:
   tree (root for normal supervisor boot, selected slot for recovery). Refreshes
   do not append inherited root/slot entries, so repeated updates cannot create a
   mixed-generation import graph
+- break-glass recovery uses `tools/recover-node-update.sh` with an exact branch
+  and 40-character commit SHA. Run `--dry-run` first; a real run records a
+  durable intent under `state/node_recovery/<sha>/intent.env` before issuing one
+  normal supervisor update request. If dispatch fails or its acknowledgement is
+  lost, inspect the supervisor status and the intent with `--observe`; never
+  repeat the state-changing command automatically. The A/B updater remains the
+  only component that prepares, validates, switches, backs up, or rolls back a
+  slot
 - periodic release reconciliation is gated by the local runtime API that owns
   the direct root mTLS client, not by realtime hub-root route readiness. A
   degraded WS/Yjs/control route therefore cannot strand an otherwise healthy

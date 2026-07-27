@@ -37,9 +37,9 @@ def _env_type() -> str:
 
 
 def _effective_force(force: bool | None) -> bool:
-    if force is not None:
-        return bool(force)
-    return _env_type() != "dev"
+    # A caller must opt into replacing local workspace changes. Production is
+    # not permission to hide them in an ever-growing stash stack.
+    return bool(force)
 
 
 def _maybe_force_stash_workspace(ctx: AgentContext, repo_root: Path, *, skill_id: str) -> str | None:
@@ -137,6 +137,12 @@ def _reset_workspace_registry_for_pull(repo_root: Path) -> bool:
 
 
 def _rebuild_workspace_registry_after_pull(workspace_root: Path) -> None:
+    registry_path = workspace_root / "registry.json"
+    if registry_path.exists() and _git_path_is_tracked(workspace_root, Path("registry.json")):
+        # Registry commits are published atomically with artifact manifests.
+        # Keep that tracked catalog authoritative; rebuilding it from a sparse
+        # checkout creates a partial, dirty projection and another auto-stash.
+        return
     payload = rebuild_workspace_registry(workspace_root)
     write_workspace_registry(workspace_root, payload)
 

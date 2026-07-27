@@ -81,6 +81,7 @@ def _update_remote_skill(remote: Path, *, version: str, skill_env: str | None) -
     )
     if skill_env is not None:
         (skill_dir / ".skill_env.json").write_text(skill_env, encoding="utf-8")
+    write_workspace_registry(remote, rebuild_workspace_registry(remote))
     _run_git(["add", "-A"], cwd=remote)
     _run_git(["commit", "-m", f"update infrastate {version}"], cwd=remote)
 
@@ -225,7 +226,7 @@ def test_request_update_repoints_existing_workspace_origin_to_configured_registr
     assert "version: '2.0.0'" in (skill_dir / "skill.yaml").read_text(encoding="utf-8")
 
 
-def test_request_update_auto_forces_on_non_dev_by_stashing_local_changes(monkeypatch, tmp_path: Path) -> None:
+def test_request_update_requires_explicit_force_on_non_dev_nodes(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ADAOS_TESTING", "0")
     monkeypatch.setenv("ENV_TYPE", "prod")
     remote = _init_monorepo(tmp_path / "case-force-prod", tracked_skill_env=False)
@@ -239,13 +240,30 @@ def test_request_update_auto_forces_on_non_dev_by_stashing_local_changes(monkeyp
     )
     _update_remote_skill(remote, version="1.0.5", skill_env='{"mode":"remote-default"}\n')
 
-    result = service.request_update("infrastate_skill")
+    with pytest.raises(GitError):
+        service.request_update("infrastate_skill")
 
+    result = service.request_update("infrastate_skill", force=True)
     assert result.updated is True
     assert result.version == "1.0.5"
     assert "version: '1.0.5'" in (skill_dir / "skill.yaml").read_text(encoding="utf-8")
     stashes = _run_git(["stash", "list"], cwd=paths.workspace_dir())
     assert "adaos:auto-stash forced skill update infrastate_skill" in stashes
+
+
+def test_request_update_keeps_published_registry_clean(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ADAOS_TESTING", "0")
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    remote = _init_monorepo(tmp_path / "case-registry-clean", tracked_skill_env=False)
+    service, paths, repo = _make_service(tmp_path / "case-registry-clean-node", remote)
+    repo.install("infrastate_skill")
+    _update_remote_skill(remote, version="1.0.7", skill_env=None)
+
+    result = service.request_update("infrastate_skill")
+
+    assert result.version == "1.0.7"
+    assert _run_git(["status", "--porcelain"], cwd=paths.workspace_dir()) == ""
+    assert _run_git(["stash", "list"], cwd=paths.workspace_dir()) == ""
 
 
 def test_request_update_requires_explicit_force_on_dev_nodes(monkeypatch, tmp_path: Path) -> None:

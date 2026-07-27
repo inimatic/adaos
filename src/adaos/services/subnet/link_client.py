@@ -42,6 +42,28 @@ def _resolve_member_hub_token(conf) -> str:
     return str(getattr(conf, "token", "") or "dev-local-token").strip() or "dev-local-token"
 
 
+def _jwt_exp_unverified(token: str) -> float | None:
+    """Read expiry only for refresh scheduling; Root still verifies the signature."""
+    parts = str(token or "").split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        raw = parts[1] + ("=" * (-len(parts[1]) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8"))
+        value = float(payload.get("exp") or 0.0) if isinstance(payload, dict) else 0.0
+        return value if value > 0.0 else None
+    except Exception:
+        return None
+
+
+def _routed_root_base(hub_url: str) -> str:
+    parsed = urllib.parse.urlparse(str(hub_url or "").strip())
+    marker = "/hubs/"
+    if parsed.scheme not in {"http", "https"} or marker not in parsed.path:
+        return ""
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", "")).rstrip("/")
+
+
 def _to_ws_url(http_base: str, path: str) -> str:
     u = urllib.parse.urlparse(str(http_base or "").strip())
     if u.scheme in ("http", "https"):
@@ -311,6 +333,10 @@ class MemberLinkClient:
         self._last_allocator_trim_at = 0.0
         self._last_allocator_trim_reason = ""
         self._allocator_trim_total = 0
+        self._member_session_refresh_attempted_at = 0.0
+        self._member_session_refresh_succeeded_at = 0.0
+        self._member_session_refresh_error = ""
+        self._member_session_expires_at = 0.0
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -444,6 +470,20 @@ class MemberLinkClient:
             "last_ws_close_code": self._last_ws_close_code,
             "last_ws_close_reason": self._last_ws_close_reason or None,
             "last_ws_close_error": self._last_ws_close_error or None,
+            "member_session": {
+                "expires_at": self._member_session_expires_at or None,
+                "refresh_attempt_ago_s": (
+                    round(max(0.0, now - self._member_session_refresh_attempted_at), 3)
+                    if self._member_session_refresh_attempted_at
+                    else None
+                ),
+                "refresh_success_ago_s": (
+                    round(max(0.0, now - self._member_session_refresh_succeeded_at), 3)
+                    if self._member_session_refresh_succeeded_at
+                    else None
+                ),
+                "refresh_error": self._member_session_refresh_error or None,
+            },
             "allocator_trim": {
                 "total": int(self._allocator_trim_total),
                 "last_attempt_ago_s": (
@@ -1094,6 +1134,86 @@ class MemberLinkClient:
         except Exception:
             pass
 
+    @staticmethod
+    def _member_session_refresh_retry_s() -> float:
+        raw = str(os.getenv("ADAOS_MEMBER_SESSION_REFRESH_RETRY_S") or "").strip()
+        try:
+            value = float(raw or 900.0)
+        except Exception:
+            value = 900.0
+        return max(60.0, min(value, 86400.0))
+
+    @staticmethod
+    def _member_session_refresh_ahead_s() -> float:
+        raw = str(os.getenv("ADAOS_MEMBER_SESSION_REFRESH_AHEAD_S") or "").strip()
+        try:
+            value = float(raw or (7 * 24 * 60 * 60))
+        except Exception:
+            value = float(7 * 24 * 60 * 60)
+        return max(3600.0, min(value, 30 * 24 * 60 * 60.0))
+
+    def _member_session_refresh_due(self, token: str, *, now: float | None = None) -> bool:
+        now0 = float(now if now is not None else time.time())
+        expires_at = _jwt_exp_unverified(token)
+        self._member_session_expires_at = float(expires_at or 0.0)
+        if self._member_session_refresh_attempted_at and (
+            now0 - self._member_session_refresh_attempted_at
+        ) < self._member_session_refresh_retry_s():
+            return False
+        # Legacy opaque credentials are offered to the refresh endpoint once
+        # per retry window so a deployment can migrate them to signed tokens.
+        if expires_at is None:
+            return True
+        return (expires_at - now0) <= self._member_session_refresh_ahead_s()
+
+    @staticmethod
+    def _request_member_session_refresh(*, root_base: str, token: str, node_id: str) -> dict[str, Any]:
+        with requests.Session() as sess:
+            try:
+                sess.trust_env = False
+            except Exception:
+                pass
+            response = sess.post(
+                root_base.rstrip("/") + "/v1/subnets/session/refresh",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                json={"node_id": node_id},
+                timeout=8.0,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"member_session_refresh_http_{response.status_code}")
+            payload = response.json()
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            raise RuntimeError("member_session_refresh_invalid_response")
+        next_token = str(payload.get("token") or "").strip()
+        if not next_token:
+            raise RuntimeError("member_session_refresh_missing_token")
+        return payload
+
+    async def _maybe_refresh_member_session(self, conf) -> None:
+        root_base = _routed_root_base(str(getattr(conf, "hub_url", "") or ""))
+        if not root_base:
+            return
+        token = _resolve_member_hub_token(conf)
+        if not token or not self._member_session_refresh_due(token):
+            return
+        self._member_session_refresh_attempted_at = time.time()
+        try:
+            payload = await asyncio.to_thread(
+                self._request_member_session_refresh,
+                root_base=root_base,
+                token=token,
+                node_id=str(getattr(conf, "node_id", "") or "").strip(),
+            )
+            next_token = str(payload.get("token") or "").strip()
+            save_node_runtime_state(member_hub_token=next_token)
+            self._member_session_refresh_succeeded_at = time.time()
+            self._member_session_refresh_error = ""
+            self._member_session_expires_at = float(_jwt_exp_unverified(next_token) or 0.0)
+            _log.info("routed member session refreshed")
+        except Exception as exc:
+            self._member_session_refresh_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            _log.warning("routed member session refresh failed: %s", self._member_session_refresh_error)
+
     async def _run(self) -> None:
         conf = get_ctx().config
         if conf.role != "member":
@@ -1108,7 +1228,6 @@ class MemberLinkClient:
 
         ws_url = _to_ws_url(conf.hub_url, "/ws/subnet")
         self._ws_url = ws_url
-        headers = [("X-AdaOS-Token", _resolve_member_hub_token(conf))]
 
         backoff = 1.0
         while not self._stop.is_set():
@@ -1118,6 +1237,8 @@ class MemberLinkClient:
             status_t: asyncio.Task | None = None
             snapshot_t: asyncio.Task | None = None
             try:
+                await self._maybe_refresh_member_session(conf)
+                headers = [("X-AdaOS-Token", _resolve_member_hub_token(conf))]
                 ws_ping_interval_s = self._ws_control_ping_interval_s()
                 ws_ping_timeout_s = self._ws_control_ping_timeout_s(ws_ping_interval_s)
                 ws_compression = _member_link_ws_compression()
@@ -1311,6 +1432,7 @@ class MemberLinkClient:
                             interval = 20.0
                         while True:
                             await asyncio.sleep(interval)
+                            await self._maybe_refresh_member_session(conf)
                             self._queue_node_status(include_capacity=False)
 
                     sender_t = asyncio.create_task(_sender(), name="subnet-link-sender")
