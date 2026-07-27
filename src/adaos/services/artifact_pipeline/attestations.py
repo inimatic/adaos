@@ -16,6 +16,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from adaos.domain.artifact_release import (
+    ArtifactPackageRef,
+    ProjectRelease,
     canonical_json_bytes,
     canonical_payload_digest,
     sha256_digest,
@@ -155,6 +157,28 @@ def _unsigned_attestation_payload(
         "predicate_digest": predicate_digest,
         "algorithm": "ed25519",
     }
+
+
+def package_provenance_statement(package: ArtifactPackageRef) -> dict[str, Any]:
+    return {
+        "schema": PACKAGE_PROVENANCE_PREDICATE,
+        "package_ref": package.to_dict(),
+    }
+
+
+def release_provenance_statement(release: ProjectRelease) -> dict[str, Any]:
+    return {
+        "schema": RELEASE_PROVENANCE_PREDICATE,
+        "project_release": release.to_dict(),
+    }
+
+
+def package_provenance_digest(package: ArtifactPackageRef) -> str:
+    return canonical_payload_digest(package_provenance_statement(package))
+
+
+def release_provenance_digest(release: ProjectRelease) -> str:
+    return canonical_payload_digest(release_provenance_statement(release))
 
 
 @dataclass(frozen=True, slots=True)
@@ -781,6 +805,7 @@ def verify_artifact_attestation(
     expected_subject_digest: str,
     expected_project_id: str,
     expected_predicate_type: str,
+    expected_predicate_digest: str | None = None,
     allowed_issuers: Iterable[str] = (),
 ) -> dict[str, Any]:
     sealed = attestation.seal()
@@ -792,6 +817,17 @@ def verify_artifact_attestation(
         raise ArtifactAttestationVerificationError("attestation project does not match requested release")
     if sealed.predicate_type != expected_predicate_type:
         raise ArtifactAttestationVerificationError("attestation predicate type is not admitted")
+    if (
+        expected_predicate_digest is not None
+        and sealed.predicate_digest
+        != _require_digest(
+            expected_predicate_digest,
+            field="expected_predicate_digest",
+        )
+    ):
+        raise ArtifactAttestationVerificationError(
+            "attestation predicate does not match requested artifact provenance"
+        )
     key = trust_store.get(sealed.key_id)
     if key is None:
         raise ArtifactAttestationVerificationError("attestation signing key is not trusted")
@@ -858,6 +894,7 @@ class ArtifactAttestationAdmission:
         subject_digest: str,
         project_id: str,
         predicate_type: str,
+        predicate_digest: str,
     ) -> dict[str, Any]:
         if subject_kind not in self.policy.required_subjects:
             return {
@@ -879,6 +916,7 @@ class ArtifactAttestationAdmission:
                     expected_subject_digest=subject_digest,
                     expected_project_id=project_id,
                     expected_predicate_type=predicate_type,
+                    expected_predicate_digest=predicate_digest,
                     allowed_issuers=self.policy.allowed_issuers,
                 )
             except ArtifactAttestationVerificationError as exc:
@@ -910,6 +948,7 @@ class ArtifactAttestationAdmission:
                 subject_digest=release_digest,
                 project_id=plan.release.project_id,
                 predicate_type=RELEASE_PROVENANCE_PREDICATE,
+                predicate_digest=release_provenance_digest(plan.release),
             )
         ]
         receipts.extend(
@@ -918,6 +957,7 @@ class ArtifactAttestationAdmission:
                 subject_digest=package.digest,
                 project_id=plan.release.project_id,
                 predicate_type=PACKAGE_PROVENANCE_PREDICATE,
+                predicate_digest=package_provenance_digest(package),
             )
             for package in sorted(plan.packages, key=lambda value: value.key)
         )
@@ -948,5 +988,9 @@ __all__ = [
     "ExternalImmutableAttestationStore",
     "ImmutableArtifactAssetClient",
     "TrustedArtifactKey",
+    "package_provenance_digest",
+    "package_provenance_statement",
+    "release_provenance_digest",
+    "release_provenance_statement",
     "verify_artifact_attestation",
 ]

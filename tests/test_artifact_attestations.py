@@ -26,6 +26,8 @@ from adaos.services.artifact_pipeline import (
     ExternalImmutableAttestationStore,
     WorkspaceActivationManager,
     build_artifact_package,
+    package_provenance_digest,
+    release_provenance_digest,
     verify_artifact_attestation,
 )
 from adaos.services.artifact_pipeline.activation import ActivationError
@@ -98,7 +100,7 @@ def _attested_admission(
                 subject_digest=package.digest,
                 project_id=plan.release.project_id,
                 predicate_type=PACKAGE_PROVENANCE_PREDICATE,
-                predicate_digest=package.manifest_digest,
+                predicate_digest=package_provenance_digest(package),
                 issued_at="2026-07-27T00:00:00Z",
             )
         )
@@ -108,9 +110,7 @@ def _attested_admission(
             subject_digest=str(plan.release.release_digest),
             project_id=plan.release.project_id,
             predicate_type=RELEASE_PROVENANCE_PREDICATE,
-            predicate_digest=canonical_payload_digest(
-                {"validation_evidence_refs": list(plan.release.validation_evidence_refs)}
-            ),
+            predicate_digest=release_provenance_digest(plan.release),
             issued_at="2026-07-27T00:00:00Z",
         )
     )
@@ -164,6 +164,34 @@ def test_ed25519_attestation_round_trip_detects_signed_field_tampering(tmp_path:
             expected_subject_digest=loaded.subject_digest,
             expected_project_id="recipes",
             expected_predicate_type=PACKAGE_PROVENANCE_PREDICATE,
+        )
+
+
+def test_valid_signature_over_wrong_provenance_is_not_admitted(tmp_path: Path) -> None:
+    signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    trust = ArtifactTrustStore(tmp_path / "trust.json")
+    trust.add(signer.trusted_key())
+    attestation = signer.sign(
+        subject_kind="package",
+        subject_digest="sha256:" + "a" * 64,
+        project_id="recipes",
+        predicate_type=PACKAGE_PROVENANCE_PREDICATE,
+        predicate_digest="sha256:" + "b" * 64,
+        issued_at="2026-07-27T00:00:00Z",
+    )
+
+    with pytest.raises(
+        ArtifactAttestationVerificationError,
+        match="does not match requested artifact provenance",
+    ):
+        verify_artifact_attestation(
+            attestation,
+            trust_store=trust,
+            expected_subject_kind="package",
+            expected_subject_digest=attestation.subject_digest,
+            expected_project_id="recipes",
+            expected_predicate_type=PACKAGE_PROVENANCE_PREDICATE,
+            expected_predicate_digest="sha256:" + "c" * 64,
         )
 
 

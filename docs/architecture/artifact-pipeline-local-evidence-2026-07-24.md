@@ -94,12 +94,22 @@ changing historical PackageRef or ProjectRelease digests. Evidence covers:
 - successful signed release/package activation with exact signature receipts
   persisted in the activation operation;
 - repeat admission under the Workspace writer lease before staging.
+- exact provenance recomputation from the reviewed PackageRef/ProjectRelease,
+  including rejection of a valid signature over a different predicate;
+- deterministic package-then-release signature issuance persisted before the
+  first external write and stable across resume;
+- fail-closed timeout/crash handling: no implicit replay, read-only
+  reconciliation by exact digest, and separate explicit continuation;
+- idempotency-key/plan conflict rejection and journal-integrity validation.
+- configured stable promotion ordering that persists the completed exact
+  attestation receipt before channel movement and verifies it again on resume.
 
-`tests/test_artifact_attestations.py`, release-contract tests, and Workspace
-activation tests passed together. The complete `test_artifact*.py` set then
-passed 138 tests across 16 files. This is a local trust foundation; journaled
-publisher issuance, remote attestation references, and clean-stand required-mode
-activation remain open under AP1-07.
+The focused `tests/test_artifact_attestations.py` and
+`tests/test_attestation_publication.py` set passes 17 tests. The post-change
+gate passes 148 artifact/attestation tests across 17 files plus 54 API runtime
+identity, management, and build-info tests (202 total). This is a local trust
+foundation with journaled publisher issuance. Remote exact attestation
+references and clean-stand required-mode activation remain open under AP1-07.
 
 The representative implementation was not hand-programmed as proof setup.
 The built-in LLM produced the UI revision and the isolated Codex process

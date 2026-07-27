@@ -7,7 +7,10 @@ import pytest
 from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef, StableSubscription
 from adaos.services.artifact_pipeline import (
     ActivationError,
+    ArtifactAttestationPublisher,
     ArtifactPublicationService,
+    ContentAddressedAttestationStore,
+    Ed25519ArtifactSigner,
     PublicationError,
     PublicationStaleError,
     ReleasePlan,
@@ -170,6 +173,54 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert service.subscriptions.load()["recipes"].installed_digest == result.pointer.release_digest
     registry = (workspace / "registry.json").read_text(encoding="utf-8")
     assert '"stable"' in registry
+
+
+def test_configured_promotion_publishes_exact_attestations_before_channel(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    remote = _Remote(tmp_path / "remote")
+    attestation_store = ContentAddressedAttestationStore(tmp_path / "attestations")
+    attestation_publisher = ArtifactAttestationPublisher(
+        state_root=tmp_path / "state",
+        store=attestation_store,
+        signer=Ed25519ArtifactSigner.generate(issuer="inimatic.release"),
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+        attestation_publisher=attestation_publisher,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-attested-promotion",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+
+    promoted = _promote(service, prepared.candidate.candidate_id)
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+
+    assert operation is not None
+    phases = [event["phase"] for event in operation["events"]]
+    assert phases.index("attestations_published") < phases.index("channel_moved")
+    publication = operation["receipts"]["attestations_published"]["publication"]
+    assert publication["status"] == "completed"
+    assert [item["subject_kind"] for item in publication["attestations"]] == [
+        "package",
+        "release",
+    ]
+    assert remote.get_channel("recipes").release_digest == promoted.pointer.release_digest
 
 
 def test_candidate_rejects_legacy_workspace_downgrade_before_trial(tmp_path: Path) -> None:

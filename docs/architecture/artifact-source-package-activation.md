@@ -752,6 +752,19 @@ Migration uses adapters instead of a flag-day rewrite:
 - Detached attestations can live in the local content-addressed store or behind
   an external immutable-asset adapter. An unknown external write outcome is not
   automatically repeated.
+- Publication persists the complete deterministic package-then-release
+  signature set before its first external write. Each dispatch intent is
+  journaled atomically. A timeout or interrupted dispatch enters an uncertain
+  state that blocks replay; a separate reconciliation performs remote reads
+  only and must find the exact attestation digest before another explicit
+  publication call can continue still-pending items.
+- When an attestation publisher is configured, stable promotion records its
+  exact completed publication result before channel compare-and-switch. Resume
+  re-reads the publisher journal and rejects a receipt that no longer matches;
+  compatibility mode remains explicit until remote trust policy is deployed.
+- Admission recomputes package and release provenance predicates from the exact
+  reviewed `PackageRef` and `ProjectRelease`. A valid publisher signature over
+  a different provenance statement is rejected.
 - Historical package activation remains compatible when no attestation policy
   is configured. A project/publisher policy that requires attestations never
   falls back to unsigned activation.

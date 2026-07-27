@@ -20,6 +20,10 @@ from adaos.services.artifact_pipeline.activation import (
     ActivationResult,
     WorkspaceActivationManager,
 )
+from adaos.services.artifact_pipeline.attestation_publication import (
+    ArtifactAttestationPublisher,
+    AttestationPublicationResult,
+)
 from adaos.services.artifact_pipeline.candidates import (
     CandidateRecord,
     CandidateStore,
@@ -289,10 +293,12 @@ class ArtifactPublicationService:
         state_root: Path,
         workspace_root: Path,
         remote: PublicationRemote,
+        attestation_publisher: ArtifactAttestationPublisher | None = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.remote = remote
+        self.attestation_publisher = attestation_publisher
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
@@ -307,6 +313,14 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             remote=self.remote,
         )
+
+    def reconcile_attestation_publication(
+        self,
+        operation_id: str,
+    ) -> AttestationPublicationResult:
+        if self.attestation_publisher is None:
+            raise PublicationError("artifact attestation publication is not configured")
+        return self.attestation_publisher.reconcile(operation_id)
 
     def plan_registry_reconciliation(
         self,
@@ -1153,6 +1167,37 @@ class ArtifactPublicationService:
         self._write_promotion(operation)
         receipts = operation.setdefault("receipts", {})
         try:
+            attestation_receipt = receipts.get("attestations_published")
+            if isinstance(attestation_receipt, Mapping):
+                if self.attestation_publisher is None:
+                    raise PublicationError(
+                        "promotion requires its configured attestation publisher to resume"
+                    )
+                raw_publication = attestation_receipt.get("publication")
+                if not isinstance(raw_publication, Mapping):
+                    raise PublicationError(
+                        "promotion attestation receipt has no publication result"
+                    )
+                persisted = self.attestation_publisher.load(
+                    str(raw_publication.get("operation_id") or "")
+                ).to_dict()
+                if persisted != dict(raw_publication) or persisted.get("status") != "completed":
+                    raise PublicationError(
+                        "promotion attestation receipt does not match completed publisher state"
+                    )
+            elif self.attestation_publisher is not None:
+                published = self.attestation_publisher.publish(
+                    plan,
+                    idempotency_key=f"stable-attestations:{candidate.release_digest}",
+                )
+                if published.status != "completed":
+                    raise PublicationError("release attestations are not fully published")
+                self._promotion_receipt(
+                    operation,
+                    "attestations_published",
+                    {"publication": published.to_dict()},
+                )
+
             channel_receipt = receipts.get("channel_moved")
             if isinstance(channel_receipt, Mapping):
                 pointer = ChannelPointer.from_mapping(channel_receipt["pointer"])
