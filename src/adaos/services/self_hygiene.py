@@ -226,7 +226,11 @@ def _logrotate_config(logs_dir: Path, policy: dict[str, Any]) -> str:
 
 
 def _systemd_service(base_dir: Path) -> str:
-    python = _path_for_unit(Path(sys.executable).resolve())
+    cli_raw = str(os.getenv("ADAOS_LINUX_CLI_SHIM_PATH") or "/usr/local/bin/adaos").strip()
+    # Keep the canonical Linux path intact when Linux rendering is tested from
+    # a Windows development host.
+    cli_text = cli_raw if cli_raw.startswith("/") else str(Path(cli_raw).expanduser().resolve())
+    cli = f'"{cli_text}"' if " " in cli_text or "\t" in cli_text else cli_text
     return (
         MANAGED_HEADER
         + "[Unit]\n"
@@ -234,7 +238,7 @@ def _systemd_service(base_dir: Path) -> str:
         + "[Service]\n"
         + "Type=oneshot\n"
         + f"Environment=ADAOS_BASE_DIR={base_dir}\n"
-        + f"ExecStart={python} -m adaos maintenance run --pressure-only --json\n"
+        + f"ExecStart={cli} maintenance run --pressure-only --json\n"
     )
 
 

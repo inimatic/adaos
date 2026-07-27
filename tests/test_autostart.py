@@ -83,7 +83,7 @@ def test_shell_wrapper_sources_dotenv_before_managed_exports(tmp_path: Path) -> 
     assert text.index('. "${ADAOS_SHARED_DOTENV_PATH}"') < text.rindex("export ADAOS_SUPERVISOR_PORT='8776'")
 
 
-def test_shell_wrapper_repairs_legacy_bounded_io_before_exec(tmp_path: Path) -> None:
+def test_shell_wrapper_uses_verified_slot_when_root_import_preflight_fails(tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
     wrapper = tmp_path / "adaos-autostart.sh"
@@ -99,9 +99,12 @@ def test_shell_wrapper_repairs_legacy_bounded_io_before_exec(tmp_path: Path) -> 
 
     text = wrapper.read_text(encoding="utf-8")
 
-    assert 'src/adaos/services/bounded_io.py' in text
-    assert 'from adaos.services.bounded_io import bounded_jsonl_tail' in text
-    assert text.index('src/adaos/services/bounded_io.py') < text.index("exec '/venv/bin/python'")
+    assert "root_import_preflight_failed" in text
+    assert "ADAOS_ROOT_RECOVERY_FALLBACK=1" in text
+    assert 'state/core_slots/slots/${slot}/venv/bin/python' in text
+    assert 'state/core_slots/slots/${slot}/repo' in text
+    assert "import adaos.apps.supervisor,adaos.apps.cli.app,adaos.apps.autostart_runner" in text
+    assert "bounded_io.py" not in text
 
 
 def test_windows_disable_stops_live_autostart_wrapper_tree(monkeypatch, tmp_path: Path) -> None:

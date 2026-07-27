@@ -1796,7 +1796,7 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     if _runtime_ready_for_boot_status_finalize(status, runtime):
-        finalized_status = finalize_runtime_boot_status()
+        finalized_status = finalize_runtime_boot_status(supervisor_authorized=True)
         if isinstance(finalized_status, dict):
             status = finalized_status
             payload["status"] = finalized_status
@@ -1857,7 +1857,7 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             # If a new runtime is already serving status, let it finalize a stale
             # root-promoted marker before declaring the update failed.
-            finalized_status = finalize_runtime_boot_status()
+            finalized_status = finalize_runtime_boot_status(supervisor_authorized=True)
             if _is_root_restart_completed_status(finalized_status):
                 payload["status"] = finalized_status
                 payload["attempt"] = _complete_update_attempt(

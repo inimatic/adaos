@@ -7,6 +7,7 @@ import requests
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -62,7 +63,15 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _target_version_matches(left: Any, right: Any) -> bool:
@@ -525,11 +534,18 @@ def _root_promotion_metadata_path(backup_dir: Path) -> Path:
     return (backup_dir / "metadata.json").resolve()
 
 
+def _write_promotion_metadata_best_effort(backup_dir: Path, payload: dict[str, Any]) -> None:
+    try:
+        _write_json(_root_promotion_metadata_path(backup_dir), payload)
+    except Exception:
+        pass
+
+
 def _remove_path(path: Path) -> None:
     if not path.exists():
         return
     if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
+        shutil.rmtree(path)
         return
     path.unlink(missing_ok=True)
 
@@ -540,6 +556,138 @@ def _copy_path(source: Path, target: Path) -> None:
         shutil.copytree(source, target, dirs_exist_ok=True)
     else:
         shutil.copy2(source, target)
+
+
+def _preflight_copy_file(source: str, target: str) -> str:
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+    return target
+
+
+def _promotion_relative_paths(changed_paths: list[Any]) -> list[str]:
+    normalized: list[str] = []
+    for item in changed_paths:
+        raw = str(item or "").strip().replace("\\", "/")
+        if not raw:
+            continue
+        relative = Path(raw)
+        if relative.is_absolute() or raw.startswith("/") or any(part in {"", ".", ".."} for part in relative.parts):
+            raise RuntimeError(f"invalid root promotion path: {raw}")
+        normalized.append(relative.as_posix())
+    return list(dict.fromkeys(normalized))
+
+
+def _promotion_path(root: Path, rel_path: str) -> Path:
+    resolved_root = root.resolve()
+    resolved = (resolved_root / rel_path).resolve()
+    if resolved == resolved_root or resolved_root not in resolved.parents:
+        raise RuntimeError(f"root promotion path escapes its root: {rel_path}")
+    return resolved
+
+
+def _preflight_root_promotion(
+    *,
+    source_repo_dir: Path,
+    root_dir: Path,
+    changed_paths: list[str],
+) -> dict[str, Any]:
+    """Prove that the exact post-promotion Python package imports before mutation."""
+    source_package = source_repo_dir / "src" / "adaos"
+    root_package = root_dir / "src" / "adaos"
+    # Small unit-test fixtures intentionally do not model a complete checkout.
+    # AdaOS is a namespace package, so pyproject plus the supervisor entrypoint
+    # are the stable markers of a real prepared slot.
+    if not (source_repo_dir / "pyproject.toml").is_file() or not (
+        source_package / "apps" / "supervisor.py"
+    ).is_file():
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "source_slot_checkout_markers_missing",
+        }
+    if not root_package.is_dir():
+        raise RuntimeError(f"root package is unavailable for promotion preflight: {root_package}")
+
+    state_dir = _root_promotion_state_dir()
+    with tempfile.TemporaryDirectory(prefix="preflight-", dir=str(state_dir)) as temporary:
+        candidate_root = Path(temporary).resolve()
+        candidate_package = candidate_root / "src" / "adaos"
+        candidate_package.mkdir(parents=True)
+        projection_paths = {"apps"}
+        for rel_path in changed_paths:
+            parts = Path(rel_path).parts
+            if len(parts) < 3 or parts[:2] != ("src", "adaos"):
+                continue
+            projection_paths.add(parts[2])
+        for projection_path in sorted(projection_paths):
+            source_projection = root_package / projection_path
+            candidate_projection = candidate_package / projection_path
+            if source_projection.is_dir():
+                shutil.copytree(
+                    source_projection,
+                    candidate_projection,
+                    copy_function=_preflight_copy_file,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git", "node_modules"),
+                )
+            elif source_projection.is_file():
+                _preflight_copy_file(str(source_projection), str(candidate_projection))
+        for rel_path in changed_paths:
+            if rel_path != "src/adaos" and not rel_path.startswith("src/adaos/"):
+                continue
+            source_path = _promotion_path(source_repo_dir, rel_path)
+            candidate_path = _promotion_path(candidate_root, rel_path)
+            _remove_path(candidate_path)
+            if source_path.exists():
+                _copy_path(source_path, candidate_path)
+
+        control_python = current_control_python(root_dir)
+        if not control_python.exists():
+            raise RuntimeError(f"root control Python is unavailable for promotion preflight: {control_python}")
+        modules = (
+            "adaos.apps.supervisor",
+            "adaos.apps.cli.app",
+            "adaos.apps.autostart_runner",
+        )
+        script = (
+            "import importlib,json,pathlib,sys\n"
+            "candidate=pathlib.Path(sys.argv[1]).resolve()\n"
+            "loaded={}\n"
+            "for name in sys.argv[2:]:\n"
+            " module=importlib.import_module(name)\n"
+            " loaded[name]=str(pathlib.Path(module.__file__).resolve())\n"
+            "supervisor=pathlib.Path(loaded['adaos.apps.supervisor'])\n"
+            "assert candidate in supervisor.parents, (candidate, supervisor)\n"
+            "print(json.dumps(loaded, sort_keys=True))\n"
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            (str((candidate_root / "src").resolve()), str((root_dir / "src").resolve()))
+        )
+        env["PYTHONNOUSERSITE"] = "1"
+        completed = subprocess.run(
+            [str(control_python), "-c", script, str(candidate_root), *modules],
+            cwd=str(candidate_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=45.0,
+        )
+        if completed.returncode != 0:
+            detail = str(completed.stderr or completed.stdout or "import preflight failed").strip()[-4000:]
+            raise RuntimeError(f"root promotion import preflight failed: {detail}")
+        try:
+            imported = json.loads(str(completed.stdout or "").strip().splitlines()[-1])
+        except Exception:
+            imported = {}
+        return {
+            "ok": True,
+            "skipped": False,
+            "control_python": str(control_python),
+            "modules": list(modules),
+            "imported": imported if isinstance(imported, dict) else {},
+        }
 
 
 def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
@@ -581,38 +729,74 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
         )
     if not changed_paths:
         changed_paths = list(BOOTSTRAP_CRITICAL_PATHS)
+    normalized_paths = _promotion_relative_paths(list(changed_paths))
+    preflight = _preflight_root_promotion(
+        source_repo_dir=source_repo_dir,
+        root_dir=root_dir,
+        changed_paths=normalized_paths,
+    )
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    backup_dir = (_root_promotion_state_dir() / f"{stamp}-{slot_name.lower()}").resolve()
+    backup_dir = (
+        _root_promotion_state_dir() / f"{stamp}-{time.time_ns()}-{slot_name.lower()}"
+    ).resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
     promoted_paths: list[str] = []
     removed_paths: list[str] = []
-    for rel_path in [str(item) for item in changed_paths if str(item).strip()]:
-        source_path = (source_repo_dir / rel_path).resolve()
-        target_path = (root_dir / rel_path).resolve()
-        backup_path = (backup_dir / rel_path).resolve()
+    for rel_path in normalized_paths:
+        target_path = _promotion_path(root_dir, rel_path)
+        backup_path = _promotion_path(backup_dir, rel_path)
         if target_path.exists():
             _copy_path(target_path, backup_path)
-        if source_path.exists():
-            _remove_path(target_path)
-            _copy_path(source_path, target_path)
-            promoted_paths.append(rel_path)
-        else:
-            _remove_path(target_path)
-            removed_paths.append(rel_path)
     payload = {
-        "ok": True,
+        "ok": False,
         "slot": slot_name,
         "required": True,
         "target_root": str(root_dir),
         "target_root_basis": root_basis,
-        "changed_paths": [str(item) for item in changed_paths if str(item).strip()],
+        "changed_paths": normalized_paths,
         "backup_dir": str(backup_dir),
         "backup_metadata_path": str(_root_promotion_metadata_path(backup_dir)),
-        "promoted_paths": promoted_paths,
-        "removed_paths": removed_paths,
+        "promoted_paths": [],
+        "removed_paths": [],
+        "transaction_state": "backed_up",
+        "preflight": preflight,
         "restart_required": True,
     }
     _write_json(_root_promotion_metadata_path(backup_dir), payload)
+    try:
+        for rel_path in normalized_paths:
+            source_path = _promotion_path(source_repo_dir, rel_path)
+            target_path = _promotion_path(root_dir, rel_path)
+            if source_path.exists():
+                _remove_path(target_path)
+                _copy_path(source_path, target_path)
+                promoted_paths.append(rel_path)
+            else:
+                _remove_path(target_path)
+                removed_paths.append(rel_path)
+        payload["ok"] = True
+        payload["transaction_state"] = "committed"
+        payload["promoted_paths"] = promoted_paths
+        payload["removed_paths"] = removed_paths
+        _write_json(_root_promotion_metadata_path(backup_dir), payload)
+    except Exception as exc:
+        payload["ok"] = False
+        payload["transaction_state"] = "apply_failed"
+        payload["error"] = str(exc)
+        _write_promotion_metadata_best_effort(backup_dir, payload)
+        try:
+            rollback = restore_root_from_backup(backup_dir=backup_dir, target_root=root_dir)
+        except Exception as rollback_exc:
+            payload["transaction_state"] = "rollback_failed"
+            payload["rollback_error"] = str(rollback_exc)
+            _write_promotion_metadata_best_effort(backup_dir, payload)
+            raise RuntimeError(
+                f"root promotion failed and rollback failed: apply={exc}; rollback={rollback_exc}"
+            ) from exc
+        payload["transaction_state"] = "rolled_back"
+        payload["rollback"] = rollback
+        _write_promotion_metadata_best_effort(backup_dir, payload)
+        raise RuntimeError(f"root promotion failed and was rolled back: {exc}") from exc
     return payload
 
 
@@ -648,7 +832,7 @@ def write_status(payload: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def finalize_runtime_boot_status() -> dict[str, Any] | None:
+def finalize_runtime_boot_status(*, supervisor_authorized: bool = False) -> dict[str, Any] | None:
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
@@ -658,6 +842,11 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
     if state == "succeeded" and phase == "validate":
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
+    # A slot runtime can prove that the application booted, but it cannot prove
+    # that the root-launched supervisor survived its own restart. Only the
+    # supervisor control plane may commit that handoff.
+    if root_restart_pending and not supervisor_authorized:
+        return None
     if state not in {"restarting", "applying", "validated"} and not (
         state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
     ):
@@ -787,15 +976,16 @@ def restore_root_from_backup(
     restored_paths: list[str] = []
     removed_paths: list[str] = []
     for rel_path in changed_paths:
-        source_path = (backup_path / rel_path).resolve()
-        target_path = (root_dir / rel_path).resolve()
+        normalized_path = _promotion_relative_paths([rel_path])[0]
+        source_path = _promotion_path(backup_path, normalized_path)
+        target_path = _promotion_path(root_dir, normalized_path)
         if source_path.exists():
             _remove_path(target_path)
             _copy_path(source_path, target_path)
-            restored_paths.append(rel_path)
+            restored_paths.append(normalized_path)
         else:
             _remove_path(target_path)
-            removed_paths.append(rel_path)
+            removed_paths.append(normalized_path)
 
     return {
         "ok": True,

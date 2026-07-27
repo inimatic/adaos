@@ -490,7 +490,7 @@ def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch
 def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
-    monkeypatch.setattr(supervisor, "finalize_runtime_boot_status", lambda: None)
+    monkeypatch.setattr(supervisor, "finalize_runtime_boot_status", lambda **_kwargs: None)
     monkeypatch.setattr(supervisor.time, "time", lambda: 120.0)
     write_status(
         {
@@ -555,7 +555,7 @@ def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_run
     monkeypatch.setattr(
         supervisor,
         "finalize_runtime_boot_status",
-        lambda: {
+        lambda **_kwargs: {
             "state": "succeeded",
             "phase": "validate",
             "action": "update",
@@ -604,7 +604,7 @@ def test_reconcile_update_status_finalizes_stale_launch_when_runtime_is_ready(mo
     monkeypatch.setattr(
         supervisor,
         "finalize_runtime_boot_status",
-        lambda: {
+        lambda **_kwargs: {
             "state": "succeeded",
             "phase": "validate",
             "action": "update",
@@ -663,7 +663,7 @@ def test_reconcile_update_status_does_not_finalize_ready_runtime_for_other_slot(
     monkeypatch.setattr(
         supervisor,
         "finalize_runtime_boot_status",
-        lambda: (_ for _ in ()).throw(AssertionError("should not finalize a different active slot")),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not finalize a different active slot")),
     )
 
     payload = supervisor._reconcile_update_status(
