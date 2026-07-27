@@ -261,13 +261,22 @@ def test_api_restart_preflight_failure_keeps_previous_server(monkeypatch):
     assert "preflight failed" in result.stdout
 
 
-def test_api_detached_restart_uses_root_cli_bootstrap(monkeypatch):
+def test_api_detached_restart_uses_root_cli_bootstrap(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(api_cmd, "merged_runtime_dotenv_env", lambda env: dict(env))
-    monkeypatch.setattr(api_cmd.subprocess, "Popen", lambda **kwargs: captured.update(kwargs))
+    class _Process:
+        pid = 4321
 
-    api_cmd._spawn_detached_server("127.0.0.1", 8777, token="t1", reload=True)
+    monkeypatch.setattr(api_cmd, "merged_runtime_dotenv_env", lambda env: dict(env))
+    log_path = tmp_path / "restart.log"
+    monkeypatch.setattr(api_cmd, "_restart_log_path", lambda _host, _port: log_path)
+    monkeypatch.setattr(
+        api_cmd.subprocess,
+        "Popen",
+        lambda **kwargs: captured.update(kwargs) or _Process(),
+    )
+
+    launch = api_cmd._spawn_detached_server("127.0.0.1", 8777, token="t1", reload=True)
 
     assert captured["args"] == [
         api_cmd.sys.executable,
@@ -283,6 +292,66 @@ def test_api_detached_restart_uses_root_cli_bootstrap(monkeypatch):
         "--token",
         "t1",
     ]
+    assert launch.pid == 4321
+    assert launch.log_path == log_path
+    assert getattr(captured["stdout"], "closed", False) is True
+    assert captured["stderr"] is api_cmd.subprocess.STDOUT
+
+
+def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
+    monkeypatch.delenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", raising=False)
+    assert api_cmd._api_restart_start_timeout_seconds() == 60.0
+
+    monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "90")
+    assert api_cmd._api_restart_start_timeout_seconds() == 90.0
+
+    monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "1")
+    assert api_cmd._api_restart_start_timeout_seconds() == 20.0
+
+    monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "invalid")
+    assert api_cmd._api_restart_start_timeout_seconds() == 60.0
+
+
+def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
+    monkeypatch,
+    tmp_path,
+):
+    runner = CliRunner()
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
+        token="t1",
+    )
+    observed: dict[str, float] = {}
+    launch = api_cmd.DetachedServerLaunch(pid=4321, log_path=tmp_path / "restart.log")
+
+    monkeypatch.setattr(api_cmd, "load_config", lambda: conf)
+    monkeypatch.setattr(api_cmd, "_ensure_api_pre_stop_preflight_or_exit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_cmd, "_restart_autostart_service_for_current_base_dir", lambda _base: None)
+    monkeypatch.setattr(api_cmd, "_current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(api_cmd, "_restart_marker_path", lambda _host, _port: tmp_path / "marker.json")
+    monkeypatch.setattr(api_cmd, "_write_restart_marker", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_cmd, "_clear_restart_marker", lambda _path: None)
+    monkeypatch.setattr(api_cmd, "_request_graceful_shutdown", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(api_cmd, "_spawn_detached_server", lambda *_args, **_kwargs: launch)
+    monkeypatch.setattr(api_cmd, "_api_restart_start_timeout_seconds", lambda: 75.0)
+    monkeypatch.setattr(
+        api_cmd,
+        "_wait_for_server_start",
+        lambda _host, _port, *, timeout: observed.update(timeout=timeout) or False,
+    )
+    monkeypatch.setattr(api_cmd.psutil, "pid_exists", lambda pid: pid == 4321)
+
+    result = runner.invoke(app, ["restart"])
+
+    assert result.exit_code == 1
+    assert observed == {"timeout": 75.0}
+    assert "within 75s" in result.stdout
+    assert "alive=true" in result.stdout
+    assert str(launch.log_path) in result.stdout
 
 
 def test_resolve_stop_bind_rejects_remote_hub_url():

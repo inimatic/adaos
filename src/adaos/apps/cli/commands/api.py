@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -26,6 +27,12 @@ from adaos.apps.cli.active_control import resolve_control_token
 apply_runtime_dotenv_overrides()
 
 app = typer.Typer(help="HTTP API for AdaOS")
+
+
+@dataclass(frozen=True, slots=True)
+class DetachedServerLaunch:
+    pid: int
+    log_path: Path
 
 
 _RUNTIME_PREFLIGHT_REQUIRED_FILES: tuple[str, ...] = (
@@ -1367,7 +1374,29 @@ def _wait_for_server_start(host: str, port: int, *, timeout: float) -> bool:
     return False
 
 
-def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: bool = False) -> None:
+def _api_restart_start_timeout_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_RESTART_START_TIMEOUT_SEC") or "60").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(20.0, min(value, 300.0))
+
+
+def _restart_log_path(host: str, port: int) -> Path:
+    safe_host = str(host or "127.0.0.1").replace(":", "_").replace("/", "_").replace("\\", "_")
+    root = _state_dir() / "api"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / f"restart-{safe_host}-{int(port)}.log"
+
+
+def _spawn_detached_server(
+    host: str,
+    port: int,
+    *,
+    token: str | None,
+    reload: bool = False,
+) -> DetachedServerLaunch:
     args = [
         sys.executable,
         "-m",
@@ -1386,13 +1415,13 @@ def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: b
 
     env = merged_runtime_dotenv_env(os.environ.copy())
     creationflags = 0
+    log_path = _restart_log_path(host, port)
     popen_kwargs: dict[str, object] = {
         "args": args,
         "cwd": os.getcwd(),
         "env": env,
         "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        "stderr": subprocess.STDOUT,
     }
     if os.name == "nt":
         creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) | int(
@@ -1404,7 +1433,15 @@ def _spawn_detached_server(host: str, port: int, *, token: str | None, reload: b
         popen_kwargs["creationflags"] = creationflags
     else:
         popen_kwargs["start_new_session"] = True
-    subprocess.Popen(**popen_kwargs)
+    with log_path.open("ab", buffering=0) as output:
+        output.write(
+            f"\n[AdaOS restart] spawned_at={time.time():.3f} host={host} port={int(port)}\n".encode(
+                "utf-8"
+            )
+        )
+        popen_kwargs["stdout"] = output
+        process = subprocess.Popen(**popen_kwargs)
+    return DetachedServerLaunch(pid=int(process.pid), log_path=log_path)
 
 
 def _request_graceful_shutdown(
@@ -1731,9 +1768,14 @@ def restart():
             ):
                 raise RuntimeError(f"failed to stop api server at {host}:{port}")
 
-        _spawn_detached_server(host, port, token=token, reload=False)
-        if not _wait_for_server_start(host, port, timeout=20.0):
-            raise RuntimeError(f"api server did not start at {host}:{port}")
+        launch = _spawn_detached_server(host, port, token=token, reload=False)
+        start_timeout = _api_restart_start_timeout_seconds()
+        if not _wait_for_server_start(host, port, timeout=start_timeout):
+            alive = psutil.pid_exists(launch.pid)
+            raise RuntimeError(
+                f"api server did not start at {host}:{port} within {start_timeout:g}s; "
+                f"spawned_pid={launch.pid} alive={str(alive).lower()} log={launch.log_path}"
+            )
     except Exception as exc:
         _clear_restart_marker(marker)
         typer.secho(f"[AdaOS] restart failed: {exc}", fg=typer.colors.RED)
