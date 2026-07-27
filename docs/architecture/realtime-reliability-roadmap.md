@@ -260,6 +260,39 @@ This closes the handshake defect and proves the post-promotion endpoint. It
 does not yet close the wider acceptance item for one already-open real
 root-routed browser session surviving the complete A/B interval.
 
+### Stand checkpoint: 2026-07-27, `91.98.89.76`
+
+The hub exposed two independent bootstrap deadlocks while converging from
+`0.1.565` to the current core release.
+
+- The host explicitly disabled warm switch, so candidate prewarm correctly
+  returned `skipped`. The strict warm-cutover gate nevertheless required
+  candidate readiness and repeatedly cycled through prepare, countdown, and
+  `candidate_not_ready` deferral. Release `0.1.617` now applies that readiness
+  gate only when warm switch is enabled; configured cold transitions no longer
+  require an impossible passive candidate.
+- The first recovered cold transition reached slot `B` and validated runtime
+  `0.1.617`, but root parity remained pending. Partial root promotion had
+  projected only the files named by the bootstrap comparison, so import
+  preflight combined new candidate modules with stale root modules and failed
+  on a transitive `adaos.services.skill.declarations` import.
+- Release `0.1.618` treats `src/adaos` as one atomic root-promotion unit whenever
+  any package member changes. Preflight therefore validates the exact complete
+  import graph that will be committed; the existing backup and rollback
+  transaction still covers the whole promoted unit.
+- Live recovery completed on slot `A` with build
+  `0.1.618+1.5d59c42`: update state is `succeeded / validate`, root promotion is
+  no longer required, runtime API readiness and active-slot ownership agree,
+  and the supervisor monitor has zero consecutive failures. The temporary cold
+  fallback was removed after validation; the original configuration backup is
+  retained on the host.
+
+A supervisor restart cancelled the already scheduled push-driven attempt, and
+the release was not reissued during the bounded observation window. Recovery
+used one pinned operator request. Automatic intent redelivery across that exact
+restart boundary remains an explicit acceptance item rather than an assumed
+property.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -625,6 +658,11 @@ lifecycle and update attempt state.
 - [x] `[must]` Validate the exact projected post-promotion root imports before
   mutation and enforce bootstrap re-export dependency closure by regression
   test.
+- [x] `[must]` Treat an explicitly disabled warm switch as a configured cold
+  transition; do not apply passive-candidate readiness gates to that mode.
+- [x] `[must]` Promote the root `src/adaos` package as one transactional import
+  graph so newly introduced transitive modules cannot be mixed with stale root
+  modules. Live proof completed on `91.98.89.76` with release `0.1.618`.
 - [x] `[must]` Make root promotion transactional: confine relative paths, back
   up the complete change set before apply, atomically persist metadata, and
   roll back every partial apply/commit failure.
@@ -636,6 +674,9 @@ lifecycle and update attempt state.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.
+- [ ] `[should]` Prove that a push-driven update intent cancelled by supervisor
+  restart is automatically redelivered and completed without a pinned operator
+  request.
 - [x] `[must]` Prove the hardened root promotion and slot fallback through two
   consecutive release updates on the affected second machine. Evidence is
   recorded under
