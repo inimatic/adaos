@@ -110,6 +110,8 @@ from adaos.services.supervisor_memory import (
 _SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
 _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 _LOG = logging.getLogger("adaos.supervisor")
+_SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
+_SUPERVISOR_INSTANCE_STARTED_AT = time.time()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1134,6 +1136,16 @@ def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] 
         "restart_required": bool(source.get("restart_required")),
         "restart_mode": str(source.get("restart_mode") or "").strip() or None,
         "restart_requested_at": _epoch(source.get("restart_requested_at")) or None,
+        "restart_requested_by_instance_id": str(source.get("restart_requested_by_instance_id") or "").strip()
+        or None,
+        "restart_requested_by_pid": int(_epoch(source.get("restart_requested_by_pid"))) or None,
+        "restart_requested_by_started_at": _epoch(source.get("restart_requested_by_started_at")) or None,
+        "root_promotion_supervisor_instance_id": str(
+            source.get("root_promotion_supervisor_instance_id") or ""
+        ).strip()
+        or None,
+        "root_promotion_supervisor_pid": int(_epoch(source.get("root_promotion_supervisor_pid"))) or None,
+        "root_promotion_supervisor_started_at": _epoch(source.get("root_promotion_supervisor_started_at")) or None,
         "min_update_period_sec": _epoch(source.get("min_update_period_sec")) or None,
         "subsequent_transition": bool(source.get("subsequent_transition")),
         "subsequent_transition_requested_at": _epoch(source.get("subsequent_transition_requested_at")) or None,
@@ -1291,6 +1303,23 @@ def _is_root_restart_pending_status(payload: dict[str, Any] | None) -> bool:
     return state == "succeeded" and phase == "root_promoted"
 
 
+def _root_promotion_owner_instance(payload: dict[str, Any] | None) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    return str(
+        data.get("root_promotion_supervisor_instance_id")
+        or data.get("restart_requested_by_instance_id")
+        or ""
+    ).strip()
+
+
+def _root_restart_crossed_supervisor_generation(payload: dict[str, Any] | None) -> bool:
+    owner_instance = _root_promotion_owner_instance(payload)
+    # Legacy receipts did not carry a process generation. Preserve their
+    # existing recovery path, while every newly written receipt is gated by
+    # the immutable per-process instance id below.
+    return not owner_instance or owner_instance != _SUPERVISOR_INSTANCE_ID
+
+
 def _is_transition_in_progress(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> bool:
     status_map = status if isinstance(status, dict) else {}
     attempt_map = attempt if isinstance(attempt, dict) else {}
@@ -1316,6 +1345,8 @@ def _runtime_ready_for_boot_status_finalize(status: dict[str, Any] | None, runti
     if state == "succeeded" and phase == "validate":
         return False
     if state == "validated" and phase == "root_promotion_pending":
+        return False
+    if state == "succeeded" and phase == "root_promoted" and not _root_restart_crossed_supervisor_generation(status):
         return False
     finalizable = state in {"restarting", "applying", "validated"} or (
         state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
@@ -1379,6 +1410,37 @@ def _subsequent_transition_request(attempt: dict[str, Any] | None) -> dict[str, 
     data = attempt if isinstance(attempt, dict) else {}
     queued = data.get("subsequent_transition_request")
     return dict(queued) if isinstance(queued, dict) and queued else None
+
+
+def _clear_orphaned_subsequent_transition_status(
+    status: dict[str, Any],
+    attempt: dict[str, Any] | None,
+    *,
+    updated_at: float | None = None,
+) -> dict[str, Any]:
+    status_payload = dict(status)
+    if _subsequent_transition_request(attempt) is not None:
+        return status_payload
+    had_stale_marker = bool(status_payload.get("subsequent_transition")) or any(
+        key in status_payload
+        for key in (
+            "subsequent_transition_action",
+            "subsequent_transition_target_rev",
+            "subsequent_transition_target_version",
+        )
+    )
+    if not had_stale_marker:
+        return status_payload
+    status_payload["subsequent_transition"] = False
+    status_payload["subsequent_transition_requested_at"] = None
+    for key in (
+        "subsequent_transition_action",
+        "subsequent_transition_target_rev",
+        "subsequent_transition_target_version",
+    ):
+        status_payload.pop(key, None)
+    status_payload["updated_at"] = time.time() if updated_at is None else float(updated_at)
+    return write_core_update_status(status_payload)
 
 
 def _target_version_matches(left: Any, right: Any) -> bool:
@@ -1634,26 +1696,11 @@ def _complete_update_attempt(*, state: str, status: dict[str, Any] | None, reaso
         # must also be an actual durable queued request, otherwise preserving
         # an old boolean makes read surfaces claim that another mutation is
         # pending even though the reconciler has nothing it can execute.
-        if _subsequent_transition_request(payload) is None:
-            had_stale_marker = bool(status_payload.get("subsequent_transition")) or any(
-                key in status_payload
-                for key in (
-                    "subsequent_transition_action",
-                    "subsequent_transition_target_rev",
-                    "subsequent_transition_target_version",
-                )
-            )
-            status_payload["subsequent_transition"] = False
-            status_payload["subsequent_transition_requested_at"] = None
-            for key in (
-                "subsequent_transition_action",
-                "subsequent_transition_target_rev",
-                "subsequent_transition_target_version",
-            ):
-                status_payload.pop(key, None)
-            if had_stale_marker:
-                status_payload["updated_at"] = now
-                status_payload = write_core_update_status(status_payload)
+        status_payload = _clear_orphaned_subsequent_transition_status(
+            status_payload,
+            payload,
+            updated_at=now,
+        )
         payload["last_status"] = status_payload
     return _write_update_attempt(payload)
 
@@ -1892,11 +1939,27 @@ def _fail_root_restart_attempt(
     )
 
 
+def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
+    current = read_core_update_status()
+    if _is_root_restart_pending_status(current) and not _root_restart_crossed_supervisor_generation(current):
+        return None
+    finalized = finalize_runtime_boot_status(supervisor_authorized=True)
+    if not isinstance(finalized, dict):
+        return None
+    if float(finalized.get("root_restart_completed_at") or 0.0) > 0.0:
+        finalized = dict(finalized)
+        finalized["root_restart_completed_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
+        finalized["root_restart_completed_by_pid"] = os.getpid()
+        finalized["root_restart_completed_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
+        finalized = write_core_update_status(finalized)
+    return finalized
+
+
 def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     if _runtime_ready_for_boot_status_finalize(status, runtime):
-        finalized_status = finalize_runtime_boot_status(supervisor_authorized=True)
+        finalized_status = _finalize_runtime_boot_status_from_supervisor()
         if isinstance(finalized_status, dict):
             status = finalized_status
             payload["status"] = finalized_status
@@ -1910,6 +1973,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(attempt, dict):
         return payload
 
+    cleaned_status = _clear_orphaned_subsequent_transition_status(status, attempt)
+    if cleaned_status != status:
+        status = cleaned_status
+        payload["status"] = cleaned_status
+        payload["_served_by"] = "supervisor_orphaned_subsequent_recovery"
     payload["attempt"] = dict(attempt)
     recovered_status = _recover_active_attempt_target_already_active(
         status=status,
@@ -1957,7 +2025,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             # If a new runtime is already serving status, let it finalize a stale
             # root-promoted marker before declaring the update failed.
-            finalized_status = finalize_runtime_boot_status(supervisor_authorized=True)
+            finalized_status = (
+                _finalize_runtime_boot_status_from_supervisor()
+                if _runtime_ready_for_boot_status_finalize(status, runtime)
+                else None
+            )
             if _is_root_restart_completed_status(finalized_status):
                 payload["status"] = finalized_status
                 payload["attempt"] = _complete_update_attempt(
@@ -4494,6 +4566,9 @@ class SupervisorManager:
         status_payload["phase"] = "root_promoted"
         status_payload["root_promotion_required"] = False
         status_payload["restart_mode"] = str(restart.get("mode") or "manual")
+        status_payload["restart_requested_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
+        status_payload["restart_requested_by_pid"] = os.getpid()
+        status_payload["restart_requested_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
         status_payload["updated_at"] = now
         if restart.get("requested"):
             status_payload["message"] = "root promotion completed; restarting autostart service to activate updated supervisor"
@@ -4509,6 +4584,9 @@ class SupervisorManager:
         attempt_payload["awaiting_restart"] = True
         attempt_payload["restart_required"] = True
         attempt_payload["restart_mode"] = str(restart.get("mode") or "manual")
+        attempt_payload["restart_requested_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
+        attempt_payload["restart_requested_by_pid"] = os.getpid()
+        attempt_payload["restart_requested_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
         attempt_payload["requested_at"] = _epoch(attempt_payload.get("requested_at")) or now
         attempt_payload["transitioned_at"] = _epoch(attempt_payload.get("transitioned_at")) or now
         attempt_payload["updated_at"] = now
@@ -10455,6 +10533,9 @@ class SupervisorManager:
                 "bootstrap_update": bootstrap_update,
                 "root_promotion": promotion,
                 "promotion_reason": reason,
+                "root_promotion_supervisor_instance_id": _SUPERVISOR_INSTANCE_ID,
+                "root_promotion_supervisor_pid": os.getpid(),
+                "root_promotion_supervisor_started_at": _SUPERVISOR_INSTANCE_STARTED_AT,
                 "finished_at": time.time(),
             }
         )
@@ -10468,6 +10549,9 @@ class SupervisorManager:
                 "accepted": True,
                 "awaiting_restart": True,
                 "restart_required": True,
+                "root_promotion_supervisor_instance_id": _SUPERVISOR_INSTANCE_ID,
+                "root_promotion_supervisor_pid": os.getpid(),
+                "root_promotion_supervisor_started_at": _SUPERVISOR_INSTANCE_STARTED_AT,
                 "requested_at": _epoch(previous_attempt.get("requested_at")) or now,
                 "transitioned_at": now,
                 "updated_at": now,

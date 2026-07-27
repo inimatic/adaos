@@ -51,7 +51,13 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     )
 
     monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
-    payload = supervisor._reconcile_update_status({"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"})
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "_served_by": "supervisor_fallback",
+        }
+    )
 
     assert payload["status"]["state"] == "failed"
     assert payload["status"]["phase"] == "shutdown"
@@ -495,6 +501,59 @@ def test_reconcile_update_status_clears_stale_subsequent_marker_without_queued_r
     assert "subsequent_transition_target_version" not in status
 
 
+def test_reconcile_update_status_self_heals_orphaned_subsequent_marker_after_attempt_completed(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_version": "current-build",
+            "subsequent_transition": False,
+            "updated_at": 499.0,
+        }
+    )
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "target_version": "current-build",
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 400.0,
+            "updated_at": 499.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {"ok": True, "status": read_status(), "_served_by": "runtime"}
+    )
+
+    assert payload["_served_by"] == "supervisor_orphaned_subsequent_recovery"
+    assert payload["status"]["subsequent_transition"] is False
+    assert read_status()["subsequent_transition"] is False
+
+
+def test_root_restart_boot_finalize_requires_new_supervisor_generation() -> None:
+    runtime = {
+        "runtime_state": "ready",
+        "listener_running": True,
+        "runtime_api_ready": True,
+        "active_slot": "B",
+    }
+    current_generation = {
+        "state": "succeeded",
+        "phase": "root_promoted",
+        "target_slot": "B",
+        "root_promotion_supervisor_instance_id": supervisor._SUPERVISOR_INSTANCE_ID,
+    }
+    next_generation = {
+        **current_generation,
+        "root_promotion_supervisor_instance_id": "previous-supervisor-instance",
+    }
+
+    assert supervisor._runtime_ready_for_boot_status_finalize(current_generation, runtime) is False
+    assert supervisor._runtime_ready_for_boot_status_finalize(next_generation, runtime) is True
+
+
 def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
@@ -560,7 +619,19 @@ def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkey
     )
 
     monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
-    payload = supervisor._reconcile_update_status({"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"})
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {
+                "runtime_state": "ready",
+                "listener_running": True,
+                "runtime_api_ready": True,
+                "active_slot": "A",
+            },
+            "_served_by": "supervisor_fallback",
+        }
+    )
 
     assert payload["status"]["state"] == "failed"
     assert payload["status"]["phase"] == "root_restart_timeout"
@@ -611,12 +682,24 @@ def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_run
         },
     )
 
-    payload = supervisor._reconcile_update_status({"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"})
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {
+                "runtime_state": "ready",
+                "listener_running": True,
+                "runtime_api_ready": True,
+                "active_slot": "A",
+            },
+            "_served_by": "supervisor_fallback",
+        }
+    )
 
     assert payload["status"]["state"] == "succeeded"
     assert payload["status"]["phase"] == "validate"
     assert payload["status"]["root_restart_completed_at"] == 119.0
-    assert payload["_served_by"] == "supervisor_timeout_finalize"
+    assert payload["_served_by"] == "supervisor_runtime_ready_finalize"
     attempt = supervisor._read_update_attempt()
     assert isinstance(attempt, dict)
     assert attempt["state"] == "completed"
@@ -5218,6 +5301,9 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
     assert attempt["state"] == "awaiting_root_restart"
     assert attempt["restart_mode"] == "self_exit"
     assert attempt["restart_requested_at"] > 0
+    assert attempt["root_promotion_supervisor_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
+    assert attempt["restart_requested_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
+    assert payload["status"]["restart_requested_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
 
 
 def test_supervisor_auto_complete_does_not_repeat_root_restart(monkeypatch, tmp_path) -> None:
