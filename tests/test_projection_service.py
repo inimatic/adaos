@@ -502,6 +502,72 @@ def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monk
     assert calls == []
 
 
+def test_projection_service_persists_changed_detached_fallback(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    persist_calls: list[str] = []
+
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/infrastate/summary",
+        webspace_id=None,
+    )
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    async def _persist(webspace_id: str) -> dict[str, object]:
+        persist_calls.append(webspace_id)
+        return {"ok": True, "webspace_id": webspace_id}
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(
+        projection_service_module,
+        "async_get_ydoc",
+        _fake_async_get_ydoc_with_update_callback(fake_state),
+    )
+    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
+    monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _persist)
+
+    asyncio.run(
+        service.apply(
+            "runtime",
+            "infrastate.summary",
+            {"version": "0.1.622"},
+            webspace_id="desktop",
+        )
+    )
+
+    assert persist_calls == ["desktop"]
+
+
+def test_projection_service_surfaces_detached_persistence_failure(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(backend="yjs", path="data/weather", webspace_id=None)
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    async def _fail_persist(_webspace_id: str) -> dict[str, object]:
+        raise RuntimeError("disk unavailable")
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(
+        projection_service_module,
+        "async_get_ydoc",
+        _fake_async_get_ydoc_with_update_callback(fake_state),
+    )
+    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
+    monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _fail_persist)
+
+    try:
+        asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="desktop"))
+    except RuntimeError as exc:
+        assert str(exc) == "disk unavailable"
+    else:
+        raise AssertionError("detached persistence failure must reach the caller")
+
+
 def test_projection_service_compacts_inline_after_detached_write_amplification(monkeypatch, tmp_path) -> None:
     projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
     fake_state = {"data": _FakeMap()}
