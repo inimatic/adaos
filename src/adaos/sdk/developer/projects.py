@@ -563,6 +563,45 @@ def check_subscription(project_id: str) -> dict[str, Any]:
     return _jsonable(_service().check_artifact_subscription(normalized_id))
 
 
+def plan_registry_reconciliation(
+    kind: str,
+    project_id: str,
+    *,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    return _jsonable(
+        _service().plan_artifact_registry_reconciliation(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+        )
+    )
+
+
+def apply_registry_reconciliation(
+    kind: str,
+    project_id: str,
+    *,
+    reviewed_plan_digest: str,
+    channel: str = "stable",
+) -> dict[str, Any]:
+    normalized_kind = _kind(kind)
+    normalized_id = _project_id(project_id)
+    reviewed = str(reviewed_plan_digest or "").strip().lower()
+    if not reviewed:
+        raise DeveloperProjectError("reviewed_plan_digest is required")
+    return _jsonable(
+        _service().apply_artifact_registry_reconciliation(
+            normalized_kind,
+            normalized_id,
+            channel=str(channel or "stable").strip() or "stable",
+            reviewed_plan_digest=reviewed,
+        )
+    )
+
+
 def plan_subscription_update(project_id: str) -> dict[str, Any]:
     normalized_id = _project_id(project_id)
     return _jsonable(_service().plan_artifact_subscription_update(normalized_id))
@@ -651,6 +690,8 @@ __all__ = [
     "ProjectNotFoundError",
     "create",
     "check_subscription",
+    "plan_registry_reconciliation",
+    "apply_registry_reconciliation",
     "inspect_subscription_update",
     "plan_subscription_update",
     "activate_subscription",

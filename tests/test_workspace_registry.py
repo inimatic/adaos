@@ -15,6 +15,7 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     ProjectRelease,
+    canonical_payload_digest,
 )
 from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
@@ -753,6 +754,58 @@ def test_registry_channel_points_to_sealed_immutable_release(tmp_path: Path):
     }
     assert entry["source"]["path"] == "scenarios/recipes"
     assert entry["source"]["revision"] == source.revision
+
+
+def test_registry_channel_compare_and_swap_rejects_changed_entry(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "recipes"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\n",
+        encoding="utf-8",
+    )
+    upsert_workspace_registry_entry(workspace, "scenarios", scenario_dir)
+    observed = load_workspace_registry(workspace, fallback_to_scan=False)["scenarios"][0]
+    observed_digest = canonical_payload_digest(observed)
+
+    registry = load_workspace_registry(workspace, fallback_to_scan=False)
+    registry["scenarios"][0]["operator_note"] = "changed-after-review"
+    write_workspace_registry(workspace, registry)
+
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("scenarios/recipes/",),
+    )
+    package = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="recipes",
+        version="1.2.3",
+        digest="sha256:" + "a" * 64,
+        manifest_digest="sha256:" + "b" * 64,
+        source_ref=source,
+    )
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=source,
+        components=(package,),
+    ).seal()
+
+    with pytest.raises(WorkspaceRegistryError, match="changed after review"):
+        set_workspace_registry_channel(
+            workspace,
+            "scenarios",
+            "recipes",
+            channel="stable",
+            release=release,
+            expected_entry_digest=observed_digest,
+        )
+
+    entry = load_workspace_registry(workspace, fallback_to_scan=False)["scenarios"][0]
+    assert entry["operator_note"] == "changed-after-review"
+    assert "channels" not in entry
 
 
 class _Sql:

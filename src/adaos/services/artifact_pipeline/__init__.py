@@ -58,6 +58,14 @@ from .releases import (
     parse_artifact_requirements,
 )
 from .remote import ArtifactRegistryClient, RemoteReleaseRepository
+from .reconciliation import (
+    REGISTRY_RECONCILIATION_OPERATION_SCHEMA,
+    REGISTRY_RECONCILIATION_PLAN_SCHEMA,
+    RegistryProjectionRemote,
+    RegistryReconciliationError,
+    RegistryReconciliationPlan,
+    WorkspaceRegistryReconciler,
+)
 from .retention import (
     ArtifactPipelineRetentionManager,
     ArtifactRetentionError,
@@ -120,6 +128,8 @@ __all__ = [
     "PROMOTION_OPERATION_SCHEMA",
     "PUSHED_SOURCE_SCHEMA",
     "REBASE_PLAN_SCHEMA",
+    "REGISTRY_RECONCILIATION_OPERATION_SCHEMA",
+    "REGISTRY_RECONCILIATION_PLAN_SCHEMA",
     "CandidateRebasePlan",
     "PreparedCandidate",
     "PromotionResult",
@@ -142,12 +152,16 @@ __all__ = [
     "ReleasePlan",
     "ReleaseRepository",
     "RemoteReleaseRepository",
+    "RegistryProjectionRemote",
+    "RegistryReconciliationError",
+    "RegistryReconciliationPlan",
     "SourceProvider",
     "SourceProviderError",
     "SubscriptionManager",
     "SubscriptionStore",
     "TrialEvidence",
     "UpdateNotice",
+    "WorkspaceRegistryReconciler",
     "assert_promotable",
     "assess_freshness",
     "begin_trial",

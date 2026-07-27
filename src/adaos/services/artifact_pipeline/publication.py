@@ -48,6 +48,10 @@ from adaos.services.artifact_pipeline.releases import (
     build_project_release,
     parse_artifact_requirements,
 )
+from adaos.services.artifact_pipeline.reconciliation import (
+    RegistryReconciliationPlan,
+    WorkspaceRegistryReconciler,
+)
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     atomic_write_json,
@@ -289,6 +293,43 @@ class ArtifactPublicationService:
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.subscriptions = SubscriptionStore(self.workspace_root / ".adaos" / "subscriptions.json")
+        self.registry_reconciler = WorkspaceRegistryReconciler(
+            state_root=self.state_root,
+            workspace_root=self.workspace_root,
+            remote=self.remote,
+        )
+
+    def plan_registry_reconciliation(
+        self,
+        project_id: str,
+        *,
+        kind: str,
+        channel: str = "stable",
+    ) -> RegistryReconciliationPlan:
+        if kind not in {"skill", "scenario"}:
+            raise PublicationError("artifact kind must be skill or scenario")
+        return self.registry_reconciler.plan(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+
+    def apply_registry_reconciliation(
+        self,
+        project_id: str,
+        *,
+        kind: str,
+        reviewed_plan_digest: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        if kind not in {"skill", "scenario"}:
+            raise PublicationError("artifact kind must be skill or scenario")
+        return self.registry_reconciler.apply(
+            project_id,
+            kind=kind,
+            channel=channel,
+            reviewed_plan_digest=reviewed_plan_digest,
+        )
 
     def pushed_source_path(self, kind: str, artifact_id: str) -> Path:
         plural = "skills" if kind == "skill" else "scenarios"

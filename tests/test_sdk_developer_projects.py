@@ -203,6 +203,33 @@ class _DeveloperService:
     def check_artifact_subscription(self, project_id):
         return {"ok": True, "project_id": project_id, "available": True}
 
+    def plan_artifact_registry_reconciliation(self, kind, project_id, *, channel="stable"):
+        return {
+            "ok": True,
+            "kind": kind,
+            "project_id": project_id,
+            "channel": channel,
+            "action": "project_remote_channel",
+            "plan_digest": "sha256:" + "b" * 64,
+        }
+
+    def apply_artifact_registry_reconciliation(
+        self,
+        kind,
+        project_id,
+        *,
+        reviewed_plan_digest,
+        channel="stable",
+    ):
+        return {
+            "ok": True,
+            "kind": kind,
+            "project_id": project_id,
+            "channel": channel,
+            "reviewed_plan_digest": reviewed_plan_digest,
+            "status": "completed",
+        }
+
     def plan_artifact_subscription_update(self, project_id):
         return {
             "ok": True,
@@ -281,6 +308,15 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         validation_evidence={"status": "passed"},
     )
     notice = projects.check_subscription("builder")
+    reconciliation_plan = projects.plan_registry_reconciliation(
+        "scenario",
+        "builder",
+    )
+    reconciliation = projects.apply_registry_reconciliation(
+        "scenario",
+        "builder",
+        reviewed_plan_digest=reconciliation_plan["plan_digest"],
+    )
     inspection = projects.inspect_subscription_update("builder")
     update_plan = projects.plan_subscription_update("builder")
     subscription_update = projects.activate_subscription(
@@ -296,6 +332,9 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
     assert promoted["permission_decision"]["actor"] == "user:test"
     assert rebased["candidate"]["candidate_id"] == "builder-rebased"
     assert notice["available"] is True
+    assert reconciliation_plan["action"] == "project_remote_channel"
+    assert reconciliation["status"] == "completed"
+    assert reconciliation["reviewed_plan_digest"] == reconciliation_plan["plan_digest"]
     assert inspection["update_plan"]["activation"]["target_release"] == "builder@1.1.0"
     assert update_plan["plan_digest"].startswith("sha256:")
     assert subscription_update["idempotency_key"] == "update-builder-1"

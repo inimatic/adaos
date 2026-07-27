@@ -10,7 +10,11 @@ from typing import Any, Iterable, Literal
 
 import yaml
 
-from adaos.domain.artifact_release import ProjectRelease, sha256_digest
+from adaos.domain.artifact_release import (
+    ProjectRelease,
+    canonical_payload_digest,
+    sha256_digest,
+)
 from adaos.domain.workspace_manifest import (
     parse_scenario_skill_bindings,
     parse_skill_activation_policy,
@@ -184,6 +188,7 @@ def set_workspace_registry_channel(
     *,
     channel: str,
     release: ProjectRelease,
+    expected_entry_digest: str | None = None,
 ) -> dict[str, Any]:
     """Point one registry artifact channel at an immutable project release.
 
@@ -199,6 +204,7 @@ def set_workspace_registry_channel(
             name_or_id,
             channel=channel,
             release=release,
+            expected_entry_digest=expected_entry_digest,
         )
 
 
@@ -209,6 +215,7 @@ def _set_workspace_registry_channel_unlocked(
     *,
     channel: str,
     release: ProjectRelease,
+    expected_entry_digest: str | None,
 ) -> dict[str, Any]:
     channel_id = _clean_text(channel)
     if not channel_id:
@@ -232,6 +239,15 @@ def _set_workspace_registry_channel_unlocked(
         raise FileNotFoundError(f"{kind[:-1]} '{name_or_id}' is not listed in workspace registry.json")
 
     entry = dict(items[matched_index])
+    observed_entry_digest = canonical_payload_digest(entry)
+    if (
+        expected_entry_digest is not None
+        and observed_entry_digest != expected_entry_digest
+    ):
+        raise WorkspaceRegistryError(
+            "workspace registry entry changed after review: "
+            f"expected {expected_entry_digest}, observed {observed_entry_digest}"
+        )
     artifact_id = _clean_text(entry.get("id")) or _clean_text(entry.get("name"))
     component = next(
         (

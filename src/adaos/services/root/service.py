@@ -2182,6 +2182,38 @@ class RootDeveloperService:
         notice = self._artifact_publication_service(cfg).check_subscription(project_id)
         return {"ok": True, **notice.to_dict()}
 
+    def plan_artifact_registry_reconciliation(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        plan = self._artifact_publication_service(cfg).plan_registry_reconciliation(
+            project_id,
+            kind=kind,
+            channel=channel,
+        )
+        return {"ok": True, **plan.to_dict()}
+
+    def apply_artifact_registry_reconciliation(
+        self,
+        kind: Literal["skill", "scenario"],
+        project_id: str,
+        *,
+        reviewed_plan_digest: str,
+        channel: str = "stable",
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        result = self._artifact_publication_service(cfg).apply_registry_reconciliation(
+            project_id,
+            kind=kind,
+            channel=channel,
+            reviewed_plan_digest=reviewed_plan_digest,
+        )
+        return {"ok": True, **result}
+
     def plan_artifact_subscription_update(self, project_id: str) -> dict[str, Any]:
         cfg = self._load_config()
         plan = self._artifact_publication_service(cfg).plan_subscription_update(project_id)

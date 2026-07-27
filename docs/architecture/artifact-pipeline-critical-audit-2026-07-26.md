@@ -66,6 +66,7 @@ broader frontend/WebSocket handoff remains separate.
 | B13 registry trust boundary | corrected, validated-local | corrupt or unknown registry payloads, unsafe paths, and ambiguous aliases fail closed; read-modify-write mutations are serialized, durable writes are atomic, and historical incomplete manifests receive deterministic non-publishable compatibility identities |
 | B14 identity drift visibility | corrected, validated-local | read-only diagnostics distinguish registry/channel, installed subscription, immutable source/package/release, and active WorkspaceLock identities; Builder's installed subscription and lock agree while its missing discovery pointer is an explicit AP6 rollout gate |
 | B15 channel/subscription admission | corrected, validated-local | malformed or partial ChannelPointers, inconsistent channel indexes, and malformed/duplicate subscription records fail closed before reconciliation |
+| B16 remote registry loss recovery | open, reproduced-live | Builder's installed subscription, WorkspaceLock, release receipt, and packages agree, but authenticated remote reads return `release_not_found` and `channel_not_found`; central truth must be restored only through a reviewed source/package-attested recovery operation |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
@@ -283,6 +284,36 @@ identity. A dedicated full-path regression exercises the verifier with current
 promotion contracts, and a negative regression rejects DEV mutation after the
 checkpoint.
 
+### B16. Local activation can outlive remote release and channel state
+
+The package durability deployment occurred after the first live Builder
+publication. A current authenticated probe found that local Builder
+`0.2.20` still has a matching stable subscription, active WorkspaceLock,
+immutable release receipt, accepted trial, and both content-addressed packages,
+while the registry service returns `404 release_not_found` for the exact release
+digest and `404 channel_not_found` for `builder/stable`. The timing is
+consistent with pre-persistence backend state loss, but that cause is not
+treated as proven by the local evidence alone.
+
+The new registry reconciliation operation correctly refuses this case: it only
+projects a freshly fetched authoritative remote pointer and release into local
+discovery and never synthesizes central state from Workspace. The remaining
+recovery needs a separate reviewed operation that:
+
+- verifies the installed subscription, WorkspaceLock, release plan, accepted
+  candidate/trial, local package digests, and immutable Forge source refs;
+- plans the exact remote package, release, and absent-channel writes before any
+  mutation;
+- journals every remote phase and never automatically repeats an unknown
+  write;
+- creates the channel only with absent-channel CAS and then uses the ordinary
+  reconciliation path for local discovery;
+- blocks if any remote release or channel exists with a conflicting identity.
+
+Until that operation has local regressions and a live reviewed receipt, package
+rollout remains gated even though ordinary remote-to-local reconciliation is
+implemented.
+
 ## Reliability And Performance Gaps
 
 ### R1. Cached activation verified each archive repeatedly
@@ -438,10 +469,16 @@ readiness.
     pointer; the tool reports this drift and does not mutate either authority.
 17. **Completed locally:** make ChannelPointer, channel-index, and subscription
     readers fail closed so malformed discovery data cannot authorize repair.
-18. **Next:** define reconciliation from a freshly validated remote channel and
-    immutable release plan into the local registry projection, then make a
-    bounded package-only rollout decision. Replace single-zone buffered storage
-    with streamed/object-store multi-zone durability before broad rollout.
+18. **Completed locally:** reconcile a freshly validated remote channel and
+    immutable release plan into local registry discovery through explicit
+    plan/review/apply, registry CAS, WorkspaceLock stability checks, and
+    operation-receipt recovery. The live Builder probe correctly failed closed
+    because the remote release and channel are absent.
+19. **Next:** implement and review source/package-attested recovery for an exact
+    locally installed release whose remote immutable state is missing, then run
+    ordinary registry reconciliation and make the bounded package-only rollout
+    decision. Replace single-zone buffered storage with streamed/object-store
+    multi-zone durability before broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

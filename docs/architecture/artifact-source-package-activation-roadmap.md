@@ -121,11 +121,13 @@ Remaining acceptance blockers:
 - keep frontend replacement, long-lived WebSocket continuity, and proxy
   control-plane evolution separate from the now-proven bounded backend HTTP
   handoff before claiming broad zero-downtime operation;
-- revalidate the authoritative remote stable channel and explicitly project it
-  into legacy registry discovery before rollout. The local Builder diagnostic
-  proves its installed subscription matches the active WorkspaceLock, while the
-  registry cache has no stable channel/source pointer; production and
-  marketplace acceptance remain deferred.
+- recover or re-establish the authoritative remote stable record before
+  rollout. The local Builder diagnostic proves its installed subscription
+  matches the active WorkspaceLock, but a fresh authenticated read found both
+  its exact release and `stable` channel absent remotely. Registry
+  reconciliation therefore refused to infer a pointer from local activation
+  state. Production and marketplace acceptance remain deferred until an
+  explicit, attested remote recovery is implemented and reviewed.
 
 The original backend route slice is no longer a blocker: PR
 [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
@@ -179,7 +181,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
-| AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
+| AP6 | 9/11 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, and digest-reviewed remote-to-local registry reconciliation | attested recovery of missing remote state, bounded legacy fallback retirement, and stand acceptance |
 | AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
@@ -550,6 +552,10 @@ injected failure.
   releases after stand evidence.
 - [ ] `[deferred]` `AP6-10` Add public candidate subscriptions and recommendation
   ranking.
+- [x] `[must]` `AP6-11` Reconcile a freshly fetched remote ChannelPointer and
+  immutable release into registry discovery through an explicit
+  `plan -> reviewed digest -> apply` operation, with registry and WorkspaceLock
+  compare-and-switch checks and no package activation.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and channel/subscription regressions in
@@ -575,6 +581,17 @@ both validators, and a live API inspection after explicit runtime activation;
 Workspace remains on Builder `0.2.20` and companion skill `0.1.28`. Full
 removal of the non-subscribed compatibility bridge remains part of the
 legacy-retirement gate.
+AP6-11 is closed locally by focused reconciliation and SDK/CLI regressions.
+The operation verifies the remote channel/release relationship, installed
+subscription, active WorkspaceLock, trusted local release receipt, and current
+registry entry before producing a digest. Apply takes the Workspace writer
+lease, performs a registry-entry CAS, changes neither installed package bytes
+nor WorkspaceLock, and recovers a lost completion receipt only on an explicit
+repeat of the same reviewed operation. A live read-only plan for Builder then
+failed closed because Forge returned `404 release_not_found` for
+`sha256:feee37b221a12c6d6ba4e12c1cdd00fdd8320df4b5d4ca9a9ee13747f01a450b`
+and `404 channel_not_found` for `builder/stable`. This is now an explicit remote
+recovery blocker; local activation evidence is not promoted into central truth.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 

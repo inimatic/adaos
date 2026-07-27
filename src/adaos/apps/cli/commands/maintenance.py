@@ -24,6 +24,12 @@ def _emit(payload: dict, *, json_output: bool) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False))
 
 
+def _root_developer_service():
+    from adaos.services.root.service import RootDeveloperService
+
+    return RootDeveloperService()
+
+
 @app.command("status")
 def status_cmd(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
@@ -102,5 +108,55 @@ def artifact_identity_cmd(
             channel=channel,
         )
     except (ValueError, FileNotFoundError, ArtifactIdentityDiagnosticError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("artifact-registry-reconcile")
+def artifact_registry_reconcile_cmd(
+    project_id: str = typer.Argument(..., help="Canonical subscribed project id."),
+    kind: str = typer.Option(..., "--kind", help="Artifact kind: scenario or skill."),
+    channel: str = typer.Option("stable", "--channel", help="Remote channel to verify."),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the exact reviewed projection; otherwise only return a plan.",
+    ),
+    reviewed_plan_digest: str | None = typer.Option(
+        None,
+        "--reviewed-plan-digest",
+        help="Exact plan digest returned by the preceding read-only invocation.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit formatted JSON."),
+) -> None:
+    """Verify remote release identity and explicitly repair registry discovery."""
+
+    normalized_kind = str(kind or "").strip().lower().rstrip("s")
+    if normalized_kind not in {"scenario", "skill"}:
+        raise typer.BadParameter("kind must be scenario or skill", param_hint="--kind")
+    service = _root_developer_service()
+    try:
+        if apply:
+            reviewed = str(reviewed_plan_digest or "").strip().lower()
+            if not reviewed:
+                raise typer.BadParameter(
+                    "--reviewed-plan-digest is required with --apply",
+                    param_hint="--reviewed-plan-digest",
+                )
+            payload = service.apply_artifact_registry_reconciliation(
+                normalized_kind,
+                project_id,
+                channel=channel,
+                reviewed_plan_digest=reviewed,
+            )
+        else:
+            payload = service.plan_artifact_registry_reconciliation(
+                normalized_kind,
+                project_id,
+                channel=channel,
+            )
+    except typer.BadParameter:
+        raise
+    except (ValueError, FileNotFoundError, RuntimeError, OSError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     _emit(payload, json_output=json_output)
