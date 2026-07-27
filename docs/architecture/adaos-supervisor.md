@@ -505,8 +505,10 @@ Rules:
   `--finalize-root-restart` once. The command requires the original pinned
   recovery intent, persists a separate root-restart receipt before calling
   `systemctl`, and refuses a second dispatch even if the acknowledgement is
-  lost. The A/B updater remains the only component that prepares, validates,
-  switches, backs up, or rolls back a slot
+  lost. The recovery script itself is a bootstrap-critical root-promotion path,
+  so every validated release installs the matching operator entry point even
+  when the stable root is not a Git checkout. The A/B updater remains the only
+  component that prepares, validates, switches, backs up, or rolls back a slot
 - periodic release reconciliation is gated by the local runtime API that owns
   the direct root mTLS client, not by realtime hub-root route readiness. A
   degraded WS/Yjs/control route therefore cannot strand an otherwise healthy

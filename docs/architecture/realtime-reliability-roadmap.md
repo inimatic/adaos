@@ -709,6 +709,8 @@ lifecycle and update attempt state.
   Observation proves active-slot/root-import/replacement-supervisor agreement;
   the separately guarded `--finalize-root-restart` handles only the legacy
   `succeeded/root_promoted` boundary and has its own one-shot durable receipt.
+  The script is included in bootstrap-critical root promotion, ensuring the
+  runbook remains locally executable after recovering a non-Git root checkout.
 - [x] `[must]` Decouple periodic core-release reconciliation from realtime
   hub-root route readiness; use the ready local runtime and its direct root mTLS
   client as the bounded update-discovery path.

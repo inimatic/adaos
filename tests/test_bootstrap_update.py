@@ -12,6 +12,10 @@ def test_candidate_owned_root_promotion_runner_is_bootstrap_promoted() -> None:
     assert "src/adaos/apps/core_update_root_promote.py" in BOOTSTRAP_CRITICAL_PATHS
 
 
+def test_operator_recovery_runner_is_bootstrap_promoted() -> None:
+    assert "tools/recover-node-update.sh" in BOOTSTRAP_CRITICAL_PATHS
+
+
 def test_bounded_io_helper_is_bootstrap_promoted() -> None:
     assert "src/adaos/services/bounded_io.py" in BOOTSTRAP_CRITICAL_PATHS
 

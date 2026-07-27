@@ -41,6 +41,7 @@ SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
 )
 
 UPDATE_CONTROL_PATHS: tuple[str, ...] = (
+    "tools/recover-node-update.sh",
     "src/adaos/apps/autostart_runner.py",
     "src/adaos/apps/core_update_apply.py",
     "src/adaos/apps/core_update_root_promote.py",
