@@ -71,6 +71,7 @@ broader frontend/WebSocket handoff remains separate.
 | B18 update-route policy drift | corrected, validated-local | REST, WebSocket, and Builder now share a versioned subscription-based route decision; subscribed package failure cannot fall through to legacy source pull and malformed subscription state fails closed |
 | B19 local slot/restart identity | corrected, validated-local | active/previous markers use durable replacement; restart requires ready health, the exact active-slot Git commit, and a stability window rather than accepting a listener or bootstrap PID |
 | B20 untrusted initial Yjs reconnect | contained, validated-local (bounded) | malformed/native-risk payloads are subprocess-preflighted and initial browser state is server-authoritative; real reconnects survived, while offline initial draft merge remains deliberately unsupported |
+| B21 builder identity is self-declared | partially corrected, validated-local foundation | detached Ed25519 subject/predicate attestations, purpose-scoped trust, revocation, immutable stores, and activation admission exist; journaled publisher emission, remote reference discovery, and stand evidence remain open in AP1-07 |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
@@ -401,6 +402,29 @@ remained stable. The explicit product limitation is that offline-only browser
 drafts present at reconnect are discarded rather than merged. A future safe
 offline-merge protocol requires generation identity and deterministic conflict
 handling; silently re-enabling initial merge is not allowed.
+
+### B21. Builder identity was provenance metadata, not cryptographic authority
+
+Package manifests persist `builder_id`, build-policy digest, source revision,
+and validation evidence references, but those fields were committed only by the
+package digest. Anyone able to publish arbitrary package bytes could make the
+same self-declarations. Digest verification proved integrity after selection;
+it did not prove which publisher authorized the subject.
+
+Current bounded correction: detached `adaos.artifact.attestation.v1` records
+use Ed25519 to bind package/release subject digest, project, issuer/key,
+issuance time, predicate type, and predicate digest. Local trust keys are
+purpose-scoped, rotate by key id, enforce signing windows and issuer allowlists,
+and fail closed after revocation. Attestations have their own content identity
+and can use local or external immutable storage without changing existing
+release digests. Required activation checks the full release/package set before
+fetch and repeats admission under the Workspace writer lease before staging.
+
+This closes the local trust/admission foundation, not end-to-end provenance.
+AP1-07 remains open until the publication operation journals one deterministic
+attestation set, remote release/channel metadata carries exact immutable refs,
+and required-mode activation passes on a clean stand. Unknown external asset
+write outcomes must be reconciled by exact digest rather than retried.
 
 ## Reliability And Performance Gaps
 

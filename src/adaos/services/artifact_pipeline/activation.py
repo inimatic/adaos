@@ -18,6 +18,10 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
 )
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+from adaos.services.artifact_pipeline.attestations import (
+    ArtifactAttestationAdmission,
+    ArtifactAttestationVerificationError,
+)
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
@@ -107,6 +111,7 @@ class WorkspaceActivationManager:
         package_store: ContentAddressedPackageStore,
         state_root: Path | None = None,
         delayed_verification_seconds: float | None = None,
+        attestation_admission: ArtifactAttestationAdmission | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.package_store = package_store
@@ -126,6 +131,7 @@ class WorkspaceActivationManager:
         self.delayed_verification_seconds = _observation_delay_seconds(
             delayed_verification_seconds
         )
+        self.attestation_admission = attestation_admission
 
     def load_lock(self) -> WorkspaceLock | None:
         if not self.lock_path.is_file():
@@ -956,6 +962,11 @@ class WorkspaceActivationManager:
             },
             "warnings": warnings,
         }
+        if self.attestation_admission is not None:
+            payload["attestations"] = {
+                "required": True,
+                "policy": self.attestation_admission.policy_summary(),
+            }
         payload["plan_digest"] = canonical_payload_digest(payload)
         return payload
 
@@ -1023,6 +1034,11 @@ class WorkspaceActivationManager:
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
     ) -> ActivationResult:
         self._assert_plan(plan)
+        if self.attestation_admission is not None:
+            try:
+                self.attestation_admission.verify_release_plan(plan)
+            except ArtifactAttestationVerificationError as exc:
+                raise ActivationError(f"artifact attestation admission failed: {exc}") from exc
         if fetch_package is not None:
             for package in plan.packages:
                 if self.package_store.has(package.digest):
@@ -1168,6 +1184,16 @@ class WorkspaceActivationManager:
                 )
 
             self._phase(operation, "verify", phase_hook=phase_hook)
+            if self.attestation_admission is not None:
+                try:
+                    operation["attestation_verification"] = (
+                        self.attestation_admission.verify_release_plan(plan)
+                    )
+                except ArtifactAttestationVerificationError as exc:
+                    raise ActivationError(
+                        f"artifact attestation admission failed: {exc}"
+                    ) from exc
+                self._write_operation(operation)
             stage_root.mkdir(parents=True, exist_ok=False)
             staged: dict[str, Path] = {}
             verified_packages: list[dict[str, Any]] = []

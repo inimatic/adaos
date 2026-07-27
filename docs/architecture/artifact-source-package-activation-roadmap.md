@@ -179,7 +179,7 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
-| AP1 | 8/12 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, and deployed binary transport whose durable host store survived a blue/green redeploy | external signing, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
+| AP1 | 9/13 | validated-stand + local-trust-foundation (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport whose durable host store survived a blue/green redeploy, and detached Ed25519 trust/admission with revocation and immutable external-asset adapter | journaled publication/discovery of attestations, stand proof, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
@@ -277,6 +277,10 @@ symlink, size, and corruption tests.
 - [ ] `[should]` `AP1-12` Replace whole-body binary buffering and the
   single-zone host mount with streamed/object-store transport, lifecycle
   controls, and multi-zone durability evidence.
+- [x] `[should]` `AP1-13` Establish the detached attestation trust boundary:
+  versioned Ed25519 records, purpose-scoped key rotation/revocation, local and
+  external immutable stores, and fail-closed activation admission before fetch
+  and again under the Workspace writer lease.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
@@ -301,6 +305,18 @@ and rejected a mismatched digest before visibility. Unknown upload outcomes do
 not fall back or replay the mutation. `AP1-12` remains open because the current
 route deliberately buffers a bounded body and the durable filesystem is local
 to one deployment zone.
+`AP1-13` is closed locally by `tests/test_artifact_attestations.py` and the full
+`test_artifact*.py` regression (16 files, 138 tests). Detached signatures bind
+the exact subject and provenance predicate digests without changing existing
+PackageRef/ProjectRelease identities. Trust-store readers reject unknown
+schemas/fields, key ids are derived from raw Ed25519 public keys, key purpose,
+signing windows, issuer allowlists, rotation, and revocation are enforced, and
+activation records the exact accepted signatures before materialization. The
+external immutable-asset adapter has an explicit no-retry regression for an
+unknown write outcome. `AP1-07` remains open until publication emits these
+records through a durable idempotent journal, remote release/channel discovery
+carries exact attestation references, and a clean stand proves required-mode
+activation from those external assets.
 
 ## Milestone AP2: Dependency-Locked Project Releases
 

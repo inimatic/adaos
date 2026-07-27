@@ -75,6 +75,32 @@ A live read-only Builder update inspection also returned HTTP 200 with
 `adaos.artifact.subscription_update_noop.v1/status=up_to_date`. The installed
 release remained `builder@0.2.20`; no Workspace mutation occurred.
 
+### Detached attestation foundation, 2026-07-27
+
+The local AP1 trust slice added versioned detached Ed25519 attestations without
+changing historical PackageRef or ProjectRelease digests. Evidence covers:
+
+- canonical signed subject/predicate records and independent attestation
+  digests;
+- tamper detection for signed fields;
+- key-id derivation from raw public key, purpose restrictions, issuer allowlist,
+  signing windows, key rotation, and fail-closed revocation;
+- strict trust-store and attestation schema admission;
+- idempotent local content-addressed assets and an external immutable-asset
+  adapter;
+- no automatic retry after an unknown external write outcome;
+- required-mode activation failure before operation/Workspace mutation when
+  signatures are missing;
+- successful signed release/package activation with exact signature receipts
+  persisted in the activation operation;
+- repeat admission under the Workspace writer lease before staging.
+
+`tests/test_artifact_attestations.py`, release-contract tests, and Workspace
+activation tests passed together. The complete `test_artifact*.py` set then
+passed 138 tests across 16 files. This is a local trust foundation; journaled
+publisher issuance, remote attestation references, and clean-stand required-mode
+activation remain open under AP1-07.
+
 The representative implementation was not hand-programmed as proof setup.
 The built-in LLM produced the UI revision and the isolated Codex process
 implemented and tested the automation. The pipeline work in AdaOS then

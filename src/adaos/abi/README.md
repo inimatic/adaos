@@ -13,6 +13,10 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   AI-assisted, and human-in-the-loop capability creation workflows
 - `builder.draft.v1.schema.json` - Builder draft workspace metadata before
   validation, preview, approval, and runtime apply
+- `artifact.attestation.v1.schema.json` - detached Ed25519 package/release
+  provenance statement bound to immutable subject and predicate digests
+- `artifact.trust-store.v1.schema.json` - local publisher trust keys, allowed
+  signing purposes, validity windows, rotation, and fail-closed revocation state
 - `endpoint-audio-events.v1.schema.json` - MVP endpoint audio event wire
   contract for ReDevice and future endpoint agents
 - `nlu.teacher.v1.schema.json` - NLU Teacher request/thread, candidate,

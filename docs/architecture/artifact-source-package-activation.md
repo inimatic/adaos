@@ -736,8 +736,27 @@ Migration uses adapters instead of a flag-day rewrite:
 - Channel mutation requires explicit policy authority.
 - A package accepted in trial is promoted by digest; it is not silently
   rebuilt for stable.
-- GitHub identities and signatures may add attestations but never replace
-  AdaOS approval and activation records.
+- Signed provenance is detached from PackageRef and ProjectRelease so adding or
+  rotating a publisher signature never changes their canonical content digest.
+- `adaos.artifact.attestation.v1` binds an Ed25519 signature to subject kind,
+  package/release digest, project id, publisher issuer/key id, issuance time,
+  predicate type, and predicate digest. The signed record has its own immutable
+  attestation digest.
+- Trust is local policy, not a property asserted by the package. Trust keys are
+  purpose-scoped (`package`/`release`), may have signing windows, rotate by
+  adding a new key id, and fail closed after revocation. A revoked key does not
+  retain implicit historical trust.
+- Required attestation admission runs before remote package fetch and again
+  inside the Workspace writer lease before staging/switch. This closes the
+  revocation race without putting remote I/O under the mutation lease.
+- Detached attestations can live in the local content-addressed store or behind
+  an external immutable-asset adapter. An unknown external write outcome is not
+  automatically repeated.
+- Historical package activation remains compatible when no attestation policy
+  is configured. A project/publisher policy that requires attestations never
+  falls back to unsigned activation.
+- GitHub identities and signatures may provide issuer evidence but never
+  replace AdaOS trial approval, reviewed activation, or health records.
 
 ## Deferred Extension Seams
 
