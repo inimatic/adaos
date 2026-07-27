@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "updated_at": "2025-02-03T04:05:06Z",
+  "skills": [
+    {
+      "kind": "skill",
+      "name": "weather_legacy",
+      "path": "skills/weather_legacy",
+      "manifest": "skills/weather_legacy/skill.yaml",
+      "custom_legacy_field": "keep-skill"
+    }
+  ],
+  "scenarios": [
+    {
+      "kind": "scenario",
+      "path": "scenarios/recipes_legacy",
+      "manifest": "scenarios/recipes_legacy/scenario.yaml",
+      "version": "DEV",
+      "custom_legacy_field": "keep-scenario"
+    }
+  ]
+}

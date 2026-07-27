@@ -63,9 +63,10 @@ broader frontend/WebSocket handoff remains separate.
 | B10 backend release admission | corrected, validated-local | backend recomputes release identity and verifies package references before visibility |
 | B11 operator retry identity | corrected, validated-local | Builder binds confirmation and idempotency to the exact reviewed plan digest |
 | B12 verifier source fidelity | corrected, validated-local | proof adapter tracks current CAS/reload contracts and rejects DEV content that differs from the exact checkpoint inventory |
+| B13 registry trust boundary | corrected, validated-local | corrupt or unknown registry payloads, unsafe paths, and ambiguous aliases fail closed; read-modify-write mutations are serialized, durable writes are atomic, and historical incomplete manifests receive deterministic non-publishable compatibility identities |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
-| R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
+| R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
 | R4 filesystem durability | corrected, validated-local | durable rename metadata plus pending/active/rolled-back history sidecars prevent false successful history |
 | R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
 | R6 blue/green route handoff | corrected, production-route-verified (bounded) | clean runs `30229653248` and `30229788369` kept strict server-side health at `322/298` and `321/297` samples across both zones with no failures or proxy recreation; frontend and WebSocket continuity remain separate |
@@ -328,9 +329,13 @@ Current correction: all newly built PackageRefs persist a portable
 activation uses it instead of recomputing the destination. Duplicate targets
 fail before staging in release-plan reads, WorkspaceLock construction, and
 activation admission. Historical PackageRefs remain readable with their
-canonical target so their digest is unchanged. Discovery and explicit
-reconciliation of a non-canonical historical directory is intentionally still
-open in AP0-07/AP6; it must not be guessed during activation.
+canonical target so their digest is unchanged. Checked-in v1 migration fixtures
+now prove that canonical manifest identity and the historical installation
+directory remain separate, derived `scenario.json` cannot supply version truth,
+and unsafe or ambiguous aliases fail closed. An incomplete canonical YAML
+version receives a deterministic, explicitly non-publishable compatibility
+version based on its digest. Package-only reconciliation of that historical
+directory is still open in AP6; activation must not guess it.
 
 ### R4. Crash durability is file-atomic, not fully filesystem-durable
 
@@ -422,8 +427,11 @@ readiness.
 14. **Completed for bounded backend HTTP:** eliminate the public-route handoff
     gap with serialized, rollback-safe pre-stop cutover and two clean controls
     across both deployment zones.
-15. **Next:** add historical migration fixtures and make an explicit bounded
-    rollout decision, then replace single-zone buffered storage with
+15. **Completed locally:** add deterministic historical registry/manifest
+    migration fixtures, fail-closed registry admission, and atomic registry
+    replacement without turning derived JSON into version authority.
+16. **Next:** add the identity explanation diagnostic and make an explicit
+    bounded rollout decision, then replace single-zone buffered storage with
     streamed/object-store multi-zone durability before broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding

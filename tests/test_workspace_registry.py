@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sqlite3
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +16,7 @@ from adaos.domain.artifact_release import (
     ArtifactSourceRef,
     ProjectRelease,
 )
+from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
 from adaos.services.workspace_registry import (
     list_workspace_registry_entries,
@@ -22,6 +25,7 @@ from adaos.services.workspace_registry import (
     registry_pattern_set,
     set_workspace_registry_channel,
     upsert_workspace_registry_entry,
+    WorkspaceRegistryError,
     write_workspace_registry,
     workspace_registry_path,
 )
@@ -461,6 +465,244 @@ def test_registry_v1_is_readable_and_rewritten_as_v2_without_losing_fields(tmp_p
     rewritten = json.loads(registry.read_text(encoding="utf-8"))
     assert rewritten["version"] == 2
     assert rewritten["scenarios"][0]["custom_legacy_field"] == "preserve-me"
+
+
+def test_historical_registry_and_incomplete_manifests_migrate_deterministically(tmp_path: Path):
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "artifact_migration"
+        / "workspace_v1_incomplete"
+    )
+    workspace = tmp_path / "workspace"
+    shutil.copytree(fixture, workspace)
+
+    first = load_workspace_registry(workspace, fallback_to_scan=False)
+    second = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert first == second
+    assert first["version"] == 2
+    scenario = first["scenarios"][0]
+    assert scenario["name"] == "recipes_legacy"
+    assert scenario["id"] == "recipes"
+    assert scenario["version"].startswith("0.0.0-legacy.")
+    assert scenario["version"] != "9.9.9"
+    assert scenario["custom_legacy_field"] == "keep-scenario"
+    assert scenario["install"] == {
+        "kind": "scenario",
+        "name": "recipes_legacy",
+        "id": "recipes",
+    }
+    assert scenario["compatibility"] == {
+        "schema": "adaos.workspace.artifact_compatibility.v1",
+        "status": "migration_required",
+        "reason": "canonical_manifest_version_missing",
+        "version_source": "canonical_manifest_digest",
+        "manifest_digest": scenario["compatibility"]["manifest_digest"],
+        "publishable": False,
+    }
+    assert scenario["compatibility"]["manifest_digest"].startswith("sha256:")
+
+    skill = first["skills"][0]
+    assert skill["name"] == "weather_legacy"
+    assert skill["id"] == "weather_skill"
+    assert skill["version"].startswith("0.0.0-legacy.")
+    assert skill["custom_legacy_field"] == "keep-skill"
+    assert skill["install"] == {
+        "kind": "skill",
+        "name": "weather_legacy",
+        "id": "weather_skill",
+    }
+    assert skill["compatibility"]["publishable"] is False
+
+    write_workspace_registry(workspace, first)
+    rewritten = json.loads(workspace_registry_path(workspace).read_text(encoding="utf-8"))
+    assert rewritten == first
+
+
+@pytest.mark.parametrize("payload", ["{", "[]", '{"version": 999}'])
+def test_workspace_registry_load_fails_closed_for_untrusted_payload(
+    tmp_path: Path,
+    payload: str,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_registry_path(workspace).write_text(payload, encoding="utf-8")
+
+    with pytest.raises(WorkspaceRegistryError):
+        load_workspace_registry(workspace, fallback_to_scan=True)
+
+
+def test_workspace_registry_atomic_write_preserves_previous_file_on_replace_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = workspace_registry_path(workspace)
+    original = b'{"version": 1, "skills": [], "scenarios": []}\n'
+    registry.write_bytes(original)
+
+    def fail_atomic_write(path, payload):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(
+        workspace_registry_module,
+        "_atomic_write_registry_json",
+        fail_atomic_write,
+    )
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        write_workspace_registry(
+            workspace,
+            {"version": 2, "skills": [], "scenarios": []},
+        )
+
+    assert registry.read_bytes() == original
+    assert list(workspace.glob(".registry.json.*.tmp")) == []
+
+
+def test_registry_v2_load_keeps_catalog_read_bounded_to_registry_file(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_registry_path(workspace).write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "skills": [],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "recipes",
+                        "name": "recipes",
+                        "version": "1.2.3",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def unexpected_manifest_read(*args, **kwargs):
+        raise AssertionError("registry v2 must not rescan canonical manifests")
+
+    monkeypatch.setattr(
+        workspace_registry_module,
+        "build_registry_entry",
+        unexpected_manifest_read,
+    )
+
+    loaded = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert loaded["scenarios"][0]["version"] == "1.2.3"
+
+
+def test_registry_upsert_serializes_the_complete_read_modify_write_cycle(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_workspace_registry(
+        workspace,
+        {"version": 2, "skills": [], "scenarios": []},
+    )
+    first_dir = workspace / "scenarios" / "first"
+    second_dir = workspace / "scenarios" / "second"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir(parents=True)
+    (first_dir / "scenario.yaml").write_text(
+        "id: first\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (second_dir / "scenario.yaml").write_text(
+        "id: second\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+
+    original_load = workspace_registry_module.load_workspace_registry
+    first_has_read = threading.Event()
+    allow_first_write = threading.Event()
+    second_finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def delayed_load(*args, **kwargs):
+        payload = original_load(*args, **kwargs)
+        if threading.current_thread().name == "registry-first":
+            first_has_read.set()
+            assert allow_first_write.wait(timeout=2)
+        return payload
+
+    def upsert(directory: Path, *, finished: threading.Event | None = None):
+        try:
+            upsert_workspace_registry_entry(
+                workspace,
+                "scenarios",
+                directory,
+            )
+        except BaseException as exc:  # surfaced in the parent test thread
+            errors.append(exc)
+        finally:
+            if finished is not None:
+                finished.set()
+
+    monkeypatch.setattr(
+        workspace_registry_module,
+        "load_workspace_registry",
+        delayed_load,
+    )
+    first = threading.Thread(
+        target=upsert,
+        args=(first_dir,),
+        name="registry-first",
+    )
+    second = threading.Thread(
+        target=upsert,
+        args=(second_dir,),
+        kwargs={"finished": second_finished},
+        name="registry-second",
+    )
+    first.start()
+    assert first_has_read.wait(timeout=2)
+    second.start()
+    assert second_finished.wait(timeout=0.1) is False
+    allow_first_write.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert not first.is_alive()
+    assert not second.is_alive()
+    loaded = original_load(workspace, fallback_to_scan=False)
+    assert [item["id"] for item in loaded["scenarios"]] == ["first", "second"]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [
+            {"id": "recipes", "name": "recipes", "version": "1.0.0"},
+            {"id": "Recipes", "name": "recipes_copy", "version": "1.0.0"},
+        ],
+        [{"id": "escape", "name": "../escape", "version": "1.0.0"}],
+    ],
+)
+def test_workspace_registry_rejects_ambiguous_or_unsafe_install_aliases(
+    tmp_path: Path,
+    entries: list[dict[str, str]],
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_registry_path(workspace).write_text(
+        json.dumps({"version": 2, "skills": [], "scenarios": entries}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceRegistryError):
+        load_workspace_registry(workspace, fallback_to_scan=False)
 
 
 def test_registry_channel_points_to_sealed_immutable_release(tmp_path: Path):
