@@ -193,11 +193,23 @@ Package requirements:
 - one verification/file-hash traversal when a cached package enters
   operation-private activation staging;
 - content-addressed local storage;
+- bounded binary upload/download as the preferred remote transport, with
+  structured errors and compatibility fallback only for an explicitly absent
+  route;
 - atomic write and verification before visibility.
 
 Packages can initially be stored locally and in the existing registry backend.
 The contract allows later use of GitHub immutable release assets, OCI, or an
 object store without changing Builder or Workspace semantics.
+
+The first deployed remote store is intentionally bounded: both blue/green
+backend slots mount one persistent package directory in one zone, while
+release and channel metadata remain in the backend's durable repository. This
+is sufficient to survive a container replacement and was verified across a
+second deployment. It is not a multi-zone storage contract. Broad rollout
+requires streamed/object-store transfer, lifecycle and backup policy,
+replication or a documented regional recovery boundary, and continuous
+candidate-ready/switch/drain routing during backend replacement.
 
 ### 4. Registry And Channels
 

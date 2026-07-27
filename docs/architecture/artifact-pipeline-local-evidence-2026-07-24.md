@@ -24,6 +24,14 @@ empty-Workspace activation through the deployed external package backend.
   [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
   at `5570f330fe7aa8c109db3d8d21ccfc44342bad3b`, CI-validated, and deployed as
   backend `0.1.142`.
+- Backend bounded binary package transport: merged by
+  [inimatic/adaos-backend#3](https://github.com/inimatic/adaos-backend/pull/3)
+  at `0bc1f8262405dc19b3248d5e1a5bd124a6ff7296`, CI-validated, and deployed as
+  backend `0.1.144`.
+- Single-zone package-store persistence: merged by
+  [inimatic/infra-inimatic#1](https://github.com/inimatic/infra-inimatic/pull/1)
+  at `45a8476f0fc6ebfd02782a174fd1a30aaeb2d35d`; both blue/green slots use the
+  same host-backed package root.
 - Representative scenario: `streaming_recipe_book_eval`.
 - Representative companion skill: `streaming_recipe_book_eval_skill`.
 - Builder change/checkpoint:
@@ -75,14 +83,14 @@ Run the external clean-stand gate only with an explicit mutation acknowledgement
   --ca .adaos\keys\ca.cert `
   --cert .adaos\keys\hub_cert.pem `
   --key .adaos\keys\hub_private.pem `
-  --expected-backend-commit 5570f330 `
+  --expected-backend-commit 0bc1f826 `
   --publish
 ```
 
 The latest durable stand record is:
 
 ```text
-.adaos/state/artifact_pipeline/stand-proofs/20260727T030000Z/evidence.json
+.adaos/state/artifact_pipeline/stand-proofs/20260727T032000Z/evidence.json
 ```
 
 The command writes only immutable package/release identities plus the dedicated
@@ -154,7 +162,9 @@ redacted identities and conclusions required for review.
 | Terminal lock history | passed | successful commit records an operation-bound `active` sidecar; injected failure after raw history write restores Workspace and records `rolled_back`; retention audits but does not let rolled-back history pin packages |
 | Backend admission CI/deployment | passed | PR `#2` required locked TypeScript build/package smoke, merged at `5570f330`, deployed as `0.1.142`, and live health reported commit `5570f33` ready |
 | Live fail-closed admission probes | passed | hub-mTLS requests returned missing-channel `404`, missing channel CAS `400`, and partial-release `400` without creating state |
-| External clean-stand round-trip | passed | two packages (15,370 archive bytes), exact release and dedicated channel traversed deployed backend; a new empty cache/Workspace activated 12 files in 1.388 s and exact-lock delayed verification passed |
+| Bounded binary package transport | passed | backend `0.1.144`; the representative scenario package used 8,130 binary bytes instead of 10,840 base64 payload bytes; exact bytes/digest round-trip passed, a mismatched digest failed with `409`, and unknown upload outcomes have a no-fallback/no-retry regression |
+| Single-zone package-store deployment durability | passed | infrastructure runs `30227081918` and `30227206352`; after the second blue/green deployment the exact package and release remained readable, channel `stand-afb87148014b` retained its release digest, and repeat binary PUT returned `created=false` |
+| External clean-stand round-trip | passed | two packages (15,370 archive bytes), exact release and dedicated channel traversed deployed backend; a new empty cache/Workspace activated 12 files in 1.291 s and exact-lock delayed verification passed |
 
 Original checkpoint-package identities retained as the source inventory
 witness:
@@ -201,7 +211,7 @@ checkpoint records.
 
 ## Failed Experiments Retained
 
-Seven failures materially changed the implementation and remain part of the
+Nine failures materially changed the implementation and remain part of the
 evidence:
 
 1. The first checkpoint sequence rejected a valid zero-byte file because the
@@ -239,6 +249,15 @@ evidence:
    to that checkpoint. This could produce a false source claim. It now verifies
    the recorded archive, compares the complete publishable file inventory, and
    fails before tests or mutation when any path, size, or digest differs.
+8. The first binary PUT after a backend deployment returned `created=true` for
+   a package uploaded by the preceding clean stand. The package bytes had lived
+   only in the replaced container. Both blue/green slots now mount the same
+   host-backed root, and the package/release/channel set survived a second
+   deployment with an idempotent `created=false` repeat PUT.
+9. Public health briefly returned `502` during both observed deployment
+   transitions. The workflow now fails if the public route does not recover,
+   but continuous upstream handoff is not yet proven and remains an explicit
+   rollout blocker rather than being hidden by a successful terminal health.
 
 The partially completed Forge writes from the first experiment were recovered
 using exact change metadata and archive hashes. The resulting design now uses
@@ -250,8 +269,13 @@ reconciliation, and no automatic repeat of the modifying command.
 - Package-only activation has stand evidence, but making it the default and
   retiring legacy sparse Workspace compatibility still requires an explicit
   rollout decision and bounded operational observation.
-- Base64-in-JSON remains the production package transport; replace it with
-  bounded streaming before larger artifacts or broad usage.
+- Bounded binary transfer is now the preferred production package route, but
+  it still buffers the complete bounded body; streamed/object-store transport
+  is required before larger artifacts or broad usage.
+- The host-backed package store survived a blue/green redeploy in one zone; it
+  does not yet prove multi-zone replication, backup/restore, or lifecycle/GC.
+- The deployment has a terminal public-health gate but still showed a transient
+  route gap. Continuous candidate-ready/switch/drain handoff remains open.
 - The pre-existing client submodule change was not modified or included.
 - The backend builder/lock admission hardening was validated locally and by the
   locked GitHub Actions artifact-contract gate, then merged through
@@ -261,6 +285,10 @@ reconciliation, and no automatic repeat of the modifying command.
   confirmed channel-CAS and complete-release admission. The subsequent stand
   proof exercised successful package, release, and dedicated-channel writes and
   reads plus package-only activation from an empty cache and Workspace.
+- Backend PR `#3` and infrastructure PR `#1` subsequently replaced the primary
+  base64 path with bounded binary transfer and persisted package bytes across
+  blue/green slots. Live backend `0.1.144` reported commit `0bc1f82`; a second
+  deployment retained the exact package, release, and dedicated channel.
 
 These gates keep the bounded artifact path below broad production acceptance;
 they do not invalidate its `validated-stand` evidence.

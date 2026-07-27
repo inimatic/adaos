@@ -115,8 +115,11 @@ Remaining acceptance blockers:
 
 - make an explicit rollout decision before package-only activation becomes the
   default or legacy sparse Workspace compatibility is retired;
-- replace base64-in-JSON package transfer with bounded streaming transport
-  before larger artifacts or broad usage;
+- replace the current bounded in-memory binary transfer and single-zone host
+  store with streamed/object-store transport and multi-zone durability before
+  larger artifacts or broad usage;
+- remove the observed public-route gap during blue/green upstream handoff and
+  prove continuous health while the old backend is drained;
 - add historical registry/manifest migration fixtures before removing the
   compatibility readers; production and marketplace acceptance remain deferred.
 
@@ -138,6 +141,16 @@ packages and their exact release through hub mTLS, advanced only the dedicated
 and Workspace. This raises the bounded path to `validated-stand`; it does not
 by itself authorize a default-route cutover or broad production acceptance.
 
+The bounded binary transport then merged through backend PR `#3` at `0bc1f826`
+and deployed as backend `0.1.144`. Infrastructure PR
+[inimatic/infra-inimatic#1](https://github.com/inimatic/infra-inimatic/pull/1)
+mounted one durable host package root into both blue/green backend slots. The
+exact package, release, and dedicated channel survived a second deployment run
+`30227206352`; binary read-back matched the expected digest and bytes, and an
+idempotent repeat PUT returned `created=false`. This proves single-zone
+deployment durability, not object-store streaming, replication, or continuous
+route availability.
+
 ## Delivery Snapshot
 
 This table records the highest maturity reached by the current implementation.
@@ -148,13 +161,13 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 6/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility | historical migration fixtures and identity diagnostics |
-| AP1 | 7/10 | validated-local (bounded) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, and single-pass verified extraction for cached activation | external signing and package-store lifecycle diagnostics |
+| AP1 | 8/12 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, and deployed binary transport whose durable host store survived a blue/green redeploy | external signing, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
-| AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip | metadata rebase policy and later merge-queue support |
+| AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 8/10 | validated-local | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, and Builder review/apply UI | bounded legacy fallback retirement and stand acceptance |
-| AP7 | 12/13 | validated-stand (bounded, isolated same-host) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, and external-backend clean-stand activation | production and marketplace acceptance remain deferred |
+| AP7 | 12/14 | validated-stand (bounded, isolated same-host) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, and package/release/channel survival across redeploy | continuous blue/green route availability plus production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -224,6 +237,12 @@ symlink, size, and corruption tests.
   package admission policy.
 - [x] `[should]` `AP1-10` Verify and extract each cached activation package in
   one archive/file-hash traversal into rollback-owned private staging.
+- [x] `[should]` `AP1-11` Prefer bounded binary package upload/download over
+  base64 JSON, preserve structured errors, verify digest before visibility,
+  and fall back only when an older backend explicitly lacks the route.
+- [ ] `[should]` `AP1-12` Replace whole-body binary buffering and the
+  single-zone host mount with streamed/object-store transport, lifecycle
+  controls, and multi-zone durability evidence.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
@@ -241,6 +260,13 @@ groups fail closed, and every new package/release write emits the group.
 regression that records one `verify_and_extract_once` receipt per cached
 component. Extraction I/O failures clean staging without quarantining a valid
 immutable package.
+`AP1-11` is closed by client and adapter regressions plus deployed backend PR
+`#3`: the representative 8,130-byte package traversed the binary route without
+the 10,840-byte base64 payload, survived a subsequent blue/green deployment,
+and rejected a mismatched digest before visibility. Unknown upload outcomes do
+not fall back or replay the mutation. `AP1-12` remains open because the current
+route deliberately buffers a bounded body and the durable filesystem is local
+to one deployment zone.
 
 ## Milestone AP2: Dependency-Locked Project Releases
 
@@ -554,6 +580,9 @@ dependency-conflict, interruption, and rollback cases.
   release backend.
 - [ ] `[deferred]` `AP7-13` Claim production acceptance or marketplace readiness
   from the single-machine proof.
+- [ ] `[should]` `AP7-14` Eliminate the public-route gap during blue/green
+  upstream handoff and prove continuous health while replacing a backend that
+  serves persisted artifact state.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 including its reproducible verifier command, immutable digests, operation
@@ -562,11 +591,17 @@ The verifier was rerun on 2026-07-26 after the critical audit. Its contract
 regression now fails if DEV publishable content differs from the recorded
 checkpoint package, while allowing the same exact files to be rebuilt under an
 explicitly identified newer package policy. `AP7-11` is closed by the fresh
-same-host stand rooted at `20260727T030000Z`: it started with an empty package
-cache and Workspace, used deployed backend `0.1.142` over hub mTLS for package,
-release, and channel reads/writes, and passed immediate exact-lock delayed
-verification. It remains deliberately narrower than second-machine and broad
-production acceptance.
+same-host stand rooted at `20260727T032000Z`: it started with an empty package
+cache and Workspace, used deployed backend `0.1.144` over hub mTLS for binary
+package, release, and channel reads/writes, and passed immediate exact-lock
+delayed verification. `AP7-12` is additionally supported by the same package,
+release, and channel surviving control deployment run `30227206352`;
+byte/digest read-back matched and repeat upload was idempotent. It remains
+deliberately narrower than second-machine, multi-zone, and broad production
+acceptance.
+`AP7-14` was added after a transient public `502` was observed during both
+deployment transitions: the new final-health gate detects a route that fails
+to recover but does not yet provide a zero-gap upstream handoff.
 
 ## Explicit Deferred Backlog
 

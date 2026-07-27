@@ -146,6 +146,7 @@ class RootHttpClient:
         headers: Mapping[str, str] | None = None,
         accept_204: bool = False,
         timeout: float | None = None,
+        response_bytes: bool = False,
     ) -> Any:
         """
         Public wrapper that automatically applies mTLS and default headers.
@@ -167,6 +168,7 @@ class RootHttpClient:
             cert=self.cert,
             timeout=timeout or self.timeout,
             accept_204=accept_204,
+            response_bytes=response_bytes,
         )
 
     def _request(
@@ -182,6 +184,7 @@ class RootHttpClient:
         cert: tuple[str, str] | None = None,
         timeout: float | None = None,
         accept_204: bool = False,
+        response_bytes: bool = False,
     ) -> Any:
         trace_request = _trace_root_http_request(path)
         started = time.perf_counter()
@@ -228,10 +231,13 @@ class RootHttpClient:
 
         content: Any | None = None
         if response.content:
-            try:
-                content = response.json()
-            except ValueError:
-                content = response.text
+            if response_bytes and response.status_code < 400:
+                content = bytes(response.content)
+            else:
+                try:
+                    content = response.json()
+                except ValueError:
+                    content = response.text
 
         if response.status_code == 204 and accept_204:
             if trace_request:
@@ -864,6 +870,26 @@ class RootHttpClient:
             )
         )
 
+    def put_artifact_package_bytes(
+        self,
+        *,
+        digest: str,
+        archive: bytes,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "PUT",
+                f"/v1/artifacts/packages/{quote(digest, safe='')}/content",
+                data=archive,
+                headers={"Content-Type": "application/vnd.adaos.artifact-package+zip"},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
     def get_artifact_package(
         self,
         *,
@@ -880,6 +906,31 @@ class RootHttpClient:
                 timeout=120.0,
             )
         )
+
+    def get_artifact_package_bytes(
+        self,
+        *,
+        digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> bytes:
+        response = self._request(
+            "GET",
+            f"/v1/artifacts/packages/{quote(digest, safe='')}/content",
+            headers={"Accept": "application/vnd.adaos.artifact-package+zip"},
+            verify=(self.verify if verify is None else verify),
+            cert=(self.cert if cert is None else cert),
+            timeout=120.0,
+            response_bytes=True,
+        )
+        if not isinstance(response, bytes):
+            raise RootHttpError(
+                "artifact package endpoint returned a non-binary response",
+                status_code=502,
+                error_code="invalid_artifact_package_response",
+                payload=response,
+            )
+        return response
 
     def put_project_release(
         self,

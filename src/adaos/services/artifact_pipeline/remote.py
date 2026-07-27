@@ -42,6 +42,18 @@ class RemoteReleaseRepository:
         verified = verify_artifact_package(archive_bytes, expected_digest=package.digest)
         if verified.ref != package:
             raise ValueError(f"package archive does not match PackageRef: {package.key}")
+        put_binary = getattr(self.client, "put_artifact_package_bytes", None)
+        if callable(put_binary):
+            try:
+                put_binary(
+                    digest=package.digest,
+                    archive=archive_bytes,
+                    **self._transport(),
+                )
+                return
+            except Exception as exc:
+                if getattr(exc, "status_code", None) not in {404, 405}:
+                    raise
         self.client.put_artifact_package(
             digest=package.digest,
             archive_b64=base64.b64encode(archive_bytes).decode("ascii"),
@@ -49,6 +61,18 @@ class RemoteReleaseRepository:
         )
 
     def fetch_package(self, package: ArtifactPackageRef) -> bytes:
+        get_binary = getattr(self.client, "get_artifact_package_bytes", None)
+        if callable(get_binary):
+            try:
+                data = get_binary(digest=package.digest, **self._transport())
+            except Exception as exc:
+                if getattr(exc, "status_code", None) not in {404, 405}:
+                    raise
+            else:
+                verified = verify_artifact_package(data, expected_digest=package.digest)
+                if verified.ref != package:
+                    raise ValueError(f"remote package does not match PackageRef: {package.key}")
+                return data
         response = self.client.get_artifact_package(
             digest=package.digest,
             **self._transport(),

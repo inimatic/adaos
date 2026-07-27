@@ -35,9 +35,14 @@ admission and channel-CAS hardening is merged through
 [inimatic/adaos-backend#2](https://github.com/inimatic/adaos-backend/pull/2)
 with a required build/smoke workflow and deployed as backend `0.1.142`. Live
 health identifies commit `5570f33`, while hub-mTLS rejection probes confirm the
-new fail-closed route contracts. A successful external package round-trip and
-stand proof remain separate gates before the package pipeline becomes the
-default.
+new fail-closed route contracts. Backend PR `#3` subsequently added bounded
+binary package routes and deployed commit `0bc1f82` as `0.1.144`.
+Infrastructure PR
+[inimatic/infra-inimatic#1](https://github.com/inimatic/infra-inimatic/pull/1)
+gave both blue/green slots one persistent host package root. A clean-stand
+round-trip and a second deployment proved that package,
+release, and channel state survive a single-zone redeploy. Default rollout,
+multi-zone durability, and continuous route handoff remain separate gates.
 
 | Finding | Status | Evidence or next gate |
 | --- | --- | --- |
@@ -54,10 +59,11 @@ default.
 | B11 operator retry identity | corrected, validated-local | Builder binds confirmation and idempotency to the exact reviewed plan digest |
 | B12 verifier source fidelity | corrected, validated-local | proof adapter tracks current CAS/reload contracts and rejects DEV content that differs from the exact checkpoint inventory |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
-| R2 base64 transport | open (`should`) | add streaming transport behind the existing adapter |
+| R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; historical alias migration remains in AP0-07/AP6 cutover |
 | R4 filesystem durability | corrected, validated-local | durable rename metadata plus pending/active/rolled-back history sidecars prevent false successful history |
 | R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
+| R6 blue/green route handoff | open (`should`) | final health now fails deployment if the public route does not recover, but transient `502` was observed and continuous handoff remains AP7-14 |
 
 ## What Remains Sound
 
@@ -285,15 +291,23 @@ still remove the private tree before live switch. A package fetched across a
 remote trust boundary is intentionally verified once before store visibility
 and once when it enters activation staging.
 
-### R2. Package and release transport is base64 JSON
+### R2. Package transport used base64 JSON
 
-The current remote adapter increases payload size and memory pressure by about
-one third and materializes the entire archive in memory on both sides. This is
-acceptable for the small proof artifacts but is not a broad package transport.
+The original remote adapter increased payload size and memory pressure by about
+one third and materialized the entire archive in memory on both sides. This was
+acceptable for the small proof artifacts but was not a broad package transport.
 
-Correction: keep the adapter boundary, then add streaming binary/object-store
-transport with digest verification before visibility. This remains a `should`
-gate unless stand sizes expose it earlier.
+Current correction: backend `0.1.144` and the AdaOS adapter prefer a bounded
+binary media-type route, preserve structured JSON errors, verify the archive
+digest before visibility, and use the legacy base64 route only after explicit
+`404`/`405` route absence. An unknown upload outcome is propagated and is not
+retried through the compatibility path. The representative scenario package
+was 8,130 bytes as binary versus 10,840 base64 payload bytes.
+
+The backend still buffers the bounded request to verify the ZIP, and the
+deployed package root is a single-zone host filesystem. Streamed verification,
+object-store lifecycle, and replicated durability therefore remain open in
+`AP1-12`; this finding is improved, not fully corrected.
 
 ### R3. Materialization target identity is implicit
 
@@ -343,6 +357,20 @@ it does not repeat or approximate a state-changing call. Longer term, runtime
 version diagnostics should expose source revision and loaded core build in one
 operator view.
 
+### R6. Blue/green deployment has a public-route handoff gap
+
+Both the binary-backend deployment and the persistent-store deployment briefly
+returned public `502` while the workflow was replacing the active slot. The
+deployment now reloads nginx after old-slot removal and fails unless public
+`/healthz` recovers, which prevents a silently broken terminal state. It does
+not make the transition zero-downtime.
+
+Required correction: make upstream selection explicit, wait for the candidate
+to be ready through its private route, atomically switch/reload the public
+upstream, drain the old slot, and prove continuous health with an external
+probe across the whole transition. This is tracked by `AP7-14` and remains a
+broad-rollout blocker.
+
 ## Corrected Implementation Order
 
 1. Harden schema admission, version uniqueness, package scrub, portable paths,
@@ -372,6 +400,15 @@ operator view.
 11. **Completed:** repeat the proof on a fresh isolated stand through deployed
     hub-mTLS package, release, and channel routes, with an empty cache and
     Workspace plus exact-lock delayed verification.
+12. **Completed:** deploy bounded binary package transfer with structured
+    failures, explicit legacy-route fallback, and no retry on unknown upload
+    outcome.
+13. **Completed for one zone:** persist one package root across both blue/green
+    slots and prove exact package, release, and channel survival after a second
+    deployment.
+14. **Next:** eliminate the public-route handoff gap, then replace single-zone
+    buffered storage with streamed/object-store multi-zone durability before
+    broad rollout.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale
