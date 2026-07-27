@@ -1351,11 +1351,29 @@ def _core_update_waits_for_supervisor_convergence(status: Any) -> bool:
     payload = status if isinstance(status, dict) else {}
     state = str(payload.get("state") or "").strip().lower()
     phase = str(payload.get("phase") or "").strip().lower()
-    # After a bootstrap/root promotion the candidate runtime can prove that it
-    # booted, but only the restarted supervisor may commit the final validate
-    # state. The two processes share the transactional status file, so bridge
-    # that one narrow handoff back into the runtime event bus.
-    return state == "succeeded" and phase == "root_promoted"
+    # A warm candidate boots while the shared transition can still be in
+    # prepare/countdown.  The same process is promoted without another
+    # bootstrap pass, so arming this bridge only at ``root_promoted`` races
+    # with fast cutover and can lose the terminal validate event.  Follow the
+    # whole bounded transition from candidate boot until a terminal state; the
+    # supervisor remains the sole writer/authority for the status file.
+    if state in {
+        "preparing",
+        "countdown",
+        "draining",
+        "stopping",
+        "restarting",
+        "applying",
+        "validated",
+    }:
+        return True
+    return state == "succeeded" and phase in {
+        "apply",
+        "launch",
+        "shutdown",
+        "root_promoted",
+        "root_promotion_pending",
+    }
 
 
 async def _watch_supervisor_core_update_convergence(
