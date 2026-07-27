@@ -245,6 +245,16 @@ projection and inventory widgets remained at their initial `Loading` values.
   expected `SYNC_STEP2`. Direct Infra State tools returned
   `slot B | 0.1.615 | a96d3fe`, update state `succeeded`, 36 installed skills,
   and 6 registered scenarios.
+- Published `infrastate_skill` release `0.75.55` was migrated once through the
+  normal runtime path. Its always-demand summary then materialized from the
+  disk snapshot as `ready`, `slot B | 0.1.615 | a96d3fe`, rather than retaining
+  the initial `slot --` placeholder.
+- Browser-protocol stream probes subscribed through the live `/ws` endpoint and
+  received complete inventory lists: 36 installed skills and 6 registered
+  scenarios. This closes the two indefinitely loading inventory states.
+- A sidecar `/yws/desktop` session held for 25 seconds, exchanged server
+  `SYNC_STEP1` and `SYNC_STEP2`, and remained `attached / complete / ready /
+  fresh` without reconnect-storm activation.
 
 This closes the handshake defect and proves the post-promotion endpoint. It
 does not yet close the wider acceptance item for one already-open real
@@ -837,6 +847,9 @@ Make Yjs transport-independent without building a second distributed system arou
 - [x] `[must]` Preserve a standards-complete server-authoritative handshake:
   answer the read-only browser `SYNC_STEP1` and reject only the initial mutating
   client state/update frames.
+- [x] `[must]` Validate the released handshake and Infra State first-paint path
+  on `.30`: sidecar `/yws` reached `ready:fresh`, the current core summary was
+  materialized, and both inventory streams returned complete lists.
 - [ ] `[should]` Validate SyncChannel recovery during A/B runtime switch with
   an already-open rooted browser `/yws` session.
 - [ ] `[deferred]` Move Yjs websocket termination and live room/session
