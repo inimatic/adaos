@@ -722,7 +722,10 @@ lifecycle and update attempt state.
   diagnostics without logging the token. An explicit rejoin/reconnect also
   reuses the original boot-generation readiness callback after successful
   registration, so recovery cannot leave a connected member permanently at
-  `ready=false`.
+  `ready=false`. Production backend `0.1.148` (`80b7942`) issued the signed
+  session used to rejoin `192.168.0.40`; after its next ordinary restart the
+  node reports `ready=true`, `connected_to_subnet=true`, and
+  `connected_to_hub=true`.
 - [x] `[must]` Distinguish scenario Catalog, Workspace source, and active
   Runtime in Infra State. Release `infrastate_skill 0.75.60` labels a missing
   sparse source explicitly and presents its cloud action as source restore;
@@ -814,16 +817,17 @@ lifecycle and update attempt state.
   runtime-side best effort.
 - [x] `[must]` A failed root import cannot be reported as a successful root
   restart by a surviving runtime process.
-- [ ] `[must]` A second-machine recovery record shows root import failure,
+- [x] `[must]` A second-machine recovery record shows root import failure,
   verified-slot fallback, transactional root repair, and a subsequent clean
   release cycle. `192.168.0.40` recovered transactionally to slot B on
   `0.1.625` (`5407a0d`): the exact pinned update was dispatched once, root
   import passed after promotion, the legacy `root_promoted` boundary received
   one guarded service restart, and the replacement supervisor committed
-  `succeeded/validate`. The checkbox remains open until the next ordinary
-  release converges without break-glass intervention. Its independent
-  Root-proxy member credential, lost with Redis, remains pending signed-session
-  backend deployment and one rejoin.
+  `succeeded/validate`. With its signed Root-proxy session restored, the hub
+  then delivered the ordinary `0.1.626` (`9d319b9`) release automatically.
+  That clean cycle completed through candidate validation, root promotion, and
+  replacement-supervisor validation without operator update/reconnect; final
+  probes confirm root imports and member readiness/connectivity.
 - [x] `[must]` Sidecar remains transport-only and does not absorb
   process/update authority.
 - [x] `[must]` Operators can identify which installed skill failed during a
