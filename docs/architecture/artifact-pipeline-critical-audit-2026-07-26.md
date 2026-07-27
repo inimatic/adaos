@@ -529,10 +529,16 @@ readiness.
     one versioned update-route contract. Subscribed projects are package-only;
     only genuine subscription absence admits labelled legacy source pull, and
     package failure never causes fallback.
-21. **Next:** run the final focused/full pipeline and stand checks against the
-    resulting revision, then synchronize remaining documentation and client/core
-    release state. Replace single-zone buffered storage with streamed/object-store
-    multi-zone durability before broad rollout.
+21. **Completed on the bounded stand:** rerun the source-faithful local proof,
+    304 focused artifact/Builder REST/WebSocket regressions, and an external
+    empty-cache/empty-Workspace activation against backend `0.1.144`. The
+    dedicated `stand-route-5dd1492f` channel passed exact release read-back and
+    delayed verification without moving `stable`.
+22. **Next release boundary:** synchronize the remaining client/core release
+    state. Before broad or multi-zone rollout, replace single-zone whole-body
+    buffering with streamed object storage, add signed attestations, and retain
+    the compatibility route until telemetry proves historical subscriptions
+    have migrated.
 
 This order intentionally handles correctness before format expansion. Adding
 attestations to a release that can be concurrently overwritten or retain stale

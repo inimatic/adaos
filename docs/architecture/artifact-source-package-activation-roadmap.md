@@ -180,8 +180,8 @@ proof is not silently promoted to stand or production acceptance.
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
-| AP6 | 11/13 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, and one fail-closed package/legacy route contract | stand acceptance and later evidence-based retirement of the compatibility route |
-| AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 161 focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
+| AP6 | 11/13 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, and one fail-closed package/legacy route contract | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
+| AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 304 final focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -671,11 +671,13 @@ The verifier was rerun on 2026-07-26 after the critical audit. Its contract
 regression now fails if DEV publishable content differs from the recorded
 checkpoint package, while allowing the same exact files to be rebuilt under an
 explicitly identified newer package policy. `AP7-11` is closed by the fresh
-same-host stand rooted at `20260727T032000Z`: it started with an empty package
+same-host stand rooted at `20260727T061000Z`: it started with an empty package
 cache and Workspace, used deployed backend `0.1.144` over hub mTLS for binary
 package, release, and channel reads/writes, and passed immediate exact-lock
-delayed verification. `AP7-12` is additionally supported by the same package,
-release, and channel surviving control deployment run `30227206352`;
+delayed verification. In the same final slice, core commit `5dd1492f` passed 304
+focused artifact/Builder transport regressions; the external verifier used only
+the dedicated `stand-route-5dd1492f` channel. `AP7-12` is additionally supported
+by the same package, release, and channel surviving control deployment run `30227206352`;
 byte/digest read-back matched and repeat upload was idempotent. It remains
 deliberately narrower than second-machine, multi-zone, and broad production
 acceptance.

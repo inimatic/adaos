@@ -15,7 +15,7 @@ empty-Workspace activation through the deployed external package backend.
 - AdaOS branch: `rev2026`.
 - Architecture baseline: commit `a97a8860`, tag
   `architecture-artifact-pipeline-v1`.
-- Local proof implementation: commits through `7a0596b6` and their ancestors.
+- Local proof implementation: commits through `5dd1492f` and their ancestors.
 - Backend package/source-tree API: merged by
   [inimatic/adaos-backend#1](https://github.com/inimatic/adaos-backend/pull/1)
   at `1329ecb3371b25869ad78acf51814704d2862b04` and deployed as backend
@@ -70,31 +70,32 @@ Run from the AdaOS repository root:
 The latest durable local record for this run is:
 
 ```text
-.adaos/state/artifact_pipeline/proofs/20260726T233544441263Z/evidence.json
+.adaos/state/artifact_pipeline/proofs/20260727T030631293308Z/evidence.json
 ```
 
 Run the external clean-stand gate only with an explicit mutation acknowledgement:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\verify_artifact_pipeline_stand.py `
-  --evidence .adaos\state\artifact_pipeline\proofs\20260726T233544441263Z\evidence.json `
+  --evidence .adaos\state\artifact_pipeline\proofs\20260727T030631293308Z\evidence.json `
   --stand-root .adaos\state\artifact_pipeline\stand-proofs\<new-run-id> `
   --base-url https://ru.api.inimatic.com `
   --ca .adaos\keys\ca.cert `
   --cert .adaos\keys\hub_cert.pem `
   --key .adaos\keys\hub_private.pem `
   --expected-backend-commit 0bc1f826 `
+  --channel stand-route-5dd1492f `
   --publish
 ```
 
 The latest durable stand record is:
 
 ```text
-.adaos/state/artifact_pipeline/stand-proofs/20260727T032000Z/evidence.json
+.adaos/state/artifact_pipeline/stand-proofs/20260727T061000Z/evidence.json
 ```
 
 The command writes only immutable package/release identities plus the dedicated
-`stand-afb87148014b` channel; it does not move `stable`. It then constructs a
+`stand-route-5dd1492f` channel; it does not move `stable`. It then constructs a
 new cache and Workspace below the new run directory and fetches all installable
 bytes back through hub mTLS.
 
@@ -144,6 +145,7 @@ redacted identities and conclusions required for review.
 | Unknown Forge outcome | passed | simulated commit plus timeout creates one remote write and reconciles it |
 | Subscription update and rollback | passed | failed health check preserves old lock/subscription; explicit new attempt succeeds |
 | Focused pipeline regression | passed | 161 tests |
+| Final post-route regression | passed | 304 artifact, Builder SDK, REST, and WebSocket tests on commit `5dd1492f` |
 | Bounded resilience proof | passed | 21 tests, including the 13 parametrized activation phases |
 | Backend TypeScript build and package smoke | passed | `npm run build:api`; `npm run test:artifact-packages` |
 | Production Forge source-tree lookup | passed | backend `0.1.137`; live mTLS lookup returned the exact scenario and skill trees |
@@ -164,7 +166,7 @@ redacted identities and conclusions required for review.
 | Live fail-closed admission probes | passed | hub-mTLS requests returned missing-channel `404`, missing channel CAS `400`, and partial-release `400` without creating state |
 | Bounded binary package transport | passed | backend `0.1.144`; the representative scenario package used 8,130 binary bytes instead of 10,840 base64 payload bytes; exact bytes/digest round-trip passed, a mismatched digest failed with `409`, and unknown upload outcomes have a no-fallback/no-retry regression |
 | Single-zone package-store deployment durability | passed | infrastructure runs `30227081918` and `30227206352`; after the second blue/green deployment the exact package and release remained readable, channel `stand-afb87148014b` retained its release digest, and repeat binary PUT returned `created=false` |
-| External clean-stand round-trip | passed | two packages (15,370 archive bytes), exact release and dedicated channel traversed deployed backend; a new empty cache/Workspace activated 12 files in 1.291 s and exact-lock delayed verification passed |
+| External clean-stand round-trip | passed | two packages (15,370 archive bytes), exact release and dedicated `stand-route-5dd1492f` channel traversed deployed backend; a new empty cache/Workspace activated 12 files in 1.375 s and exact-lock delayed verification passed |
 
 Original checkpoint-package identities retained as the source inventory
 witness:
@@ -185,7 +187,7 @@ Post-audit rebuild identities under package policy
 scenario package  sha256:5a007b582c50ec2c8a6ad2662bb1853da6272bccec54f513ce52ce391d67be20
 skill package     sha256:e751d9ecde3222373c6d38c7a4959ad740a207656a1838da94bf44e26e9160bb
 project release   sha256:afb87148014ba1aee8d308842d1ff6937a7fc495bb18b5ba0505e113fb848f11
-workspace lock    sha256:9c297b647db6d18d3f0eaf0835871fad0026586b312c7fe7cd469824e9b1cbf8
+workspace lock    sha256:be0bf5c6e6c16f1abf364623cca0ca7ddc2914ca716210dda88730fcf79fd505
 ```
 
 Live Builder publication identities:
