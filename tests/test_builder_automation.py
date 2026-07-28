@@ -449,6 +449,79 @@ def test_completed_iteration_clears_stale_failure_from_session(tmp_path: Path) -
     assert "last_failure" not in refreshed
 
 
+def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.materialize_on_completion = True
+    task_id = "task.orphan"
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "companion_skill_id": "recipes_skill",
+        "webspace_id": "prompt-dev",
+        "current_task_id": task_id,
+        "status": "in_progress",
+    }
+    service._save_session(session)
+    output_dir = Path(service.runs_root) / task_id / "output"
+    output_dir.mkdir(parents=True)
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"turn.completed"}\n',
+        encoding="utf-8",
+    )
+    recovered: list[str] = []
+
+    class _Worker:
+        def recover_orphaned_codex_run(self, value: str) -> dict:
+            recovered.append(value)
+            return {"ok": True}
+
+    service.worker_factory = _Worker
+
+    def snapshot(**_kwargs):
+        completed = bool(recovered)
+        return {
+            "tasks": [
+                {
+                    "task_id": task_id,
+                    "status": "completed" if completed else "in_progress",
+                    "updated_at": "2026-07-28T15:13:00+00:00",
+                    "result": {"summary": "Recovered result."} if completed else None,
+                    "progress": [],
+                }
+            ]
+        }
+
+    service.factory = SimpleNamespace(snapshot=snapshot)
+    finalized: list[dict] = []
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        completed["completion_readiness"] = {
+            "ok": True,
+            "task_id": task_id,
+            "completed_at": "2026-07-28T15:14:00+00:00",
+        }
+        completed.pop("finalizing_task_id", None)
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+
+    refreshed = service.refresh_session(session)
+
+    assert recovered == [task_id]
+    assert finalized[0]["status"] == "commit_ready"
+    assert finalized[0]["last_result"]["summary"] == "Recovered result."
+    assert refreshed["status"] == "completed"
+    assert refreshed["completion_readiness"]["ok"] is True
+
+
 def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(

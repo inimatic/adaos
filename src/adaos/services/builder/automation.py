@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.1.0"
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
+_log = logging.getLogger("adaos.builder.automation")
 
 _ACTIVE_STATUSES = {
     "starting",
@@ -865,6 +867,14 @@ class BuilderAutomationService:
         task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), None)
         if not task:
             return current
+        recovered = self._recover_orphaned_task(current, task)
+        if recovered is not None:
+            return recovered
+        # A failed one-shot reconciliation updates the authoritative factory
+        # task before returning.  Refresh the snapshot so this read exposes the
+        # failure instead of preserving the stale in-progress projection.
+        snapshot = self.factory.snapshot(include_tasks=True)
+        task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), task)
         task_status = task.get("status")
         current["status"] = (
             "commit_ready"
@@ -989,6 +999,96 @@ class BuilderAutomationService:
             }
         self._save_session(current)
         return current
+
+    def _recover_orphaned_task(
+        self,
+        session: Mapping[str, Any],
+        task: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resume one terminal local Codex run after its API supervisor died."""
+
+        task_id = str(task.get("task_id") or "").strip()
+        task_status = str(task.get("status") or "").strip()
+        if (
+            not task_id
+            or task_status not in _ACTIVE_STATUSES
+            or isinstance(session.get("completion_readiness"), Mapping)
+        ):
+            return None
+        run_dir = Path(self.runs_root) / _safe_token(task_id)
+        if not LocalSkillFactoryWorker._codex_journal_completed(
+            run_dir / "output" / "codex-live.jsonl"
+        ):
+            return None
+        if not _WORKER_LOCK.acquire(blocking=False):
+            # The original in-process worker still owns finalization.  It will
+            # publish the terminal projection when it leaves the lock.
+            return None
+        try:
+            latest = self.get_session(
+                str(session.get("object_type") or ""),
+                str(session.get("object_id") or ""),
+            )
+            if (
+                not latest
+                or str(latest.get("current_task_id") or "").strip() != task_id
+                or isinstance(latest.get("completion_readiness"), Mapping)
+            ):
+                return None
+            worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
+                state_dir=self.state_dir,
+                repo_root=self.repo_root,
+                dev_skills_root=self.dev_skills_root,
+                dev_scenarios_root=self.dev_scenarios_root,
+                runs_root=self.runs_root,
+            )
+            try:
+                worker.recover_orphaned_codex_run(task_id)
+            except ValueError:
+                # A terminal journal can be observed a few milliseconds before
+                # the original worker persists its own local state.  In that
+                # normal race the explicit local-state guards decline recovery.
+                return None
+            except Exception:
+                _log.exception("one-shot orphaned Automation recovery failed task=%s", task_id)
+                return None
+
+            snapshot = self.factory.snapshot(include_tasks=True)
+            completed_task = next(
+                (item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id),
+                None,
+            )
+            if not isinstance(completed_task, Mapping) or completed_task.get("status") != "completed":
+                return None
+            current = dict(latest)
+            current["task"] = dict(completed_task)
+            if completed_task.get("result"):
+                current["last_result"] = completed_task.get("result")
+            current["status"] = "commit_ready" if self.materialize_on_completion else "completed"
+            current["finalizing_task_id"] = task_id if self.materialize_on_completion else None
+            current["progress"] = {
+                "task_id": task_id,
+                "status": current["status"],
+                "message": (
+                    "Recovered completed Codex turn; finalizing DEV activation and checkpoints"
+                    if self.materialize_on_completion
+                    else "Recovered completed Codex turn"
+                ),
+                "updated_at": _now_iso(),
+            }
+            current["updated_at"] = current["progress"]["updated_at"]
+            self._save_session(current)
+            if self.event_sink:
+                self.event_sink(self.project_session(current))
+            if self.materialize_on_completion:
+                self._finalize_completed_session(current)
+                return self.get_session(
+                    str(current.get("object_type") or ""),
+                    str(current.get("object_id") or ""),
+                ) or current
+            return current
+        finally:
+            _WORKER_LOCK.release()
 
     def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
         kind = str(session["object_type"])

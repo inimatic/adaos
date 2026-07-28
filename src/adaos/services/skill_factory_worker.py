@@ -310,7 +310,7 @@ class LocalSkillFactoryWorker:
         test_report = _read_json(test_report_path) if test_report_path.is_file() else {}
         dirty = bool(_git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace))
         report_passed = bool(test_report.get("ok")) and str(test_report.get("status") or "") == "passed"
-        if dirty and not report_passed:
+        if not report_passed:
             # A worker/host failure can happen after Codex has returned but
             # before deterministic validation or the result commit.  Resume
             # those deterministic steps once against the preserved worktree;
@@ -319,7 +319,11 @@ class LocalSkillFactoryWorker:
             if not final_message_path.is_file():
                 raise ValueError("pre-commit recovery requires a completed Codex result")
             self._cleanup_generated_files(workspace)
-            changed_paths = self._changed_paths(workspace)
+            # Codex is instructed not to commit, but a surviving child process
+            # can still do so after its API parent has been restarted.  Diff
+            # from the immutable materialization root so both committed and
+            # uncommitted task changes receive the same bounded validation.
+            changed_paths = self._changed_from_baseline(workspace)
             self._validate_changed_paths(assignment, changed_paths)
             test_report = self._validate_workspace(assignment, workspace)
             _write_json(output_dir / "test_report.json", test_report)
@@ -373,7 +377,8 @@ class LocalSkillFactoryWorker:
                 "\n".join(all_changed_paths) + "\n", encoding="utf-8"
             )
             _git(["add", "-A"], cwd=workspace)
-            _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
+            if _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+                _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             dirty = False
             report_passed = True
 
@@ -428,6 +433,103 @@ class LocalSkillFactoryWorker:
             },
         )
         return {"ok": True, "recovered": True, "assignment": assignment, "result": result, "completed": completed}
+
+    def recover_orphaned_codex_run(self, task_id: str) -> dict[str, Any]:
+        """Finish a Codex turn whose supervising API process was restarted.
+
+        This is deliberately a one-shot deterministic recovery.  It accepts
+        only a terminal Codex journal plus its final message, marks the local
+        run failed before doing any work, and delegates to the validated-result
+        path.  A second automatic attempt is therefore impossible; an
+        interrupted recovery requires the explicit recovery tool.
+        """
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("orphaned run assignment does not match task_id")
+
+        local_state_path = runtime_dir / "state.json"
+        local_state = _read_json(local_state_path) if local_state_path.is_file() else {}
+        local_status = str(local_state.get("status") or "").strip()
+        if local_status in {"completed", "failed"}:
+            raise ValueError(f"orphaned recovery is not available for local status {local_status!r}")
+
+        events_path = output_dir / "codex-live.jsonl"
+        final_message_path = output_dir / "last_message.md"
+        if not self._codex_journal_completed(events_path):
+            raise ValueError("orphaned recovery requires a terminal Codex journal")
+        if not final_message_path.is_file() or not final_message_path.read_text(
+            encoding="utf-8", errors="strict"
+        ).strip():
+            raise ValueError("orphaned recovery requires the completed Codex message")
+
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(final_message_path, runtime_dir / "codex-final.md")
+        _write_json(
+            local_state_path,
+            {
+                "schema": LOCAL_SESSION_SCHEMA,
+                "status": "failed",
+                "error": "orphaned_after_codex_completion",
+                "failed_at": _now_iso(),
+                "recovery": {"mode": "terminal_journal_resume", "automatic_attempts": 1},
+            },
+        )
+        self.factory.fail_task(
+            {
+                "task_id": str(task_id),
+                "node_id": self.node_id,
+                "message": "Worker supervisor restarted after the Codex turn completed",
+                # ``recover_task_result`` accepts only an explicitly
+                # recoverable failure.  This does not requeue or rerun Codex;
+                # the local state marker still enforces one automatic attempt.
+                "retryable": True,
+            }
+        )
+        try:
+            return self.recover_validated_run(task_id)
+        except Exception as exc:
+            try:
+                self.factory.fail_task(
+                    {
+                        "task_id": str(task_id),
+                        "node_id": self.node_id,
+                        "message": f"Orphaned Codex recovery failed: {type(exc).__name__}: {exc}",
+                        "retryable": False,
+                    }
+                )
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def _codex_journal_completed(path: Path, *, tail_bytes: int = 262_144) -> bool:
+        if not path.is_file():
+            return False
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - max(4096, int(tail_bytes))))
+                raw = stream.read().decode("utf-8", errors="replace")
+        except OSError:
+            return False
+        for line in reversed(raw.splitlines()):
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            event_type = str(event.get("type") or "").strip()
+            if event_type == "turn.completed":
+                return True
+            if event_type in {"turn.failed", "turn.cancelled"}:
+                return False
+        return False
 
     def repair_preserved_run(self, task_id: str) -> dict[str, Any]:
         """Run one bounded Codex repair against a preserved failed worktree."""
