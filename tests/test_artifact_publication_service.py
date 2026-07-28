@@ -771,6 +771,53 @@ def test_scenario_candidate_includes_companion_skill_from_same_change_set(
     ).is_file()
 
 
+def test_scenario_candidate_migrates_installed_dependency_without_dev_copy(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    scenario_dir = _scenario(dev_root / "scenarios")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    installed_skill = _skill(workspace / "skills")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("change-recipes",),
+    )
+
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("change-recipes",),
+        validation_evidence={"status": "passed"},
+    )
+
+    dependency = next(
+        item for item in prepared.plan.packages if item.key == "skill:shopping_skill"
+    )
+    assert dependency.version == "2.1.0"
+    assert dependency.source_ref.forge == "workspace-migration"
+    assert dependency.source_ref.repository == "installed-workspace"
+    assert dependency.source_ref.revision.startswith("sha256:")
+    assert not (dev_root / "skills" / "shopping_skill").exists()
+    assert installed_skill.is_dir()
+    assert (
+        prepared.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
+    ).is_file()
+
+
 def test_follow_up_candidate_reuses_dependency_from_stable_project_release(
     tmp_path: Path,
 ) -> None:

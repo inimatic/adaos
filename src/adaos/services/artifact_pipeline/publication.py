@@ -784,6 +784,60 @@ class ArtifactPublicationService:
             raise PublicationError(f"canonical manifest {path} must contain an object")
         return payload
 
+    def _installed_dependency_package(
+        self,
+        requirement: DependencyRequirement,
+    ) -> tuple[BuiltArtifactPackage, Path] | None:
+        """Synthesize an immutable package identity for a legacy Workspace install.
+
+        This is the AP0 compatibility boundary for an installed dependency that
+        predates independent stable release channels.  It never reads mutable
+        DEV and labels the provenance explicitly as a Workspace migration.
+        """
+
+        dependency_dir = (
+            self.workspace_root
+            / ("skills" if requirement.kind == "skill" else "scenarios")
+            / requirement.artifact_id
+        )
+        if not dependency_dir.is_dir():
+            return None
+        path_scope = (
+            f"skills/{requirement.artifact_id}/"
+            if requirement.kind == "skill"
+            else f"scenarios/{requirement.artifact_id}/"
+        )
+        provisional_ref = ArtifactSourceRef(
+            forge="workspace-migration",
+            repository="installed-workspace",
+            revision="workspace:bootstrap",
+            path_scope=(path_scope,),
+        )
+        provisional = build_artifact_package(
+            dependency_dir,
+            kind=requirement.kind,
+            source_ref=provisional_ref,
+        )
+        if provisional.ref.key != requirement.key:
+            raise PublicationError(
+                "installed Workspace dependency identity does not match its path: "
+                f"expected {requirement.key}, found {provisional.ref.key}"
+            )
+        source_ref = ArtifactSourceRef(
+            forge="workspace-migration",
+            repository="installed-workspace",
+            revision=f"sha256:{provisional.ref.digest.removeprefix('sha256:')}",
+            path_scope=(path_scope,),
+        )
+        return (
+            build_artifact_package(
+                dependency_dir,
+                kind=requirement.kind,
+                source_ref=source_ref,
+            ),
+            dependency_dir,
+        )
+
     def _dependency_inputs(
         self,
         *,
@@ -884,12 +938,27 @@ class ArtifactPublicationService:
                     missing = status == 404 or code in {"channel_not_found", "release_not_found"} or isinstance(
                         exc, FileNotFoundError
                     )
-                    if missing and requirement.optional:
-                        continue
                     if missing:
-                        raise PublicationError(
-                            f"required stable dependency is unavailable: {requirement.key}"
-                        ) from exc
+                        installed = self._installed_dependency_package(requirement)
+                        if installed is None:
+                            if requirement.optional:
+                                continue
+                            raise PublicationError(
+                                f"required stable dependency is unavailable: {requirement.key}"
+                            ) from exc
+                        installed_built, installed_dir = installed
+                        catalog.add(installed_built.ref)
+                        archives[installed_built.ref.digest] = installed_built.archive_bytes
+                        installed_requirements = parse_artifact_requirements(
+                            self._manifest(installed_dir, requirement.kind),
+                            kind=requirement.kind,  # type: ignore[arg-type]
+                        )
+                        requirements_by_package.setdefault(
+                            installed_built.ref.digest,
+                            [],
+                        ).extend(installed_requirements)
+                        pending_requirements.extend(installed_requirements)
+                        continue
                     raise
 
             release_digest = (
