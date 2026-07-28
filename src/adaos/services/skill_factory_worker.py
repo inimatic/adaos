@@ -429,6 +429,54 @@ class LocalSkillFactoryWorker:
         )
         return {"ok": True, "recovered": True, "assignment": assignment, "result": result, "completed": completed}
 
+    def repair_preserved_run(self, task_id: str) -> dict[str, Any]:
+        """Run one bounded Codex repair against a preserved failed worktree."""
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        workspace = run_root / "workspace"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("preserved repair assignment does not match task_id")
+        local_state = _read_json(runtime_dir / "state.json")
+        if str(local_state.get("status") or "") != "failed":
+            raise ValueError("preserved repair requires a failed local run")
+        report_path = output_dir / "test_report.json"
+        report = _read_json(report_path) if report_path.is_file() else {}
+        errors = [str(item) for item in report.get("errors") or [] if str(item).strip()]
+        if bool(report.get("ok")) or not errors:
+            raise ValueError("preserved repair requires deterministic validation errors")
+        if not _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+            raise ValueError("preserved repair requires an uncommitted Codex worktree")
+        previous_repairs = sorted(runtime_dir.glob("codex-events-repair-*.jsonl"))
+        if len(previous_repairs) >= self.max_repair_attempts:
+            raise ValueError("preserved repair budget is exhausted")
+
+        prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+        repair_prompt = (
+            prompt
+            + "\n\n# Deterministic validation repair\n\n"
+            + "Continue in the preserved isolated workspace. Fix every deterministic error below, "
+            + "rerun relevant checks, and leave the workspace valid. Do not publish, activate, or "
+            + "change checkpoint-owned version/updated_at metadata.\n\n"
+            + "\n".join(f"- {item}" for item in errors[:40])
+        )
+        attempt = len(previous_repairs) + 1
+        result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
+        self._record_codex_attempt(runtime_dir, result, attempt=attempt)
+        if result.returncode:
+            raise RuntimeError(
+                f"Codex repair exited with code {result.returncode}: {result.stderr[-1000:]}"
+            )
+        if result.final_message:
+            # Recovery uses the primary final-message path for the durable
+            # result summary; the original message remains in the event log.
+            (runtime_dir / "codex-final.md").write_text(result.final_message, encoding="utf-8")
+        return self.recover_validated_run(task_id)
+
     def run_assignment(self, assignment: Mapping[str, Any]) -> dict[str, Any]:
         task_id = str(assignment.get("task_id") or "").strip()
         if not task_id:
