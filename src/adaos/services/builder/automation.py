@@ -570,28 +570,45 @@ class BuilderAutomationService:
             current = self.refresh_session(session)
             task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
             failure = current.get("last_failure") if isinstance(current.get("last_failure"), Mapping) else {}
-            if str(current.get("status") or "") != "failed" or str(task.get("status") or "") != "failed":
+            if str(current.get("status") or "") != "failed":
                 raise ValueError("validated result recovery requires a failed Automation task")
-            if not bool(failure.get("retryable")):
-                raise ValueError("validated result recovery requires a retryable task failure")
             task_id = str(current.get("current_task_id") or "").strip()
-            worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
-                state_dir=self.state_dir,
-                repo_root=self.repo_root,
-                dev_skills_root=self.dev_skills_root,
-                dev_scenarios_root=self.dev_scenarios_root,
-                runs_root=self.runs_root,
-                progress_callback=lambda recovered_task_id, status, message: self._on_worker_progress(
-                    str(current.get("session_id") or ""),
-                    recovered_task_id,
-                    status,
-                    message,
-                ),
-            )
-            recovered_result = worker.recover_validated_run(task_id)
-            current = self.refresh_session(current)
-            if str(current.get("status") or "") != "completed" or not isinstance(current.get("last_result"), Mapping):
-                raise RuntimeError("validated result recovery did not complete the Automation task")
+            task_status = str(task.get("status") or "")
+            failure_stage = str(failure.get("stage") or "")
+            if (
+                task_status == "completed"
+                and failure_stage == "live_readiness"
+                and isinstance(current.get("last_result"), Mapping)
+            ):
+                recovered_result = {
+                    "ok": True,
+                    "task_id": task_id,
+                    "reused_validated_result": True,
+                    "recovery_stage": "live_readiness",
+                }
+                current["reuse_confirmed_checkpoints"] = True
+            else:
+                if task_status != "failed":
+                    raise ValueError("validated result recovery requires a failed Automation task")
+                if not bool(failure.get("retryable")):
+                    raise ValueError("validated result recovery requires a retryable task failure")
+                worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
+                    state_dir=self.state_dir,
+                    repo_root=self.repo_root,
+                    dev_skills_root=self.dev_skills_root,
+                    dev_scenarios_root=self.dev_scenarios_root,
+                    runs_root=self.runs_root,
+                    progress_callback=lambda recovered_task_id, status, message: self._on_worker_progress(
+                        str(current.get("session_id") or ""),
+                        recovered_task_id,
+                        status,
+                        message,
+                    ),
+                )
+                recovered_result = worker.recover_validated_run(task_id)
+                current = self.refresh_session(current)
+                if str(current.get("status") or "") != "completed" or not isinstance(current.get("last_result"), Mapping):
+                    raise RuntimeError("validated result recovery did not complete the Automation task")
             current["status"] = "commit_ready"
             current["finalizing_task_id"] = task_id
             current["progress"] = {
@@ -836,6 +853,19 @@ class BuilderAutomationService:
                     "message": error,
                     "updated_at": readiness.get("completed_at") or current.get("updated_at"),
                 }
+            elif not bool(readiness.get("ok", False)):
+                error = str(
+                    readiness.get("error")
+                    or "Automation result is validated but live readiness is not confirmed"
+                )
+                readiness = {**dict(readiness), "ok": False, "error": error}
+                current["completion_readiness"] = readiness
+                current["status"] = "failed"
+                current["last_failure"] = {
+                    "stage": "live_readiness",
+                    "message": error,
+                    "updated_at": readiness.get("completed_at") or current.get("updated_at"),
+                }
         task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
         finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:
@@ -1064,6 +1094,7 @@ class BuilderAutomationService:
             "completed_at": None,
         }
         failed_checkpoints: list[Mapping[str, Any]] = []
+        preview_target: Mapping[str, Any] | None = None
         try:
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
             if pending_transition == "return_to_prototype":
@@ -1079,7 +1110,20 @@ class BuilderAutomationService:
                     object_id,
                     task_id=str(current.get("current_task_id") or "").strip() or None,
                 )
-            readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
+            previous_readiness = (
+                session.get("completion_readiness")
+                if isinstance(session.get("completion_readiness"), Mapping)
+                else {}
+            )
+            confirmed_checkpoints = [
+                dict(item)
+                for item in previous_readiness.get("vcs_checkpoints") or []
+                if isinstance(item, Mapping) and bool(item.get("ok"))
+            ]
+            if bool(current.get("reuse_confirmed_checkpoints")) and confirmed_checkpoints:
+                readiness["vcs_checkpoints"] = confirmed_checkpoints
+            else:
+                readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
             failed_checkpoints = [
                 item
                 for item in readiness["vcs_checkpoints"]
@@ -1194,23 +1238,24 @@ class BuilderAutomationService:
                     },
                 )
             if object_type == "scenario" and object_id and preview_target and bool(preview_target.get("follow_active")):
-                try:
-                    from adaos.sdk.builder import preview
+                from adaos.sdk.builder import preview
 
-                    workflow_after = self._workflow().describe(object_type, object_id)
-                    readiness["materialization"] = preview.select_target(
-                        object_type,
-                        object_id,
-                        stage=str(workflow_after.get("active_phase") or "prototype"),
-                        source_webspace_id=webspace_id,
-                        follow_active=True,
+                target_stage = "prototype" if pending_transition == "return_to_prototype" else "automation"
+                readiness["materialization"] = preview.select_target(
+                    object_type,
+                    object_id,
+                    stage=target_stage,
+                    source_webspace_id=webspace_id,
+                    follow_active=True,
+                )
+                if not bool(readiness["materialization"].get("ok", False)):
+                    raise RuntimeError(
+                        str(
+                            readiness["materialization"].get("error_detail")
+                            or readiness["materialization"].get("error")
+                            or "selected preview target materialization failed"
+                        )
                     )
-                except Exception as exc:
-                    readiness["materialization"] = {
-                        "ok": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "preserved_target": dict(preview_target),
-                    }
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
@@ -1222,6 +1267,7 @@ class BuilderAutomationService:
                 "updated_at": readiness["completed_at"],
             }
             current.pop("finalizing_task_id", None)
+            current.pop("reuse_confirmed_checkpoints", None)
             current.pop("last_failure", None)
             current["updated_at"] = readiness["completed_at"]
             self._save_session(current)

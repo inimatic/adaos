@@ -473,6 +473,43 @@ def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path
     assert refreshed["last_failure"]["stage"] == "forge_checkpoint"
 
 
+def test_refresh_reconciles_completed_task_with_failed_live_readiness(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "task.1",
+                    "status": "completed",
+                    "updated_at": "2026-07-18T00:00:00+00:00",
+                    "result": {"summary": "code complete"},
+                    "progress": [],
+                }
+            ]
+        }
+    )
+
+    refreshed = service.refresh_session(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "current_task_id": "task.1",
+            "status": "completed",
+            "completion_readiness": {
+                "ok": False,
+                "task_id": "task.1",
+                "error": "ValueError: automation Preview is not available",
+                "vcs_checkpoints": [{"ok": True, "kind": "scenario", "name": "recipes"}],
+            },
+        }
+    )
+
+    assert refreshed["status"] == "failed"
+    assert refreshed["completion_readiness"]["ok"] is False
+    assert refreshed["last_failure"]["stage"] == "live_readiness"
+    assert "Preview is not available" in refreshed["last_failure"]["message"]
+
+
 def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     published: list[dict] = []
@@ -597,6 +634,81 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     assert saved[-1]["status"] == "failed"
     assert saved[-1]["last_failure"]["stage"] == "live_readiness"
     assert saved[-1]["progress"]["status"] == "failed"
+    assert notified == []
+
+
+def test_finalize_compensates_failed_follow_active_preview_after_workflow_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    notified: list[dict] = []
+    transitions: list[str] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: [{"ok": True, "commit": "forge-1"}],
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def get_workspace_binding(self, source_webspace_id):  # noqa: ARG002
+            return {
+                "preview_target": {
+                    "stage": "prototype",
+                    "revision": "UI 005",
+                    "follow_active": True,
+                }
+            }
+
+    class FakeWorkflow:
+        def snapshot_current_automation(self, *args, **kwargs):  # noqa: ARG002
+            return {"path": "automation/0.2.11"}
+
+        def describe(self, object_type, object_id):  # noqa: ARG002
+            return {"active_phase": "automation"}
+
+        def transition(self, object_type, object_id, event, **kwargs):  # noqa: ARG002
+            transitions.append(event)
+            return {"active_phase": "automation"}
+
+    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.select_target",
+        lambda *args, **kwargs: {  # noqa: ARG005
+            "ok": False,
+            "error": "webspace_rebuild_failed",
+            "error_detail": "ValueError: invalid runtime projection",
+        },
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: notified.append(dict(value)) or dict(value),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "status": "completed",
+        }
+    )
+
+    assert saved[-1]["status"] == "failed"
+    assert saved[-1]["completion_readiness"]["ok"] is False
+    assert saved[-1]["completion_readiness"]["materialization"]["error"] == "webspace_rebuild_failed"
+    assert "invalid runtime projection" in saved[-1]["last_failure"]["message"]
+    assert transitions == ["automation_completed", "automation_failed"]
     assert notified == []
 
 
@@ -727,6 +839,48 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
     assert result["ok"] is True
     assert result["change_id"] == previous_change_id
     assert finalized[0]["reconciliation_history"][-1]["mode"] == "resume_partial"
+
+
+def test_validated_result_recovery_reuses_completed_task_after_live_readiness_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.1",
+        "status": "failed",
+        "task": {"task_id": "task.1", "status": "completed", "result": {"summary": "ready"}},
+        "last_result": {"summary": "ready"},
+        "last_failure": {"stage": "live_readiness", "message": "preview failed"},
+        "completion_readiness": {
+            "ok": False,
+            "task_id": "task.1",
+            "vcs_checkpoints": [{"ok": True, "kind": "scenario", "commit": "forge-1"}],
+        },
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        completed.pop("reuse_confirmed_checkpoints", None)
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+
+    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+
+    assert result["ok"] is True
+    assert result["worker"]["reused_validated_result"] is True
+    assert finalized[0]["status"] == "commit_ready"
+    assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:
