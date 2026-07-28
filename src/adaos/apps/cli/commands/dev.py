@@ -1543,8 +1543,16 @@ def dev_skill_run(
         raise typer.Exit(1)
 
     mgr = _mgr()
+    previous_execution_mode = os.environ.get("ADAOS_DEV_TOOL_EXECUTION_MODE")
+    os.environ["ADAOS_DEV_TOOL_EXECUTION_MODE"] = "oneshot"
     try:
-        result = mgr.run_dev_tool(name, tool, payload_obj, timeout=timeout, slot=slot)
+        try:
+            result = mgr.run_dev_tool(name, tool, payload_obj, timeout=timeout, slot=slot)
+        finally:
+            if previous_execution_mode is None:
+                os.environ.pop("ADAOS_DEV_TOOL_EXECUTION_MODE", None)
+            else:
+                os.environ["ADAOS_DEV_TOOL_EXECUTION_MODE"] = previous_execution_mode
     except Exception as exc:
         typer.secho(f"run failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc

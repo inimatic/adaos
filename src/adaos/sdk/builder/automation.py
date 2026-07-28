@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from typing import Any
 
 
 def _service():
     from adaos.services.builder.automation import BuilderAutomationService
 
-    return BuilderAutomationService.from_context()
+    execution_mode = str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower()
+    return BuilderAutomationService.from_context(background=execution_mode != "oneshot")
 
 
 def start(

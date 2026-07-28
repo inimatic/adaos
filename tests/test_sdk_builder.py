@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from adaos.sdk.builder import artifacts, automation, preview
+from adaos.services.builder.automation import BuilderAutomationService
 
 
 class _AutomationService:
@@ -20,6 +21,21 @@ class _AutomationService:
     def projection(self, **kwargs):
         self.calls.append(("projection", kwargs))
         return {"ok": True, "automation": {"status": "running", "iteration": 2}}
+
+
+def test_automation_service_runs_inline_for_one_shot_dev_tool(monkeypatch) -> None:
+    service = _AutomationService()
+    calls: list[dict] = []
+
+    def from_context(*, background: bool = True):
+        calls.append({"background": background})
+        return service
+
+    monkeypatch.setattr(BuilderAutomationService, "from_context", from_context)
+    monkeypatch.setenv("ADAOS_DEV_TOOL_EXECUTION_MODE", "oneshot")
+
+    assert automation._service() is service
+    assert calls == [{"background": False}]
 
 
 def test_automation_facade_returns_projection_without_exposing_service(monkeypatch) -> None:
