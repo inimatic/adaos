@@ -2493,7 +2493,10 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
     assert result["broadcast_update_bytes"] == len(update)
     assert result["direct_client_broadcast_count"] == 1
     assert result["direct_client_broadcast_failed"] == 0
-    assert client.messages == [gateway_module.create_update_message(update)]
+    assert client.messages == [
+        gateway_module.create_update_message(store.replace_calls[-1]["snapshot"])
+    ]
+    assert result["direct_client_broadcast_bytes"] == len(store.replace_calls[-1]["snapshot"])
     assert result["full_state_update_bytes"] == len(store.replace_calls[-1]["snapshot"])
     assert store.replace_calls[-1]["snapshot"] != update
     assert len(store.replace_calls[-1]["snapshot"]) > len(update)

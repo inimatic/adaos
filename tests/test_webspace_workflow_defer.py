@@ -644,7 +644,7 @@ def test_builder_revision_payload_only_preview_persists_live_snapshot(monkeypatc
     assert result["payload_only_rebuild"] is True
     assert len(refresh_calls) == 1
     assert refresh_calls[0][1]["persist_repair"] is True
-    assert refresh_calls[0][1]["force_full_state_update"] is False
+    assert refresh_calls[0][1]["force_full_state_update"] is True
 
 
 def test_builder_revision_apply_skips_projection_refresh_by_default(monkeypatch) -> None:

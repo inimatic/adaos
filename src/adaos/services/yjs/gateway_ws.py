@@ -6996,11 +6996,16 @@ async def _apply_room_materialized_payload(
             phase_timings_ms["total"] = _elapsed_ms_since(total_started)
         direct_client_broadcast_count = 0
         direct_client_broadcast_failed = 0
-        if update:
+        client_broadcast_update = (
+            full_state_update
+            if force_full_state_update and full_state_update
+            else update
+        )
+        if client_broadcast_update:
             stage_started = time.perf_counter()
             clients = list(getattr(room, "clients", []) or [])
             if clients:
-                message = create_update_message(bytes(update))
+                message = create_update_message(bytes(client_broadcast_update))
 
                 async def _send_materialized_update(client: Any) -> bool:
                     try:
@@ -7040,6 +7045,7 @@ async def _apply_room_materialized_payload(
             "full_state_update_bytes": len(full_state_update or b""),
             "direct_client_broadcast_count": int(direct_client_broadcast_count),
             "direct_client_broadcast_failed": int(direct_client_broadcast_failed),
+            "direct_client_broadcast_bytes": len(client_broadcast_update or b""),
         }
     except BaseException as exc:
         if _is_control_flow_base_exception(exc):

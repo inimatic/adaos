@@ -10007,7 +10007,13 @@ async def rebuild_webspace_from_sources(
         )
         and _rebuild_action_refreshes_live_room(requested_action)
     )
-    force_full_state_update = bool(fresh_doc_rebuild and ystore_reset)
+    force_full_state_update = bool(
+        fresh_doc_rebuild
+        and (
+            ystore_reset
+            or (requested_action == "builder_revision_apply" and payload_only_rebuild)
+        )
+    )
     if should_refresh_live_room:
         if _defer_live_room_refresh_for_rebuild(requested_action):
             persist_repair = not (
