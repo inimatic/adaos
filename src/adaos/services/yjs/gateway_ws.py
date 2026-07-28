@@ -122,6 +122,7 @@ _YWS_ATTEMPT_HISTORY: deque[float] = deque(maxlen=1024)
 _YWS_CLIENT_ATTEMPT_HISTORY: dict[str, deque[float]] = {}
 _YWS_CLIENT_SHORT_SESSION_HISTORY: dict[str, deque[float]] = {}
 _YWS_GUARD_QUARANTINE_UNTIL: dict[str, float] = {}
+_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL: dict[str, float] = {}
 _YWS_GUARD_LAST_LOG_AT: dict[str, float] = {}
 _YWS_GUARD_LAST_NOTIFY_AT: dict[str, float] = {}
 _YWS_GUARD_INCIDENTS: dict[str, dict[str, float]] = {}
@@ -435,6 +436,7 @@ _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S
 _YWS_GUARD_NOTIFY_INTERVAL_S = _env_float("ADAOS_YWS_GUARD_NOTIFY_INTERVAL_S", 30.0, minimum=1.0)
 _YWS_GUARD_REJECT_HOLD_MAX_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_MAX_SEC", 0.0, minimum=0.0)
 _YWS_GUARD_REJECT_HOLD_STEP_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_STEP_SEC", 1.0, minimum=0.05)
+_YWS_GUARD_RECOVERY_IN_PROGRESS_S = _env_float("ADAOS_YWS_GUARD_RECOVERY_IN_PROGRESS_S", 10.0, minimum=1.0)
 _YWS_GUARD_MIN_STABLE_SESSION_S = _env_float("ADAOS_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0, minimum=0.0)
 _YWS_GUARD_SHORT_SESSION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0, minimum=1.0)
 _YWS_GUARD_SHORT_SESSION_LIMIT = _env_int("ADAOS_YWS_GUARD_SHORT_SESSION_LIMIT", 3, minimum=1)
@@ -4247,6 +4249,7 @@ def clear_yws_guard_state_for_webspace(
         client_attempt_history_cleared = _drop_prefixed(_YWS_CLIENT_ATTEMPT_HISTORY, history_prefix)
         client_short_session_history_cleared = _drop_prefixed(_YWS_CLIENT_SHORT_SESSION_HISTORY, history_prefix)
         quarantine_cleared = _drop_prefixed(_YWS_GUARD_QUARANTINE_UNTIL, history_prefix)
+        recovery_in_flight_cleared = _drop_prefixed(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL, history_prefix)
         incident_cleared = _drop_prefixed(_YWS_GUARD_INCIDENTS, history_prefix)
         log_cleared = _drop_prefixed(_YWS_GUARD_LAST_LOG_AT, log_prefix)
         notify_cleared = _drop_prefixed(_YWS_GUARD_LAST_NOTIFY_AT, log_prefix)
@@ -4255,6 +4258,7 @@ def clear_yws_guard_state_for_webspace(
             + client_attempt_history_cleared
             + client_short_session_history_cleared
             + quarantine_cleared
+            + recovery_in_flight_cleared
             + incident_cleared
             + log_cleared
             + notify_cleared
@@ -4275,6 +4279,7 @@ def clear_yws_guard_state_for_webspace(
         "client_attempt_history_cleared": client_attempt_history_cleared,
         "client_short_session_history_cleared": client_short_session_history_cleared,
         "quarantine_cleared": quarantine_cleared,
+        "recovery_in_flight_cleared": recovery_in_flight_cleared,
         "incident_cleared": incident_cleared,
         "log_cleared": log_cleared,
         "notify_cleared": notify_cleared,
@@ -4368,6 +4373,7 @@ def _yws_guard_reject_hold_seconds(reason: str, diag: dict[str, Any] | None) -> 
     if reason_token not in {
         "client_reconnect_storm",
         "client_reconnect_backoff",
+        "client_recovery_in_progress",
         "client_short_session_storm",
         "webspace_reconnect_storm",
         "webspace_reconnect_backoff",
@@ -4730,6 +4736,12 @@ def _yws_guard_reject_reason(
     webspace_distinct_clients_10s = 0
     client_15s = 0
     client_short_sessions = 0
+    active_client_total = _active_yws_connection_total_for_client(
+        webspace_key,
+        dev_key,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
     client_reconnect_storm = False
     client_short_session_storm = False
     webspace_reconnect_storm = False
@@ -4738,6 +4750,9 @@ def _yws_guard_reject_reason(
     quarantine_until = 0.0
     quarantine_ttl_s: float | None = None
     quarantine_incident_count: int | None = None
+    recovery_in_progress_until = 0.0
+    recovery_in_progress_ttl_s: float | None = None
+    recovery_admission_reserved = False
     route_dependency: dict[str, Any] = {}
     dependency_recovery_allowed = False
     dependency_recovery_reason = ""
@@ -4767,6 +4782,31 @@ def _yws_guard_reject_reason(
         _YWS_GUARD_DIAG["last_dependency_recovery_route_reason"] = str(route_dependency.get("reason") or "")
 
     with _YWS_STORM_LOCK:
+        def _reserve_recovery_admission_locked(trigger: str) -> bool:
+            nonlocal recovery_in_progress_until, recovery_in_progress_ttl_s
+            nonlocal recovery_admission_reserved, dependency_recovery_allowed, dependency_recovery_reason
+            existing_until = float(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.get(client_key) or 0.0)
+            if existing_until > now:
+                recovery_in_progress_until = existing_until
+                recovery_in_progress_ttl_s = max(0.0, existing_until - now)
+                return False
+            ttl_s = max(1.0, float(_YWS_GUARD_RECOVERY_IN_PROGRESS_S))
+            recovery_in_progress_until = now + ttl_s
+            recovery_in_progress_ttl_s = ttl_s
+            _YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL[client_key] = recovery_in_progress_until
+            recovery_admission_reserved = True
+            dependency_recovery_allowed = True
+            dependency_recovery_reason = str(trigger or "").strip() or "client_recovery_admission"
+            _record_dependency_recovery()
+            _YWS_GUARD_DIAG["recovery_admission_reserved_total"] = int(
+                _YWS_GUARD_DIAG.get("recovery_admission_reserved_total") or 0
+            ) + 1
+            _YWS_GUARD_DIAG["last_recovery_admission_at"] = now
+            _YWS_GUARD_DIAG["last_recovery_admission_webspace_id"] = webspace_key
+            _YWS_GUARD_DIAG["last_recovery_admission_dev_id"] = dev_key
+            _YWS_GUARD_DIAG["last_recovery_admission_reason"] = dependency_recovery_reason
+            return True
+
         cutoff_60 = now - 60.0
         while _YWS_OPEN_HISTORY and _YWS_OPEN_HISTORY[0] < cutoff_60:
             _YWS_OPEN_HISTORY.popleft()
@@ -4800,6 +4840,9 @@ def _yws_guard_reject_reason(
         for key0 in list(_YWS_GUARD_QUARANTINE_UNTIL.keys()):
             if float(_YWS_GUARD_QUARANTINE_UNTIL.get(key0) or 0.0) <= now:
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(key0, None)
+        for key0 in list(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.keys()):
+            if float(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.get(key0) or 0.0) <= now:
+                _YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.pop(key0, None)
         recent_10s, webspace_distinct_clients_10s = _yws_client_recent_open_counts_locked(webspace_key, now)
         client_key = _yws_guard_client_history_key(
             webspace_key,
@@ -4816,9 +4859,17 @@ def _yws_guard_reject_reason(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
         if client_quarantine_until > now:
-            quarantine_until = client_quarantine_until
-            quarantine_ttl_s = max(0.0, client_quarantine_until - now)
-            reason = "client_reconnect_backoff"
+            if active_total <= 0 and _dependency_allows_recovery("client_reconnect_backoff_no_active_yws"):
+                _YWS_GUARD_QUARANTINE_UNTIL.pop(client_key, None)
+                cleared_client_quarantine = True
+                if not _reserve_recovery_admission_locked("client_reconnect_backoff_no_active_yws"):
+                    reason = "client_recovery_in_progress"
+                    quarantine_until = recovery_in_progress_until
+                    quarantine_ttl_s = recovery_in_progress_ttl_s
+            else:
+                quarantine_until = client_quarantine_until
+                quarantine_ttl_s = max(0.0, client_quarantine_until - now)
+                reason = "client_reconnect_backoff"
         elif webspace_quarantine_until > now:
             if active_total > 0:
                 reason = "webspace_reconnect_backoff"
@@ -4841,7 +4892,18 @@ def _yws_guard_reject_reason(
                     webspace_recent_10s=recent_10s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
                 )
-                if (
+                if active_client_total > 0:
+                    reason = "client_recovery_in_progress"
+                    quarantine_until = now + max(1.0, float(_YWS_GUARD_RECOVERY_IN_PROGRESS_S))
+                    quarantine_ttl_s = max(1.0, float(_YWS_GUARD_RECOVERY_IN_PROGRESS_S))
+                    recovery_in_progress_until = quarantine_until
+                    recovery_in_progress_ttl_s = quarantine_ttl_s
+                elif active_total <= 0 and _dependency_allows_recovery("client_reconnect_storm_no_active_yws"):
+                    if not _reserve_recovery_admission_locked("client_reconnect_storm_no_active_yws"):
+                        reason = "client_recovery_in_progress"
+                        quarantine_until = recovery_in_progress_until
+                        quarantine_ttl_s = recovery_in_progress_ttl_s
+                elif (
                     webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
                     and client_15s < _yws_single_client_reconnect_escalation_limit()
                 ):
@@ -4915,6 +4977,7 @@ def _yws_guard_reject_reason(
                 _YWS_GUARD_DIAG["last_reject_incident_count"] = quarantine_incident_count
     diag = {
         "active_total": active_total,
+        "active_client_total": active_client_total,
         "recent_open_10s": recent_10s,
         "webspace_distinct_clients_10s": webspace_distinct_clients_10s,
         "client_open_15s": client_15s,
@@ -4929,6 +4992,9 @@ def _yws_guard_reject_reason(
         "quarantine_until": quarantine_until,
         "quarantine_ttl_s": quarantine_ttl_s,
         "quarantine_incident_count": quarantine_incident_count,
+        "recovery_admission_reserved": recovery_admission_reserved,
+        "recovery_in_progress_until": recovery_in_progress_until,
+        "recovery_in_progress_ttl_s": recovery_in_progress_ttl_s,
         "route_dependency": route_dependency,
         "dependency_recovery_allowed": dependency_recovery_allowed,
         "dependency_recovery_reason": dependency_recovery_reason,

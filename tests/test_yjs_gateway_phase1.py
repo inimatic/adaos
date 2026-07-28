@@ -153,6 +153,7 @@ def _clear_yws_guard_state() -> None:
     gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
     gateway_module._YWS_CLIENT_SHORT_SESSION_HISTORY.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
+    gateway_module._YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.clear()
     gateway_module._YWS_GUARD_INCIDENTS.clear()
 
 
@@ -3083,6 +3084,7 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
         "client_attempt_history_cleared": 0,
         "client_short_session_history_cleared": 0,
         "quarantine_cleared": 0,
+        "recovery_in_flight_cleared": 0,
         "incident_cleared": 0,
         "log_cleared": 0,
         "notify_cleared": 0,
@@ -4269,6 +4271,82 @@ def test_yws_guard_rejects_sustained_single_client_reconnect_loop(monkeypatch) -
     reason_again, diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
     assert reason_again == "client_reconnect_backoff"
     assert diag_again["quarantine_ttl_s"] is not None
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_admits_single_recovery_when_no_active_yws_and_route_ready(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECOVERY_IN_PROGRESS_S", 10.0)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda *, now_ts=None: {
+            "ready": True,
+            "reason": "route_signal_ready",
+            "route_status": "ready",
+        },
+    )
+
+    for _idx in range(6):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-a")
+
+    reason, diag = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+
+    assert reason == ""
+    assert diag["active_total"] == 0
+    assert diag["client_reconnect_storm"] is True
+    assert diag["dependency_recovery_allowed"] is True
+    assert diag["dependency_recovery_reason"] == "client_reconnect_storm_no_active_yws"
+    assert diag["recovery_admission_reserved"] is True
+    assert diag["recovery_in_progress_ttl_s"] == 10.0
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+
+    reason_again, diag_again = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+    assert reason_again == "client_recovery_in_progress"
+    assert diag_again["quarantine_ttl_s"] is not None
+    assert diag_again["quarantine_ttl_s"] <= 10.0
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_reports_recovery_in_progress_for_active_scoped_client(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECOVERY_IN_PROGRESS_S", 10.0)
+    client_key = gateway_module._yws_client_limit_key("dev-hot", browser_session_id="tab-a")
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
+    gateway_module._ACTIVE_YWS_CLIENTS["desktop"] = {client_key: 1}
+
+    for _idx in range(6):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-a")
+
+    reason, diag = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+
+    assert reason == "client_recovery_in_progress"
+    assert diag["active_total"] == 1
+    assert diag["active_client_total"] == 1
+    assert diag["client_reconnect_storm"] is True
+    assert diag["quarantine_ttl_s"] == 10.0
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
 
 

@@ -261,12 +261,53 @@ def test_detach_and_deny_have_distinct_admission_policy(monkeypatch) -> None:
     assert detached["connection_state"] == "detached"
     assert access_links.authorize_link("member", "member-1") == (True, None)
 
+    reconnected = access_links.touch_member_link("member-1", online=True, connection_state="connected")
+
+    assert reconnected is not None
+    assert reconnected["admission_policy"] == "allow"
+    assert reconnected["detached_at"] is None
+    assert reconnected["connection_state"] == "connected"
+
     denied = access_links.deny_link("member", "member-1")
 
     assert denied["admission_policy"] == "deny"
     assert denied["revoked"] is True
     assert denied["connection_state"] == "denied"
     assert access_links.authorize_link("member", "member-1") == (False, "denied")
+
+
+def test_touch_member_link_emits_reactivation_event_after_detached_reconnect(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    emitted: list[tuple[str, dict[str, object], str | None]] = []
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(
+        "adaos.services.eventbus.emit",
+        lambda _bus, topic, payload, source=None: emitted.append((topic, dict(payload), source)),
+    )
+
+    access_links.touch_member_link("member-1", online=True, connection_state="connected")
+    access_links.detach_link("member", "member-1")
+    emitted.clear()
+
+    reconnected = access_links.touch_member_link("member-1", online=True, connection_state="connected")
+
+    assert reconnected is not None
+    assert reconnected["admission_policy"] == "allow"
+    assert emitted == [
+        (
+            "subnet.member.access.reactivated",
+            {
+                "node_id": "member-1",
+                "reason": "member_link.reactivated",
+                "previous_admission_policy": "detached",
+                "admission_policy": "allow",
+                "connection_state": "connected",
+                "online": True,
+            },
+            "access_links",
+        )
+    ]
 
 
 def test_redevice_touch_merges_policy_identity_aliases(monkeypatch) -> None:
