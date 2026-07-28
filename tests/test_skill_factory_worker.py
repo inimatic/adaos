@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -509,6 +511,54 @@ def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkey
     assert environment["PATH"] == "C:/bin"
     assert "OPENAI_API_KEY" not in environment
     assert "ADAOS_TOKEN" not in environment
+
+
+def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PATH", "C:/global-bin")
+    repo_root = tmp_path / "adaos"
+    executor = SubprocessCodexExecutor(repo_root=repo_root)
+
+    environment = executor._execution_environment()
+
+    assert environment["ADAOS_REPO_ROOT"] == str(repo_root.resolve())
+    assert environment["PYTHONPATH"] == str(repo_root.resolve() / "src")
+    assert environment["ADAOS_PYTHON"] == str(Path(sys.executable).resolve())
+    assert environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).resolve().parent)
+    assert environment["PYTHONUTF8"] == "1"
+    assert environment["PYTHONIOENCODING"] == "utf-8"
+    assert "OPENAI_API_KEY" not in environment
+
+
+def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+        executor=lambda **_kwargs: CodexRunResult(returncode=0),
+    )
+    assignment = {
+        "task_id": "task.prompt",
+        "target": {"type": "skill", "id": "demo"},
+        "realize_request": {
+            "target": {"type": "skill", "id": "demo"},
+            "artifacts": {"implementation_brief": "Keep Russian text intact."},
+        },
+        "forge": {"sparse_paths": ["skills/demo/"]},
+    }
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert "ADAOS_PYTHON" in prompt
+    assert "authoritative SDK" in prompt
+    assert "PowerShell string pipeline" in prompt
+    assert "UTF-8" in prompt
 
 
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(tmp_path: Path) -> None:

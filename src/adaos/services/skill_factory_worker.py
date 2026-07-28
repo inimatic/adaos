@@ -100,10 +100,12 @@ class SubprocessCodexExecutor:
         model: str | None = None,
         timeout_seconds: int = 4 * 60 * 60,
         sandbox_mode: str | None = None,
+        repo_root: Path | None = None,
     ) -> None:
         self.executable = executable
         self.model = str(model or "").strip() or None
         self.timeout_seconds = max(60, int(timeout_seconds))
+        self.repo_root = Path(repo_root).resolve() if repo_root is not None else None
         configured_sandbox = str(sandbox_mode or os.getenv("ADAOS_LOCAL_CODEX_SANDBOX") or "").strip()
         # Native Codex workspace sandboxing is not currently writable in our
         # Windows host profile.  Local-process is an explicitly trusted debug
@@ -146,7 +148,7 @@ class SubprocessCodexExecutor:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=self._bounded_environment(),
+                env=self._execution_environment(),
             )
             try:
                 process.communicate(input=prompt, timeout=self.timeout_seconds)
@@ -212,6 +214,26 @@ class SubprocessCodexExecutor:
         }
         return {key: value for key, value in os.environ.items() if key.upper() in allowed and value}
 
+    def _execution_environment(self) -> dict[str, str]:
+        environment = self._bounded_environment()
+        environment["PYTHONUTF8"] = "1"
+        environment["PYTHONIOENCODING"] = "utf-8"
+        python_path = Path(sys.executable).resolve()
+        environment["ADAOS_PYTHON"] = str(python_path)
+        environment["VIRTUAL_ENV"] = str(python_path.parent.parent)
+        inherited_path = str(environment.get("PATH") or "").strip()
+        environment["PATH"] = os.pathsep.join(
+            dict.fromkeys(
+                entry
+                for entry in (str(python_path.parent), inherited_path)
+                if entry
+            )
+        )
+        if self.repo_root is not None:
+            environment["ADAOS_REPO_ROOT"] = str(self.repo_root)
+            environment["PYTHONPATH"] = str(self.repo_root / "src")
+        return environment
+
 
 class LocalSkillFactoryWorker:
     """One-task local Skill Factory worker used by Prompt IDE automation."""
@@ -235,7 +257,7 @@ class LocalSkillFactoryWorker:
         self.dev_scenarios_root = Path(dev_scenarios_root)
         self.runs_root = Path(runs_root or (self.state_dir / "skill_factory" / "local_runs"))
         self.node_id = node_id
-        self.executor = executor or SubprocessCodexExecutor()
+        self.executor = executor or SubprocessCodexExecutor(repo_root=self.repo_root)
         self.progress_callback = progress_callback
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
@@ -597,10 +619,11 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
 4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
-6. Run relevant bounded checks. Fix failures caused by your changes.
+6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK source exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
-9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields."""
+9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields.
+10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
