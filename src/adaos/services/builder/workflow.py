@@ -611,9 +611,19 @@ class BuilderWorkflowService:
             current["source_message_ids"] = source_message_ids[-100:]
             add_change_evidence(metadata.get("change_id"))
             invalidate_delivery("change_set_extended")
-            if any(item.get("lane") == "prototype" for item in additions):
+            prototype_added = any(item.get("lane") == "prototype" for item in additions)
+            prototype_pending = any(
+                item.get("lane") == "prototype"
+                and item.get("status") not in {"resolved", "deferred"}
+                for item in current.get("issues") or []
+                if isinstance(item, Mapping)
+            )
+            if prototype_added or prototype_pending:
                 current["route"] = "prototype_first"
-                update_change_set(status="changes_requested", gate="prototype")
+                update_change_set(
+                    status="changes_requested" if prototype_added else "in_progress",
+                    gate="prototype",
+                )
             else:
                 update_change_set(status="in_progress", gate="automation")
             return

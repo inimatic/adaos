@@ -176,6 +176,15 @@ class BuilderAutomationService:
         requested_change_set_id = str(change_set_id or active_change_set_id).strip() or None
         if change_set_id and active_change_set_id and str(change_set_id).strip() != active_change_set_id:
             raise ValueError("change_set_id does not match the active Builder change set")
+        if (
+            active_change_set_id
+            and str(active_change_set.get("status") or "")
+            not in {"published", "rejected", "superseded"}
+            and str(active_change_set.get("gate") or "") != "automation"
+        ):
+            raise ValueError(
+                "the active change set must pass its Prototype approval gate before Automation starts"
+            )
         with _LOCK:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:

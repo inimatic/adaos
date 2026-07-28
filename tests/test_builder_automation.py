@@ -162,6 +162,35 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     assert started["session"]["change_id"] in workflow["change_set"]["member_change_ids"]
 
 
+def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-layout",
+            "request": "Add a favorites section.",
+            "issues": [
+                {
+                    "issue_id": "favorites-layout",
+                    "title": "Add a favorites section",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Favorites is visible in the navigation."],
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match="Prototype approval gate"):
+        service.start_from_execute(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Implement favorites.",
+            webspace_id="prompt-dev",
+        )
+
+
 def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"

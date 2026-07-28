@@ -153,6 +153,51 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
+def test_automation_followup_does_not_skip_pending_prototype_gate(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-layout",
+            "request": "Add a favorites section.",
+            "issues": [
+                {
+                    "issue_id": "layout",
+                    "title": "Add favorites layout",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Favorites is visible."],
+                }
+            ],
+        },
+    )
+
+    extended = service.transition(
+        "scenario",
+        "recipes",
+        "change_issues_added",
+        metadata={
+            "change_set_id": "CS-layout",
+            "change_id": "change-storage",
+            "request": "Persist favorites.",
+            "issues": [
+                {
+                    "issue_id": "storage",
+                    "title": "Persist favorites",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Favorites survive restart."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    assert extended["change_set"]["gate"] == "prototype"
+    assert extended["change_set"]["route"] == "prototype_first"
+
+
 def test_change_set_routes_functional_work_directly_to_automation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
