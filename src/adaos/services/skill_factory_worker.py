@@ -758,14 +758,14 @@ class LocalSkillFactoryWorker:
             if not source.exists():
                 raise FileNotFoundError(f"DEV scenario not found: {source}")
             shutil.copytree(source, destination)
-            skill_id = self._companion_skill_id(assignment)
-            skill_source = self.dev_skills_root / skill_id
-            skill_destination = workspace / "skills" / skill_id
-            if not skill_source.exists():
-                raise FileNotFoundError(
-                    f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
-                )
-            shutil.copytree(skill_source, skill_destination)
+            for skill_id in self._companion_skill_ids(assignment):
+                skill_source = self.dev_skills_root / skill_id
+                skill_destination = workspace / "skills" / skill_id
+                if not skill_source.exists():
+                    raise FileNotFoundError(
+                        f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
+                    )
+                shutil.copytree(skill_source, skill_destination)
             automation_snapshot = (
                 self.state_dir
                 / "builder"
@@ -789,17 +789,29 @@ class LocalSkillFactoryWorker:
         return None
 
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
+        return self._companion_skill_ids(assignment)[0]
+
+    def _companion_skill_ids(self, assignment: Mapping[str, Any]) -> list[str]:
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         target = dict(assignment.get("target") or {})
-        return _safe_token(artifacts.get("companion_skill_id") or f"{target.get('id')}_skill", fallback="generated_skill")
+        values = artifacts.get("companion_skill_ids")
+        if not isinstance(values, (list, tuple)):
+            values = [artifacts.get("companion_skill_id") or f"{target.get('id')}_skill"]
+        result: list[str] = []
+        for value in values:
+            token = _safe_token(value, fallback="")
+            if token and token not in result:
+                result.append(token)
+        return result or ["generated_skill"]
 
     def _build_packet(self, assignment: Mapping[str, Any], workspace: Path, input_dir: Path) -> dict[str, Any]:
         request = dict(assignment.get("realize_request") or {})
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill")
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
-        companion = self._companion_skill_id(assignment) if target_type == "scenario" else target_id
+        companions = self._companion_skill_ids(assignment) if target_type == "scenario" else [target_id]
+        companion = companions[0]
         source = dict(request.get("source") or {})
         artifacts = dict(request.get("artifacts") or {})
         brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()
@@ -811,6 +823,7 @@ class LocalSkillFactoryWorker:
             "task_id": assignment.get("task_id"),
             "target": target,
             "companion_skill_id": companion,
+            "companion_skill_ids": companions,
             "allowed_paths": allowed,
             "acceptance": dict(assignment.get("acceptance") or {}),
             "constraints": dict(assignment.get("constraints") or {}),
@@ -830,7 +843,7 @@ This task returns the completed Automation result to Prototype. Edit only the sc
 When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as the immutable previous Automation edition supplied alongside the current Prototype requirements. Use it as implementation context, but never edit it.
 """
         required_result = """1. Inspect all existing files under the target paths before editing.
-2. Edit only the current scenario's declarative prototype files; do not modify the companion skill.
+2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
 3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
 4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
 5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
@@ -838,7 +851,7 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect all existing files under the target paths before editing.
 2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
-3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
+3. For a scenario prototype, connect `scenarios/{target_id}` to every required companion skill ({companions_label}) through `depends`, declarative actions and data routes as appropriate.
 4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
 6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK source exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
@@ -849,6 +862,7 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
+            companions_label=", ".join(companions),
             allowed_paths=", ".join(allowed),
         )
         prompt = f"""# AdaOS local realization task
@@ -859,7 +873,7 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 
 - Type: {target_type}
 - ID: {target_id}
-- Companion skill: {companion}
+- Companion skills: {", ".join(companions)}
 
 ## Approved implementation brief
 
@@ -1063,8 +1077,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
         target = dict(assignment.get("target") or {})
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
-        skill_id = self._companion_skill_id(assignment) if target.get("type") == "scenario" else target_id
-        required = [workspace / "skills" / skill_id / "skill.yaml", workspace / "skills" / skill_id / "handlers" / "main.py"]
+        skill_ids = self._companion_skill_ids(assignment) if target.get("type") == "scenario" else [target_id]
+        required = [
+            path
+            for skill_id in skill_ids
+            for path in (
+                workspace / "skills" / skill_id / "skill.yaml",
+                workspace / "skills" / skill_id / "handlers" / "main.py",
+            )
+        ]
         if target.get("type") == "scenario":
             required.append(workspace / "scenarios" / target_id / "scenario.yaml")
         for path in required:
@@ -1367,8 +1388,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         sources: list[tuple[Path, Path]] = []
         if target.get("type") == "scenario":
             sources.append((workspace / "scenarios" / target_id, self.dev_scenarios_root / target_id))
-            skill_id = self._companion_skill_id(assignment)
-            sources.append((workspace / "skills" / skill_id, self.dev_skills_root / skill_id))
+            sources.extend(
+                (workspace / "skills" / skill_id, self.dev_skills_root / skill_id)
+                for skill_id in self._companion_skill_ids(assignment)
+            )
         else:
             sources.append((workspace / "skills" / target_id, self.dev_skills_root / target_id))
         snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})

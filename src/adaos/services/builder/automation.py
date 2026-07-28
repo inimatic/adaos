@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 
@@ -228,11 +228,12 @@ class BuilderAutomationService:
                 raise ValueError(
                     "Automation is already the active process; submit a new Automation iteration instead"
                 )
-            companion_skill_id = self._resolve_companion_skill_id(kind, project_id)
+            companion_skill_ids = self._resolve_companion_skill_ids(kind, project_id)
+            companion_skill_id = companion_skill_ids[0]
             created_artifacts = self._ensure_automation_artifacts_created(
                 kind=kind,
                 project_id=project_id,
-                companion_skill_id=companion_skill_id,
+                companion_skill_ids=companion_skill_ids,
                 implementation_brief=brief,
             )
             session = {
@@ -241,6 +242,7 @@ class BuilderAutomationService:
                 "object_type": kind,
                 "object_id": project_id,
                 "companion_skill_id": companion_skill_id,
+                "companion_skill_ids": companion_skill_ids,
                 "webspace_id": str(webspace_id or "desktop"),
                 "conversation_id": str(conversation_id or "").strip() or None,
                 "topic_id": f"prompt-project:{kind}:{project_id}",
@@ -297,13 +299,13 @@ class BuilderAutomationService:
         *,
         kind: str,
         project_id: str,
-        companion_skill_id: str,
+        companion_skill_ids: Sequence[str],
         implementation_brief: str,
     ) -> list[dict[str, Any]]:
         service = self.workspace_service or BuilderWorkspaceService.from_context()
         artifacts = [(kind, project_id)]
         if kind == "scenario":
-            artifacts.append(("skill", companion_skill_id))
+            artifacts.extend(("skill", skill_id) for skill_id in companion_skill_ids)
 
         created: list[dict[str, Any]] = []
         for artifact_kind, artifact_id in artifacts:
@@ -330,21 +332,34 @@ class BuilderAutomationService:
             )
         return created
 
-    def _resolve_companion_skill_id(self, kind: str, project_id: str) -> str:
-        """Prefer a scenario's declared runtime skill over a name convention."""
+    def _resolve_companion_skill_ids(self, kind: str, project_id: str) -> list[str]:
+        """Resolve every declared scenario skill, retaining the conventional primary."""
         if kind != "scenario":
-            return project_id
+            return [project_id]
 
         scenario_root = self.dev_scenarios_root / project_id
-        manifest: Mapping[str, Any] = {}
-        path = scenario_root / "scenario.yaml"
-        if path.is_file():
+        manifests: list[Mapping[str, Any]] = []
+        paths = [scenario_root / "scenario.yaml"]
+        previous_manifest = (
+            self.state_dir
+            / "builder"
+            / "workflow_snapshots"
+            / "scenario"
+            / project_id
+            / "automation"
+            / "scenario.yaml"
+        )
+        if previous_manifest.is_file():
+            paths.append(previous_manifest)
+        for path in paths:
+            if not path.is_file():
+                continue
             try:
                 value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
             except (OSError, ValueError, yaml.YAMLError):
                 value = {}
             if isinstance(value, Mapping):
-                manifest = value
+                manifests.append(value)
 
         candidates: list[str] = []
 
@@ -358,19 +373,35 @@ class BuilderAutomationService:
                 if token and token not in candidates:
                     candidates.append(token)
 
-        runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
-        runtime_skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
-        skills = manifest.get("skills") if isinstance(manifest.get("skills"), Mapping) else {}
-        add(runtime_skills.get("required"))
-        add(skills.get("required"))
-        add(manifest.get("depends"))
+        for manifest in manifests:
+            runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
+            runtime_skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+            skills = manifest.get("skills") if isinstance(manifest.get("skills"), Mapping) else {}
+            add(runtime_skills.get("required"))
+            add(skills.get("required"))
+            add(manifest.get("depends"))
 
         conventional = f"{project_id}_skill"
         if conventional in candidates:
-            return conventional
-        if candidates:
-            return candidates[0]
-        return conventional
+            candidates.remove(conventional)
+            candidates.insert(0, conventional)
+        return candidates or [conventional]
+
+    def _resolve_companion_skill_id(self, kind: str, project_id: str) -> str:
+        """Compatibility accessor for the primary scenario companion skill."""
+        return self._resolve_companion_skill_ids(kind, project_id)[0]
+
+    @staticmethod
+    def _session_companion_skill_ids(session: Mapping[str, Any]) -> list[str]:
+        values = session.get("companion_skill_ids")
+        if not isinstance(values, (list, tuple)):
+            values = [session.get("companion_skill_id")]
+        result: list[str] = []
+        for value in values:
+            token = _safe_token(value, fallback="")
+            if token and token not in result:
+                result.append(token)
+        return result
 
     def submit_turn(
         self,
@@ -785,6 +816,7 @@ class BuilderAutomationService:
                 "type": str(session.get("object_type") or ""),
                 "id": str(session.get("object_id") or ""),
                 "companion_skill_id": str(session.get("companion_skill_id") or "") or None,
+                "companion_skill_ids": BuilderAutomationService._session_companion_skill_ids(session),
             },
             "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
             "iteration": int(session.get("iteration") or 0),
@@ -1112,7 +1144,8 @@ class BuilderAutomationService:
     def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
         kind = str(session["object_type"])
         project_id = str(session["object_id"])
-        companion = str(session["companion_skill_id"])
+        companions = self._session_companion_skill_ids(session)
+        companion = companions[0] if companions else str(session.get("companion_skill_id") or "")
         sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
         source_artifacts: list[tuple[str, str, Path]] = [
             (
@@ -1122,8 +1155,9 @@ class BuilderAutomationService:
             )
         ]
         if kind == "scenario":
-            sparse_paths.append(f"skills/{companion}/")
-            source_artifacts.append(("skill", companion, self.dev_skills_root / companion))
+            for skill_id in companions:
+                sparse_paths.append(f"skills/{skill_id}/")
+                source_artifacts.append(("skill", skill_id, self.dev_skills_root / skill_id))
         sparse_paths.append(f"docs/requirements/{project_id}/")
         attachments: list[tuple[str, Path, str]] = []
         if kind == "scenario":
@@ -1179,6 +1213,7 @@ class BuilderAutomationService:
                 "implementation_brief": session.get("implementation_brief"),
                 "implementation_brief_path": session.get("brief_path"),
                 "companion_skill_id": companion,
+                "companion_skill_ids": companions,
                 "iteration_instruction": iteration_instruction,
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
@@ -1362,12 +1397,16 @@ class BuilderAutomationService:
                     for item in failed_checkpoints
                 )
                 raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
-            companion_skill_id = str(session.get("companion_skill_id") or "").strip()
-            if companion_skill_id:
-                readiness["skill"] = self._prepare_and_activate_dev_skill(
-                    companion_skill_id,
-                    webspace_id=webspace_id,
-                )
+            companion_skill_ids = self._session_companion_skill_ids(session)
+            if companion_skill_ids:
+                readiness["skills"] = [
+                    self._prepare_and_activate_dev_skill(
+                        skill_id,
+                        webspace_id=webspace_id,
+                    )
+                    for skill_id in companion_skill_ids
+                ]
+                readiness["skill"] = readiness["skills"][0]
 
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -1595,11 +1634,11 @@ class BuilderAutomationService:
         )[:240]
         object_type = str(session.get("object_type") or "").strip().lower().rstrip("s")
         object_id = str(session.get("object_id") or "").strip()
-        companion_skill_id = str(session.get("companion_skill_id") or "").strip()
         primary_artifact = (object_type, object_id)
-        artifacts: list[tuple[str, str]] = []
-        if companion_skill_id:
-            artifacts.append(("skill", companion_skill_id))
+        artifacts: list[tuple[str, str]] = [
+            ("skill", skill_id)
+            for skill_id in self._session_companion_skill_ids(session)
+        ]
         if object_type in {"skill", "scenario"} and object_id and (object_type, object_id) not in artifacts:
             artifacts.append((object_type, object_id))
 

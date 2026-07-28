@@ -113,6 +113,63 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     assert task["result"]["provenance"]["runner_version"].startswith("adaos-local-codex-worker/")
 
 
+def test_local_worker_materializes_and_syncs_all_companion_skills(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _scenario(dev_scenarios, "recipe_book")
+    for skill_id in ("recipe_book_skill", "recipe_book_control_skill"):
+        _core_created_skill_fixture(repo_root, dev_skills, skill_id)
+
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {
+                "implementation_brief": "Implement both declared recipe capabilities.",
+                "companion_skill_id": "recipe_book_skill",
+                "companion_skill_ids": ["recipe_book_skill", "recipe_book_control_skill"],
+            },
+            "repo": {
+                "sparse_paths": [
+                    "scenarios/recipe_book/",
+                    "skills/recipe_book_skill/",
+                    "skills/recipe_book_control_skill/",
+                ]
+            },
+        }
+    )
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        assert "recipe_book_skill, recipe_book_control_skill" in prompt
+        for skill_id in ("recipe_book_skill", "recipe_book_control_skill"):
+            handler = workspace / "skills" / skill_id / "handlers" / "main.py"
+            handler.write_text(
+                handler.read_text(encoding="utf-8") + f"\n# realized {skill_id}\n",
+                encoding="utf-8",
+            )
+        return CodexRunResult(returncode=0, final_message="Implemented both skills.")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    for skill_id in ("recipe_book_skill", "recipe_book_control_skill"):
+        assert f"realized {skill_id}" in (
+            dev_skills / skill_id / "handlers" / "main.py"
+        ).read_text(encoding="utf-8")
+
+
 def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"

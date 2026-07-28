@@ -212,6 +212,39 @@ def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: 
     assert companion == "recipes_control_skill"
 
 
+def test_scenario_automation_retains_all_previous_automation_companions(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    snapshot = (
+        service.state_dir
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "recipes"
+        / "automation"
+    )
+    snapshot.mkdir(parents=True)
+    (snapshot / "scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "recipes",
+                "version": "0.2.0",
+                "depends": ["recipes_skill", "recipes_control_skill"],
+                "runtime": {
+                    "skills": {
+                        "required": ["recipes_skill", "recipes_control_skill"],
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    companions = service._resolve_companion_skill_ids("scenario", "recipes")
+
+    assert companions == ["recipes_skill", "recipes_control_skill"]
+
+
 @pytest.mark.parametrize("corrupted", ["???????? ??????", "Damaged \ufffd text"])
 def test_automation_start_rejects_transport_corrupted_brief_before_writes(
     tmp_path: Path,
@@ -393,6 +426,7 @@ def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> N
         "type": "scenario",
         "id": "recipes",
         "companion_skill_id": "recipes_skill",
+        "companion_skill_ids": ["recipes_skill"],
     }
     assert projection["result_branch"] == result["session"]["last_result"]["branch"]
     assert projection["steps"][-1]["state"] == "completed"
