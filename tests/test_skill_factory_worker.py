@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -676,6 +677,43 @@ def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
             "ok": True,
         }
     ]
+
+
+def test_worker_changed_paths_supports_single_commit_dirty_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=workspace, check=True, capture_output=True)
+    tracked.write_text("changed\n", encoding="utf-8")
+    (workspace / "new.txt").write_text("new\n", encoding="utf-8")
+
+    worker = object.__new__(LocalSkillFactoryWorker)
+
+    assert worker._changed_from_baseline(workspace) == ["tracked.txt", "new.txt"]
+
+
+def test_worker_changed_paths_differs_from_root_after_commit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=workspace, check=True, capture_output=True)
+    tracked.write_text("changed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "result"], cwd=workspace, check=True, capture_output=True)
+
+    worker = object.__new__(LocalSkillFactoryWorker)
+
+    assert worker._changed_from_baseline(workspace) == ["tracked.txt"]
 
 
 def test_codex_executor_discovers_vscode_bundled_cli(monkeypatch, tmp_path: Path) -> None:

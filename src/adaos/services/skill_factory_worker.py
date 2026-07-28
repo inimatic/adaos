@@ -683,8 +683,35 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         return paths
 
     def _changed_from_baseline(self, workspace: Path) -> list[str]:
-        output = _git(["diff", "--name-only", "HEAD~1", "HEAD"], cwd=workspace)
-        return [line.strip().replace("\\", "/") for line in output.splitlines() if line.strip()]
+        # The isolated repository starts with exactly one materialization
+        # commit.  During validation the generated result is still in the
+        # worktree; after finalization it is a second commit.  ``HEAD~1`` is
+        # therefore invalid at the first boundary and also assumes Codex did
+        # not create an intermediate commit.  Always diff from the repository
+        # root and merge the current porcelain paths instead.
+        if not (workspace / ".git").is_dir():
+            # Direct deterministic-validator tests may provide a materialized
+            # tree without the worker's git envelope.  In that case every
+            # source file is conservatively considered in scope.
+            return [
+                path.relative_to(workspace).as_posix()
+                for path in sorted(workspace.rglob("*"))
+                if path.is_file() and ".git" not in path.parts
+            ]
+        roots = _git(["rev-list", "--max-parents=0", "HEAD"], cwd=workspace).splitlines()
+        if not roots:
+            raise RuntimeError("isolated realization workspace has no baseline commit")
+        baseline = roots[-1].strip()
+        committed = _git(["diff", "--name-only", baseline, "HEAD"], cwd=workspace)
+        paths = [
+            line.strip().replace("\\", "/")
+            for line in committed.splitlines()
+            if line.strip()
+        ]
+        for path in self._changed_paths(workspace):
+            if path not in paths:
+                paths.append(path)
+        return paths
 
     def _validate_changed_paths(self, assignment: Mapping[str, Any], changed_paths: list[str]) -> None:
         allowed = [str(item).replace("\\", "/").strip("/") + "/" for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
