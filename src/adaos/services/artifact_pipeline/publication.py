@@ -791,6 +791,7 @@ class ArtifactPublicationService:
         artifact_dir: Path,
         own_package: ArtifactPackageRef,
         checkpoint_change_ids: tuple[str, ...],
+        base_release: ReleasePlan | None = None,
     ) -> tuple[
         PackageCatalog,
         dict[str, tuple[DependencyRequirement, ...]],
@@ -806,6 +807,11 @@ class ArtifactPublicationService:
         }
         archives: dict[str, bytes] = {}
         loaded_releases: set[str] = set()
+        base_packages = (
+            {item.key: item for item in base_release.packages}
+            if base_release is not None
+            else {}
+        )
 
         pending_requirements = list(requirements)
         processed_requirements: set[tuple[str, str, str]] = set()
@@ -858,25 +864,33 @@ class ArtifactPublicationService:
                 pending_requirements.extend(local_requirements)
                 continue
 
-            try:
-                pointer = self.remote.get_channel(requirement.artifact_id, "stable")
-                dependency_plan = self.remote.get_release(
-                    requirement.artifact_id,
-                    pointer.release_digest,
-                )
-            except Exception as exc:
-                status = getattr(exc, "status_code", None)
-                code = str(getattr(exc, "error_code", "") or "")
-                missing = status == 404 or code in {"channel_not_found", "release_not_found"} or isinstance(
-                    exc, FileNotFoundError
-                )
-                if missing and requirement.optional:
-                    continue
-                if missing:
-                    raise PublicationError(
-                        f"required stable dependency is unavailable: {requirement.key}"
-                    ) from exc
-                raise
+            # A channel belongs to a project release set, not necessarily to
+            # every component in that set.  Preserve the dependency selected
+            # by the current stable project release unless the same change set
+            # checkpoints a replacement above.  Only projects without such a
+            # component fall back to an independently published dependency.
+            if requirement.key in base_packages and base_release is not None:
+                dependency_plan = base_release
+            else:
+                try:
+                    pointer = self.remote.get_channel(requirement.artifact_id, "stable")
+                    dependency_plan = self.remote.get_release(
+                        requirement.artifact_id,
+                        pointer.release_digest,
+                    )
+                except Exception as exc:
+                    status = getattr(exc, "status_code", None)
+                    code = str(getattr(exc, "error_code", "") or "")
+                    missing = status == 404 or code in {"channel_not_found", "release_not_found"} or isinstance(
+                        exc, FileNotFoundError
+                    )
+                    if missing and requirement.optional:
+                        continue
+                    if missing:
+                        raise PublicationError(
+                            f"required stable dependency is unavailable: {requirement.key}"
+                        ) from exc
+                    raise
 
             release_digest = (
                 dependency_plan.release.release_digest
@@ -1026,6 +1040,7 @@ class ArtifactPublicationService:
             artifact_dir=artifact_dir,
             own_package=built.ref,
             checkpoint_change_ids=change_ids,
+            base_release=stable,
         )
         plan = build_project_release(
             project_id=artifact_id,

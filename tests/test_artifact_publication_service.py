@@ -771,6 +771,84 @@ def test_scenario_candidate_includes_companion_skill_from_same_change_set(
     ).is_file()
 
 
+def test_follow_up_candidate_reuses_dependency_from_stable_project_release(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    scenario_dir = _scenario(dev_root / "scenarios")
+    skill_dir = _skill(dev_root / "skills")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+        change_ids=("initial-project-release",),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("initial-project-release",),
+    )
+    initial = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("initial-project-release",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(initial.candidate.candidate_id, accepted=True)
+    _promote(service, initial.candidate.candidate_id)
+
+    # The companion component has no independent shopping_skill/stable
+    # channel: it is owned by the stable recipes release set.
+    with pytest.raises(FileNotFoundError):
+        remote.get_channel("shopping_skill", "stable")
+
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.1\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("scenario-follow-up",),
+    )
+
+    follow_up = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("scenario-follow-up",),
+        validation_evidence={"status": "passed"},
+    )
+
+    components = {
+        (item.kind, item.artifact_id): item.version
+        for item in follow_up.plan.packages
+    }
+    assert components == {
+        ("scenario", "recipes"): "1.0.1",
+        ("skill", "shopping_skill"): "2.1.0",
+    }
+    assert (
+        follow_up.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
+    ).is_file()
+
+
 def test_scenario_candidate_includes_dependency_from_an_earlier_change_set_member(
     tmp_path: Path,
 ) -> None:
