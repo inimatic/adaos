@@ -201,6 +201,11 @@ class BuilderAutomationService:
         with _LOCK:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
+                incoming_conversation_id = str(conversation_id or "").strip()
+                if incoming_conversation_id and not str(current.get("conversation_id") or "").strip():
+                    current["conversation_id"] = incoming_conversation_id
+                    current["updated_at"] = _now_iso()
+                    self._save_session(current)
                 current_change_set_id = str(current.get("change_set_id") or "").strip() or None
                 if requested_change_set_id and current_change_set_id != requested_change_set_id:
                     raise ValueError("another Builder change set already owns the active Automation session")
@@ -374,6 +379,7 @@ class BuilderAutomationService:
         object_type: str | None = None,
         object_id: str | None = None,
         webspace_id: str | None = None,
+        conversation_id: str | None = None,
         workflow_transition: str | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
@@ -388,7 +394,14 @@ class BuilderAutomationService:
             )
             if not session:
                 return {"ok": False, "handled": False, "error": "automation_session_not_found"}
+            incoming_conversation_id = str(conversation_id or "").strip()
+            if incoming_conversation_id and not str(session.get("conversation_id") or "").strip():
+                session["conversation_id"] = incoming_conversation_id
+                session["updated_at"] = _now_iso()
+                self._save_session(session)
             session = self.refresh_session(session)
+            if session.get("status") == "completed":
+                session = self._notify_completed_session(session)
             if session.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
                 return {
                     "ok": True,

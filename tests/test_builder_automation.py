@@ -308,11 +308,43 @@ def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monke
         object_id="recipes",
         implementation_brief="Implement recipe search.",
         webspace_id="prompt-dev",
+        conversation_id="conv.builder.recipes",
     )
 
     assert result["duplicate"] is True
     assert result["worker_relaunched"] is True
     assert launched == ["automation.scenario.recipes"]
+    assert result["session"]["conversation_id"] == "conv.builder.recipes"
+
+
+def test_followup_backfills_conversation_before_terminal_notification(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    notified: list[str] = []
+
+    def notify(self, session):
+        notified.append(str(session.get("conversation_id") or ""))
+        return dict(session)
+
+    monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", notify)
+
+    service.submit_turn(
+        text="Add filtering by cooking time.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+        conversation_id="conv.builder.recipes",
+    )
+
+    assert notified == ["conv.builder.recipes"]
+    current = service.get_session("scenario", "recipes")
+    assert current is not None
+    assert current["conversation_id"] == "conv.builder.recipes"
 
 
 def test_followup_turn_clears_stale_terminal_projection(tmp_path: Path) -> None:

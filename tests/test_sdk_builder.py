@@ -64,7 +64,12 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
         implementation_brief="Implement the approved brief",
         webspace_id="desktop-dev",
     )
-    submitted = automation.submit("Add tests", object_type="scenario", object_id="builder")
+    submitted = automation.submit(
+        "Add tests",
+        object_type="scenario",
+        object_id="builder",
+        conversation_id="conv.builder",
+    )
     state = automation.get_state(object_type="scenario", object_id="builder")
 
     assert started["automation"]["status"] == "queued"
@@ -72,6 +77,7 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
     assert state["automation"]["status"] == "running"
     assert state["session_present"] is True
     assert [name for name, _kwargs in service.calls] == ["start", "submit", "projection", "projection"]
+    assert service.calls[1][1]["conversation_id"] == "conv.builder"
 
 
 def test_automation_facade_treats_missing_session_as_idle_state(monkeypatch) -> None:
