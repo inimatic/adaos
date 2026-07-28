@@ -289,7 +289,7 @@ class LocalSkillFactoryWorker:
         return self.run_assignment(assignment)
 
     def recover_validated_run(self, task_id: str) -> dict[str, Any]:
-        """Activate and report one committed validated run without rerunning Codex."""
+        """Validate or activate one preserved run without rerunning Codex."""
 
         task_token = _safe_token(task_id)
         run_root = self.runs_root / task_token
@@ -300,16 +300,87 @@ class LocalSkillFactoryWorker:
         assignment = _read_json(input_dir / "assignment.json")
         if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
             raise ValueError("validated run assignment does not match task_id")
-        test_report = _read_json(output_dir / "test_report.json")
-        if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
-            raise ValueError("result recovery requires a passed deterministic test report")
         local_state = _read_json(runtime_dir / "state.json")
         if str(local_state.get("status") or "") != "failed":
             raise ValueError("result recovery requires a preserved failed local run")
         if not workspace.is_dir() or not (workspace / ".git").is_dir():
-            raise ValueError("result recovery requires the committed task workspace")
-        if _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
-            raise ValueError("result recovery refuses a modified task workspace")
+            raise ValueError("result recovery requires the preserved task workspace")
+
+        test_report_path = output_dir / "test_report.json"
+        test_report = _read_json(test_report_path) if test_report_path.is_file() else {}
+        dirty = bool(_git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace))
+        report_passed = bool(test_report.get("ok")) and str(test_report.get("status") or "") == "passed"
+        if dirty and not report_passed:
+            # A worker/host failure can happen after Codex has returned but
+            # before deterministic validation or the result commit.  Resume
+            # those deterministic steps once against the preserved worktree;
+            # never invoke Codex again from the recovery path.
+            final_message_path = runtime_dir / "codex-final.md"
+            if not final_message_path.is_file():
+                raise ValueError("pre-commit recovery requires a completed Codex result")
+            self._cleanup_generated_files(workspace)
+            changed_paths = self._changed_paths(workspace)
+            self._validate_changed_paths(assignment, changed_paths)
+            test_report = self._validate_workspace(assignment, workspace)
+            _write_json(output_dir / "test_report.json", test_report)
+            if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
+                raise ValueError("preserved result does not pass deterministic validation")
+
+            evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+            result_relative = str(
+                evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
+            ).replace("\\", "/")
+            evidence_root = workspace / Path(result_relative).parent
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            (evidence_root / "changed_files.txt").write_text(
+                "\n".join(changed_paths) + "\n", encoding="utf-8"
+            )
+            shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
+            task_prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+            packet_hash = "sha256:" + hashlib.sha256(task_prompt.encode("utf-8")).hexdigest()
+            source_snapshot = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+            provenance = {
+                "schema": "adaos.skill_factory.task_provenance.v1",
+                "runner_version": RUNNER_VERSION,
+                "image_digest": "local-process",
+                "instruction_packet_hash": packet_hash,
+                "dependency_changes": self._dependency_changes(workspace),
+                "source_refs": dict(assignment.get("source_refs") or {}),
+                "base_revision": str((assignment.get("forge") or {}).get("base_revision") or "") or None,
+                "source_snapshot": {
+                    "snapshot_id": source_snapshot.get("snapshot_id"),
+                    "digest": source_snapshot.get("digest"),
+                }
+                if source_snapshot
+                else None,
+                "tool_versions": {"python": sys.version.split()[0]},
+                "created_at": _now_iso(),
+                "recovery": {"mode": "pre_commit_deterministic_resume"},
+            }
+            _write_json(evidence_root / "provenance.json", provenance)
+            result_manifest = {
+                "schema": "adaos.skill_factory.dev_result.v1",
+                "task_id": task_id,
+                "node_id": self.node_id,
+                "status": "completed",
+                "summary": final_message_path.read_text(encoding="utf-8").strip(),
+                "tests": test_report,
+                "packet": _read_json(input_dir / "packet.json"),
+            }
+            _write_json(evidence_root / "result.json", result_manifest)
+            all_changed_paths = self._changed_from_baseline(workspace)
+            (evidence_root / "changed_files.txt").write_text(
+                "\n".join(all_changed_paths) + "\n", encoding="utf-8"
+            )
+            _git(["add", "-A"], cwd=workspace)
+            _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
+            dirty = False
+            report_passed = True
+
+        if not report_passed:
+            raise ValueError("result recovery requires a passed deterministic test report")
+        if dirty:
+            raise ValueError("result recovery refuses a modified validated task workspace")
 
         evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
         result_relative = str(
