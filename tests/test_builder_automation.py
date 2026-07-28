@@ -308,6 +308,50 @@ def test_scenario_automation_retains_published_companions_as_immutable_baseline(
     ).exists()
 
 
+def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    assert service.workspace_service is not None
+    assert service.workspace_service.skills_root is not None
+    workspace_skill = Path(service.workspace_service.skills_root) / "voice_chat_skill"
+    workspace_skill.mkdir(parents=True)
+    (workspace_skill / "skill.yaml").write_text(
+        yaml.safe_dump({"name": "voice_chat_skill", "version": "1.0.0"}, sort_keys=False),
+        encoding="utf-8",
+    )
+    scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"
+    scenario.write_text(
+        yaml.safe_dump(
+            {
+                "id": "recipes",
+                "version": "0.1.0",
+                "depends": ["recipes_skill", "voice_chat_skill"],
+                "runtime": {"skills": {"required": ["recipes_skill", "voice_chat_skill"]}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the owned recipe behavior against installed chat APIs.",
+        webspace_id="prompt-dev",
+    )
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+
+    assert started["session"]["companion_skill_ids"] == ["recipes_skill"]
+    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == ["recipes_skill"]
+    assert "skills/voice_chat_skill/" not in task["forge"]["sparse_paths"]
+    assert not (service.dev_skills_root / "voice_chat_skill").exists()
+
+
 def test_followup_refreshes_companions_from_current_publication(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(

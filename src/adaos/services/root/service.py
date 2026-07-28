@@ -49,6 +49,7 @@ from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.services.runtime_refresh import refresh_skill_runtime
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
@@ -2060,6 +2061,97 @@ class RootDeveloperService:
             attestation_admission=trust.admission,
         )
 
+    @staticmethod
+    def _workspace_lock_components(lock: Any, *, kind: str) -> list[Any]:
+        expected = str(kind or "").strip().lower().rstrip("s")
+        return [
+            component
+            for component in getattr(lock, "components", ()) or ()
+            if str(getattr(component, "kind", "") or "").strip().lower().rstrip("s") == expected
+        ]
+
+    def _reload_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
+        """Converge every installed skill runtime to the just-activated WorkspaceLock."""
+
+        manager = _get_skill_manager(self.ctx)
+        refreshed: list[dict[str, Any]] = []
+        for component in self._workspace_lock_components(lock, kind="skill"):
+            skill_id = str(getattr(component, "artifact_id", "") or "").strip()
+            version = str(getattr(component, "version", "") or "").strip()
+            if not skill_id or not version:
+                raise RootServiceError("WorkspaceLock contains an incomplete skill component")
+            result = refresh_skill_runtime(
+                manager,
+                skill_id,
+                source_version=version,
+                migrate_runtime=True,
+                ensure_installed=False,
+                require_active_version=True,
+                operation_id=f"workspace-lock:{getattr(lock, 'lock_revision', '')}",
+            )
+            refreshed.append(
+                {
+                    "skill_id": skill_id,
+                    "version": version,
+                    "active_version": result.get("active_version_after"),
+                    "active_slot": result.get("active_slot_after"),
+                    "runtime_migrated": bool(result.get("runtime_migrated")),
+                }
+            )
+        return {
+            "status": "completed",
+            "lock_revision": getattr(lock, "lock_revision", None),
+            "skills": refreshed,
+        }
+
+    def _health_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
+        manager = _get_skill_manager(self.ctx)
+        checks: list[dict[str, Any]] = []
+        failures: list[str] = []
+        for component in self._workspace_lock_components(lock, kind="skill"):
+            skill_id = str(getattr(component, "artifact_id", "") or "").strip()
+            expected = str(getattr(component, "version", "") or "").strip()
+            status = manager.runtime_status(skill_id)
+            active = str(status.get("version") or "").strip()
+            ready = bool(status.get("ready", True)) and bool(status.get("active_slot")) and active == expected
+            checks.append(
+                {
+                    "kind": "skill_runtime",
+                    "artifact_id": skill_id,
+                    "expected_version": expected,
+                    "active_version": active,
+                    "active_slot": status.get("active_slot"),
+                    "ok": ready,
+                }
+            )
+            if not ready:
+                failures.append(f"skill:{skill_id} expected={expected} active={active or 'none'}")
+        for component in self._workspace_lock_components(lock, kind="scenario"):
+            scenario_id = str(getattr(component, "artifact_id", "") or "").strip()
+            expected = str(getattr(component, "version", "") or "").strip()
+            manifest_path = Path(self.ctx.paths.scenarios_dir()) / scenario_id / "scenario.yaml"
+            manifest = _read_manifest(manifest_path)
+            installed = str(manifest.get("version") or "").strip()
+            ready = bool(scenario_id) and installed == expected
+            checks.append(
+                {
+                    "kind": "scenario_source",
+                    "artifact_id": scenario_id,
+                    "expected_version": expected,
+                    "installed_version": installed,
+                    "ok": ready,
+                }
+            )
+            if not ready:
+                failures.append(f"scenario:{scenario_id} expected={expected} installed={installed or 'none'}")
+        if failures:
+            raise RootServiceError("Published Workspace runtime did not converge: " + "; ".join(failures))
+        return {
+            "status": "healthy",
+            "lock_revision": getattr(lock, "lock_revision", None),
+            "checks": checks,
+        }
+
     def prepare_artifact_candidate(
         self,
         kind: Literal["skill", "scenario"],
@@ -2150,16 +2242,8 @@ class RootDeveloperService:
             promoted = publication.promote(
                 candidate_id,
                 permission_decision=permission_decision,
-                reload_policy={
-                    "mode": "skip",
-                    "approved_by": "root.artifact_publication.mvp",
-                    "reason": "live artifact reload adapter is not connected yet",
-                },
-                health_policy={
-                    "mode": "skip",
-                    "approved_by": "root.artifact_publication.mvp",
-                    "reason": "live artifact health adapter is not connected yet",
-                },
+                reload_runtime=self._reload_published_workspace_runtime,
+                health_check=self._health_published_workspace_runtime,
             )
         except PublicationStaleError as exc:
             return {

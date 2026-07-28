@@ -896,21 +896,23 @@ class LocalSkillFactoryWorker:
         return None
 
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
-        return self._companion_skill_ids(assignment)[0]
+        companions = self._companion_skill_ids(assignment)
+        return companions[0] if companions else ""
 
     def _companion_skill_ids(self, assignment: Mapping[str, Any]) -> list[str]:
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         target = dict(assignment.get("target") or {})
         values = artifacts.get("companion_skill_ids")
-        if not isinstance(values, (list, tuple)):
+        explicit_values = isinstance(values, (list, tuple))
+        if not explicit_values:
             values = [artifacts.get("companion_skill_id") or f"{target.get('id')}_skill"]
         result: list[str] = []
         for value in values:
             token = _safe_token(value, fallback="")
             if token and token not in result:
                 result.append(token)
-        return result or ["generated_skill"]
+        return result if explicit_values else (result or ["generated_skill"])
 
     def _build_packet(self, assignment: Mapping[str, Any], workspace: Path, input_dir: Path) -> dict[str, Any]:
         request = dict(assignment.get("realize_request") or {})
@@ -918,7 +920,7 @@ class LocalSkillFactoryWorker:
         target_type = str(target.get("type") or "skill")
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
         companions = self._companion_skill_ids(assignment) if target_type == "scenario" else [target_id]
-        companion = companions[0]
+        companion = companions[0] if companions else None
         source = dict(request.get("source") or {})
         artifacts = dict(request.get("artifacts") or {})
         brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()

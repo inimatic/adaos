@@ -236,6 +236,47 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
     assert captured["health_policy"] is None
 
 
+def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() -> None:
+    captured: dict[str, object] = {}
+    component = SimpleNamespace(
+        artifact_id="builder",
+        kind="scenario",
+        version="1.2.3",
+        digest="sha256:" + "a" * 64,
+        source_ref=SimpleNamespace(revision="revision-1"),
+    )
+    promoted = SimpleNamespace(
+        plan=SimpleNamespace(release=SimpleNamespace(components=[component])),
+        candidate=SimpleNamespace(project_id="builder"),
+        pointer=SimpleNamespace(release="builder@1.2.3", release_digest="sha256:" + "b" * 64),
+        activation=SimpleNamespace(
+            workspace_lock=SimpleNamespace(to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64})
+        ),
+        subscription=SimpleNamespace(to_dict=lambda: {"project_id": "builder"}),
+    )
+
+    class _Publication:
+        def promote(self, candidate_id: str, **kwargs):
+            captured["candidate_id"] = candidate_id
+            captured.update(kwargs)
+            return promoted
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+    service._artifact_publication_service = lambda _cfg: _Publication()
+    service._reload_published_workspace_runtime = lambda _lock: {"status": "completed"}
+    service._health_published_workspace_runtime = lambda _lock: {"status": "healthy"}
+
+    result = service.promote_artifact_candidate("candidate-1")
+
+    assert result["ok"] is True
+    assert captured["candidate_id"] == "candidate-1"
+    assert captured["reload_runtime"] is service._reload_published_workspace_runtime
+    assert captured["health_check"] is service._health_published_workspace_runtime
+    assert "reload_policy" not in captured
+    assert "health_policy" not in captured
+
+
 def test_subscription_activation_exposes_operation_identity() -> None:
     class _Record:
         def __init__(self, payload):

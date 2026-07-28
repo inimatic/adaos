@@ -229,7 +229,7 @@ class BuilderAutomationService:
                     "Automation is already the active process; submit a new Automation iteration instead"
                 )
             companion_skill_ids = self._resolve_companion_skill_ids(kind, project_id)
-            companion_skill_id = companion_skill_ids[0]
+            companion_skill_id = companion_skill_ids[0] if companion_skill_ids else None
             created_artifacts = self._ensure_automation_artifacts_created(
                 kind=kind,
                 project_id=project_id,
@@ -332,6 +332,24 @@ class BuilderAutomationService:
             )
         return created
 
+    def _workspace_skills_root(self) -> Path:
+        if self.workspace_service is not None and self.workspace_service.skills_root is not None:
+            return Path(self.workspace_service.skills_root)
+        return self.repo_root / ".adaos" / "workspace" / "skills"
+
+    def _is_mutable_companion_skill(self, skill_id: str) -> bool:
+        """Separate project-owned DEV sources from installed runtime dependencies."""
+
+        token = _safe_token(skill_id, fallback="")
+        if not token:
+            return False
+        if (self.dev_skills_root / token).is_dir():
+            return True
+        # An installed-only skill is a versioned dependency contract.  It must
+        # not be copied into an isolated change set or replaced by a blank DEV
+        # scaffold merely because a scenario declares it as required at runtime.
+        return not (self._workspace_skills_root() / token).is_dir()
+
     def _resolve_companion_skill_ids(self, kind: str, project_id: str) -> list[str]:
         """Resolve every declared scenario skill, retaining the conventional primary.
 
@@ -400,11 +418,13 @@ class BuilderAutomationService:
         if conventional in candidates:
             candidates.remove(conventional)
             candidates.insert(0, conventional)
-        return candidates or [conventional]
+        mutable = [skill_id for skill_id in candidates if self._is_mutable_companion_skill(skill_id)]
+        return mutable if candidates else [conventional]
 
     def _resolve_companion_skill_id(self, kind: str, project_id: str) -> str:
         """Compatibility accessor for the primary scenario companion skill."""
-        return self._resolve_companion_skill_ids(kind, project_id)[0]
+        companions = self._resolve_companion_skill_ids(kind, project_id)
+        return companions[0] if companions else ""
 
     @staticmethod
     def _session_companion_skill_ids(session: Mapping[str, Any]) -> list[str]:
@@ -424,12 +444,19 @@ class BuilderAutomationService:
     ) -> list[str]:
         """Merge durable session companions with current functional lineage."""
 
+        existing = [
+            skill_id
+            for skill_id in self._session_companion_skill_ids(session)
+            if self._is_mutable_companion_skill(skill_id)
+        ]
         resolved = self._resolve_companion_skill_ids(
             str(session.get("object_type") or ""),
             str(session.get("object_id") or ""),
         )
         companions: list[str] = []
-        for value in [*resolved, *self._session_companion_skill_ids(session)]:
+        # ``resolved`` contains only DEV-owned or not-yet-created sources;
+        # installed-only dependencies were filtered above and remain immutable.
+        for value in [*resolved, *existing]:
             token = _safe_token(value, fallback="")
             if token and token not in companions:
                 companions.append(token)
@@ -1190,10 +1217,15 @@ class BuilderAutomationService:
         kind = str(session["object_type"])
         project_id = str(session["object_id"])
         companions = self._resolve_companion_skill_ids(kind, project_id)
-        for skill_id in self._session_companion_skill_ids(session):
+        existing = [
+            skill_id
+            for skill_id in self._session_companion_skill_ids(session)
+            if self._is_mutable_companion_skill(skill_id)
+        ]
+        for skill_id in existing:
             if skill_id not in companions:
                 companions.append(skill_id)
-        companion = companions[0] if companions else str(session.get("companion_skill_id") or "")
+        companion = companions[0] if companions else ""
         sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
         source_artifacts: list[tuple[str, str, Path]] = [
             (
