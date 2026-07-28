@@ -245,6 +245,81 @@ def test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot(tm
     ).read_text(encoding="utf-8")
 
 
+def test_local_worker_recovers_committed_validated_result_without_rerunning_codex(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    scenario_root = _scenario(dev_scenarios, "recipe_book")
+    skill_root = _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(
+            ("scenario", "recipe_book", scenario_root),
+            ("skill", "recipe_book_skill", skill_root),
+        ),
+        created_at="2026-07-28T12:00:00+00:00",
+    )
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "repo": {
+                "base_revision": snapshot["digest"],
+                "source_snapshot": snapshot,
+                "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"],
+            },
+        }
+    )
+    codex_calls: list[str] = []
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        codex_calls.append(prompt)
+        handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
+        handler.write_text(handler.read_text(encoding="utf-8") + "\n# recovered task result\n", encoding="utf-8")
+        return CodexRunResult(returncode=0, final_message="Implemented once.")
+
+    runs_root = tmp_path / "runs"
+    wrong_worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "wrong" / "skills",
+        dev_scenarios_root=tmp_path / "wrong" / "scenarios",
+        runs_root=runs_root,
+        executor=fake_codex,
+        max_repair_attempts=0,
+    )
+
+    failed = wrong_worker.run_once()
+
+    assert failed["ok"] is False
+    assert "source directory does not exist" in failed["error"]
+    recovery_worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=runs_root,
+        executor=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not rerun")),
+    )
+
+    recovered = recovery_worker.recover_validated_run(submitted["task"]["task_id"])
+
+    assert recovered["ok"] is True
+    assert codex_calls and len(codex_calls) == 1
+    assert "recovered task result" in (skill_root / "handlers" / "main.py").read_text(encoding="utf-8")
+    task = next(
+        item
+        for item in factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == submitted["task"]["task_id"]
+    )
+    assert task["status"] == "completed"
+    assert task["attempts"] == 1
+    assert task["result_recovery_history"][-1]["failure_id"]
+
+
 def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"

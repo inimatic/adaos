@@ -224,6 +224,44 @@ def test_skill_factory_idempotent_completion_survives_restart(tmp_path: Path) ->
     assert restarted["ready_events"][0]["task_id"] == task["task_id"]
 
 
+def test_skill_factory_recovers_validated_result_without_requeue(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request({"target": {"type": "skill", "id": "recover_demo"}})["task"]
+    service.register_dev_node({"node_id": "devnode.test"})
+    assignment = service.poll_assignment("devnode.test")["assignment"]
+    service.fail_task(
+        {
+            "task_id": task["task_id"],
+            "node_id": "devnode.test",
+            "message": "post-commit activation failed",
+            "retryable": True,
+        }
+    )
+    result = _dev_result(
+        task_id=task["task_id"],
+        assignment=assignment,
+        node_id="devnode.test",
+        changed_paths=["skills/recover_demo/skill.yaml"],
+    )
+
+    recovered = service.recover_task_result(
+        {
+            **result,
+            "recovery": {
+                "reason": "activate preserved validated result",
+                "validated_run_dir": str(tmp_path / "runs" / task["task_id"]),
+                "actor": "test",
+            },
+        }
+    )
+
+    assert recovered["recovered"] is True
+    assert recovered["task"]["status"] == "completed"
+    assert recovered["task"]["attempts"] == 1
+    assert recovered["task"]["result_recovery_history"][-1]["failure_id"]
+    assert len(recovered["task"]["failure_history"]) == 1
+
+
 def test_skill_factory_operator_controls_pause_drain_quarantine_and_retry(tmp_path: Path) -> None:
     service = SkillFactoryService(state_dir=tmp_path)
     task = service.submit_realize_request({"target": {"type": "skill", "id": "ops_demo"}})["task"]

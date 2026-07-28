@@ -137,4 +137,23 @@ def reconcile_checkpoint(*, object_type: str, object_id: str) -> dict[str, Any]:
     )
 
 
-__all__ = ["get_state", "reconcile_checkpoint", "return_to_prototype", "start", "submit"]
+def recover_validated_result(*, object_type: str, object_id: str) -> dict[str, Any]:
+    """Activate a preserved validated result without assigning Codex again."""
+
+    return dict(
+        _service().recover_validated_result(
+            object_type=object_type,
+            object_id=object_id,
+        )
+        or {}
+    )
+
+
+__all__ = [
+    "get_state",
+    "reconcile_checkpoint",
+    "recover_validated_result",
+    "return_to_prototype",
+    "start",
+    "submit",
+]

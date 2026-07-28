@@ -559,6 +559,59 @@ class BuilderAutomationService:
             "automation": self.project_session(reconciled),
         }
 
+    def recover_validated_result(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+        """Activate a preserved validated task result without rerunning Codex."""
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            current = self.refresh_session(session)
+            task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
+            failure = current.get("last_failure") if isinstance(current.get("last_failure"), Mapping) else {}
+            if str(current.get("status") or "") != "failed" or str(task.get("status") or "") != "failed":
+                raise ValueError("validated result recovery requires a failed Automation task")
+            if not bool(failure.get("retryable")):
+                raise ValueError("validated result recovery requires a retryable task failure")
+            task_id = str(current.get("current_task_id") or "").strip()
+            worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
+                state_dir=self.state_dir,
+                repo_root=self.repo_root,
+                dev_skills_root=self.dev_skills_root,
+                dev_scenarios_root=self.dev_scenarios_root,
+                runs_root=self.runs_root,
+                progress_callback=lambda recovered_task_id, status, message: self._on_worker_progress(
+                    str(current.get("session_id") or ""),
+                    recovered_task_id,
+                    status,
+                    message,
+                ),
+            )
+            recovered_result = worker.recover_validated_run(task_id)
+            current = self.refresh_session(current)
+            if str(current.get("status") or "") != "completed" or not isinstance(current.get("last_result"), Mapping):
+                raise RuntimeError("validated result recovery did not complete the Automation task")
+            current["status"] = "commit_ready"
+            current["finalizing_task_id"] = task_id
+            current["progress"] = {
+                "task_id": task_id,
+                "status": "commit_ready",
+                "message": "Finalizing recovered DEV activation and Forge checkpoints",
+                "updated_at": _now_iso(),
+            }
+            current["updated_at"] = current["progress"]["updated_at"]
+            self._save_session(current)
+
+        self._finalize_completed_session(current)
+        reconciled = self.get_session(object_type, object_id) or current
+        return {
+            "ok": str(reconciled.get("status") or "") == "completed",
+            "recovered": True,
+            "worker": recovered_result,
+            "session": reconciled,
+            "automation": self.project_session(reconciled),
+        }
+
     def status(self, *, object_type: str, object_id: str) -> dict[str, Any]:
         session = self.get_session(object_type, object_id)
         if not session:
@@ -753,7 +806,7 @@ class BuilderAutomationService:
         if task.get("result"):
             current["last_result"] = task.get("result")
             current.pop("last_failure", None)
-        if task.get("failure_history"):
+        if task_status != "completed" and task.get("failure_history"):
             current["last_failure"] = task.get("failure_history")[-1]
             current.pop("last_result", None)
         readiness = current.get("completion_readiness")

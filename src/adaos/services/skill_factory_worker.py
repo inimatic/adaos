@@ -265,6 +265,76 @@ class LocalSkillFactoryWorker:
         assignment = dict(polled["assignment"])
         return self.run_assignment(assignment)
 
+    def recover_validated_run(self, task_id: str) -> dict[str, Any]:
+        """Activate and report one committed validated run without rerunning Codex."""
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        workspace = run_root / "workspace"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("validated run assignment does not match task_id")
+        test_report = _read_json(output_dir / "test_report.json")
+        if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
+            raise ValueError("result recovery requires a passed deterministic test report")
+        local_state = _read_json(runtime_dir / "state.json")
+        if str(local_state.get("status") or "") != "failed":
+            raise ValueError("result recovery requires a preserved failed local run")
+        if not workspace.is_dir() or not (workspace / ".git").is_dir():
+            raise ValueError("result recovery requires the committed task workspace")
+        if _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+            raise ValueError("result recovery refuses a modified task workspace")
+
+        evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+        result_relative = str(
+            evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
+        ).replace("\\", "/")
+        evidence_root = workspace / Path(result_relative).parent
+        result_manifest = _read_json(evidence_root / "result.json")
+        provenance = _read_json(evidence_root / "provenance.json")
+        if str(result_manifest.get("task_id") or "") != str(task_id or ""):
+            raise ValueError("validated result manifest does not match task_id")
+        if str(result_manifest.get("status") or "") != "completed" or not provenance:
+            raise ValueError("validated result evidence is incomplete")
+
+        self._sync_artifacts(assignment, workspace)
+        result = {
+            "task_id": str(task_id),
+            "node_id": self.node_id,
+            "status": "completed",
+            "commit_hash": _git(["rev-parse", "HEAD"], cwd=workspace),
+            "branch": str((assignment.get("forge") or {}).get("branch") or ""),
+            "changed_paths": self._changed_from_baseline(workspace),
+            "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
+            "provenance": provenance,
+            "summary": str(result_manifest.get("summary") or "").strip(),
+            "local_run_dir": str(run_root),
+        }
+        _write_json(output_dir / "result.json", result)
+        completed = self.factory.recover_task_result(
+            {
+                **result,
+                "recovery": {
+                    "reason": "activate preserved validated result after retryable post-commit failure",
+                    "validated_run_dir": str(run_root),
+                    "actor": self.node_id,
+                },
+            }
+        )
+        _write_json(
+            runtime_dir / "state.json",
+            {
+                "schema": LOCAL_SESSION_SCHEMA,
+                "status": "completed",
+                "recovered": True,
+                "completed_at": _now_iso(),
+            },
+        )
+        return {"ok": True, "recovered": True, "assignment": assignment, "result": result, "completed": completed}
+
     def run_assignment(self, assignment: Mapping[str, Any]) -> dict[str, Any]:
         task_id = str(assignment.get("task_id") or "").strip()
         if not task_id:

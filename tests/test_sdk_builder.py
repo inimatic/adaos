@@ -22,6 +22,10 @@ class _AutomationService:
         self.calls.append(("projection", kwargs))
         return {"ok": True, "automation": {"status": "running", "iteration": 2}}
 
+    def recover_validated_result(self, **kwargs):
+        self.calls.append(("recover_validated_result", kwargs))
+        return {"ok": True, "recovered": True}
+
 
 def test_automation_service_runs_inline_for_one_shot_dev_tool(monkeypatch) -> None:
     service = _AutomationService()
@@ -36,6 +40,18 @@ def test_automation_service_runs_inline_for_one_shot_dev_tool(monkeypatch) -> No
 
     assert automation._service() is service
     assert calls == [{"background": False}]
+
+
+def test_automation_facade_recovers_validated_result_without_resubmission(monkeypatch) -> None:
+    service = _AutomationService()
+    monkeypatch.setattr(automation, "_service", lambda: service)
+
+    recovered = automation.recover_validated_result(object_type="scenario", object_id="recipes")
+
+    assert recovered == {"ok": True, "recovered": True}
+    assert service.calls == [
+        ("recover_validated_result", {"object_type": "scenario", "object_id": "recipes"})
+    ]
 
 
 def test_automation_facade_returns_projection_without_exposing_service(monkeypatch) -> None:
