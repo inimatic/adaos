@@ -104,6 +104,211 @@ def test_invalid_ui_revision_pointer_is_not_treated_as_a_revision(
     assert workflow["prototype"]["head_revision"] is None
 
 
+def test_change_set_routes_interface_work_through_prototype_first(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-favorites",
+            "request": "Add a favorites section and preserve the existing shopping flow.",
+            "source_message_ids": ["message-1"],
+            "issues": [
+                {
+                    "issue_id": "favorites-layout",
+                    "title": "Add the favorites section to the navigation",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Favorites is visible without hiding the shopping list."],
+                },
+                {
+                    "issue_id": "favorites-storage",
+                    "title": "Persist favorite recipes",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Favorites survive a scenario restart."],
+                },
+            ],
+        },
+    )["workflow"]
+
+    assert planned["active_phase"] == "prototype"
+    assert planned["change_set"]["schema"] == "adaos.builder.change_set.v1"
+    assert planned["change_set"]["route"] == "prototype_first"
+    assert planned["change_set"]["gate"] == "prototype"
+    assert planned["change_set"]["member_change_ids"] == ["CS-recipes-favorites"]
+    assert planned["capabilities"]["can_plan_change_set"] is False
+
+    approved = service.transition(
+        "scenario",
+        "recipes",
+        "stabilize_prototype",
+        metadata={"revision": "001"},
+    )["workflow"]
+    assert approved["change_set"]["status"] == "approved"
+    assert approved["change_set"]["gate"] == "automation"
+    assert approved["change_set"]["issues"][0]["status"] == "resolved"
+    assert approved["change_set"]["issues"][1]["status"] == "open"
+
+
+def test_change_set_routes_functional_work_directly_to_automation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-sync",
+            "request": "Synchronize shopping items with the store API.",
+            "issues": [
+                {
+                    "title": "Implement store synchronization",
+                    "lane": "automation",
+                    "acceptance_criteria": ["A failed request leaves the local list unchanged."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    assert planned["active_phase"] == "prototype"
+    assert planned["change_set"]["route"] == "automation_direct"
+    assert planned["change_set"]["gate"] == "automation"
+
+    started = service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+    )["workflow"]
+    assert started["active_phase"] == "automation"
+    assert started["change_set"]["status"] == "in_progress"
+    assert started["change_set"]["member_change_ids"] == [
+        "CS-recipes-sync",
+        "change-sync-implementation",
+    ]
+
+
+def test_change_set_advances_through_automation_trial_and_publication(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-sync",
+            "request": "Synchronize shopping items with the store API.",
+            "issues": [
+                {
+                    "issue_id": "sync",
+                    "title": "Implement store synchronization",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Synchronization is covered by an integration test."],
+                }
+            ],
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+    )
+    completed = service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+    )["workflow"]
+    assert completed["change_set"]["status"] == "implemented"
+    assert completed["change_set"]["gate"] == "trial"
+    assert completed["change_set"]["issues"][0]["status"] == "resolved"
+
+    checkpointed = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "checkpoint-sync",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )["workflow"]
+    assert checkpointed["change_set"]["status"] == "checkpointed"
+    assert "checkpoint-sync" in checkpointed["change_set"]["member_change_ids"]
+
+    trial = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_prepared",
+        metadata={
+            "candidate_id": "candidate-sync",
+            "release_digest": "sha256:" + "2" * 64,
+            "package_digest": "sha256:" + "3" * 64,
+        },
+    )["workflow"]
+    assert trial["change_set"]["status"] == "trial"
+
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_accepted",
+        metadata={"candidate_id": "candidate-sync"},
+    )
+    published = service.transition(
+        "scenario",
+        "recipes",
+        "publish",
+        metadata={"candidate_id": "candidate-sync", "version": "0.2.0"},
+    )["workflow"]
+    assert published["change_set"]["status"] == "published"
+    assert published["change_set"]["gate"] == "complete"
+    assert published["capabilities"]["can_plan_change_set"] is True
+
+
+def test_active_change_set_requires_explicit_supersession(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    issue = {
+        "title": "First change",
+        "lane": "prototype",
+        "acceptance_criteria": ["The first change is visible."],
+    }
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={"change_set_id": "CS-1", "request": "First change", "issues": [issue]},
+    )
+
+    with pytest.raises(BuilderWorkflowError, match="supersedes_change_set_id"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "plan_change_set",
+            metadata={"change_set_id": "CS-2", "request": "Second change", "issues": [issue]},
+        )
+
+    superseded = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-2",
+            "supersedes_change_set_id": "CS-1",
+            "request": "Second change",
+            "issues": [issue],
+        },
+    )["workflow"]
+    assert superseded["change_set"]["change_set_id"] == "CS-2"
+
+
 def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

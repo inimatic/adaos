@@ -20,6 +20,7 @@ def start(
     webspace_id: str = "desktop",
     conversation_id: str | None = None,
     brief_path: str | None = None,
+    change_set_id: str | None = None,
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
@@ -31,6 +32,7 @@ def start(
             webspace_id=webspace_id,
             conversation_id=conversation_id,
             brief_path=brief_path,
+            change_set_id=change_set_id,
         )
         or {}
     )

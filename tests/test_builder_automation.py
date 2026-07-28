@@ -114,6 +114,54 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-store-sync",
+            "request": "Synchronize shopping items with the store API.",
+            "issues": [
+                {
+                    "issue_id": "store-sync",
+                    "title": "Implement transactional store synchronization",
+                    "lane": "automation",
+                    "acceptance_criteria": [
+                        "A failed remote request leaves the local shopping list unchanged."
+                    ],
+                }
+            ],
+        },
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the approved store synchronization change set.",
+        webspace_id="prompt-dev",
+        conversation_id="conv.builder.recipes",
+    )
+
+    assert started["session"]["change_set_id"] == "CS-recipes-store-sync"
+    assert started["automation"]["change_set_id"] == "CS-recipes-store-sync"
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+    request = task["realize_request"]
+    assert request["links"]["change_set_id"] == "CS-recipes-store-sync"
+    assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "store-sync"
+    assert (
+        "A failed remote request leaves the local shopping list unchanged."
+        in request["acceptance"]["checks"]
+    )
+    workflow = service._workflow().describe("scenario", "recipes")
+    assert started["session"]["change_id"] in workflow["change_set"]["member_change_ids"]
+
+
 def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"

@@ -17,10 +17,15 @@ from adaos.services.runtime_paths import current_state_dir
 
 
 BUILDER_WORKFLOW_SCHEMA = "adaos.builder.workflow.v1"
+BUILDER_CHANGE_SET_SCHEMA = "adaos.builder.change_set.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
 _MAX_HISTORY = 50
+_MAX_CHANGE_ISSUES = 50
+_CHANGE_SET_TERMINAL_STATES = {"published", "rejected", "superseded"}
+_ISSUE_STATES = {"open", "in_progress", "resolved", "deferred"}
+_ISSUE_LANES = {"prototype", "automation"}
 
 
 class BuilderWorkflowError(ValueError):
@@ -60,6 +65,98 @@ def _project_id(value: Any) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _bounded_text(value: Any, *, field: str, max_length: int) -> str:
+    token = " ".join(str(value or "").split())
+    if not token:
+        raise BuilderWorkflowError(f"{field} is required")
+    if len(token) > max_length:
+        raise BuilderWorkflowError(f"{field} exceeds {max_length} characters")
+    return token
+
+
+def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise BuilderWorkflowError("change set issues must be objects")
+    issue_id = str(value.get("issue_id") or value.get("id") or f"I{index:03d}").strip()
+    if not issue_id or len(issue_id) > 80:
+        raise BuilderWorkflowError("change set issue_id is required and must be at most 80 characters")
+    title = _bounded_text(value.get("title") or value.get("summary"), field="change set issue title", max_length=240)
+    lane = str(value.get("lane") or value.get("target_phase") or "").strip().lower()
+    if lane not in _ISSUE_LANES:
+        raise BuilderWorkflowError("change set issue lane must be prototype or automation")
+    status = str(value.get("status") or "open").strip().lower()
+    if status not in _ISSUE_STATES:
+        raise BuilderWorkflowError(
+            "change set issue status must be open, in_progress, resolved, or deferred"
+        )
+    raw_criteria = value.get("acceptance_criteria") or value.get("acceptance") or []
+    if isinstance(raw_criteria, str):
+        raw_criteria = [raw_criteria]
+    if not isinstance(raw_criteria, (list, tuple)):
+        raise BuilderWorkflowError("change set issue acceptance_criteria must be a list")
+    criteria = [
+        _bounded_text(item, field="acceptance criterion", max_length=500)
+        for item in raw_criteria[:20]
+    ]
+    if not criteria:
+        raise BuilderWorkflowError("every change set issue requires acceptance_criteria")
+    return {
+        "issue_id": issue_id,
+        "title": title,
+        "lane": lane,
+        "status": status,
+        "acceptance_criteria": criteria,
+    }
+
+
+def _normalize_change_set(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or not str(value.get("change_set_id") or "").strip():
+        return None
+    issues: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value.get("issues") or [], start=1):
+        issue = _normalize_issue(item, index=index)
+        issue_id = issue["issue_id"]
+        if issue_id in seen:
+            raise BuilderWorkflowError(f"duplicate change set issue_id: {issue_id}")
+        seen.add(issue_id)
+        issues.append(issue)
+    route = str(value.get("route") or "").strip().lower()
+    if route not in {"prototype_first", "automation_direct"}:
+        route = "prototype_first" if any(item["lane"] == "prototype" for item in issues) else "automation_direct"
+    gate = str(value.get("gate") or ("prototype" if route == "prototype_first" else "automation")).strip().lower()
+    if gate not in {"prototype", "automation", "trial", "publication", "complete"}:
+        gate = "prototype" if route == "prototype_first" else "automation"
+    status = str(value.get("status") or "planned").strip().lower()
+    member_change_ids = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in value.get("member_change_ids") or []
+            if str(item).strip()
+        )
+    )[-100:]
+    change_set_id = str(value.get("change_set_id") or "").strip()
+    if change_set_id not in member_change_ids:
+        member_change_ids.insert(0, change_set_id)
+    return {
+        "schema": BUILDER_CHANGE_SET_SCHEMA,
+        "change_set_id": change_set_id,
+        "request": _bounded_text(value.get("request"), field="change set request", max_length=4000),
+        "route": route,
+        "gate": gate,
+        "status": status,
+        "issues": issues,
+        "member_change_ids": member_change_ids,
+        "source_message_ids": [
+            str(item).strip()
+            for item in value.get("source_message_ids") or []
+            if str(item).strip()
+        ][-100:],
+        "created_at": str(value.get("created_at") or "").strip() or None,
+        "updated_at": str(value.get("updated_at") or "").strip() or None,
+    }
 
 
 def _legacy_phase(value: Any) -> str:
@@ -171,6 +268,7 @@ class BuilderWorkflowService:
         automation = _mapping(raw.get("automation"))
         publication = _mapping(raw.get("publication"))
         delivery = _mapping(raw.get("delivery"))
+        change_set = _normalize_change_set(raw.get("change_set"))
         current_revision = self.current_prototype_revision(object_type, object_id)
         prototype.setdefault("head_revision", current_revision)
         if _kind(object_type) == "scenario" and active_phase == "prototype":
@@ -225,6 +323,7 @@ class BuilderWorkflowService:
             "automation": automation,
             "delivery": delivery,
             "publication": publication,
+            "change_set": change_set,
             "pending_transition": _mapping(raw.get("pending_transition")) or None,
             "history": [
                 dict(item)
@@ -241,6 +340,8 @@ class BuilderWorkflowService:
         automation_status = str(automation.get("status") or "not_started")
         delivery_status = str(_mapping(workflow.get("delivery")).get("status") or "idle")
         retained_automation = bool(str(automation.get("snapshot_path") or "").strip())
+        change_set = _normalize_change_set(workflow.get("change_set"))
+        change_set_status = str((change_set or {}).get("status") or "")
         automation_previewable = automation_status == "completed" or (
             retained_automation and automation_status in {"adapting", "failed", "frozen"}
         )
@@ -264,6 +365,11 @@ class BuilderWorkflowService:
             "can_preview_automation": object_type == "scenario" and automation_previewable,
             "can_preview_publication": object_type == "scenario"
             and str(_mapping(workflow.get("publication")).get("status") or "") == "published",
+            "can_plan_change_set": mutable
+            and (not change_set or change_set_status in _CHANGE_SET_TERMINAL_STATES),
+            "can_update_change_set": mutable
+            and bool(change_set)
+            and change_set_status not in _CHANGE_SET_TERMINAL_STATES,
         }
 
     def describe(self, object_type: str, object_id: str) -> dict[str, Any]:
@@ -306,6 +412,8 @@ class BuilderWorkflowService:
                 "automation_status": workflow["automation"].get("status"),
                 "delivery_status": workflow["delivery"].get("status"),
                 "publication_status": workflow["publication"].get("status"),
+                "change_set_status": (workflow.get("change_set") or {}).get("status"),
+                "change_set_gate": (workflow.get("change_set") or {}).get("gate"),
             }
             self._apply_transition(workflow, action_token, details, changed_at=changed_at)
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
@@ -316,6 +424,8 @@ class BuilderWorkflowService:
                 "automation_status": workflow["automation"].get("status"),
                 "delivery_status": workflow["delivery"].get("status"),
                 "publication_status": workflow["publication"].get("status"),
+                "change_set_status": (workflow.get("change_set") or {}).get("status"),
+                "change_set_gate": (workflow.get("change_set") or {}).get("gate"),
             }
             history = list(workflow.get("history") or [])
             history.append(
@@ -365,6 +475,44 @@ class BuilderWorkflowService:
         automation = workflow["automation"]
         delivery = workflow["delivery"]
         publication = workflow["publication"]
+        change_set = _normalize_change_set(workflow.get("change_set"))
+        workflow["change_set"] = change_set
+
+        def require_change_set(change_set_id: Any = None) -> dict[str, Any]:
+            current = workflow.get("change_set")
+            if not isinstance(current, dict):
+                raise BuilderWorkflowError("an active change set is required")
+            expected = str(change_set_id or current.get("change_set_id") or "").strip()
+            if expected != str(current.get("change_set_id") or ""):
+                raise BuilderWorkflowError("change set identity does not match the active change set")
+            if str(current.get("status") or "") in _CHANGE_SET_TERMINAL_STATES:
+                raise BuilderWorkflowError("the active change set is already terminal")
+            return current
+
+        def update_change_set(*, status: str | None = None, gate: str | None = None) -> None:
+            current = workflow.get("change_set")
+            if not isinstance(current, dict):
+                return
+            if status:
+                current["status"] = status
+            if gate:
+                current["gate"] = gate
+            current["updated_at"] = changed_at
+
+        def add_change_evidence(change_id: Any) -> None:
+            token = str(change_id or "").strip()
+            current = workflow.get("change_set")
+            if not token or not isinstance(current, dict):
+                return
+            members = [
+                str(item).strip()
+                for item in current.get("member_change_ids") or []
+                if str(item).strip()
+            ]
+            if token not in members:
+                members.append(token)
+            current["member_change_ids"] = members[-100:]
+            current["updated_at"] = changed_at
 
         def invalidate_delivery(reason: str) -> None:
             if str(delivery.get("status") or "idle") in {"trial", "accepted"}:
@@ -375,10 +523,84 @@ class BuilderWorkflowService:
                         "stale_at": changed_at,
                     }
                 )
+        if action == "plan_change_set":
+            change_set_id = str(metadata.get("change_set_id") or "").strip()
+            if not change_set_id:
+                raise BuilderWorkflowError("change_set_id is required")
+            existing = workflow.get("change_set")
+            if isinstance(existing, Mapping) and str(existing.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES:
+                supersedes = str(metadata.get("supersedes_change_set_id") or "").strip()
+                if supersedes != str(existing.get("change_set_id") or ""):
+                    raise BuilderWorkflowError(
+                        "an active change set already exists; supersedes_change_set_id is required"
+                    )
+            raw_issues = metadata.get("issues")
+            if not isinstance(raw_issues, (list, tuple)) or not raw_issues:
+                raise BuilderWorkflowError("change set requires at least one issue")
+            if len(raw_issues) > _MAX_CHANGE_ISSUES:
+                raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
+            issues = [_normalize_issue(item, index=index) for index, item in enumerate(raw_issues, start=1)]
+            issue_ids = [item["issue_id"] for item in issues]
+            if len(set(issue_ids)) != len(issue_ids):
+                raise BuilderWorkflowError("change set issue_ids must be unique")
+            route = "prototype_first" if any(item["lane"] == "prototype" for item in issues) else "automation_direct"
+            gate = "prototype" if route == "prototype_first" else "automation"
+            workflow["change_set"] = {
+                "schema": BUILDER_CHANGE_SET_SCHEMA,
+                "change_set_id": change_set_id,
+                "request": _bounded_text(metadata.get("request"), field="change set request", max_length=4000),
+                "route": route,
+                "gate": gate,
+                "status": "planned",
+                "issues": issues,
+                "member_change_ids": [change_set_id],
+                "source_message_ids": [
+                    str(item).strip()
+                    for item in metadata.get("source_message_ids") or []
+                    if str(item).strip()
+                ][-100:],
+                "created_at": changed_at,
+                "updated_at": changed_at,
+            }
+            return
+        if action == "change_issue_updated":
+            current = require_change_set(metadata.get("change_set_id"))
+            issue_id = str(metadata.get("issue_id") or "").strip()
+            status = str(metadata.get("status") or "").strip().lower()
+            if status not in _ISSUE_STATES:
+                raise BuilderWorkflowError(
+                    "change set issue status must be open, in_progress, resolved, or deferred"
+                )
+            issue = next(
+                (item for item in current.get("issues") or [] if item.get("issue_id") == issue_id),
+                None,
+            )
+            if not isinstance(issue, dict):
+                raise BuilderWorkflowError(f"unknown change set issue_id: {issue_id}")
+            issue["status"] = status
+            update_change_set(status="in_progress" if status == "in_progress" else None)
+            return
+        if action == "change_evidence_recorded":
+            require_change_set(metadata.get("change_set_id"))
+            change_id = str(metadata.get("change_id") or "").strip()
+            if not change_id:
+                raise BuilderWorkflowError("change evidence requires change_id")
+            add_change_evidence(change_id)
+            return
         if action == "stabilize_prototype":
             self._require_active(workflow, "prototype", action)
             prototype.update({"status": "working", "stable": True, "stabilized_at": changed_at})
             prototype["head_revision"] = metadata.get("revision") or prototype.get("head_revision")
+            current = workflow.get("change_set")
+            if isinstance(current, dict) and current.get("gate") == "prototype":
+                for issue in current.get("issues") or []:
+                    if (
+                        isinstance(issue, dict)
+                        and issue.get("lane") == "prototype"
+                        and issue.get("status") != "deferred"
+                    ):
+                        issue["status"] = "resolved"
+                update_change_set(status="approved", gate="automation")
             return
         if action in {"handoff_to_automation", "automation_started"}:
             self._require_active(workflow, "prototype", action)
@@ -402,6 +624,8 @@ class BuilderWorkflowService:
             )
             invalidate_delivery("automation_started")
             workflow["pending_transition"] = None
+            update_change_set(status="in_progress", gate="automation")
+            add_change_evidence(metadata.get("change_id"))
             return
         if action == "automation_iteration_started":
             self._require_active(workflow, "automation", action)
@@ -427,6 +651,8 @@ class BuilderWorkflowService:
             )
             invalidate_delivery("automation_iteration_started")
             workflow["pending_transition"] = None
+            update_change_set(status="in_progress", gate="automation")
+            add_change_evidence(metadata.get("change_id"))
             return
         if action == "automation_completed":
             self._require_active(workflow, "automation", action)
@@ -441,6 +667,17 @@ class BuilderWorkflowService:
                     "error": None,
                 }
             )
+            current = workflow.get("change_set")
+            if isinstance(current, dict):
+                for issue in current.get("issues") or []:
+                    if (
+                        isinstance(issue, dict)
+                        and issue.get("lane") == "automation"
+                        and issue.get("status") != "deferred"
+                    ):
+                        issue["status"] = "resolved"
+                update_change_set(status="implemented", gate="trial")
+                add_change_evidence(metadata.get("change_id"))
             return
         if action == "automation_failed":
             self._require_active(workflow, "automation", action)
@@ -453,6 +690,8 @@ class BuilderWorkflowService:
                 }
             )
             workflow["pending_transition"] = None
+            update_change_set(status="blocked", gate="automation")
+            add_change_evidence(metadata.get("change_id"))
             return
         if action == "request_return_to_prototype":
             self._require_active(workflow, "automation", action)
@@ -504,6 +743,8 @@ class BuilderWorkflowService:
             )
             invalidate_delivery("returned_to_prototype")
             workflow["pending_transition"] = None
+            update_change_set(status="in_progress", gate="prototype")
+            add_change_evidence(metadata.get("change_id"))
             return
         if action == "checkpoint_recorded":
             change_id = str(metadata.get("change_id") or "").strip()
@@ -538,6 +779,8 @@ class BuilderWorkflowService:
                     "rebase_plan": dict(rebase_plan) if has_rebase_plan else None,
                 }
             )
+            add_change_evidence(change_id)
+            update_change_set(status="checkpointed", gate="trial")
             return
         if action == "candidate_prepared":
             self._require_active(workflow, "automation", action)
@@ -566,6 +809,7 @@ class BuilderWorkflowService:
                     "stale_reason": None,
                 }
             )
+            update_change_set(status="trial", gate="trial")
             return
         if action in {"candidate_accepted", "candidate_rejected"}:
             if str(delivery.get("status") or "") != "trial":
@@ -579,6 +823,10 @@ class BuilderWorkflowService:
                     "decided_at": changed_at,
                     "decision_observations": list(metadata.get("observations") or ()),
                 }
+            )
+            update_change_set(
+                status="accepted" if action == "candidate_accepted" else "changes_requested",
+                gate="publication" if action == "candidate_accepted" else "automation",
             )
             return
         if action == "candidate_stale":
@@ -597,6 +845,7 @@ class BuilderWorkflowService:
                     "rebase_plan": dict(rebase_plan),
                 }
             )
+            update_change_set(status="rebase_required", gate="automation")
             return
         if action == "publish":
             self._require_active(workflow, "automation", action)
@@ -620,6 +869,7 @@ class BuilderWorkflowService:
                 }
             )
             delivery.update({"status": "published", "published_at": changed_at})
+            update_change_set(status="published", gate="complete")
             return
         raise BuilderWorkflowError(f"unsupported Builder workflow transition: {action}")
 
@@ -740,6 +990,7 @@ class BuilderWorkflowService:
 
 
 __all__ = [
+    "BUILDER_CHANGE_SET_SCHEMA",
     "BUILDER_WORKFLOW_EVENT",
     "BUILDER_WORKFLOW_SCHEMA",
     "BuilderWorkflowError",

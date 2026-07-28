@@ -158,6 +158,7 @@ class BuilderAutomationService:
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
         brief_path: str | None = None,
+        change_set_id: str | None = None,
     ) -> dict[str, Any]:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
@@ -166,9 +167,21 @@ class BuilderAutomationService:
         workflow_before = self._workflow().describe(kind, project_id)
         if workflow_before.get("archived"):
             raise ValueError("archived projects cannot start automation")
+        active_change_set = (
+            workflow_before.get("change_set")
+            if isinstance(workflow_before.get("change_set"), Mapping)
+            else {}
+        )
+        active_change_set_id = str(active_change_set.get("change_set_id") or "").strip()
+        requested_change_set_id = str(change_set_id or active_change_set_id).strip() or None
+        if change_set_id and active_change_set_id and str(change_set_id).strip() != active_change_set_id:
+            raise ValueError("change_set_id does not match the active Builder change set")
         with _LOCK:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
+                current_change_set_id = str(current.get("change_set_id") or "").strip() or None
+                if requested_change_set_id and current_change_set_id != requested_change_set_id:
+                    raise ValueError("another Builder change set already owns the active Automation session")
                 refreshed = self.refresh_session(current)
                 result = {
                     "ok": True,
@@ -206,6 +219,7 @@ class BuilderAutomationService:
                 "topic_id": f"prompt-project:{kind}:{project_id}",
                 "implementation_brief": brief,
                 "brief_path": str(brief_path or "").strip() or None,
+                "change_set_id": requested_change_set_id,
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
@@ -239,6 +253,7 @@ class BuilderAutomationService:
                         else session.get("source_prototype_version")
                     ),
                     "task_id": session.get("current_task_id"),
+                    "change_id": session.get("change_id"),
                 },
             )
         self._launch_worker(session["session_id"])
@@ -428,7 +443,10 @@ class BuilderAutomationService:
                     "request_return_to_prototype",
                     actor="builder.automation",
                     reason="Automation result is being adapted into a safe prototype",
-                    metadata={"task_id": session.get("current_task_id")},
+                    metadata={
+                        "task_id": session.get("current_task_id"),
+                        "change_id": session.get("change_id"),
+                    },
                 )
             else:
                 self._workflow().transition(
@@ -437,7 +455,10 @@ class BuilderAutomationService:
                     "automation_iteration_started",
                     actor="builder.automation",
                     reason="a new Automation iteration was queued",
-                    metadata={"task_id": session.get("current_task_id")},
+                    metadata={
+                        "task_id": session.get("current_task_id"),
+                        "change_id": session.get("change_id"),
+                    },
                 )
         self._launch_worker(session["session_id"])
         return {
@@ -607,6 +628,8 @@ class BuilderAutomationService:
             "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
             "iteration": int(session.get("iteration") or 0),
             "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
+            "change_set_id": str(session.get("change_set_id") or "").strip() or None,
+            "change_id": str(session.get("change_id") or "").strip() or None,
             "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
             "steps": BuilderAutomationService._step_projection(status),
             "progress": dict(progress) if progress else None,
@@ -806,6 +829,19 @@ class BuilderAutomationService:
             attachments=attachments,
             created_at=_now_iso(),
         )
+        workflow_state = self._workflow().describe(kind, project_id)
+        change_set = (
+            workflow_state.get("change_set")
+            if isinstance(workflow_state.get("change_set"), Mapping)
+            else {}
+        )
+        acceptance_checks = [
+            str(criterion).strip()
+            for issue in change_set.get("issues") or []
+            if isinstance(issue, Mapping) and issue.get("status") != "deferred"
+            for criterion in issue.get("acceptance_criteria") or []
+            if str(criterion).strip()
+        ]
         request_id = (
             f"realize.{_safe_token(kind)}.{_safe_token(project_id)}."
             f"{_safe_token(session.get('change_id'), fallback='change')}."
@@ -826,6 +862,7 @@ class BuilderAutomationService:
                 "iteration_instruction": iteration_instruction,
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
+                "change_set": dict(change_set) if change_set else None,
             },
             "repo": {
                 "sparse_paths": sparse_paths,
@@ -842,6 +879,7 @@ class BuilderAutomationService:
             },
             "acceptance": {
                 "checks": [
+                    *acceptance_checks,
                     "skill manifest is valid",
                     "Python handlers compile",
                     "scenario and webui JSON are valid when present",
@@ -852,6 +890,7 @@ class BuilderAutomationService:
                 "automation_session_id": session.get("session_id"),
                 "webspace_id": session.get("webspace_id"),
                 "iteration": session.get("iteration"),
+                "change_set_id": session.get("change_set_id"),
             },
         }
         return self.factory.submit_realize_request(request)
@@ -913,6 +952,7 @@ class BuilderAutomationService:
                                 actor="builder.automation",
                                 metadata={
                                     "task_id": session.get("current_task_id"),
+                                    "change_id": session.get("change_id"),
                                     "error": (
                                         session.get("last_failure", {}).get("message")
                                         if isinstance(session.get("last_failure"), Mapping)
@@ -1051,6 +1091,7 @@ class BuilderAutomationService:
                     metadata={
                         "revision": transition_snapshot.get("revision"),
                         "task_id": current.get("current_task_id"),
+                        "change_id": current.get("change_id"),
                     },
                 )
                 readiness["workflow_transition"] = {
@@ -1070,6 +1111,7 @@ class BuilderAutomationService:
                         metadata={
                             "source_prototype_revision": current.get("source_prototype_version"),
                             "task_id": current.get("current_task_id"),
+                            "change_id": current.get("change_id"),
                         },
                     )
                 self._workflow().transition(
@@ -1079,6 +1121,7 @@ class BuilderAutomationService:
                     actor="builder.automation",
                     metadata={
                         "task_id": current.get("current_task_id"),
+                        "change_id": current.get("change_id"),
                         "version": self._project_version(object_type, object_id),
                         "snapshot_path": (
                             readiness.get("automation_snapshot", {}).get("path")
@@ -1139,6 +1182,7 @@ class BuilderAutomationService:
                     actor="builder.automation",
                     metadata={
                         "task_id": current.get("current_task_id"),
+                        "change_id": current.get("change_id"),
                         "error": readiness["error"],
                     },
                 )
@@ -1178,6 +1222,7 @@ class BuilderAutomationService:
         topic_id = str(session.get("topic_id") or "").strip()
         metadata = {
             "change_id": change_id,
+            "change_set_id": str(session.get("change_set_id") or "").strip(),
             "conversation_id": conversation_id,
             "topic_id": topic_id,
             "thread_id": topic_id,
@@ -1224,7 +1269,10 @@ class BuilderAutomationService:
                     ],
                     request_id=str(session.get("current_task_id") or "").strip() or None,
                     summary=message,
-                    meta={"automation_session_id": session.get("session_id")},
+                    meta={
+                        "automation_session_id": session.get("session_id"),
+                        "change_set_id": session.get("change_set_id"),
+                    },
                 )
             except Exception:
                 pass
