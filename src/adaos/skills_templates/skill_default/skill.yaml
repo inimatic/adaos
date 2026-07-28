@@ -82,6 +82,8 @@ data_routes:
     first_paint: "empty skill memory projection"
     recovery: "memory.search/list rebuilds from node-local conversation store"
     guard_visibility: "memory writes are proposed through Pending Actions before long-term reuse"
+    budget:
+      max_payload_bytes: 65536
 
 conversation:
   dialog_channel:

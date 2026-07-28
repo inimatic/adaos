@@ -689,6 +689,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         artifacts = dict(request.get("artifacts") or {})
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
+        self._validate_skill_data_routes(workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -797,6 +798,35 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    @staticmethod
+    def _validate_skill_data_routes(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Apply install-strict causal and budget rules before a result can commit."""
+
+        from adaos.services.skill.validation import validate_data_route_contract
+
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                errors.append(f"{relative}: data route validation failed: {type(exc).__name__}: {exc}")
+                continue
+            if not isinstance(manifest, dict):
+                errors.append(f"{relative}: skill manifest must be an object")
+                continue
+            route_issues = validate_data_route_contract(manifest)
+            if route_issues:
+                errors.extend(
+                    f"{relative}: {issue.code}: {issue.message} ({issue.where})"
+                    for issue in route_issues
+                )
+            else:
+                checks.append({"kind": "skill.data_routes.strict", "path": relative, "ok": True})
 
     @staticmethod
     def _validate_checkpoint_owned_manifest_metadata(

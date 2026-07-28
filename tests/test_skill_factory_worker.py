@@ -511,6 +511,40 @@ def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkey
     assert "ADAOS_TOKEN" not in environment
 
 
+def test_worker_treats_browser_data_route_warnings_as_strict_errors(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "tools": [{"name": "list_items", "input_schema": {"type": "object"}}],
+                "data_routes": [
+                    {
+                        "surface": "widget:items",
+                        "route": "tool/details",
+                        "tool": "list_items",
+                        "first_paint": "empty list",
+                        "recovery": "retry",
+                        "guard_visibility": "show unavailable",
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_skill_data_routes(workspace, checks, errors)
+
+    assert any("data_routes.budget_missing" in error for error in errors)
+    assert any("data_routes.read_policy_missing" in error for error in errors)
+    assert checks == []
+
+
 def test_codex_executor_discovers_vscode_bundled_cli(monkeypatch, tmp_path: Path) -> None:
     executable = (
         tmp_path
