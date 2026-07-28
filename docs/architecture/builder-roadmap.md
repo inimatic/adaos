@@ -913,6 +913,25 @@ observed projection matches the latest desired generation.
   interactive Builder, and Automation ingress before it becomes durable
   evidence. Codex-operated non-ASCII tool requests use UTF-8 files and
   `--json-file`, not PowerShell native-process text pipelines.
+- [x] `[must]` Refresh a declarative host from updates to its configured root
+  Yjs `initialStateSource`, so create/select project changes redraw Builder
+  without navigation or a page reload. The client regression covers a
+  `test03_recipes` to `test04_recipes` selection change.
+- [x] `[must]` Treat `idle`, `not_started`, and default Automation projections
+  as absence rather than lineage evidence. A fresh `test04_recipes` projects
+  one Prototype revision, does not synthesize an Automation row, and never
+  borrows the Prototype version for a nonexistent result. Control skill
+  `0.1.39` carries the focused regression and strict validation evidence.
+- [x] `[must]` Preserve every functional companion skill across Automation
+  turns and provide the installed Workspace Publication as an immutable
+  implementation baseline. The worker rejects changes to that baseline and
+  removes it before DEV activation or release-package construction.
+- [ ] `[must]` Complete the corrective functional Builder Automation from the
+  current Prototype plus installed Publication, then repeat candidate Trial,
+  stable Publication, exact Workspace materialization, and byte/lock checks.
+- [ ] `[must]` Complete browser acceptance for atomic create/select redraw,
+  canonical single-response project chat, and `proto:` / `active:` /
+  `public:` Preview selection after the corrective Publication.
 - [ ] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.

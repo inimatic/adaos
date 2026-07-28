@@ -172,6 +172,12 @@ tool, service, credential, device, external-network, and production-data
 bindings are removed from the new Prototype and replaced with bounded local
 state or mock data. A later handoff receives both that Prototype as the current
 requirement and the retained Automation as its previous implementation.
+It also receives the currently installed Workspace Publication as a separate
+immutable implementation baseline. Companion skills are resolved from the
+current Prototype, retained Automation, and current Publication as a union, so
+a safely disconnected Prototype cannot silently erase established functional
+dependencies. The Publication attachment is read-only, is rejected if Codex
+changes it, and is stripped before DEV activation and package construction.
 If adaptation fails, Builder records the adaptation diagnostic and restores
 the retained Automation to `completed`; the failed side process never
 invalidates the last working implementation or Publication snapshot.
