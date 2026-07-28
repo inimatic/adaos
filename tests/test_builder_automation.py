@@ -883,6 +883,40 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+def test_refresh_restores_recovered_return_to_prototype_transition(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.prototype",
+        "status": "failed",
+        "last_failure": {"message": "worker failed before finalization"},
+    }
+    task = {
+        "task_id": "task.prototype",
+        "status": "completed",
+        "updated_at": "2026-07-28T12:00:00+00:00",
+        "realize_request": {
+            "artifacts": {"workflow_transition": "return_to_prototype"},
+        },
+        "result": {"summary": "Safe prototype recovered."},
+    }
+    monkeypatch.setattr(
+        type(service.factory),
+        "snapshot",
+        lambda _self, **_kwargs: {"tasks": [task]},
+    )
+
+    refreshed = service.refresh_session(session)
+
+    assert refreshed["status"] == "completed"
+    assert refreshed["pending_workflow_transition"] == "return_to_prototype"
+    assert refreshed["last_result"]["summary"] == "Safe prototype recovered."
+
+
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []

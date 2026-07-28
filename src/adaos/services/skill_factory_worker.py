@@ -901,9 +901,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     payload = _read_json(path)
                     validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
                     if validation_errors:
-                        errors.extend(
-                            f"{path.relative_to(workspace)}: webui schema: {item.message}" for item in validation_errors[:20]
-                        )
+                        for item in validation_errors[:20]:
+                            pointer = "/".join(str(part) for part in item.absolute_path) or "<root>"
+                            errors.append(
+                                f"{path.relative_to(workspace)}: webui schema at {pointer}: {item.message}"
+                            )
                     else:
                         checks.append({"kind": "webui.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
             except Exception as exc:

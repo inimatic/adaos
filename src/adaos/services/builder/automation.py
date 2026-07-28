@@ -814,6 +814,29 @@ class BuilderAutomationService:
         )
         current["task"] = task
         current["updated_at"] = task.get("updated_at") or _now_iso()
+        realize_request = (
+            task.get("realize_request")
+            if isinstance(task.get("realize_request"), Mapping)
+            else {}
+        )
+        request_artifacts = (
+            realize_request.get("artifacts")
+            if isinstance(realize_request.get("artifacts"), Mapping)
+            else {}
+        )
+        recovered_transition = str(request_artifacts.get("workflow_transition") or "").strip()
+        if (
+            task_status == "completed"
+            and recovered_transition
+            and not str(current.get("pending_workflow_transition") or "").strip()
+            and not isinstance(current.get("completion_readiness"), Mapping)
+        ):
+            # A retryable worker failure clears the pending transition so the
+            # old Automation remains authoritative.  If that same preserved
+            # task is later recovered, restore its original transition before
+            # finalization; otherwise the safe Prototype would be applied to
+            # DEV but never entered in the workflow state machine.
+            current["pending_workflow_transition"] = recovered_transition
         run_dir = Path(self.runs_root) / _safe_token(task_id)
         current["local_run"] = {
             "path": str(run_dir),
