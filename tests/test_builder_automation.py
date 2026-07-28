@@ -679,7 +679,10 @@ def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(tmp_path: Path,
     assert finalized[0]["reconciliation_history"][-1]["previous_change_id"] == previous_change_id
 
 
-def test_checkpoint_reconciliation_refuses_partially_committed_pair(tmp_path: Path) -> None:
+def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -689,6 +692,7 @@ def test_checkpoint_reconciliation_refuses_partially_committed_pair(tmp_path: Pa
     )
     failed = service.get_session("scenario", "recipes")
     assert failed is not None
+    previous_change_id = failed["change_id"]
     failed["status"] = "failed"
     failed["completion_readiness"] = {
         "ok": False,
@@ -700,9 +704,26 @@ def test_checkpoint_reconciliation_refuses_partially_committed_pair(tmp_path: Pa
     }
     failed["last_failure"] = {"stage": "forge_checkpoint", "message": "timeout"}
     service._save_session(failed)
+    finalized: list[dict] = []
 
-    with pytest.raises(ValueError, match="partially committed"):
-        service.reconcile_checkpoint(object_type="scenario", object_id="recipes")
+    def finalize(_service, session):
+        finalized.append(dict(session))
+        completed = dict(session)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not be submitted")),
+    )
+
+    result = service.reconcile_checkpoint(object_type="scenario", object_id="recipes")
+
+    assert result["ok"] is True
+    assert result["change_id"] == previous_change_id
+    assert finalized[0]["reconciliation_history"][-1]["mode"] == "resume_partial"
 
 
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:

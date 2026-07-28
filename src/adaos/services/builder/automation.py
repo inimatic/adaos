@@ -481,11 +481,11 @@ class BuilderAutomationService:
         }
 
     def reconcile_checkpoint(self, *, object_type: str, object_id: str) -> dict[str, Any]:
-        """Explicitly repeat only a failed Forge checkpoint for a validated task.
+        """Explicitly reconcile failed Forge checkpoints for a validated task.
 
-        This recovery never submits or runs Codex.  It is intentionally limited
-        to a completed task whose entire paired checkpoint failed, so a partially
-        committed artifact set cannot be advanced under a new identity.
+        This recovery never submits or runs Codex.  When a paired checkpoint is
+        partial, it retains the original change id so already committed artifacts
+        are verified and returned idempotently while only missing artifacts write.
         """
 
         with _LOCK:
@@ -514,19 +514,19 @@ class BuilderAutomationService:
                 raise ValueError("checkpoint reconciliation requires a Forge checkpoint failure")
             if str(task.get("status") or "") != "completed" or not result:
                 raise ValueError("checkpoint reconciliation requires a validated completed Codex result")
-            if not checkpoints or any(bool(item.get("ok")) for item in checkpoints):
-                raise ValueError(
-                    "checkpoint reconciliation requires a complete pre-commit failure; "
-                    "partially committed artifact sets require manual recovery"
-                )
+            if not checkpoints or not any(not bool(item.get("ok")) for item in checkpoints):
+                raise ValueError("checkpoint reconciliation requires at least one failed artifact")
 
             task_id = str(current.get("current_task_id") or "").strip()
-            reconciliation_id = self._change_id(
+            previous_change_id = str(current.get("change_id") or "").strip()
+            partial_checkpoint = any(bool(item.get("ok")) for item in checkpoints)
+            if partial_checkpoint and not previous_change_id:
+                raise ValueError("partial checkpoint reconciliation requires the original change id")
+            reconciliation_id = previous_change_id if partial_checkpoint else self._change_id(
                 session_id=str(current.get("session_id") or ""),
                 iteration=int(current.get("iteration") or 0),
                 seed=f"{task_id}:checkpoint-reconcile",
             )
-            previous_change_id = str(current.get("change_id") or "").strip()
             history = [
                 dict(item)
                 for item in current.get("reconciliation_history") or []
@@ -538,6 +538,7 @@ class BuilderAutomationService:
                     "task_id": task_id,
                     "previous_change_id": previous_change_id or None,
                     "change_id": reconciliation_id,
+                    "mode": "resume_partial" if partial_checkpoint else "retry_precommit",
                     "requested_at": _now_iso(),
                 }
             )
