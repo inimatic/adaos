@@ -155,6 +155,7 @@ def get_state(
     object_type: str | None = None,
     object_id: str | None = None,
     webspace_id: str = "desktop",
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Return the compact render-safe automation projection."""
 
@@ -163,6 +164,7 @@ def get_state(
             object_type=object_type,
             object_id=object_id,
             webspace_id=webspace_id,
+            conversation_id=conversation_id,
         )
         or {}
     )

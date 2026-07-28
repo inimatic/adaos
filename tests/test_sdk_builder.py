@@ -70,7 +70,11 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
         object_id="builder",
         conversation_id="conv.builder",
     )
-    state = automation.get_state(object_type="scenario", object_id="builder")
+    state = automation.get_state(
+        object_type="scenario",
+        object_id="builder",
+        conversation_id="conv.builder",
+    )
 
     assert started["automation"]["status"] == "queued"
     assert submitted["automation"]["iteration"] == 2
@@ -78,6 +82,7 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
     assert state["session_present"] is True
     assert [name for name, _kwargs in service.calls] == ["start", "submit", "projection", "projection"]
     assert service.calls[1][1]["conversation_id"] == "conv.builder"
+    assert service.calls[-1][1]["conversation_id"] == "conv.builder"
 
 
 def test_automation_facade_treats_missing_session_as_idle_state(monkeypatch) -> None:

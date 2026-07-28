@@ -554,6 +554,34 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
     assert refreshed["completion_readiness"]["ok"] is True
 
 
+def test_projection_backfills_missing_conversation_before_notification(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    notified: list[str] = []
+
+    def notify(self, session):
+        notified.append(str(session.get("conversation_id") or ""))
+        return dict(session)
+
+    monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", notify)
+
+    result = service.projection(
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+        conversation_id="conv.builder.recipes",
+    )
+
+    assert result["ok"] is True
+    assert notified == ["conv.builder.recipes"]
+    assert service.get_session("scenario", "recipes")["conversation_id"] == "conv.builder.recipes"
+
+
 def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(

@@ -720,6 +720,7 @@ class BuilderAutomationService:
         object_type: str | None = None,
         object_id: str | None = None,
         webspace_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> dict[str, Any]:
         session = (
             self.get_session(str(object_type), str(object_id))
@@ -732,6 +733,11 @@ class BuilderAutomationService:
                 "error": "automation_session_not_found",
                 "automation": self.empty_projection(webspace_id=webspace_id),
             }
+        incoming_conversation_id = str(conversation_id or "").strip()
+        if incoming_conversation_id and not str(session.get("conversation_id") or "").strip():
+            session["conversation_id"] = incoming_conversation_id
+            session["updated_at"] = _now_iso()
+            self._save_session(session)
         current = self.refresh_session(session)
         if current.get("status") == "completed":
             current = self._notify_completed_session(current)
