@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -622,7 +623,7 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK source exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
-9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields.
+9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields. Tests must validate their shape or semantics and must not assert an exact value for either field, because checkpointing changes them after your checks.
 10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it."""
         required_result = required_result.format(
             target_id=target_id,
@@ -712,6 +713,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         artifacts = dict(request.get("artifacts") or {})
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
+        self._validate_tests_do_not_pin_checkpoint_metadata(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
@@ -821,6 +823,60 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    @staticmethod
+    def _validate_tests_do_not_pin_checkpoint_metadata(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        def checkpoint_key(node: ast.AST) -> str | None:
+            if isinstance(node, ast.Subscript):
+                key = node.slice
+                if isinstance(key, ast.Constant) and key.value in {"version", "updated_at"}:
+                    return str(key.value)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value in {"version", "updated_at"}
+            ):
+                return str(node.args[0].value)
+            return None
+
+        def exact_literal(node: ast.AST) -> bool:
+            if isinstance(node, ast.Constant):
+                return isinstance(node.value, (str, int, float))
+            if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+                return bool(node.elts) and all(exact_literal(item) for item in node.elts)
+            return False
+
+        for path in sorted(workspace.glob("**/tests/test_*.py")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError, UnicodeError):
+                continue
+            violations: list[tuple[int, str]] = []
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Compare):
+                    continue
+                expressions = [node.left, *node.comparators]
+                keys = [key for item in expressions if (key := checkpoint_key(item))]
+                if not keys:
+                    continue
+                if any(exact_literal(item) for item in expressions if checkpoint_key(item) is None):
+                    violations.append((int(getattr(node, "lineno", 0) or 0), keys[0]))
+            if violations:
+                errors.extend(
+                    f"{relative}:{line}: generated test pins checkpoint-owned manifest {key}; "
+                    "validate its format or semantics instead of an exact value"
+                    for line, key in violations
+                )
+            else:
+                checks.append({"kind": "checkpoint_test_contract", "path": relative, "ok": True})
 
     @staticmethod
     def _validate_skill_data_routes(
