@@ -272,6 +272,87 @@ def test_stable_promotion_retains_other_subscribed_workspace_projects(tmp_path: 
     assert '"planner"' in registry
 
 
+def test_current_subscription_repairs_a_missing_legacy_workspace_slot(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+
+    plans = {}
+    for name, marker in (("recipes", "one"), ("planner", "two")):
+        dev = _named_scenario(tmp_path / "dev", name, marker=marker)
+        service.record_push(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            source_ref=_source_for(name),
+        )
+        prepared = service.prepare_candidate(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            change_ids=(f"change-{name}",),
+            validation_evidence={"suite": "scenario-validation", "status": "passed"},
+        )
+        plans[name] = prepared.plan
+        service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+        _promote(service, prepared.candidate.candidate_id)
+
+    manager = WorkspaceActivationManager(
+        workspace_root=workspace,
+        package_store=service.package_store,
+        state_root=service.state_root / "activation",
+    )
+    manager.activate(
+        plans["planner"],
+        idempotency_key="simulate-legacy-primary-replacement",
+        slot_id="primary",
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest.legacy_workspace",
+            "reason": "simulate the former single-slot activation",
+        },
+        health_policy={
+            "mode": "skip",
+            "approved_by": "pytest.legacy_workspace",
+            "reason": "simulation has no live runtime",
+        },
+    )
+    assert not (workspace / "scenarios" / "recipes").exists()
+
+    notice = service.check_subscription("recipes")
+    assert notice.available is True
+    assert notice.activation_allowed is True
+    assert notice.reason == "workspace_slot_missing"
+    reviewed = service.plan_subscription_update("recipes", notice=notice)
+    repaired = service.activate_subscription_update(
+        "recipes",
+        expected_plan_digest=reviewed.plan_digest,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest.subscription_repair",
+            "reason": "test Workspace has no live runtime",
+        },
+        health_policy={
+            "mode": "skip",
+            "approved_by": "pytest.subscription_repair",
+            "reason": "test Workspace has no live runtime",
+        },
+    )
+
+    assert notice.reason == "workspace_slot_missing"
+    assert {item.project_id for item in repaired.activation.workspace_lock.slots} == {
+        "recipes",
+        "planner",
+    }
+    assert (workspace / "scenarios" / "recipes" / "webui.json").is_file()
+    assert (workspace / "scenarios" / "planner" / "webui.json").is_file()
+
+
 def test_configured_promotion_publishes_exact_attestations_before_channel(
     tmp_path: Path,
 ) -> None:

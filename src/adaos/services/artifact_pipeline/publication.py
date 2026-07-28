@@ -554,13 +554,36 @@ class ArtifactPublicationService:
         except KeyError as exc:
             raise PublicationError(f"project has no stable subscription: {project_id}") from exc
         pointer = self.remote.get_channel(project_id, subscription.channel)
-        available = pointer.release_digest != subscription.installed_digest
-        allowed = available and subscription.policy == "notify"
+        channel_moved = pointer.release_digest != subscription.installed_digest
+        activation_manager = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
+        )
+        lock = activation_manager.load_lock()
+        installed_slot = next(
+            (
+                item
+                for item in (lock.slots if lock is not None else ())
+                if item.project_id == subscription.project_id
+                and item.release == subscription.installed_release
+                and item.release_digest == subscription.installed_digest
+            ),
+            None,
+        )
+        workspace_slot_missing = bool(subscription.installed_digest and installed_slot is None)
+        available = channel_moved or workspace_slot_missing
+        allowed = workspace_slot_missing and not channel_moved
+        if channel_moved:
+            allowed = subscription.policy == "notify"
         reason = "up_to_date"
-        if available and subscription.policy == "pinned":
+        if channel_moved and subscription.policy == "pinned":
             reason = "pinned"
-        elif available:
+        elif channel_moved:
             reason = "channel_moved"
+        elif workspace_slot_missing:
+            reason = "workspace_slot_missing"
         return SubscriptionUpdateNotice(subscription, pointer, available, allowed, reason)
 
     def plan_subscription_update(
