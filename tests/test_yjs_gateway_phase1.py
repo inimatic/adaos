@@ -2416,7 +2416,15 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
     ydoc = Y.YDoc()
     with ydoc.begin_transaction() as txn:
         ydoc.get_map("runtime").set(txn, "old_snapshot_only", "x" * 512)
-    room = SimpleNamespace(ydoc=ydoc, clients=[])
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.messages: list[bytes] = []
+
+        async def send(self, message: bytes) -> None:
+            self.messages.append(bytes(message))
+
+    client = _FakeClient()
+    room = SimpleNamespace(ydoc=ydoc, clients=[client])
 
     class _FakeStore:
         def __init__(self) -> None:
@@ -2483,6 +2491,9 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
     assert result["full_state_snapshot_persisted"] is True
     assert store.replace_calls
     assert result["broadcast_update_bytes"] == len(update)
+    assert result["direct_client_broadcast_count"] == 1
+    assert result["direct_client_broadcast_failed"] == 0
+    assert client.messages == [gateway_module.create_update_message(update)]
     assert result["full_state_update_bytes"] == len(store.replace_calls[-1]["snapshot"])
     assert store.replace_calls[-1]["snapshot"] != update
     assert len(store.replace_calls[-1]["snapshot"]) > len(update)

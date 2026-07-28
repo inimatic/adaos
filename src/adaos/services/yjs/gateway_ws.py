@@ -6994,6 +6994,30 @@ async def _apply_room_materialized_payload(
         else:
             phase_timings_ms["mark_backend_update"] = 0.0
             phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        direct_client_broadcast_count = 0
+        direct_client_broadcast_failed = 0
+        if update:
+            stage_started = time.perf_counter()
+            clients = list(getattr(room, "clients", []) or [])
+            if clients:
+                message = create_update_message(bytes(update))
+
+                async def _send_materialized_update(client: Any) -> bool:
+                    try:
+                        await client.send(message)
+                        return True
+                    except Exception:
+                        return False
+
+                delivery_results = await asyncio.gather(
+                    *(_send_materialized_update(client) for client in clients)
+                )
+                direct_client_broadcast_count = sum(1 for delivered in delivery_results if delivered)
+                direct_client_broadcast_failed = len(delivery_results) - direct_client_broadcast_count
+            phase_timings_ms["direct_client_broadcast"] = _elapsed_ms_since(stage_started)
+        else:
+            phase_timings_ms["direct_client_broadcast"] = 0.0
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
         try:
             setattr(room, "_last_materialized_payload", _compact_materialized_payload_for_room_history(payload))
         except Exception:
@@ -7014,6 +7038,8 @@ async def _apply_room_materialized_payload(
             "full_state_snapshot_result": full_state_snapshot_result,
             "broadcast_update_bytes": len(update or b""),
             "full_state_update_bytes": len(full_state_update or b""),
+            "direct_client_broadcast_count": int(direct_client_broadcast_count),
+            "direct_client_broadcast_failed": int(direct_client_broadcast_failed),
         }
     except BaseException as exc:
         if _is_control_flow_base_exception(exc):
