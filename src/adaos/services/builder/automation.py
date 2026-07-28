@@ -949,9 +949,34 @@ class BuilderAutomationService:
                     "message": error,
                     "updated_at": readiness.get("completed_at") or current.get("updated_at"),
                 }
+        terminal_readiness = bool(
+            task_status == "completed"
+            and isinstance(readiness, Mapping)
+            and bool(readiness.get("ok"))
+            and str(readiness.get("task_id") or "").strip() == task_id
+        )
         task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
         finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
-        if task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:
+        if terminal_readiness:
+            existing_progress = (
+                current.get("progress")
+                if isinstance(current.get("progress"), Mapping)
+                else {}
+            )
+            current["status"] = "completed"
+            current["progress"] = {
+                "task_id": task_id,
+                "status": "completed",
+                "message": (
+                    existing_progress.get("message")
+                    if str(existing_progress.get("status") or "") == "completed"
+                    else "Automation result activated and checkpointed"
+                ),
+                "updated_at": readiness.get("completed_at") or current.get("updated_at"),
+            }
+            current["updated_at"] = current["progress"]["updated_at"]
+            current.pop("last_failure", None)
+        elif task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:
             current["progress"] = dict(task_progress[-1])
         if current.get("status") == "failed" and isinstance(current.get("last_failure"), Mapping):
             failure = current["last_failure"]

@@ -479,6 +479,54 @@ def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_pat
     assert refreshed["progress"]["message"] == "Forge finalization"
 
 
+def test_refresh_preserves_terminal_orchestration_progress_after_worker_completion(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "task.1",
+                    "status": "completed",
+                    "updated_at": "2026-07-18T00:00:00+00:00",
+                    "progress": [
+                        {"status": "commit_ready", "message": "worker commit"}
+                    ],
+                }
+            ]
+        }
+    )
+
+    refreshed = service.refresh_session(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "current_task_id": "task.1",
+            "status": "completed",
+            "progress": {
+                "task_id": "task.1",
+                "status": "completed",
+                "message": "Automation result activated and checkpointed",
+                "updated_at": "2026-07-18T00:01:00+00:00",
+            },
+            "completion_readiness": {
+                "ok": True,
+                "task_id": "task.1",
+                "completed_at": "2026-07-18T00:01:00+00:00",
+                "vcs_checkpoints": [
+                    {"ok": True, "kind": "scenario", "name": "recipes"}
+                ],
+            },
+        }
+    )
+
+    assert refreshed["status"] == "completed"
+    assert refreshed["progress"]["status"] == "completed"
+    assert refreshed["progress"]["message"] == "Automation result activated and checkpointed"
+    assert refreshed["updated_at"] == "2026-07-18T00:01:00+00:00"
+
+
 def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(
