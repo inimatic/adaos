@@ -2376,7 +2376,11 @@ class RootDeveloperService:
             target,
             name,
             prototype_value,
-            version_bump_index=1,
+            # A template version is the initial version of a newly-created
+            # artifact. Creation is not a new revision of the template and
+            # must not consume a semantic-version bump before the first
+            # checkpoint or publication.
+            version_bump_index=None,
             set_prototype=True,
         )
         if kind == "scenarios":
