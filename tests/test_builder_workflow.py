@@ -309,6 +309,70 @@ def test_active_change_set_requires_explicit_supersession(
     assert superseded["change_set"]["change_set_id"] == "CS-2"
 
 
+def test_followup_request_extends_active_change_set_and_invalidates_trial(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes",
+            "request": "Synchronize shopping items.",
+            "issues": [
+                {
+                    "issue_id": "sync",
+                    "title": "Synchronize shopping items",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Synchronization is transactional."],
+                }
+            ],
+        },
+    )
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_prepared",
+        metadata={
+            "candidate_id": "candidate-1",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+        },
+    )
+
+    extended = service.transition(
+        "scenario",
+        "recipes",
+        "change_issues_added",
+        metadata={
+            "change_set_id": "CS-recipes",
+            "change_id": "change-layout-followup",
+            "request": "Also show synchronization status next to each item.",
+            "source_message_ids": ["message-2"],
+            "issues": [
+                {
+                    "issue_id": "sync-status-layout",
+                    "title": "Show synchronization status",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Every shopping item shows its synchronization state."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    assert extended["delivery"]["status"] == "stale"
+    assert extended["change_set"]["route"] == "prototype_first"
+    assert extended["change_set"]["gate"] == "prototype"
+    assert extended["change_set"]["status"] == "changes_requested"
+    assert extended["change_set"]["request_addenda"] == [
+        "Also show synchronization status next to each item."
+    ]
+    assert extended["change_set"]["member_change_ids"][-1] == "change-layout-followup"
+
+
 def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

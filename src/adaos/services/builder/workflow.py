@@ -144,6 +144,10 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
         "schema": BUILDER_CHANGE_SET_SCHEMA,
         "change_set_id": change_set_id,
         "request": _bounded_text(value.get("request"), field="change set request", max_length=4000),
+        "request_addenda": [
+            _bounded_text(item, field="change set request addendum", max_length=4000)
+            for item in value.get("request_addenda") or []
+        ][-50:],
         "route": route,
         "gate": gate,
         "status": status,
@@ -549,6 +553,7 @@ class BuilderWorkflowService:
                 "schema": BUILDER_CHANGE_SET_SCHEMA,
                 "change_set_id": change_set_id,
                 "request": _bounded_text(metadata.get("request"), field="change set request", max_length=4000),
+                "request_addenda": [],
                 "route": route,
                 "gate": gate,
                 "status": "planned",
@@ -562,6 +567,55 @@ class BuilderWorkflowService:
                 "created_at": changed_at,
                 "updated_at": changed_at,
             }
+            return
+        if action == "change_issues_added":
+            current = require_change_set(metadata.get("change_set_id"))
+            raw_issues = metadata.get("issues")
+            if not isinstance(raw_issues, (list, tuple)) or not raw_issues:
+                raise BuilderWorkflowError("change set extension requires at least one issue")
+            existing_issues = [
+                item for item in current.get("issues") or [] if isinstance(item, dict)
+            ]
+            if len(existing_issues) + len(raw_issues) > _MAX_CHANGE_ISSUES:
+                raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
+            known_ids = {str(item.get("issue_id") or "") for item in existing_issues}
+            additions: list[dict[str, Any]] = []
+            for index, item in enumerate(raw_issues, start=len(existing_issues) + 1):
+                issue = _normalize_issue(item, index=index)
+                if issue["issue_id"] in known_ids:
+                    raise BuilderWorkflowError(
+                        f"duplicate change set issue_id: {issue['issue_id']}"
+                    )
+                known_ids.add(issue["issue_id"])
+                additions.append(issue)
+            current["issues"] = [*existing_issues, *additions]
+            addendum = str(metadata.get("request") or "").strip()
+            if addendum:
+                current["request_addenda"] = [
+                    *list(current.get("request_addenda") or []),
+                    _bounded_text(
+                        addendum,
+                        field="change set request addendum",
+                        max_length=4000,
+                    ),
+                ][-50:]
+            source_message_ids = [
+                str(item).strip()
+                for item in current.get("source_message_ids") or []
+                if str(item).strip()
+            ]
+            for message_id in metadata.get("source_message_ids") or []:
+                token = str(message_id).strip()
+                if token and token not in source_message_ids:
+                    source_message_ids.append(token)
+            current["source_message_ids"] = source_message_ids[-100:]
+            add_change_evidence(metadata.get("change_id"))
+            invalidate_delivery("change_set_extended")
+            if any(item.get("lane") == "prototype" for item in additions):
+                current["route"] = "prototype_first"
+                update_change_set(status="changes_requested", gate="prototype")
+            else:
+                update_change_set(status="in_progress", gate="automation")
             return
         if action == "change_issue_updated":
             current = require_change_set(metadata.get("change_set_id"))
