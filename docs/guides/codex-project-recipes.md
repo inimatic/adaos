@@ -62,6 +62,24 @@ $env:ADAOS_PROMPT_B64 = [Convert]::ToBase64String(
 .venv\Scripts\python.exe -c "import base64, os; print(base64.b64decode(os.environ['ADAOS_PROMPT_B64']).decode('utf-8'))"
 ```
 
+For Codex-operated Builder changes, the stronger repository rule is:
+
+- create non-ASCII request payloads as UTF-8 files (normally with
+  `apply_patch`) and pass them with `--json-file`;
+- never generate a Cyrillic payload with a PowerShell here-string piped into
+  Python, and never embed user text in `python -c` source;
+- use Python only to *read* the UTF-8 file with an explicit encoding; use
+  ASCII `\uXXXX` escapes or Base64 only when a file cannot be used;
+- set `PYTHONIOENCODING=utf-8` for native-process output, or render diagnostic
+  JSON with `ensure_ascii=True` when the surrounding console encoding is not
+  under our control;
+- verify the persisted bytes before invoking a state-changing tool. If the
+  value already contains a replacement character or a long question-mark run,
+  reject it at ingress rather than trying to reconstruct the original text.
+
+This rule applies to request text, addenda, acceptance criteria, commit
+messages, and any other user-authored text that becomes durable provenance.
+
 ## Python Tests
 
 For targeted core tests from the repository root, set `PYTHONPATH` explicitly:

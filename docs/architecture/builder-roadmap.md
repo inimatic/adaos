@@ -21,13 +21,16 @@ Workspace. The exact evidence is recorded in
 Clean-stand repetition remains open, so this is not a production-acceptance
 claim.
 
-The 2026-07-28 change-oriented slice is `validated-local` and checkpointed in
-Forge: scenario `0.2.23` (`2aebc842`), control skill `0.1.32` (`ddb30038`),
-and interactive `builder_skill` `0.3.3` (`5e79f165`). It adds bounded change
-sets, issue lanes and gates, dependent Lifecycle lineage, and exact
-`proto:`/`active:`/`public:` target selection. This record is not yet a claim
-that the new slice passed a fresh end-to-end candidate trial and publication;
-that acceptance item remains open below.
+The 2026-07-28 change-oriented slice is `validated-local`: scenario `0.2.28`,
+control skill `0.1.36`, and interactive `builder_skill` `0.3.13` were advanced
+through one bounded change set, isolated Automation, Forge checkpoints, an
+accepted dependency-locked trial, stable Publication, and exact Workspace
+materialization. It adds issue lanes and gates, dependent Lifecycle lineage,
+and exact `proto:`/`active:`/`public:` target selection. The accepted candidate
+was `builder-0-2-28-940229ddbf49`, with release digest
+`sha256:ad74d7a6ccec5d4787e793ff244a5bc08ce682db12dd4cc7b5928714278ab4df`.
+Clean-stand and production-soak repetition remain open, so this is not a
+production-acceptance claim.
 
 ## Reading Rules
 
@@ -883,6 +886,13 @@ observed projection matches the latest desired generation.
   prevent isolated Codex from starting before Prototype approval.
 - [x] `[must]` Carry the active change-set identity and acceptance criteria into
   Automation, checkpoint, candidate, trial, and Publication evidence.
+- [x] `[must]` Advance the workflow to `checkpoint_recorded` only after the
+  primary Automation checkpoint has a confirmed change id, package digest,
+  and source revision. Recovery reuses confirmed checkpoints without rerunning
+  isolated Codex or repeating a Forge push.
+- [x] `[must]` Resolve required candidate dependencies across all approved
+  checkpoint members of the active change set, while rejecting unrelated DEV
+  dependencies that are not part of the set.
 - [x] `[must]` Project the active set and issue progress in the contextual
   Conversation panel; preserve Prototype development settings and expose them
   only while Prototype is editable.
@@ -891,11 +901,21 @@ observed projection matches the latest desired generation.
   Automation and Publication nodes are previewable; uncertain legacy lineage
   is marked inferred.
 - [x] `[must]` Verify exact local runtime selection labels and bindings for
-  `proto: builder · UI 042`, `active: builder · 0.2.20`, and
-  `public: builder · 0.2.20`.
-- [ ] `[must]` Run one fresh user request through issue extraction, built-in LLM
+  `proto: builder · UI 045`, `active: builder · 0.2.28`, and
+  `public: builder · 0.2.28`.
+- [x] `[must]` Run one fresh user request through issue extraction, built-in LLM
   Prototype approval or direct Automation, isolated Codex, candidate trial,
   stable Publication, and Workspace materialization on this machine.
+  Candidate `builder-0-2-28-940229ddbf49` locked scenario `0.2.28`, control
+  skill `0.1.36`, and interactive skill `0.3.13`; the deliverable files in DEV,
+  trial, and Workspace were byte-for-byte equal after promotion.
+- [x] `[must]` Reject newly corrupted user-authored text at Builder workflow,
+  interactive Builder, and Automation ingress before it becomes durable
+  evidence. Codex-operated non-ASCII tool requests use UTF-8 files and
+  `--json-file`, not PowerShell native-process text pipelines.
+- [ ] `[should]` Mark immutable historical values that already contain lossy
+  replacement runs as transport-corrupted in Specification projections while
+  retaining their raw provenance; never infer the missing source characters.
 - [ ] `[should]` Add an explicit split/merge editor when automatic issue
   decomposition is ambiguous; the current bounded list supports status edits
   but not structural regrouping.

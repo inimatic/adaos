@@ -415,6 +415,17 @@ affordance map. Later profiles may tune wording, temperature, examples, or
 schema compression for a specific provider/model, but the output contract must
 remain the same complete `adaos.webui.v1` manifest.
 
+User-authored text crosses Builder boundaries as Unicode, not as console text.
+Browser/API ingress, Builder workflow persistence, Skill Factory packets,
+Codex prompts, Forge evidence, and UI projections must all preserve the same
+UTF-8 code points. Windows operator tooling passes non-ASCII payloads through
+UTF-8 files and `--json-file`; PowerShell native-process pipelines are not a
+supported request transport. New text containing a replacement character or a
+long question-mark run is rejected before persistence. Historical corrupted
+evidence remains immutable; UI projections must label it transport-corrupted,
+and Builder adds a clean follow-up record instead of guessing the lost source
+characters.
+
 The Root-owned `development` model profile uses `gpt-5` as its baseline. Prompt
 IDE obtains the scoped profile list from `/v1/llm/models?scope=development`, and
 new Builder projects inherit the profile marked `default=true`. Other Root LLM
@@ -572,7 +583,18 @@ revision; retry and recovery remain possible from the dev workspace.
 Automation completion applies the same rule to every materialized artifact:
 a scenario and its companion skill receive separate Forge checkpoints using
 the terminal implementation-result summary as their commit message before
-runtime preparation begins.
+runtime preparation begins. The workflow advances to `checkpoint_recorded`
+only when the primary artifact checkpoint contains a change id, package
+digest, and source revision. An explicit recovery path can reuse those durable
+receipts after an interrupted finalization; it never reruns isolated Codex or
+repeats an already confirmed Forge push.
+
+Candidate dependency resolution considers every approved checkpoint member of
+the active change set, not only the most recent primary-artifact receipt. This
+allows an earlier companion-skill checkpoint from the same set to satisfy the
+scenario dependency while still rejecting an unrelated or unapproved DEV
+dependency.
+
 Before automation starts, every missing DEV target (including a scenario's
 companion skill) is scaffolded through `RootDeveloperService.create_scenario`
 or `create_skill`. The worker consumes existing DEV sources and must not copy a
