@@ -245,6 +245,69 @@ def test_scenario_automation_retains_all_previous_automation_companions(tmp_path
     assert companions == ["recipes_skill", "recipes_control_skill"]
 
 
+def test_scenario_automation_retains_published_companions_as_immutable_baseline(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    assert service.workspace_service is not None
+    assert service.workspace_service.scenarios_root is not None
+    publication = Path(service.workspace_service.scenarios_root) / "recipes"
+    publication.mkdir(parents=True)
+    (publication / "scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "recipes",
+                "version": "0.4.0",
+                "depends": ["recipes_skill", "recipes_control_skill"],
+                "runtime": {
+                    "skills": {
+                        "required": ["recipes_skill", "recipes_control_skill"],
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (publication / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"application": {}}}),
+        encoding="utf-8",
+    )
+
+    companions = service._resolve_companion_skill_ids("scenario", "recipes")
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Preserve the installed behavior while applying the approved prototype.",
+        webspace_id="prompt-dev",
+    )
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+
+    assert companions == ["recipes_skill", "recipes_control_skill"]
+    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == companions
+    attachment = next(
+        item
+        for item in task["forge"]["source_snapshot"]["attachments"]
+        if item["name"] == "current_publication"
+    )
+    assert attachment["target_path"] == "scenarios/recipes/.builder_current_publication"
+    task_prompt = (
+        tmp_path
+        / "runs"
+        / started["session"]["current_task_id"]
+        / "input"
+        / "task.md"
+    ).read_text(encoding="utf-8")
+    assert "immutable currently installed functional edition" in task_prompt
+    assert not (
+        service.dev_scenarios_root / "recipes" / ".builder_current_publication"
+    ).exists()
+
+
 @pytest.mark.parametrize("corrupted", ["???????? ??????", "Damaged \ufffd text"])
 def test_automation_start_rejects_transport_corrupted_brief_before_writes(
     tmp_path: Path,
@@ -1276,6 +1339,44 @@ def test_validated_result_recovery_finalizes_recovered_workflow_transition(
     assert result["worker"]["recovery_stage"] == "workflow_transition"
     assert finalized[0]["status"] == "commit_ready"
     assert finalized[0]["pending_workflow_transition"] == "return_to_prototype"
+
+
+def test_validated_result_recovery_finalizes_externally_repaired_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "skill",
+        "object_id": "builder_sdk_control_skill",
+        "current_task_id": "task.repaired",
+        "status": "completed",
+        "task": {"task_id": "task.repaired", "status": "completed"},
+        "last_result": {"summary": "Preserved worktree repaired and validated."},
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not rerun"))
+
+    result = service.recover_validated_result(
+        object_type="skill",
+        object_id="builder_sdk_control_skill",
+    )
+
+    assert result["ok"] is True
+    assert result["worker"]["reused_validated_result"] is True
+    assert result["worker"]["recovery_stage"] == "validated_activation"
+    assert finalized[0]["status"] == "commit_ready"
+    assert "reuse_confirmed_checkpoints" not in finalized[0]
 
 
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:

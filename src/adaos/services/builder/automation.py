@@ -333,7 +333,13 @@ class BuilderAutomationService:
         return created
 
     def _resolve_companion_skill_ids(self, kind: str, project_id: str) -> list[str]:
-        """Resolve every declared scenario skill, retaining the conventional primary."""
+        """Resolve every declared scenario skill, retaining the conventional primary.
+
+        The current Prototype is allowed to have fewer bindings than the last
+        functional result.  Preserve dependencies from both the retained
+        Automation snapshot and the installed Workspace publication so a new
+        Automation cycle cannot silently drop a functional companion skill.
+        """
         if kind != "scenario":
             return [project_id]
 
@@ -351,6 +357,15 @@ class BuilderAutomationService:
         )
         if previous_manifest.is_file():
             paths.append(previous_manifest)
+        workspace_scenarios_root = (
+            Path(self.workspace_service.scenarios_root)
+            if self.workspace_service is not None
+            and self.workspace_service.scenarios_root is not None
+            else self.repo_root / ".adaos" / "workspace" / "scenarios"
+        )
+        published_manifest = workspace_scenarios_root / project_id / "scenario.yaml"
+        if published_manifest.is_file():
+            paths.append(published_manifest)
         for path in paths:
             if not path.is_file():
                 continue
@@ -629,6 +644,8 @@ class BuilderAutomationService:
             task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
             failure = current.get("last_failure") if isinstance(current.get("last_failure"), Mapping) else {}
             current_status = str(current.get("status") or "")
+            task_id = str(current.get("current_task_id") or "").strip()
+            task_status = str(task.get("status") or "")
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
             readiness = (
                 current.get("completion_readiness")
@@ -663,18 +680,24 @@ class BuilderAutomationService:
                 and isinstance(current.get("last_result"), Mapping)
                 and not isinstance(current.get("completion_readiness"), Mapping)
             )
+            validated_activation_pending = (
+                current_status == "completed"
+                and task_status == "completed"
+                and isinstance(current.get("last_result"), Mapping)
+                and not isinstance(current.get("completion_readiness"), Mapping)
+            )
             if (
                 current_status != "failed"
                 and not recovered_transition_pending
                 and not workflow_checkpoint_pending
+                and not validated_activation_pending
             ):
                 raise ValueError("validated result recovery requires a failed Automation task")
-            task_id = str(current.get("current_task_id") or "").strip()
-            task_status = str(task.get("status") or "")
             failure_stage = str(failure.get("stage") or "")
             if (
                 recovered_transition_pending
                 or workflow_checkpoint_pending
+                or validated_activation_pending
                 or task_status == "completed"
                 and failure_stage == "live_readiness"
                 and isinstance(current.get("last_result"), Mapping)
@@ -688,10 +711,12 @@ class BuilderAutomationService:
                         if recovered_transition_pending
                         else "workflow_checkpoint"
                         if workflow_checkpoint_pending
+                        else "validated_activation"
+                        if validated_activation_pending
                         else "live_readiness"
                     ),
                 }
-                if not recovered_transition_pending:
+                if not recovered_transition_pending and not validated_activation_pending:
                     current["reuse_confirmed_checkpoints"] = True
             else:
                 if task_status != "failed":
@@ -1175,6 +1200,21 @@ class BuilderAutomationService:
                         "previous_automation",
                         automation_snapshot,
                         f"scenarios/{project_id}/.builder_previous_automation",
+                    )
+                )
+            workspace_scenarios_root = (
+                Path(self.workspace_service.scenarios_root)
+                if self.workspace_service is not None
+                and self.workspace_service.scenarios_root is not None
+                else self.repo_root / ".adaos" / "workspace" / "scenarios"
+            )
+            current_publication = workspace_scenarios_root / project_id
+            if current_publication.is_dir():
+                attachments.append(
+                    (
+                        "current_publication",
+                        current_publication,
+                        f"scenarios/{project_id}/.builder_current_publication",
                     )
                 )
         source_snapshot = capture_source_snapshot(

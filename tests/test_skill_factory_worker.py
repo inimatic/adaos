@@ -653,6 +653,34 @@ def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tm
     )
 
 
+def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "target": {"type": "scenario", "id": "recipe_book"},
+        "forge": {
+            "sparse_paths": [
+                "scenarios/recipe_book/",
+                "skills/recipe_book_skill/",
+            ]
+        },
+        "realize_request": {
+            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="current Publication baseline"):
+        worker._validate_changed_paths(
+            assignment,
+            ["scenarios/recipe_book/.builder_current_publication/webui.json"],
+        )
+
+
 def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"

@@ -836,11 +836,15 @@ class LocalSkillFactoryWorker:
         transition_requirements = """
 ## Workflow transition constraints
 
-This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill or the retained `.builder_previous_automation` snapshot. The functional Automation implementation remains frozen for Preview and for the next Automation cycle.
+This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill, the retained `.builder_previous_automation` snapshot, or the `.builder_current_publication` baseline. The functional Automation implementation and current Publication remain frozen for Preview and for the next Automation cycle.
 """ if workflow_transition == "return_to_prototype" else """
 ## Previous Automation
 
 When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as the immutable previous Automation edition supplied alongside the current Prototype requirements. Use it as implementation context, but never edit it.
+
+## Current Publication
+
+When `scenarios/{target_id}/.builder_current_publication` exists, treat it as the immutable currently installed functional edition. Use it as the implementation baseline when the current Prototype or previous Automation is non-functional or omits established bindings. Merge the approved Prototype requirements into that baseline; never edit the retained publication directory itself.
 """
         required_result = """1. Inspect all existing files under the target paths before editing.
 2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
@@ -858,7 +862,8 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
 9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields. Tests must validate their shape or semantics and must not assert an exact value for either field, because checkpointing changes them after your checks.
-10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it."""
+10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it.
+11. Do not edit `.builder_current_publication`; it is immutable implementation input."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -967,6 +972,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     "return_to_prototype may not modify the frozen Automation implementation: "
                     f"{forbidden}"
                 )
+        immutable_publication = [
+            path
+            for path in changed_paths
+            if "/.builder_current_publication/" in f"/{path}"
+        ]
+        if immutable_publication:
+            raise ValueError(
+                "Automation may not modify the current Publication baseline: "
+                f"{immutable_publication}"
+            )
 
     def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
         errors: list[str] = []
@@ -1464,6 +1479,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 previous_automation = staged / ".builder_previous_automation"
                 if previous_automation.exists():
                     shutil.rmtree(previous_automation)
+                current_publication = staged / ".builder_current_publication"
+                if current_publication.exists():
+                    shutil.rmtree(current_publication)
                 self._cleanup_generated_files(staged)
                 staged_rows.append((staged, destination, backup))
 

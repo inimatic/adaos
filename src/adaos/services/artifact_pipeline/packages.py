@@ -33,6 +33,7 @@ PACKAGE_MANIFEST_SCHEMA = "adaos.artifact.component_package.v1"
 PACKAGE_BUILDER_ID = "adaos.package_builder.v1"
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _EXCLUDED_DIRS = {
+    ".builder_current_publication",
     ".builder_previous_automation",
     ".git",
     ".mypy_cache",
