@@ -35,6 +35,19 @@ If the UI shows `????`, treat it as a data-path bug until proven otherwise:
 check the source file bytes, the API payload, stream/Yjs projection, and the
 browser rendering payload separately.
 
+For `adaos dev skill run`, never pass user-authored Unicode as inline JSON on
+Windows. Store the payload as UTF-8 and use `--json-file`; reserve `--json` for
+short ASCII-only payloads:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev skill run builder_skill chat `
+  --json-file .adaos\state\builder\requests\chat.json
+```
+
+If a persisted request already contains `????`, the original code points have
+been lost. Do not guess and silently rewrite history. Mark that evidence as
+transport-corrupted/deferred and add a clean follow-up request.
+
 PowerShell 5.1 re-encodes text sent through a native-process pipeline. Setting
 only `PYTHONIOENCODING=utf-8` can therefore make Python decode an ASCII/legacy
 pipeline as UTF-8 and turn a valid request into `????`. Set `$OutputEncoding`
