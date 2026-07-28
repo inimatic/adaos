@@ -563,6 +563,23 @@ def test_builder_revision_apply_does_not_use_scenario_switch_live_room_defer_fla
     assert webspace_runtime_module._defer_live_room_refresh_for_rebuild("builder_revision_apply") is True
 
 
+def test_skill_runtime_rebuild_actions_refresh_the_live_room_with_materialized_payload() -> None:
+    for action in {
+        "skill_activation_sync",
+        "skill_batch_runtime_sync",
+        "skill_install_sync",
+        "skill_runtime_sync",
+        "skill_uninstall_sync",
+        "skill_update_sync",
+        "artifact_subscription_sync",
+    }:
+        assert webspace_runtime_module._rebuild_action_refreshes_live_room(action) is True
+        assert webspace_runtime_module._rebuild_action_applies_live_payload(action) is True
+
+    assert webspace_runtime_module._rebuild_action_refreshes_live_room("member_snapshot_rebuild") is False
+    assert webspace_runtime_module._rebuild_action_applies_live_payload("restore") is False
+
+
 def test_builder_revision_apply_publishes_live_room_by_default(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
     monkeypatch.delenv("ADAOS_BUILDER_REVISION_LIVE_ROOM_UPDATES", raising=False)

@@ -3792,6 +3792,33 @@ def _refresh_live_room_after_rebuild_enabled() -> bool:
     return _env_flag_default_enabled("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM")
 
 
+def _rebuild_action_refreshes_live_room(action: str) -> bool:
+    action_token = str(action or "").strip().lower()
+    if action_token in {
+        "scenario_switch_rebuild",
+        "builder_revision_apply",
+        "reload",
+        "reset",
+        "restore",
+        "artifact_subscription_sync",
+    }:
+        return True
+    return action_token.startswith("skill_") and action_token.endswith("_sync")
+
+
+def _rebuild_action_applies_live_payload(action: str) -> bool:
+    action_token = str(action or "").strip().lower()
+    if action_token in {
+        "scenario_switch_rebuild",
+        "builder_revision_apply",
+        "reload",
+        "reset",
+        "artifact_subscription_sync",
+    }:
+        return True
+    return action_token.startswith("skill_") and action_token.endswith("_sync")
+
+
 def _defer_live_room_refresh_for_rebuild(action: str) -> bool:
     action_token = str(action or "").strip()
     return action_token == "builder_revision_apply" and _env_flag_enabled(
@@ -9978,14 +10005,7 @@ async def rebuild_webspace_from_sources(
             scenario_switch_payload_rebuild
             or _refresh_live_room_after_rebuild_enabled()
         )
-        and requested_action
-        in {
-            "scenario_switch_rebuild",
-            "builder_revision_apply",
-            "reload",
-            "reset",
-            "restore",
-        }
+        and _rebuild_action_refreshes_live_room(requested_action)
     )
     force_full_state_update = bool(fresh_doc_rebuild and ystore_reset)
     if should_refresh_live_room:
@@ -10016,7 +10036,7 @@ async def rebuild_webspace_from_sources(
                     webspace_id,
                     requested_action,
                 )
-                if requested_action in {"scenario_switch_rebuild", "builder_revision_apply", "reload", "reset"}:
+                if _rebuild_action_applies_live_payload(requested_action):
                     persist_repair = not (
                         requested_action == "builder_revision_apply"
                         and builder_fresh_doc_rebuild
