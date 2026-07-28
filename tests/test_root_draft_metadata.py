@@ -21,6 +21,7 @@ from adaos.services.root.service import (
     _normalize_draft_metadata,
     _parse_draft_commit_metadata,
 )
+from adaos.services.root import service as root_service_module
 
 
 def test_draft_metadata_is_allowlisted_and_round_trips_from_git_trailers() -> None:
@@ -275,6 +276,70 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     assert captured["health_check"] is service._health_published_workspace_runtime
     assert "reload_policy" not in captured
     assert "health_policy" not in captured
+
+
+def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario_root = tmp_path / "scenarios"
+    builder_root = scenario_root / "builder"
+    builder_root.mkdir(parents=True)
+    (builder_root / "scenario.yaml").write_text(
+        "id: builder\nversion: 1.2.3\n",
+        encoding="utf-8",
+    )
+    manager = SimpleNamespace(
+        runtime_status=lambda skill_id: {
+            "ready": True,
+            "active_slot": "B",
+            "version": "4.5.6",
+        }
+    )
+    refresh_calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(root_service_module, "_get_skill_manager", lambda _ctx: manager)
+    monkeypatch.setattr(
+        root_service_module,
+        "refresh_skill_runtime",
+        lambda _manager, skill_id, **kwargs: (
+            refresh_calls.append((skill_id, kwargs))
+            or {
+                "active_version_after": "4.5.6",
+                "active_slot_after": "B",
+                "runtime_migrated": True,
+            }
+        ),
+    )
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace(
+        paths=SimpleNamespace(scenarios_dir=lambda: scenario_root)
+    )
+    lock = SimpleNamespace(
+        lock_revision=9,
+        components=[
+            SimpleNamespace(kind="scenario", artifact_id="builder", version="1.2.3"),
+            SimpleNamespace(kind="skill", artifact_id="builder_skill", version="4.5.6"),
+        ],
+    )
+
+    reloaded = service._reload_published_workspace_runtime(lock)
+    healthy = service._health_published_workspace_runtime(lock)
+
+    assert reloaded["status"] == "completed"
+    assert refresh_calls == [
+        (
+            "builder_skill",
+            {
+                "source_version": "4.5.6",
+                "migrate_runtime": True,
+                "ensure_installed": False,
+                "require_active_version": True,
+                "operation_id": "workspace-lock:9",
+            },
+        )
+    ]
+    assert healthy["status"] == "healthy"
+    assert all(check["ok"] for check in healthy["checks"])
 
 
 def test_subscription_activation_exposes_operation_identity() -> None:

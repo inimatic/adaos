@@ -2130,7 +2130,7 @@ class RootDeveloperService:
             scenario_id = str(getattr(component, "artifact_id", "") or "").strip()
             expected = str(getattr(component, "version", "") or "").strip()
             manifest_path = Path(self.ctx.paths.scenarios_dir()) / scenario_id / "scenario.yaml"
-            manifest = _read_manifest(manifest_path)
+            manifest = _load_manifest(manifest_path)
             installed = str(manifest.get("version") or "").strip()
             ready = bool(scenario_id) and installed == expected
             checks.append(
