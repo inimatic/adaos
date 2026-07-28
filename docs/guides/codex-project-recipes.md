@@ -51,11 +51,13 @@ transport-corrupted/deferred and add a clean follow-up request.
 PowerShell 5.1 re-encodes text sent through a native-process pipeline. Setting
 only `PYTHONIOENCODING=utf-8` can therefore make Python decode an ASCII/legacy
 pipeline as UTF-8 and turn a valid request into `????`. Set `$OutputEncoding`
-before piping, or avoid the text pipeline entirely. A reliable API-test pattern
-is to pass UTF-8 text as Base64 through an environment variable:
+before piping, or avoid the text pipeline entirely. When a payload file cannot
+be used, construct test text from ASCII-only Unicode escapes before converting
+it to Base64:
 
 ```powershell
-$prompt = "Проверь текущий прототип"
+$promptJson = '"\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f"'
+$prompt = ConvertFrom-Json $promptJson
 $env:ADAOS_PROMPT_B64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes($prompt)
 )
@@ -145,6 +147,32 @@ If a tool still runs old skill behavior after push/activation, do not hide it
 with an API restart as the first answer. Check the active slot and handler reload
 path, then restart only as a diagnostic or temporary recovery step.
 
+Installed dependencies named by a scenario are not automatically project-owned
+DEV companions. Keep an installed-only dependency immutable during Automation.
+Publication may synthesize its first package identity from the installed
+Workspace copy, but the resulting `WorkspaceLock` must pin its digest and source
+as `workspace-migration`; subsequent builds resolve it from stable releases.
+
+## Publication Activation Recovery
+
+Stable Publication is a transaction across the channel pointer, WorkspaceLock,
+materialized artifacts, runtime reload, and exact health verification. Do not
+retry `publish_project` after an uncertain or failed response. Inspect the
+promotion and activation receipts first.
+
+If the activation operation is explicitly `failed`, is confirmed rolled back,
+and the promotion is paused without a Workspace receipt, recover it once:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev root recover-promotion-activation `
+  <candidate-id> <failed-operation-id>
+```
+
+The command validates the exact candidate, release, and failed operation, then
+records a new idempotency key. Resume the ordinary publication command only
+after this explicit recovery. The existing channel receipt is reused; the
+stable pointer is not moved a second time.
+
 ## Local Runtime Restart
 
 When a local API restart is needed during debugging:
@@ -153,7 +181,11 @@ When a local API restart is needed during debugging:
 $procs = Get-CimInstance Win32_Process | Where-Object {
   $_.Name -eq "python.exe" -and $_.CommandLine -match "adaos api serve"
 }
-foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }
+foreach ($p in $procs) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.ProcessId)" |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+  Stop-Process -Id $p.ProcessId -Force
+}
 Start-Sleep -Seconds 2
 Start-Process `
   -FilePath "D:\git\inimatic\adaos\.venv\Scripts\python.exe" `
@@ -164,6 +196,18 @@ Start-Process `
 
 The local browser client is commonly served on `http://127.0.0.1:8100`, and the
 hub/API on `http://127.0.0.1:8777` in current debugging sessions.
+
+After restart, verify the listener owner instead of assuming the newly launched
+parent owns the port:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8777 -State Listen |
+  Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+An older child process can survive termination of its launcher and continue to
+serve stale code. Stop only the resolved AdaOS API process tree and re-check the
+listener before starting another instance.
 
 ## Browser Debugging
 

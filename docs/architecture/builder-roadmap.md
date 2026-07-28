@@ -901,8 +901,8 @@ observed projection matches the latest desired generation.
   Automation and Publication nodes are previewable; uncertain legacy lineage
   is marked inferred.
 - [x] `[must]` Verify exact local runtime selection labels and bindings for
-  `proto: builder · UI 045`, `active: builder · 0.2.28`, and
-  `public: builder · 0.2.28`.
+  `proto: builder · UI 053`, `active: builder · 0.2.40`, and
+  `public: builder · 0.2.40`.
 - [x] `[must]` Run one fresh user request through issue extraction, built-in LLM
   Prototype approval or direct Automation, isolated Codex, candidate trial,
   stable Publication, and Workspace materialization on this machine.
@@ -926,12 +926,30 @@ observed projection matches the latest desired generation.
   turns and provide the installed Workspace Publication as an immutable
   implementation baseline. The worker rejects changes to that baseline and
   removes it before DEV activation or release-package construction.
-- [ ] `[must]` Complete the corrective functional Builder Automation from the
+- [x] `[must]` Treat installed-only dependencies as immutable release inputs,
+  not mutable DEV companions. A missing legacy stable identity is migrated
+  into a deterministic package with an explicit `workspace-migration` source
+  reference and included in the project release lock.
+- [x] `[must]` Activate every component from the promoted WorkspaceLock and
+  require exact scenario and active skill-runtime versions before recording a
+  successful Workspace receipt. A failed, rolled-back activation can only be
+  resumed by the explicit one-shot `recover-promotion-activation` command,
+  which issues a new idempotency key and never repeats the channel move.
+- [x] `[must]` Complete the corrective functional Builder Automation from the
   current Prototype plus installed Publication, then repeat candidate Trial,
   stable Publication, exact Workspace materialization, and byte/lock checks.
-- [ ] `[must]` Complete browser acceptance for atomic create/select redraw,
+  Candidate `builder-0-2-40-26af92f3eaef` passed isolated Trial and promoted
+  release `builder@0.2.40`; WorkspaceLock revision `9` pins Builder `0.2.40`,
+  `builder_skill` `0.3.16`, `builder_sdk_control_skill` `0.1.44`, and migrated
+  `voice_chat_skill` `0.6.17`. Reload and post-activation health receipts are
+  exact for every component.
+- [x] `[must]` Complete browser acceptance for atomic create/select redraw,
   canonical single-response project chat, and `proto:` / `active:` /
   `public:` Preview selection after the corrective Publication.
+  The current browser projects `test04_recipes` as one Prototype revision with
+  no synthetic Automation row; Lifecycle node selection switches the
+  phase-specific Conversation surface, and all three exact Builder previews
+  are synchronized and materialization-ready.
 - [ ] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.
