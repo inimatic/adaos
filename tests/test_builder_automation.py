@@ -975,7 +975,13 @@ def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary
             "object_type": "scenario",
             "object_id": "recipes",
             "companion_skill_id": "recipes_skill",
-            "last_result": {"summary": "Implemented recipe filters and details."},
+            "last_result": {
+                "summary": "Implemented recipe filters and details.",
+                "changed_paths": [
+                    "skills/recipes_skill/handlers/main.py",
+                    "scenarios/recipes/webui.json",
+                ],
+            },
         }
     )
 
@@ -992,3 +998,46 @@ def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary
         },
     ]
     assert [item["commit"] for item in checkpoints] == ["skill-sha", "scenario-sha"]
+
+
+def test_automation_does_not_checkpoint_unchanged_companion_skill(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "last_result": {
+                "summary": "Aligned derived scenario projections.",
+                "changed_paths": [
+                    ".adaos/tasks/task.1/result.json",
+                    "scenarios/recipes/scenario.json",
+                    "scenarios/recipes/webui.json",
+                ],
+            },
+        }
+    )
+
+    assert calls == [
+        {
+            "kind": "scenario",
+            "artifact_id": "recipes",
+            "message": "Aligned derived scenario projections.",
+        }
+    ]
+    assert checkpoints == [{"ok": True, "kind": "scenario", "name": "recipes"}]

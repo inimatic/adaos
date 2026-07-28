@@ -1373,6 +1373,32 @@ class BuilderAutomationService:
         if object_type in {"skill", "scenario"} and object_id and (object_type, object_id) not in artifacts:
             artifacts.append((object_type, object_id))
 
+        changed_paths_value = result.get("changed_paths")
+        if isinstance(changed_paths_value, list):
+            changed_paths = {
+                str(path or "").replace("\\", "/").lstrip("./")
+                for path in changed_paths_value
+                if str(path or "").strip()
+            }
+            created_artifacts = {
+                (
+                    str(item.get("kind") or "").strip().lower().rstrip("s"),
+                    str(item.get("name") or item.get("id") or "").strip(),
+                )
+                for item in session.get("created_artifacts") or []
+                if isinstance(item, Mapping)
+            }
+            artifacts = [
+                (kind, artifact_id)
+                for kind, artifact_id in artifacts
+                if (kind, artifact_id) in created_artifacts
+                or any(
+                    path == f"{kind}s/{artifact_id}"
+                    or path.startswith(f"{kind}s/{artifact_id}/")
+                    for path in changed_paths
+                )
+            ]
+
         service = BuilderWorkspaceService.from_context()
         checkpoints: list[dict[str, Any]] = []
         change_id = str(session.get("change_id") or "").strip()
