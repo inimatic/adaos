@@ -114,6 +114,29 @@ def _scenario(root: Path) -> Path:
     return scenario
 
 
+def _named_scenario(root: Path, name: str, *, marker: str) -> Path:
+    scenario = root / name
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text(
+        f"id: {name}\nversion: 1.0.0\ntitle: {name}\n",
+        encoding="utf-8",
+    )
+    (scenario / "webui.json").write_text(
+        f'{{"ui": {{"marker": "{marker}"}}}}\n',
+        encoding="utf-8",
+    )
+    return scenario
+
+
+def _source_for(name: str) -> ArtifactSourceRef:
+    return ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=(f"subnets/dev/nodes/node/scenarios/{name}/",),
+    )
+
+
 def _skill(root: Path) -> Path:
     skill = root / "shopping_skill"
     skill.mkdir(parents=True)
@@ -203,6 +226,50 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert service.subscriptions.load()["recipes"].installed_digest == result.pointer.release_digest
     registry = (workspace / "registry.json").read_text(encoding="utf-8")
     assert '"stable"' in registry
+
+
+def test_stable_promotion_retains_other_subscribed_workspace_projects(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+
+    promoted = None
+    for name, marker in (("recipes", "one"), ("planner", "two")):
+        dev = _named_scenario(tmp_path / "dev", name, marker=marker)
+        service.record_push(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            source_ref=_source_for(name),
+        )
+        prepared = service.prepare_candidate(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            change_ids=(f"change-{name}",),
+            validation_evidence={"suite": "scenario-validation", "status": "passed"},
+        )
+        service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+        promoted = _promote(service, prepared.candidate.candidate_id)
+
+    assert promoted is not None
+    lock = promoted.activation.workspace_lock
+    assert {item.project_id for item in lock.slots} == {"recipes", "planner"}
+    assert {item.key for item in lock.components} == {
+        "scenario:recipes",
+        "scenario:planner",
+    }
+    assert (workspace / "scenarios" / "recipes" / "webui.json").is_file()
+    assert (workspace / "scenarios" / "planner" / "webui.json").is_file()
+    assert set(service.subscriptions.load()) == {"recipes", "planner"}
+    registry = (workspace / "registry.json").read_text(encoding="utf-8")
+    assert '"recipes"' in registry
+    assert '"planner"' in registry
 
 
 def test_configured_promotion_publishes_exact_attestations_before_channel(

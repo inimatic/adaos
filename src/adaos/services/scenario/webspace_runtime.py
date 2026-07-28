@@ -10742,6 +10742,88 @@ def _ensure_builder_empty_canvas_widget(page: dict[str, Any], scenario_id: str) 
     page["meta"] = meta
 
 
+def _builder_publication_package_content(
+    scenario_id: str,
+    *,
+    revision: str | None,
+) -> dict[str, Any] | None:
+    """Read an installed immutable Publication even when its slot is not active.
+
+    Workspace files are an active materialization, while subscriptions and
+    release packages are the durable source for every installed project.
+    """
+
+    from io import BytesIO
+    from zipfile import BadZipFile, ZipFile
+
+    from adaos.domain.artifact_release import ProjectRelease
+    from adaos.services.artifact_pipeline.channels import ChannelError, SubscriptionStore
+    from adaos.services.artifact_pipeline.packages import (
+        ContentAddressedPackageStore,
+        PackageVerificationError,
+    )
+    from adaos.services.runtime_paths import current_state_dir
+
+    scenario_root = scenarios_loader.scenario_root_for_space(scenario_id, "workspace")
+    workspace_root = scenario_root.parent.parent
+    try:
+        subscription = SubscriptionStore(
+            workspace_root / ".adaos" / "subscriptions.json"
+        ).load().get(scenario_id)
+    except ChannelError as exc:
+        raise ValueError("Builder publication subscription metadata is invalid") from exc
+    if subscription is None or not subscription.installed_digest:
+        return None
+    expected_release = f"{scenario_id}@{str(revision or '').strip()}"
+    if revision and subscription.installed_release != expected_release:
+        return None
+
+    release_path = (
+        workspace_root
+        / ".adaos"
+        / "releases"
+        / f"{subscription.installed_digest.split(':', 1)[-1]}.json"
+    )
+    if not release_path.is_file():
+        return None
+    try:
+        release = ProjectRelease.from_mapping(
+            json.loads(release_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError("Builder publication release metadata is invalid") from exc
+    release_digest = release.release_digest or release.computed_digest()
+    if (
+        release.project_id != scenario_id
+        or release_digest != subscription.installed_digest
+        or (revision and release.version != str(revision).strip())
+    ):
+        raise ValueError("Builder publication release identity does not match its subscription")
+    component = next(
+        (
+            item
+            for item in release.components
+            if item.kind == "scenario" and item.artifact_id == scenario_id
+        ),
+        None,
+    )
+    if component is None:
+        raise ValueError("Builder publication release has no scenario component")
+
+    store = ContentAddressedPackageStore(
+        Path(current_state_dir()) / "artifact_pipeline" / "packages"
+    )
+    try:
+        archive, verified = store.read_verified(component.digest)
+        if verified.ref != component:
+            raise ValueError("published package identity differs from its release")
+        with ZipFile(BytesIO(archive), "r") as bundle:
+            payload = json.loads(bundle.read("webui.json").decode("utf-8-sig"))
+    except (OSError, KeyError, ValueError, BadZipFile, PackageVerificationError) as exc:
+        raise ValueError("Builder publication package is unavailable or invalid") from exc
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
 def _builder_preview_content_override(
     scenario_id: str,
     *,
@@ -10787,6 +10869,11 @@ def _builder_preview_content_override(
         content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
     if not isinstance(content, Mapping):
         content = scenarios_loader.read_content(scenario_id, space=source_space)
+    if stage_token == "publication" and (not isinstance(content, Mapping) or not content):
+        content = _builder_publication_package_content(
+            scenario_id,
+            revision=revision_token or None,
+        )
     if not isinstance(content, Mapping) or not content:
         raise ValueError(f"Builder {stage_token} preview source is unavailable: {scenario_id}")
 

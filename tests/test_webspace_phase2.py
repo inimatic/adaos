@@ -4645,6 +4645,99 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
 
 
+def test_builder_publication_preview_reads_verified_installed_package_when_slot_is_inactive(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from adaos.domain.artifact_release import (
+        ArtifactSourceRef,
+        ProjectRelease,
+        StableSubscription,
+    )
+    from adaos.services.artifact_pipeline.channels import SubscriptionStore
+    from adaos.services.artifact_pipeline.packages import (
+        ContentAddressedPackageStore,
+        build_artifact_package,
+    )
+
+    scenario_dir = tmp_path / "source" / "recipes"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.2.0\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    publication = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {"pageSchema": {"title": "Installed publication"}}
+            }
+        },
+    }
+    (scenario_dir / "webui.json").write_text(
+        json.dumps(publication),
+        encoding="utf-8",
+    )
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("subnets/dev/nodes/node/scenarios/recipes/",),
+    )
+    built = build_artifact_package(scenario_dir, kind="scenario", source_ref=source)
+    release = ProjectRelease(
+        project_id="recipes",
+        version="0.2.0",
+        source_ref=source,
+        components=(built.ref,),
+    ).seal()
+
+    workspace = tmp_path / "workspace"
+    metadata = workspace / ".adaos"
+    releases = metadata / "releases"
+    releases.mkdir(parents=True)
+    release_digest = release.release_digest or release.computed_digest()
+    (releases / f"{release_digest.split(':', 1)[1]}.json").write_text(
+        json.dumps(release.to_dict()),
+        encoding="utf-8",
+    )
+    SubscriptionStore(metadata / "subscriptions.json").save(
+        StableSubscription(
+            project_id="recipes",
+            installed_release="recipes@0.2.0",
+            installed_digest=release_digest,
+        )
+    )
+    state_dir = tmp_path / "state"
+    ContentAddressedPackageStore(
+        state_dir / "artifact_pipeline" / "packages"
+    ).put(built.archive_bytes, expected_digest=built.ref.digest)
+
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "scenario_root_for_space",
+        lambda scenario_id, space: workspace / "scenarios" / scenario_id,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: None,
+    )
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="publication",
+        revision="0.2.0",
+        label=None,
+    )
+
+    assert source_space == "workspace"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == (
+        "public:0.2.0 Installed publication"
+    )
+
+
 def test_builder_prototype_preview_synthesizes_an_empty_canvas_for_legacy_default_scenarios(monkeypatch) -> None:
     legacy_content = {
         "id": "template-id",

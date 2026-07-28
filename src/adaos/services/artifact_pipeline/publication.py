@@ -329,6 +329,37 @@ class ArtifactPublicationService:
             remote=self.remote,
         )
 
+    def _workspace_slot_id(
+        self,
+        project_id: str,
+        *,
+        activation_manager: WorkspaceActivationManager | None = None,
+    ) -> str:
+        """Keep each installed project in a stable Workspace slot.
+
+        Older activations used the single ``primary`` slot. Preserve that slot
+        for its existing project, but never replace it when another subscribed
+        project is promoted or updated.
+        """
+
+        manager = activation_manager or WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
+        )
+        current = manager.load_lock()
+        if current is None or not current.slots:
+            return "primary"
+        for slot in sorted(current.slots, key=lambda item: item.slot_id):
+            if slot.project_id == project_id:
+                return slot.slot_id
+        occupied = {item.slot_id for item in current.slots}
+        if project_id not in occupied:
+            return project_id
+        suffix = canonical_payload_digest({"project_id": project_id}).split(":", 1)[1][:16]
+        return f"project-{suffix}"
+
     def reconcile_attestation_publication(
         self,
         operation_id: str,
@@ -556,7 +587,13 @@ class ArtifactPublicationService:
             state_root=self.state_root / "activation",
             attestation_admission=self.attestation_admission,
         )
-        activation_plan = activation_manager.plan_activation(release_plan)
+        activation_plan = activation_manager.plan_activation(
+            release_plan,
+            slot_id=self._workspace_slot_id(
+                project_id,
+                activation_manager=activation_manager,
+            ),
+        )
         return SubscriptionUpdatePlan(notice, release_plan, activation_plan)
 
     def activate_subscription_update(
@@ -580,17 +617,19 @@ class ArtifactPublicationService:
         if expected_plan_digest is not None and str(expected_plan_digest).strip().lower() != prepared.plan_digest:
             raise PublicationError("subscription update plan changed; review the new plan before activation")
         plan = prepared.release_plan
-        activation = WorkspaceActivationManager(
+        activation_manager = WorkspaceActivationManager(
             workspace_root=self.workspace_root,
             package_store=self.package_store,
             state_root=self.state_root / "activation",
             attestation_admission=self.attestation_admission,
-        ).activate(
+        )
+        activation = activation_manager.activate(
             plan,
             idempotency_key=(
                 str(idempotency_key or "").strip()
                 or f"subscription:{project_id}:{notice.pointer.release_digest}"
             ),
+            slot_id=str(prepared.activation_plan.get("slot_id") or "primary"),
             fetch_package=self.remote.fetch_package,
             reload_runtime=reload_runtime,
             health_check=health_check,
@@ -1396,6 +1435,10 @@ class ArtifactPublicationService:
                 activation = activation_manager.activate(
                     plan,
                     idempotency_key=f"stable:{candidate.release_digest}",
+                    slot_id=self._workspace_slot_id(
+                        candidate.project_id,
+                        activation_manager=activation_manager,
+                    ),
                     fetch_package=self.remote.fetch_package,
                     reload_runtime=reload_runtime,
                     health_check=health_check,
