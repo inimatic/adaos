@@ -2198,6 +2198,23 @@ class RootDeveloperService:
         )
         return {"ok": True, "candidate": candidate.to_dict()}
 
+    def recover_artifact_candidate_activation(
+        self,
+        candidate_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        try:
+            result = self._artifact_publication_service(cfg).recover_promotion_activation(
+                str(candidate_id or "").strip(),
+                str(operation_id or "").strip(),
+            )
+        except Exception as exc:
+            if isinstance(exc, RootServiceError):
+                raise
+            raise RootServiceError(str(exc)) from exc
+        return {"ok": True, "recovery": result}
+
     def prepare_rebased_artifact_candidate(
         self,
         stale_candidate_id: str,

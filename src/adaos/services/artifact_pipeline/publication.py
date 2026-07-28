@@ -417,6 +417,86 @@ class ArtifactPublicationService:
         except MutationLockTimeout as exc:
             raise PublicationError("candidate promotion is already running") from exc
 
+    def recover_promotion_activation(
+        self,
+        candidate_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Reconcile one failed, rolled-back activation without replaying it."""
+
+        try:
+            with mutation_lock(self.promotion_lock_path(candidate_id)):
+                promotion = self.load_promotion(candidate_id)
+                if promotion is None:
+                    raise PublicationError("candidate promotion has no durable operation")
+                if promotion.get("status") != "paused":
+                    raise PublicationError("candidate promotion is not paused")
+                receipts = promotion.setdefault("receipts", {})
+                if isinstance(receipts.get("workspace_activated"), Mapping):
+                    raise PublicationError("candidate Workspace activation is already complete")
+                release_digest = str(promotion.get("release_digest") or "").strip()
+                if not release_digest:
+                    raise PublicationError("candidate promotion has no immutable release digest")
+                manager = WorkspaceActivationManager(
+                    workspace_root=self.workspace_root,
+                    package_store=self.package_store,
+                    state_root=self.state_root / "activation",
+                    attestation_admission=self.attestation_admission,
+                )
+                previous_recovery = receipts.get("activation_recovered")
+                expected_key = f"stable:{release_digest}"
+                if isinstance(previous_recovery, Mapping):
+                    expected_key = str(
+                        previous_recovery.get("new_idempotency_key") or ""
+                    ).strip()
+                expected_operation_id = manager.operation_id(expected_key)
+                operation_token = str(operation_id or "").strip()
+                if operation_token != expected_operation_id:
+                    raise PublicationError(
+                        "failed activation does not match the current promotion attempt"
+                    )
+                operation_path = manager.operation_path(operation_token)
+                try:
+                    activation_operation = json.loads(
+                        operation_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, ValueError) as exc:
+                    raise PublicationError(
+                        f"cannot read failed activation operation {operation_token}: {exc}"
+                    ) from exc
+                if (
+                    activation_operation.get("release_digest") != release_digest
+                    or activation_operation.get("status") != "failed"
+                    or activation_operation.get("rolled_back") is not True
+                ):
+                    raise PublicationError(
+                        "activation recovery requires the exact failed and rolled-back release operation"
+                    )
+                recovered = manager.recover_interrupted(operation_token)
+                new_key = f"stable-recovery:{release_digest}:{operation_token}"
+                self._promotion_receipt(
+                    promotion,
+                    "activation_recovered",
+                    {
+                        "operation_id": operation_token,
+                        "operation_status": recovered.get("status"),
+                        "new_idempotency_key": new_key,
+                    },
+                )
+                promotion["status"] = "paused"
+                promotion["phase"] = "activation_recovered"
+                promotion["paused_at"] = _now()
+                self._write_promotion(promotion)
+                return {
+                    "status": "recovered",
+                    "candidate_id": candidate_id,
+                    "release_digest": release_digest,
+                    "operation_id": operation_token,
+                    "next_operation_id": manager.operation_id(new_key),
+                }
+        except MutationLockTimeout as exc:
+            raise PublicationError("candidate promotion is already running") from exc
+
     def plan_registry_reconciliation(
         self,
         project_id: str,
@@ -1573,9 +1653,19 @@ class ArtifactPublicationService:
                     state_root=self.state_root / "activation",
                     attestation_admission=self.attestation_admission,
                 )
+                activation_key = f"stable:{candidate.release_digest}"
+                recovery_receipt = receipts.get("activation_recovered")
+                if isinstance(recovery_receipt, Mapping):
+                    activation_key = str(
+                        recovery_receipt.get("new_idempotency_key") or ""
+                    ).strip()
+                    if not activation_key:
+                        raise PublicationError(
+                            "promotion activation recovery receipt has no next idempotency key"
+                        )
                 activation = activation_manager.activate(
                     plan,
-                    idempotency_key=f"stable:{candidate.release_digest}",
+                    idempotency_key=activation_key,
                     slot_id=self._workspace_slot_id(
                         candidate.project_id,
                         activation_manager=activation_manager,

@@ -229,6 +229,70 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert '"stable"' in registry
 
 
+def test_paused_promotion_recovers_failed_activation_with_new_identity(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-recipes",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+
+    with pytest.raises(ActivationError, match="health check failed"):
+        service.promote(
+            prepared.candidate.candidate_id,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "pytest",
+                "reason": "no live runtime",
+            },
+            health_check=lambda _lock: False,
+        )
+    failed_operation_id = WorkspaceActivationManager.operation_id(
+        f"stable:{prepared.candidate.release_digest}"
+    )
+    recovery = service.recover_promotion_activation(
+        prepared.candidate.candidate_id,
+        failed_operation_id,
+    )
+
+    assert recovery["status"] == "recovered"
+    assert recovery["operation_id"] == failed_operation_id
+    promoted = service.promote(
+        prepared.candidate.candidate_id,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "no live runtime",
+        },
+        health_check=lambda _lock: True,
+    )
+    assert promoted.pointer.release == "recipes@1.0.0"
+    assert promoted.activation.operation_id == recovery["next_operation_id"]
+    promotion = service.load_promotion(prepared.candidate.candidate_id)
+    assert promotion is not None
+    assert (
+        promotion["receipts"]["activation_recovered"]["operation_id"]
+        == failed_operation_id
+    )
+
+
 def test_stable_promotion_retains_other_subscribed_workspace_projects(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

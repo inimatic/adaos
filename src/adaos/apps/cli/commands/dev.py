@@ -323,6 +323,24 @@ def root_login(
     _echo_login_result(result)
 
 
+@root_app.command("recover-promotion-activation")
+def root_recover_promotion_activation(
+    candidate_id: str = typer.Argument(..., help="Accepted candidate identity."),
+    operation_id: str = typer.Argument(..., help="Exact failed activation operation identity."),
+) -> None:
+    """Reconcile one rolled-back activation before explicitly resuming promotion."""
+
+    try:
+        result = _service().recover_artifact_candidate_activation(
+            candidate_id,
+            operation_id,
+        )
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 @root_app.command("logs")
 @_run_safe
 def root_logs(
