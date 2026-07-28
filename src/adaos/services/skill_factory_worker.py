@@ -712,8 +712,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
+        changed_paths = set(self._changed_from_baseline(workspace))
         self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
-        self._validate_tests_do_not_pin_checkpoint_metadata(workspace, checks, errors)
+        self._validate_tests_do_not_pin_checkpoint_metadata(
+            workspace,
+            checks,
+            errors,
+            changed_paths=changed_paths,
+        )
         self._validate_skill_data_routes(workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
@@ -829,6 +835,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         workspace: Path,
         checks: list[dict[str, Any]],
         errors: list[str],
+        *,
+        changed_paths: set[str] | None = None,
     ) -> None:
         def checkpoint_key(node: ast.AST) -> str | None:
             if isinstance(node, ast.Subscript):
@@ -855,6 +863,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
         for path in sorted(workspace.glob("**/tests/test_*.py")):
             relative = path.relative_to(workspace).as_posix()
+            if changed_paths is not None and relative not in changed_paths:
+                continue
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             except (OSError, SyntaxError, UnicodeError):

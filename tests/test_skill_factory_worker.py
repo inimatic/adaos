@@ -641,6 +641,43 @@ def test_worker_allows_semantic_manifest_version_checks(tmp_path: Path) -> None:
     ]
 
 
+def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    baseline_tests = workspace / "skills" / "dependency" / "tests"
+    changed_tests = workspace / "skills" / "target" / "tests"
+    baseline_tests.mkdir(parents=True)
+    changed_tests.mkdir(parents=True)
+    (baseline_tests / "test_manifest.py").write_text(
+        "def test_version(manifest):\n"
+        "    assert manifest['version'] == '0.1.0'\n",
+        encoding="utf-8",
+    )
+    (changed_tests / "test_manifest.py").write_text(
+        "import re\n\n"
+        "def test_version(manifest):\n"
+        "    assert re.fullmatch(r'\\d+\\.\\d+\\.\\d+', manifest['version'])\n",
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/target/tests/test_manifest.py"},
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "checkpoint_test_contract",
+            "path": "skills/target/tests/test_manifest.py",
+            "ok": True,
+        }
+    ]
+
+
 def test_codex_executor_discovers_vscode_bundled_cli(monkeypatch, tmp_path: Path) -> None:
     executable = (
         tmp_path
