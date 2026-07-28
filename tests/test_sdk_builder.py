@@ -244,7 +244,12 @@ def test_preview_facade_never_blocks_event_driven_selection_on_rebuild(monkeypat
 def test_preview_target_materializes_exact_prototype_without_changing_workflow(monkeypatch) -> None:
     service = _PreviewService()
     materializations: list[dict] = []
+    events: list[tuple[str, dict]] = []
     monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.sdk.data.events.publish",
+        lambda topic, payload, **_kwargs: events.append((topic, payload)),
+    )
     monkeypatch.setattr(
         "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
         lambda: SimpleNamespace(
@@ -281,6 +286,8 @@ def test_preview_target_materializes_exact_prototype_without_changing_workflow(m
     assert materializations[0]["preview_stage"] == "prototype"
     assert materializations[0]["revision"] == "002"
     assert service.preview_targets[0]["target"]["follow_active"] is False
+    assert [topic for topic, _payload in events] == ["builder.context.selected"]
+    assert events[0][1]["object_id"] == "recipes"
 
 
 def test_preview_target_materializes_current_content_when_a_scenario_has_no_ui_revision(monkeypatch) -> None:

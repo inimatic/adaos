@@ -336,6 +336,28 @@ def select_target(
         wait_for_rebuild=True,
         publish_event=False,
     )
+    # ``select_target`` materializes the requested snapshot itself, so it must
+    # not publish ``builder.preview.desired`` and schedule a second reconcile.
+    # Project selection is a separate projection, however: Builder hosts
+    # consume ``data/builder/selection`` through Yjs and need the context event
+    # even when preview materialization is synchronous.
+    selected_binding = _plain(selected.get("binding"))
+    selected_context = _plain(selected_binding.get("selection"))
+    from adaos.sdk.data.events import publish
+
+    publish(
+        BUILDER_CONTEXT_SELECTED,
+        {
+            "source_webspace_id": source,
+            "project_kind": kind,
+            "project_id": project_id,
+            "object_type": kind,
+            "object_id": project_id,
+            "title": str(selected_context.get("title") or project_id).strip() or project_id,
+            "description": str(selected_context.get("description") or "").strip(),
+        },
+        source="sdk.builder.preview.select_target",
+    )
     preview_id = str(selected.get("preview_webspace_id") or selected.get("dev_webspace_id") or "").strip()
     if not preview_id:
         raise RuntimeError("Builder preview relation is missing")
