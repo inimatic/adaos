@@ -237,6 +237,32 @@ def test_change_set_routes_functional_work_directly_to_automation(
     ]
 
 
+@pytest.mark.parametrize("corrupted", ["???????? ??????", "Повреждённый \ufffd текст"])
+def test_change_set_rejects_transport_corrupted_new_text(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+    corrupted: str,
+) -> None:
+    service, _root = workflow_project
+
+    with pytest.raises(BuilderWorkflowError, match="transport-corrupted"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "plan_change_set",
+            metadata={
+                "change_set_id": "CS-corrupted",
+                "request": corrupted,
+                "issues": [
+                    {
+                        "title": "Valid title",
+                        "lane": "prototype",
+                        "acceptance_criteria": ["Valid criterion"],
+                    }
+                ],
+            },
+        )
+
+
 def test_change_set_advances_through_automation_trial_and_publication(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

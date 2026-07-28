@@ -76,6 +76,25 @@ def _bounded_text(value: Any, *, field: str, max_length: int) -> str:
     return token
 
 
+def _reject_transport_corruption(value: Any, *, field: str) -> None:
+    """Reject new text whose original Unicode code points were already lost."""
+
+    values: list[Any]
+    if isinstance(value, Mapping):
+        values = list(value.values())
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        token = str(value or "")
+        if "\ufffd" in token or "????" in token:
+            raise BuilderWorkflowError(
+                f"{field} appears transport-corrupted; submit the original text as UTF-8"
+            )
+        return
+    for item in values:
+        _reject_transport_corruption(item, field=field)
+
+
 def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise BuilderWorkflowError("change set issues must be objects")
@@ -541,6 +560,8 @@ class BuilderWorkflowService:
             raw_issues = metadata.get("issues")
             if not isinstance(raw_issues, (list, tuple)) or not raw_issues:
                 raise BuilderWorkflowError("change set requires at least one issue")
+            _reject_transport_corruption(metadata.get("request"), field="change set request")
+            _reject_transport_corruption(raw_issues, field="change set issues")
             if len(raw_issues) > _MAX_CHANGE_ISSUES:
                 raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
             issues = [_normalize_issue(item, index=index) for index, item in enumerate(raw_issues, start=1)]
@@ -573,6 +594,8 @@ class BuilderWorkflowService:
             raw_issues = metadata.get("issues")
             if not isinstance(raw_issues, (list, tuple)) or not raw_issues:
                 raise BuilderWorkflowError("change set extension requires at least one issue")
+            _reject_transport_corruption(metadata.get("request"), field="change set request addendum")
+            _reject_transport_corruption(raw_issues, field="change set issues")
             existing_issues = [
                 item for item in current.get("issues") or [] if isinstance(item, dict)
             ]
