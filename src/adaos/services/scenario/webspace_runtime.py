@@ -10014,6 +10014,7 @@ async def rebuild_webspace_from_sources(
                 requested_action == "builder_revision_apply"
                 and builder_fresh_doc_rebuild
                 and _builder_revision_replace_ystore_snapshot_enabled()
+                and not payload_only_rebuild
             )
             deferred_refresh_kwargs: dict[str, Any] = {
                 "persist_repair": persist_repair,
@@ -10041,6 +10042,7 @@ async def rebuild_webspace_from_sources(
                         requested_action == "builder_revision_apply"
                         and builder_fresh_doc_rebuild
                         and _builder_revision_replace_ystore_snapshot_enabled()
+                        and not payload_only_rebuild
                     )
                     refresh_kwargs: dict[str, Any] = {
                         "reason": f"semantic_rebuild:{requested_action}",
