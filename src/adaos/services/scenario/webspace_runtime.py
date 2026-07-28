@@ -9896,6 +9896,7 @@ async def rebuild_webspace_from_sources(
         if _is_control_flow_base_exception(exc):
             raise
         error_token = "webspace_rebuild_timeout" if isinstance(exc, asyncio.TimeoutError) else "webspace_rebuild_failed"
+        error_detail = f"{type(exc).__name__}: {exc}"[:1000]
         finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
         semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
         ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
@@ -9926,11 +9927,12 @@ async def rebuild_webspace_from_sources(
             phase_timings_ms=phase_timings,
         )
         _log.warning(
-            "failed to rebuild webspace from sources webspace=%s action=%s scenario=%s error=%s timings_ms=%s semantic_timings_ms=%s",
+            "failed to rebuild webspace from sources webspace=%s action=%s scenario=%s error=%s detail=%s timings_ms=%s semantic_timings_ms=%s",
             webspace_id,
             requested_action,
             target_scenario,
             error_token,
+            error_detail,
             finalized_timings,
             semantic_timings,
             exc_info=True,
@@ -9954,6 +9956,7 @@ async def rebuild_webspace_from_sources(
             "ydoc_timings_ms": ydoc_timings,
             "phase_timings_ms": phase_timings,
             "error": error_token,
+            "error_detail": error_detail,
         }
 
     semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
