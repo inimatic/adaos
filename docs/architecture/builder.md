@@ -117,11 +117,34 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
 
 ## Prototype And Automation Workflow
 
-Builder has one mutable process at a time. `Prototype` and `Automation` are
-the only possible values of `workflow.active_phase`; `Publication` is an
+Builder projects every user request onto one bounded
+`adaos.builder.change_set.v1`. A change set contains the original intent,
+individually testable issue items, acceptance criteria, durable Builder Change
+references, and one execution route. Follow-up remarks normally extend the
+active set; they do not create a new set unless the previous set is terminal or
+the user explicitly starts unrelated work. This is a project-local execution
+contract, not the deferred global/multi-user Issue registry.
+
+Issue items use two execution lanes:
+
+- `prototype`: interface, layout, content hierarchy, presentation, and other
+  safely mockable interaction requirements;
+- `automation`: behavior, persistence, integration, dependency, migration,
+  runtime, and test requirements.
+
+If any unresolved item belongs to `prototype`, the route is
+`prototype_first`. The built-in interactive LLM changes only the deterministic
+Prototype, and Automation cannot start until that gate is approved. A purely
+functional request may use `automation_direct`; Builder records the set and
+requires an explicit implementation brief before isolated Codex starts. A
+heuristic classification is never sufficient to launch Codex by itself.
+
+Builder still has one mutable process at a time. `Prototype` and `Automation`
+are the only possible values of `workflow.active_phase`; `Publication` is an
 immutable release snapshot and is never an active editing phase. The
 authoritative persisted contract is `adaos.builder.workflow.v1` in the DEV
-project's `prompt_state.json`.
+project's `prompt_state.json`, with the active change set embedded in that
+projection.
 
 Lifecycle selection, workflow state, and Preview are independent:
 
@@ -132,13 +155,14 @@ Lifecycle selection, workflow state, and Preview are independent:
 
 The supported transitions are:
 
-| From | Action | To | Durable effect |
+| Change-set gate | Action | Next gate | Durable effect |
 | --- | --- | --- | --- |
-| Prototype | hand off/start Automation | Automation | current Prototype head becomes frozen input |
-| Automation working | Automation completes | Automation completed | replace the single retained Automation snapshot |
-| Automation completed/failed | submit another Automation turn | Automation working | reopen the same Automation process with a new iteration and task id |
-| Automation completed | publish | Automation completed | create or replace the current Publication snapshot |
-| Automation completed | return to Prototype | Prototype | built-in LLM derives a new safe Prototype revision |
+| Prototype | approve/stabilize Prototype | Automation | approved revision becomes immutable requirement input |
+| Automation | isolated Codex completes | Trial | result, checks, source Prototype, and member changes are checkpointed |
+| Trial | reject or request changes | Prototype or Automation | candidate stays non-promotable and the affected issue items reopen |
+| Trial | accept | Publication | accepted trial evidence admits stable promotion |
+| Publication | publish | Complete | immutable release and publication evidence reference the change set |
+| Complete/Automation | return result to Prototype | Prototype | built-in LLM derives a new safe Prototype revision for a later set |
 
 Returning to Prototype does not thaw or overwrite the completed Automation.
 The local realization worker receives the retained Automation as immutable
@@ -152,9 +176,21 @@ If adaptation fails, Builder records the adaptation diagnostic and restores
 the retained Automation to `completed`; the failed side process never
 invalidates the last working implementation or Publication snapshot.
 
-Only one Automation snapshot is retained under Builder runtime state; a new
-completed Automation replaces it. It is not copied into the published
-scenario. Historical implementation recovery remains a Forge/VCS concern.
+Lifecycle projects dependency, not three independent stage buckets:
+
+```text
+Prototype revision
+  -> Automation result produced from that revision
+       -> Publication produced from that Automation result
+```
+
+Only the retained current Automation and current Publication are previewable.
+Legacy publication evidence without provenance is shown under an explicitly
+inferred historical Automation node instead of being silently attributed to
+the current result. Only one Automation snapshot is retained under Builder
+runtime state; a new completed Automation replaces it. It is not copied into
+the published scenario. Historical implementation recovery remains a
+Forge/VCS concern.
 
 The scenario version source of truth is `scenario.yaml`. Compatibility
 `scenario.json` content must not override its lifecycle or publication version.

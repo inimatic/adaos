@@ -21,6 +21,14 @@ Workspace. The exact evidence is recorded in
 Clean-stand repetition remains open, so this is not a production-acceptance
 claim.
 
+The 2026-07-28 change-oriented slice is `validated-local` and checkpointed in
+Forge: scenario `0.2.23` (`2aebc842`), control skill `0.1.32` (`ddb30038`),
+and interactive `builder_skill` `0.3.3` (`5e79f165`). It adds bounded change
+sets, issue lanes and gates, dependent Lifecycle lineage, and exact
+`proto:`/`active:`/`public:` target selection. This record is not yet a claim
+that the new slice passed a fresh end-to-end candidate trial and publication;
+that acceptance item remains open below.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
@@ -824,12 +832,14 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 The Builder Workbench prototype now uses one project-oriented surface instead
 of the legacy Prompt IDE toolbar split:
 
-- the left navigation owns project selection and the three-stage lifecycle
-  tree (`Prototype`, `Automation`, `Publication`)
+- the left navigation owns project selection and a dependent lifecycle lineage:
+  Prototype revisions contain the Automation results derived from them, which
+  in turn contain their Publications
 - the main area switches between project overview, the durable Builder
   conversation, and the selected artifact
 - the auxiliary area is contextual: runtime projection on Overview,
-  development/LLM controls on Conversation, and the artifact tree on Artifacts
+  development/LLM plus active change-set controls on Conversation, and the
+  artifact tree on Artifacts
 - `ui.chat` supports an optional multiline composer; `Shift+Enter` inserts a
   newline while `Enter` and `Ctrl/Cmd+Enter` submit by default
 - split layouts can declare bounded sidebar and auxiliary widths while medium
@@ -865,6 +875,32 @@ observed projection matches the latest desired generation.
   materialization events when their scenario no longer matches the latest
   source-webspace binding. This prevents an older asynchronous event from
   replacing the currently selected Builder projection.
+- [x] `[must]` Persist `adaos.builder.change_set.v1` inside the authoritative
+  project workflow with bounded issue items, acceptance criteria, member
+  Builder Changes, and `prototype_first` / `automation_direct` routes.
+- [x] `[must]` Aggregate follow-up interface and functional remarks into the
+  active set, keep unresolved Prototype issues at the Prototype gate, and
+  prevent isolated Codex from starting before Prototype approval.
+- [x] `[must]` Carry the active change-set identity and acceptance criteria into
+  Automation, checkpoint, candidate, trial, and Publication evidence.
+- [x] `[must]` Project the active set and issue progress in the contextual
+  Conversation panel; preserve Prototype development settings and expose them
+  only while Prototype is editable.
+- [x] `[must]` Replace independent stage roots with dependent
+  Prototype -> Automation -> Publication lineage. Only the retained current
+  Automation and Publication nodes are previewable; uncertain legacy lineage
+  is marked inferred.
+- [x] `[must]` Verify exact local runtime selection labels and bindings for
+  `proto: builder · UI 042`, `active: builder · 0.2.20`, and
+  `public: builder · 0.2.20`.
+- [ ] `[must]` Run one fresh user request through issue extraction, built-in LLM
+  Prototype approval or direct Automation, isolated Codex, candidate trial,
+  stable Publication, and Workspace materialization on this machine.
+- [ ] `[should]` Add an explicit split/merge editor when automatic issue
+  decomposition is ambiguous; the current bounded list supports status edits
+  but not structural regrouping.
+- [ ] `[deferred]` Promote project-local issue items into a federated multi-user
+  Issue/extraction and proposal-exchange model.
 - [ ] `[must]` Persist the authoritative Builder transition record in the skill
   and make transition submission idempotent by generation id.
 - [ ] `[must]` Materialize only the latest desired generation and mark older
