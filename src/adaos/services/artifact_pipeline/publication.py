@@ -929,7 +929,7 @@ class ArtifactPublicationService:
             kind=kind,
             artifact_dir=artifact_dir,
             own_package=built.ref,
-            checkpoint_change_ids=record.change_ids,
+            checkpoint_change_ids=change_ids,
         )
         plan = build_project_release(
             project_id=artifact_id,

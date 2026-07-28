@@ -553,6 +553,50 @@ def test_scenario_candidate_includes_companion_skill_from_same_change_set(
     ).is_file()
 
 
+def test_scenario_candidate_includes_dependency_from_an_earlier_change_set_member(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    scenario_dir = _scenario(dev_root / "scenarios")
+    skill_dir = _skill(dev_root / "skills")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+        change_ids=("change-skill",),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("change-scenario",),
+    )
+
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("change-skill", "change-scenario"),
+        validation_evidence={"status": "passed"},
+    )
+
+    skill_package = next(item for item in prepared.plan.packages if item.kind == "skill")
+    assert skill_package.version == "2.1.0"
+    assert skill_package.source_ref == _source()
+
+
 def test_scenario_candidate_does_not_mix_unrelated_dev_dependency(
     tmp_path: Path,
 ) -> None:
