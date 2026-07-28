@@ -212,6 +212,49 @@ def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: 
     assert companion == "recipes_control_skill"
 
 
+@pytest.mark.parametrize("corrupted", ["???????? ??????", "Damaged \ufffd text"])
+def test_automation_start_rejects_transport_corrupted_brief_before_writes(
+    tmp_path: Path,
+    corrupted: str,
+) -> None:
+    service = _service(tmp_path)
+
+    with pytest.raises(ValueError, match="transport-corrupted"):
+        service.start_from_execute(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief=corrupted,
+            webspace_id="prompt-dev",
+        )
+
+    assert service.get_session("scenario", "recipes") is None
+
+
+def test_automation_followup_rejects_transport_corrupted_text_before_iteration(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+
+    with pytest.raises(ValueError, match="transport-corrupted"):
+        service.submit_turn(
+            text="???? broken follow-up",
+            object_type="scenario",
+            object_id="recipes",
+            webspace_id="prompt-dev",
+        )
+
+    current = service.get_session("scenario", "recipes")
+    assert current is not None
+    assert current["iteration"] == 0
+    assert current["change_id"] == started["session"]["change_id"]
+
+
 def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path) -> None:
     service = _service(tmp_path)
     started = service.start_from_execute(

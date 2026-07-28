@@ -66,6 +66,16 @@ def _safe_token(value: Any, *, fallback: str = "project") -> str:
     return token.strip("._") or fallback
 
 
+def _reject_transport_corruption(value: Any, *, field: str) -> None:
+    """Reject new durable Automation text after Unicode code points were lost."""
+
+    token = str(value or "")
+    if "\ufffd" in token or "????" in token:
+        raise ValueError(
+            f"{field} appears transport-corrupted; submit the original text as UTF-8"
+        )
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -164,6 +174,7 @@ class BuilderAutomationService:
         brief = str(implementation_brief or "").strip()
         if not brief:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
+        _reject_transport_corruption(brief, field="implementation_brief")
         workflow_before = self._workflow().describe(kind, project_id)
         if workflow_before.get("archived"):
             raise ValueError("archived projects cannot start automation")
@@ -366,6 +377,7 @@ class BuilderAutomationService:
         instruction = str(text or "").strip()
         if not instruction:
             raise ValueError("automation chat text is required")
+        _reject_transport_corruption(instruction, field="automation chat text")
         with _LOCK:
             session = (
                 self.get_session(str(object_type), str(object_id))
