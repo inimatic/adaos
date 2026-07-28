@@ -697,23 +697,25 @@ lifecycle and update attempt state.
   values while materialization is incomplete.
 - [x] `[must]` Resolve local node-owned projections to their live unscoped
   producer path instead of the first-paint `data/nodes/<local>/...` federation
-  alias. Client `0.0.243` (`ff424af`) is released, its regression distinguishes
-  a current local `data/infrastate/summary` from a stale local alias, and all 95
-  focused page-data tests plus the production build pass. Remote node
-  projections remain scoped. Live probes on `192.168.0.30` and `91.98.89.76`
-  both report `succeeded`, `slot B | 0.1.627 | 10be80e`, and one applied
-  projection from active `infrastate_skill 0.75.60`.
+  alias. Fix `f623040` is released in client `0.0.245+a497386`; its regression
+  distinguishes a current local `data/infrastate/summary` from a stale local
+  alias, and all 95 focused page-data tests plus the production build pass.
+  Remote node projections remain scoped. Live probes on `192.168.0.30` and
+  `91.98.89.76` both report `succeeded`, `slot A | 0.1.628 | fede6a4`, from
+  active `infrastate_skill 0.75.60`.
 - [x] `[must]` Keep manual and CI client publication on the same Firebase
-  project. `.firebaserc` and local deploy scripts now resolve `myinimatic`,
-  matching the CI identity, while the Hosting site remains `inimatic`.
+  project. `.firebaserc`, local deploy scripts, and CI use the `inimatic`
+  project alias, and release verification uses `https://inimatic.com`. The
+  immutable legacy Google project ID is confined to the alias mapping and
+  service-account identity.
 - [x] `[must]` Recover the interrupted same-version `infrastate_skill`
   quarantine on `91.98.89.76` through one explicit named transactional
   migration. Operation `skill-migrate-bab5a15abc` passed all 115 skill tests,
   activated slot B, cleared the deactivation marker, and did not introduce an
   automatic state-changing retry.
 - [ ] `[must]` Confirm restart-safe Infra State first paint in the existing
-  routed browser sessions on `192.168.0.30` and `91.98.89.76`. Core `0.1.627`
-  (`10be80e`) and client `0.0.243` are released and both live server projections
+  routed browser sessions on `192.168.0.30` and `91.98.89.76`. Core `0.1.628`
+  (`fede6a4`) and client `0.0.245` are released and both live server projections
   are current; visual confirmation remains open until the existing browser
   sessions reload the released client bundle.
 - [x] `[must]` Provide a pinned one-shot recovery entry point for a node with a
