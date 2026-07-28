@@ -1527,6 +1527,18 @@ def dev_skill_setup(
         typer.echo(str(result))
 
 
+def _echo_utf8_json(value: Any) -> None:
+    """Write machine JSON independently of the Windows console code page."""
+
+    rendered = json.dumps(value, ensure_ascii=False)
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is None:
+        typer.echo(rendered)
+        return
+    binary.write(rendered.encode("utf-8") + b"\n")
+    binary.flush()
+
+
 @_run_safe
 @skill_app.command("run")
 def dev_skill_run(
@@ -1574,7 +1586,7 @@ def dev_skill_run(
         typer.secho(f"run failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
 
-    typer.echo(json.dumps(result, ensure_ascii=False))
+    _echo_utf8_json(result)
 
 
 @_run_safe

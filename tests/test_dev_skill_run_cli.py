@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
+import sys
 
 import pytest
 import typer
@@ -49,3 +51,13 @@ def test_dev_skill_run_rejects_ambiguous_inline_and_file_payloads(tmp_path: Path
 
     with pytest.raises(typer.Exit):
         dev.dev_skill_run("demo", "inspect", "{}", None, None, payload_file)
+
+
+def test_dev_skill_run_writes_machine_json_as_utf8_bytes(monkeypatch) -> None:
+    raw = io.BytesIO()
+    console = io.TextIOWrapper(raw, encoding="cp1251")
+    monkeypatch.setattr(sys, "stdout", console)
+
+    dev._echo_utf8_json({"value": "Русский � 😀"})
+
+    assert raw.getvalue().decode("utf-8") == '{"value": "Русский � 😀"}\n'
