@@ -674,6 +674,27 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError("change evidence requires change_id")
             add_change_evidence(change_id)
             return
+        if action == "prototype_revision_recorded":
+            self._require_active(workflow, "prototype", action)
+            revision = str(metadata.get("revision") or "").strip()
+            if not revision:
+                raise BuilderWorkflowError("Prototype revision recording requires revision")
+            if _kind(str(metadata.get("object_type") or "scenario")) != "scenario":
+                raise BuilderWorkflowError("Prototype revisions are supported only for scenarios")
+            prototype.update(
+                {
+                    "status": "working",
+                    "stable": False,
+                    "head_revision": revision,
+                    "revised_at": changed_at,
+                }
+            )
+            invalidate_delivery("prototype_revision_recorded")
+            current = workflow.get("change_set")
+            if isinstance(current, dict) and current.get("gate") == "prototype":
+                update_change_set(status="in_progress", gate="prototype")
+            add_change_evidence(metadata.get("change_id"))
+            return
         if action == "stabilize_prototype":
             self._require_active(workflow, "prototype", action)
             prototype.update({"status": "working", "stable": True, "stabilized_at": changed_at})

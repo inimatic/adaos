@@ -153,6 +153,67 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
+def test_prototype_revision_is_recorded_without_approving_issues(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-layout",
+            "request": "Adjust the recipe layout.",
+            "issues": [
+                {
+                    "issue_id": "layout",
+                    "title": "Adjust the recipe layout",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The revised layout is visible."],
+                }
+            ],
+        },
+    )
+    (root / "ui_revisions" / "005.json").write_text("{}", encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").write_text("005\n", encoding="utf-8")
+
+    recorded = service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={
+            "object_type": "scenario",
+            "revision": "005",
+            "previous_revision": "001",
+            "change_id": "change.layout.005",
+        },
+    )["workflow"]
+
+    assert recorded["active_phase"] == "prototype"
+    assert recorded["prototype"]["head_revision"] == "005"
+    assert recorded["prototype"]["stable"] is False
+    assert recorded["change_set"]["status"] == "in_progress"
+    assert recorded["change_set"]["gate"] == "prototype"
+    assert recorded["change_set"]["issues"][0]["status"] == "open"
+    assert "change.layout.005" in recorded["change_set"]["member_change_ids"]
+    assert recorded["history"][-1]["action"] == "prototype_revision_recorded"
+
+
+def test_prototype_revision_cannot_be_recorded_during_automation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+
+    with pytest.raises(BuilderWorkflowError, match="requires active prototype"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "prototype_revision_recorded",
+            metadata={"object_type": "scenario", "revision": "002"},
+        )
+
+
 def test_automation_followup_does_not_skip_pending_prototype_gate(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
