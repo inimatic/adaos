@@ -20,6 +20,7 @@ from adaos.services.artifact_pipeline import (
     ReleaseRepository,
     WorkspaceActivationManager,
 )
+from adaos.services.artifact_pipeline import packages as package_module
 
 
 class _Remote:
@@ -551,6 +552,75 @@ def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:
             change_ids=("change-after-push",),
             validation_evidence={"status": "passed"},
         )
+
+
+def test_candidate_reuses_exact_checkpoint_after_build_policy_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    old_policy = "sha256:" + "1" * 64
+    new_policy = "sha256:" + "2" * 64
+    monkeypatch.setattr(package_module, "PACKAGE_BUILD_POLICY_DIGEST", old_policy)
+    pushed = service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+
+    monkeypatch.setattr(package_module, "PACKAGE_BUILD_POLICY_DIGEST", new_policy)
+    verified = service.verify_pushed_source(pushed, dev)
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-policy-only",),
+        validation_evidence={"status": "passed"},
+    )
+
+    assert pushed.package.build_policy_digest == old_policy
+    assert verified.ref == pushed.package
+    assert prepared.plan.packages == (pushed.package,)
+    assert remote.archives[pushed.package.digest] == verified.archive_bytes
+
+
+def test_build_policy_change_does_not_hide_dev_content_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    monkeypatch.setattr(
+        package_module,
+        "PACKAGE_BUILD_POLICY_DIGEST",
+        "sha256:" + "1" * 64,
+    )
+    pushed = service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    monkeypatch.setattr(
+        package_module,
+        "PACKAGE_BUILD_POLICY_DIGEST",
+        "sha256:" + "2" * 64,
+    )
+    (dev / "webui.json").write_text('{"ui": {"changed": true}}\n', encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="changed after"):
+        service.verify_pushed_source(pushed, dev)
 
 
 def test_promotion_rechecks_persisted_public_source_tree(tmp_path: Path) -> None:

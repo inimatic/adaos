@@ -724,11 +724,45 @@ class ArtifactPublicationService:
             kind=record.kind,  # type: ignore[arg-type]
             source_ref=record.source_ref,
         )
-        if current.ref != record.package:
+        if current.ref == record.package:
+            return current
+
+        try:
+            checkpoint_bytes, checkpoint = self.package_store.read_verified(
+                record.package.digest
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise PublicationError(
+                "exact Forge checkpoint package is unavailable or invalid"
+            ) from exc
+        if checkpoint.ref != record.package:
+            raise PublicationError(
+                "exact Forge checkpoint package does not match its pushed source receipt"
+            )
+
+        # A core update may change only the package build-policy digest (for
+        # example, by adding a reserved transient directory to the exclusion
+        # set). That changes deterministic archive bytes even when every
+        # publishable source byte is unchanged. Compare the signed file
+        # inventory and all other package semantics, then keep using the
+        # immutable checkpoint archive. Any policy change that affects the
+        # selected files still changes this projection and is rejected.
+        def _source_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
+            projected = dict(manifest)
+            projected.pop("build_policy_digest", None)
+            return projected
+
+        if _source_projection(current.package_manifest) != _source_projection(
+            checkpoint.package_manifest
+        ):
             raise PublicationError(
                 "DEV content changed after the exact Forge checkpoint; push a new checkpoint"
             )
-        return current
+        return BuiltArtifactPackage(
+            ref=checkpoint.ref,
+            archive_bytes=checkpoint_bytes,
+            package_manifest=checkpoint.package_manifest,
+        )
 
     def verify_pushed_source(
         self,

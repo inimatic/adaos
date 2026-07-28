@@ -515,6 +515,10 @@ def _verify_artifact_package(
         for name, record in expected_files.items():
             raw = archive.read(name)
             _assert_publishable_file(name, raw, error_type=PackageVerificationError)
+            if _excluded(PurePosixPath(name)):
+                raise PackageVerificationError(
+                    f"package contains a path excluded by the current safety policy: {name}"
+                )
             recorded_size = record.get("size")
             if recorded_size is None or int(recorded_size) != len(raw):
                 raise PackageVerificationError(f"package file size mismatch: {name}")
@@ -530,15 +534,14 @@ def _verify_artifact_package(
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(raw)
 
+        # The digest identifies the historical deterministic build policy; it
+        # is part of the immutable package reference, not a runtime-version
+        # allowlist. Core upgrades must continue to verify and activate older
+        # packages. Every archived member is therefore rechecked against the
+        # current path, credential, private-key, collision, and size safety
+        # rules above. A historical policy that selected a now-excluded path
+        # is rejected independently of its claimed digest.
         if package_manifest.get("builder_id") is not None:
-            if (
-                package_manifest.get("builder_id") == PACKAGE_BUILDER_ID
-                and package_manifest.get("build_policy_digest")
-                != PACKAGE_BUILD_POLICY_DIGEST
-            ):
-                raise PackageVerificationError(
-                    "package claims the AdaOS builder with an unknown build policy digest"
-                )
             expected_schema_locks = [
                 {
                     "lock_id": (
