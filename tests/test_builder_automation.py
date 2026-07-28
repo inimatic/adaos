@@ -559,6 +559,8 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
     assert saved[-1]["completion_readiness"]["vcs_checkpoints"][0]["commit"] == "forge-1"
     assert saved[-1]["status"] == "completed"
+    assert saved[-1]["progress"]["status"] == "completed"
+    assert saved[-1]["progress"]["task_id"] == "task.1"
 
 
 def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: Path, monkeypatch) -> None:
@@ -594,6 +596,7 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
 
     assert saved[-1]["status"] == "failed"
     assert saved[-1]["last_failure"]["stage"] == "live_readiness"
+    assert saved[-1]["progress"]["status"] == "failed"
     assert notified == []
 
 

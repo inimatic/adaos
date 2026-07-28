@@ -1215,6 +1215,12 @@ class BuilderAutomationService:
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
             current["status"] = "completed"
+            current["progress"] = {
+                "task_id": current.get("current_task_id"),
+                "status": "completed",
+                "message": "Automation result activated and checkpointed",
+                "updated_at": readiness["completed_at"],
+            }
             current.pop("finalizing_task_id", None)
             current.pop("last_failure", None)
             current["updated_at"] = readiness["completed_at"]
@@ -1224,6 +1230,12 @@ class BuilderAutomationService:
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
             current["status"] = "failed"
+            current["progress"] = {
+                "task_id": current.get("current_task_id"),
+                "status": "failed",
+                "message": readiness["error"],
+                "updated_at": readiness["completed_at"],
+            }
             current.pop("finalizing_task_id", None)
             current.pop("pending_workflow_transition", None)
             current["last_failure"] = {

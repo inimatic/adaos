@@ -14,6 +14,40 @@ def _service():
     return BuilderAutomationService.from_context(background=execution_mode != "oneshot")
 
 
+def _foreground_result(
+    service: Any,
+    result: Mapping[str, Any],
+    *,
+    object_type: str | None,
+    object_id: str | None,
+    webspace_id: str,
+) -> dict[str, Any]:
+    """Replace a queued acknowledgement with the durable final one-shot projection."""
+
+    merged = dict(result or {})
+    if bool(getattr(service, "background", True)):
+        return merged
+    final = service.projection(
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
+    )
+    if not isinstance(final, Mapping):
+        return merged
+    session = final.get("session") if isinstance(final.get("session"), Mapping) else None
+    projection = final.get("automation") if isinstance(final.get("automation"), Mapping) else None
+    if session is not None:
+        merged["session"] = dict(session)
+    if projection is not None:
+        merged["automation"] = dict(projection)
+    final_status = str((session or {}).get("status") or "").strip()
+    if final_status:
+        merged["status"] = f"automation_{final_status}"
+    if final_status in {"completed", "failed", "cancelled", "expired"}:
+        merged["ok"] = final_status == "completed"
+    return merged
+
+
 def start(
     *,
     object_type: str,
@@ -26,17 +60,22 @@ def start(
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
-    return dict(
-        _service().start_from_execute(
-            object_type=object_type,
-            object_id=object_id,
-            implementation_brief=implementation_brief,
-            webspace_id=webspace_id,
-            conversation_id=conversation_id,
-            brief_path=brief_path,
-            change_set_id=change_set_id,
-        )
-        or {}
+    service = _service()
+    result = service.start_from_execute(
+        object_type=object_type,
+        object_id=object_id,
+        implementation_brief=implementation_brief,
+        webspace_id=webspace_id,
+        conversation_id=conversation_id,
+        brief_path=brief_path,
+        change_set_id=change_set_id,
+    ) or {}
+    return _foreground_result(
+        service,
+        result,
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
     )
 
 
@@ -67,7 +106,13 @@ def submit(
         )
         if isinstance(state, Mapping):
             result["automation"] = dict(state.get("automation") or {})
-    return result
+    return _foreground_result(
+        service,
+        result,
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
+    )
 
 
 def return_to_prototype(
@@ -86,15 +131,20 @@ def return_to_prototype(
         "publish or activate a release. Validate the resulting scenario and webui declarations and add or update "
         "tests that prove the prototype has no functional production bindings."
     )
-    return dict(
-        _service().submit_turn(
-            text=instruction,
-            object_type=object_type,
-            object_id=object_id,
-            webspace_id=webspace_id,
-            workflow_transition="return_to_prototype",
-        )
-        or {}
+    service = _service()
+    result = service.submit_turn(
+        text=instruction,
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
+        workflow_transition="return_to_prototype",
+    ) or {}
+    return _foreground_result(
+        service,
+        result,
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
     )
 
 
