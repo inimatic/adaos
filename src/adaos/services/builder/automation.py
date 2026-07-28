@@ -572,19 +572,51 @@ class BuilderAutomationService:
             failure = current.get("last_failure") if isinstance(current.get("last_failure"), Mapping) else {}
             current_status = str(current.get("status") or "")
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
+            readiness = (
+                current.get("completion_readiness")
+                if isinstance(current.get("completion_readiness"), Mapping)
+                else {}
+            )
+            confirmed_primary_checkpoint = next(
+                (
+                    item
+                    for item in readiness.get("vcs_checkpoints") or []
+                    if isinstance(item, Mapping)
+                    and bool(item.get("ok"))
+                    and str(item.get("kind") or "").strip().lower().rstrip("s")
+                    == str(current.get("object_type") or "").strip().lower().rstrip("s")
+                    and str(item.get("name") or "").strip()
+                    == str(current.get("object_id") or "").strip()
+                    and str(item.get("package_digest") or "").strip()
+                    and str(item.get("source_revision") or item.get("commit") or "").strip()
+                ),
+                None,
+            )
+            workflow_checkpoint_pending = bool(
+                current_status == "completed"
+                and readiness.get("ok")
+                and confirmed_primary_checkpoint
+                and not isinstance(readiness.get("workflow_checkpoint"), Mapping)
+                and str(current.get("change_id") or "").strip()
+            )
             recovered_transition_pending = (
                 current_status == "completed"
                 and bool(pending_transition)
                 and isinstance(current.get("last_result"), Mapping)
                 and not isinstance(current.get("completion_readiness"), Mapping)
             )
-            if current_status != "failed" and not recovered_transition_pending:
+            if (
+                current_status != "failed"
+                and not recovered_transition_pending
+                and not workflow_checkpoint_pending
+            ):
                 raise ValueError("validated result recovery requires a failed Automation task")
             task_id = str(current.get("current_task_id") or "").strip()
             task_status = str(task.get("status") or "")
             failure_stage = str(failure.get("stage") or "")
             if (
                 recovered_transition_pending
+                or workflow_checkpoint_pending
                 or task_status == "completed"
                 and failure_stage == "live_readiness"
                 and isinstance(current.get("last_result"), Mapping)
@@ -596,6 +628,8 @@ class BuilderAutomationService:
                     "recovery_stage": (
                         "workflow_transition"
                         if recovered_transition_pending
+                        else "workflow_checkpoint"
+                        if workflow_checkpoint_pending
                         else "live_readiness"
                     ),
                 }
@@ -1293,6 +1327,45 @@ class BuilderAutomationService:
                             or "selected preview target materialization failed"
                         )
                     )
+            if pending_transition != "return_to_prototype":
+                primary_checkpoint = next(
+                    (
+                        item
+                        for item in readiness["vcs_checkpoints"]
+                        if str(item.get("kind") or "").strip().lower().rstrip("s") == object_type
+                        and str(item.get("name") or "").strip() == object_id
+                    ),
+                    None,
+                )
+                if readiness["vcs_checkpoints"] and not primary_checkpoint:
+                    raise RuntimeError(
+                        f"Forge checkpoints do not include the primary {object_type}:{object_id} artifact"
+                    )
+                if primary_checkpoint:
+                    change_id = str(current.get("change_id") or "").strip()
+                    package_digest = str(primary_checkpoint.get("package_digest") or "").strip()
+                    source_revision = str(
+                        primary_checkpoint.get("source_revision")
+                        or primary_checkpoint.get("commit")
+                        or ""
+                    ).strip()
+                    if not change_id or not package_digest or not source_revision:
+                        raise RuntimeError(
+                            "Primary Forge checkpoint is missing change, package, or source identity"
+                        )
+                    readiness["workflow_checkpoint"] = self._workflow().transition(
+                        object_type,
+                        object_id,
+                        "checkpoint_recorded",
+                        actor="builder.automation",
+                        reason="Automation result checkpointed in Forge",
+                        metadata={
+                            "change_id": change_id,
+                            "package_digest": package_digest,
+                            "source_revision": source_revision,
+                            "task_id": current.get("current_task_id"),
+                        },
+                    )
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
@@ -1367,6 +1440,7 @@ class BuilderAutomationService:
         object_type = str(session.get("object_type") or "").strip().lower().rstrip("s")
         object_id = str(session.get("object_id") or "").strip()
         companion_skill_id = str(session.get("companion_skill_id") or "").strip()
+        primary_artifact = (object_type, object_id)
         artifacts: list[tuple[str, str]] = []
         if companion_skill_id:
             artifacts.append(("skill", companion_skill_id))
@@ -1388,14 +1462,23 @@ class BuilderAutomationService:
                 for item in session.get("created_artifacts") or []
                 if isinstance(item, Mapping)
             }
-            artifacts = [
+            changed_artifacts = {
                 (kind, artifact_id)
                 for kind, artifact_id in artifacts
-                if (kind, artifact_id) in created_artifacts
-                or any(
+                if any(
                     path == f"{kind}s/{artifact_id}"
                     or path.startswith(f"{kind}s/{artifact_id}/")
                     for path in changed_paths
+                )
+            }
+            artifact_content_changed = changed_artifacts | created_artifacts
+            artifacts = [
+                (kind, artifact_id)
+                for kind, artifact_id in artifacts
+                if (kind, artifact_id) in artifact_content_changed
+                or (
+                    (kind, artifact_id) == primary_artifact
+                    and bool(artifact_content_changed)
                 )
             ]
 

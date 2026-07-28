@@ -550,7 +550,17 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     monkeypatch.setattr(
         BuilderAutomationService,
         "_checkpoint_completed_artifacts",
-        lambda self, session: calls.append("checkpoint") or [{"ok": True, "commit": "forge-1"}],
+        lambda self, session: calls.append("checkpoint")
+        or [
+            {
+                "ok": True,
+                "kind": "scenario",
+                "name": "recipes",
+                "commit": "forge-1",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "forge-1",
+            }
+        ],
     )
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -586,6 +596,7 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
             "companion_skill_id": "recipes_skill",
             "webspace_id": "desktop",
             "current_task_id": "task.1",
+            "change_id": "change-1",
             "status": "completed",
         }
     )
@@ -595,6 +606,10 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["completion_readiness"]["materialization"]["preview_webspace_id"] == "desktop-dev"
     assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
     assert saved[-1]["completion_readiness"]["vcs_checkpoints"][0]["commit"] == "forge-1"
+    assert (
+        saved[-1]["completion_readiness"]["workflow_checkpoint"]["workflow"]["delivery"]["status"]
+        == "checkpoint"
+    )
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["progress"]["status"] == "completed"
     assert saved[-1]["progress"]["task_id"] == "task.1"
@@ -883,6 +898,58 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+def test_validated_result_recovery_records_missing_workflow_checkpoint_without_rerunning_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "change_id": "change-1",
+        "current_task_id": "task.1",
+        "status": "completed",
+        "task": {"task_id": "task.1", "status": "completed"},
+        "last_result": {"summary": "ready"},
+        "completion_readiness": {
+            "ok": True,
+            "task_id": "task.1",
+            "vcs_checkpoints": [
+                {
+                    "ok": True,
+                    "kind": "scenario",
+                    "name": "recipes",
+                    "commit": "forge-1",
+                    "package_digest": "sha256:" + "1" * 64,
+                    "source_revision": "forge-1",
+                }
+            ],
+        },
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        completed.pop("reuse_confirmed_checkpoints", None)
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+
+    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+
+    assert result["ok"] is True
+    assert result["worker"]["reused_validated_result"] is True
+    assert result["worker"]["recovery_stage"] == "workflow_checkpoint"
+    assert finalized[0]["status"] == "commit_ready"
+    assert finalized[0]["reuse_confirmed_checkpoints"] is True
+
+
 def test_refresh_restores_recovered_return_to_prototype_transition(
     tmp_path: Path,
     monkeypatch,
@@ -1041,3 +1108,45 @@ def test_automation_does_not_checkpoint_unchanged_companion_skill(tmp_path: Path
         }
     ]
     assert checkpoints == [{"ok": True, "kind": "scenario", "name": "recipes"}]
+
+
+def test_automation_checkpoints_primary_scenario_when_only_companion_skill_changed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "last_result": {
+                "summary": "Implemented the scenario dependency in its companion skill.",
+                "changed_paths": ["skills/recipes_skill/handlers/main.py"],
+            },
+        }
+    )
+
+    assert [(item["kind"], item["artifact_id"]) for item in calls] == [
+        ("skill", "recipes_skill"),
+        ("scenario", "recipes"),
+    ]
+    assert [(item["kind"], item["name"]) for item in checkpoints] == [
+        ("skill", "recipes_skill"),
+        ("scenario", "recipes"),
+    ]
