@@ -743,6 +743,9 @@ class SkillFactoryService:
         with _LOCK:
             state = self._read_state()
             task = self._require_task(state, task_token)
+            current_status = _text(task.get("status"))
+            if current_status in TASK_TERMINAL_STATES:
+                raise ValueError(f"task '{task_token}' is terminal: {current_status}")
             node_id = _text(payload.get("node_id"))
             self._validate_assigned_node(task, node_id)
             self._ensure_node_credentials_active(state, node_id)
@@ -935,8 +938,23 @@ class SkillFactoryService:
         with _LOCK:
             state = self._read_state()
             task = self._require_task(state, task_token)
-            if _text(task.get("status")) == "cancelled":
+            current_status = _text(task.get("status"))
+            if current_status == "cancelled":
                 return {"ok": True, "duplicate": True, "task": _json_clone(task)}
+            if current_status in TASK_TERMINAL_STATES:
+                return {
+                    "ok": False,
+                    "terminal": True,
+                    "error": f"task '{task_token}' is already terminal: {current_status}",
+                    "task": _json_clone(task),
+                }
+            if current_status == "commit_ready":
+                return {
+                    "ok": False,
+                    "terminal": False,
+                    "error": f"task '{task_token}' is committing and can no longer be cancelled safely",
+                    "task": _json_clone(task),
+                }
             now = _now_iso()
             task["status"] = "cancelled"
             task["cancellation_requested"] = True

@@ -5,9 +5,11 @@ import hashlib
 import json
 import logging
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +93,10 @@ class CodexRunResult:
     command: tuple[str, ...] = ()
 
 
+class TaskExecutionCancelled(RuntimeError):
+    """The authoritative Skill Factory task was cancelled while executing."""
+
+
 class SubprocessCodexExecutor:
     """Run the installed Codex CLI without exposing AdaOS credentials in the prompt."""
 
@@ -114,7 +120,14 @@ class SubprocessCodexExecutor:
         # Docker workers should override this back to workspace-write.
         self.sandbox_mode = configured_sandbox or ("danger-full-access" if os.name == "nt" else "workspace-write")
 
-    def __call__(self, *, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+    def __call__(
+        self,
+        *,
+        workspace: Path,
+        prompt: str,
+        output_dir: Path,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / "last_message.md"
         live_events_path = output_dir / "codex-live.jsonl"
@@ -140,6 +153,11 @@ class SubprocessCodexExecutor:
         with live_events_path.open("w", encoding="utf-8", newline="\n") as events_file, live_stderr_path.open(
             "w", encoding="utf-8", newline="\n"
         ) as stderr_file:
+            popen_kwargs: dict[str, Any] = {}
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            else:
+                popen_kwargs["start_new_session"] = True
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
@@ -150,12 +168,30 @@ class SubprocessCodexExecutor:
                 encoding="utf-8",
                 errors="replace",
                 env=self._execution_environment(),
+                **popen_kwargs,
             )
             try:
-                process.communicate(input=prompt, timeout=self.timeout_seconds)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+                if process.stdin is None:  # pragma: no cover - Popen contract guard
+                    raise RuntimeError("Codex stdin is unavailable")
+                process.stdin.write(prompt)
+                process.stdin.close()
+                process.stdin = None
+                deadline = time.monotonic() + self.timeout_seconds
+                while process.poll() is None:
+                    if cancel_check is not None and cancel_check():
+                        self._terminate_process_tree(process)
+                        raise TaskExecutionCancelled("Skill Factory task was cancelled")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._terminate_process_tree(process)
+                        raise subprocess.TimeoutExpired(command, self.timeout_seconds)
+                    try:
+                        process.wait(timeout=min(0.5, remaining))
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                if process.poll() is None:
+                    self._terminate_process_tree(process)
                 raise
         events = live_events_path.read_text(encoding="utf-8", errors="replace")
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
@@ -167,6 +203,39 @@ class SubprocessCodexExecutor:
             final_message=final_message,
             command=tuple(command),
         )
+
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+        """Stop only the process group created for this isolated Codex turn."""
+
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            except Exception:
+                process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                process.kill()
+        try:
+            process.wait(timeout=10)
+        except Exception:
+            if process.poll() is None:
+                process.kill()
 
     def _resolve_executable(self) -> str:
         configured = str(os.getenv("ADAOS_CODEX_EXECUTABLE") or "").strip()
@@ -608,13 +677,16 @@ class LocalSkillFactoryWorker:
 
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
             self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
-            codex_result = self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
+            self._ensure_task_active(task_id)
+            codex_result = self._execute_codex(task_id=task_id, workspace=workspace, prompt=prompt, output_dir=output_dir)
+            self._ensure_task_active(task_id)
             self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
             if codex_result.returncode:
                 raise RuntimeError(f"Codex exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}")
 
             test_report: dict[str, Any] = {}
             for repair_attempt in range(self.max_repair_attempts + 1):
+                self._ensure_task_active(task_id)
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
                 self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
@@ -632,7 +704,13 @@ class LocalSkillFactoryWorker:
                     + "fix every reported issue, rerun relevant checks, and leave the workspace in a valid state.\n\n"
                     + "\n".join(f"- {item}" for item in test_report["errors"][:40])
                 )
-                codex_result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
+                codex_result = self._execute_codex(
+                    task_id=task_id,
+                    workspace=workspace,
+                    prompt=repair_prompt,
+                    output_dir=output_dir,
+                )
+                self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
                 if codex_result.returncode:
                     raise RuntimeError(
@@ -680,11 +758,14 @@ class LocalSkillFactoryWorker:
             (evidence_root / "changed_files.txt").write_text("\n".join(all_changed_paths) + "\n", encoding="utf-8")
 
             self._progress(task_id, "commit_ready", "Committing validated local result")
+            self._ensure_task_active(task_id)
             _git(["add", "-A"], cwd=workspace)
             _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             commit_hash = _git(["rev-parse", "HEAD"], cwd=workspace)
             final_changed_paths = self._changed_from_baseline(workspace)
+            self._ensure_task_active(task_id)
             self._sync_artifacts(assignment, workspace)
+            self._ensure_task_active(task_id)
             result = {
                 "task_id": task_id,
                 "node_id": self.node_id,
@@ -701,6 +782,10 @@ class LocalSkillFactoryWorker:
             completed = self.factory.complete_task(result)
             _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, "status": "completed", "completed_at": _now_iso()})
             return {"ok": True, "assignment": dict(assignment), "result": result, "completed": completed}
+        except TaskExecutionCancelled as exc:
+            cancelled = {"status": "cancelled", "error": str(exc), "cancelled_at": _now_iso()}
+            _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, **cancelled})
+            return {"ok": False, "assignment": dict(assignment), **cancelled, "run_dir": str(run_root)}
         except Exception as exc:
             failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "failed_at": _now_iso()}
             _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, **failure})
@@ -716,6 +801,28 @@ class LocalSkillFactoryWorker:
             except Exception:
                 pass
             return {"ok": False, "assignment": dict(assignment), **failure, "run_dir": str(run_root)}
+
+    def _task_status(self, task_id: str) -> str:
+        snapshot = self.factory.snapshot(include_tasks=True)
+        task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), None)
+        return str((task or {}).get("status") or "missing").strip().lower()
+
+    def _ensure_task_active(self, task_id: str) -> None:
+        status = self._task_status(task_id)
+        if status in {"cancelled", "expired"}:
+            raise TaskExecutionCancelled(f"Skill Factory task is {status}")
+        if status in {"completed", "failed", "missing"}:
+            raise RuntimeError(f"Skill Factory task is no longer active: {status}")
+
+    def _execute_codex(self, *, task_id: str, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+        if isinstance(self.executor, SubprocessCodexExecutor):
+            return self.executor(
+                workspace=workspace,
+                prompt=prompt,
+                output_dir=output_dir,
+                cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
+            )
+        return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
 
     @staticmethod
     def _record_codex_attempt(runtime_dir: Path, result: CodexRunResult, *, attempt: int) -> None:
@@ -1524,4 +1631,4 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     shutil.rmtree(backup, ignore_errors=True)
 
 
-__all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor"]
+__all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor", "TaskExecutionCancelled"]
