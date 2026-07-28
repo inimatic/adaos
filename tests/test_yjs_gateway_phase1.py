@@ -2298,7 +2298,11 @@ def test_apply_materialized_payload_does_not_wait_for_client_sync_without_client
     gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
 
 
-def test_apply_materialized_payload_client_sync_wait_is_opt_in(monkeypatch) -> None:
+def test_live_room_refresh_waits_for_client_delivery_by_default() -> None:
+    assert gateway_module._LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS > 0.0
+
+
+def test_apply_materialized_payload_client_sync_wait_can_be_disabled(monkeypatch) -> None:
     key = "gateway-client-sync-wait-disabled"
     update = b"wait-disabled-update"
     gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[object()])

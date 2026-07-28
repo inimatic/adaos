@@ -414,9 +414,13 @@ _GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC = _env_float(
 )
 _GATEWAY_LIVE_PERSIST_COMPACTION_LOCK = threading.RLock()
 _GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT: dict[str, float] = {}
+# Materialization mutates the authoritative YDoc synchronously, while YRoom
+# fans the resulting update out on its async observer task. Keep the wait
+# bounded, but enabled by default so a successful preview switch also means
+# that every currently connected browser has received the update.
 _LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS = _env_float(
     "ADAOS_YJS_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS",
-    0.0,
+    250.0,
     minimum=0.0,
 )
 _LIVE_ROOM_REFRESH_DIAG_TTL_SEC = _env_float("ADAOS_YJS_LIVE_ROOM_REFRESH_DIAG_TTL_SEC", 60.0, minimum=1.0)
