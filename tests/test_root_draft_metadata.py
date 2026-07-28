@@ -503,3 +503,74 @@ def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_p
     assert result.commit == "4" * 40
     assert recorded.source_tree == "5" * 40
     assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+
+def test_checkpoint_replays_prepared_archive_when_remote_receipt_is_unchanged(tmp_path) -> None:
+    service, publication, skill, _workspace = _checkpoint_service(tmp_path)
+    previous_change_id = "builder-checkpoint-previous"
+    change_id = "builder-checkpoint-replay"
+    previous_ref = ArtifactSourceRef(
+        forge="adaos-root",
+        repository="inimatic/registry",
+        revision="6" * 40,
+        path_scope=("subnets/dev/nodes/node/skills/recipe_skill/",),
+    )
+    previous = publication.record_push(
+        kind="skill",
+        artifact_id="recipe_skill",
+        artifact_dir=skill,
+        source_ref=previous_ref,
+        change_ids=(previous_change_id,),
+        source_tree="7" * 40,
+    )
+    state: dict[str, object] = {"pushes": 0}
+    previous_receipt = {
+        "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
+        "commit": previous_ref.revision,
+        "tree_sha": previous.source_tree,
+        "sha256": previous.package.digest.removeprefix("sha256:"),
+        "metadata": {"change_id": previous_change_id},
+    }
+
+    class _FailBeforeCommitThenSucceedClient:
+        def get_draft_info(self, **_kwargs):
+            return previous_receipt
+
+        def push_skill_draft(self, **kwargs):
+            state["pushes"] = int(state["pushes"]) + 1
+            if state["pushes"] == 1:
+                raise TimeoutError("request failed before commit")
+            return {
+                "stored_path": previous_receipt["stored_path"],
+                "commit": "8" * 40,
+                "tree_sha": "9" * 40,
+                "sha256": kwargs["sha256"],
+                "metadata": {"change_id": change_id},
+            }
+
+        def get_draft_source_tree(self, **_kwargs):
+            raise AssertionError("the successful response already contains a source tree")
+
+    service._client = lambda _cfg: _FailBeforeCommitThenSucceedClient()
+
+    with pytest.raises(TimeoutError, match="failed before commit"):
+        service._push_artifact(
+            "skills",
+            "recipe_skill",
+            message="checkpoint",
+            metadata={"change_id": change_id},
+        )
+
+    assert "version: 1.0.0" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+    result = service._push_artifact(
+        "skills",
+        "recipe_skill",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    assert state["pushes"] == 2
+    assert result.commit == "8" * 40
+    assert result.version == "1.0.1"
+    assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")

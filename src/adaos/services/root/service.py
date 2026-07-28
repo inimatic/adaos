@@ -2830,6 +2830,39 @@ class RootDeveloperService:
                 raise RootServiceError("Root did not return a verifiable Forge source tree")
             return tree
 
+        def draft_receipt_identity(response: Mapping[str, Any]) -> dict[str, Any]:
+            metadata = _normalize_draft_metadata(
+                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            )
+            return {
+                key: value
+                for key, value in {
+                    "stored_path": str(response.get("stored_path") or "").strip().rstrip("/"),
+                    "commit": str(response.get("commit") or "").strip(),
+                    "tree_sha": str(response.get("tree_sha") or "").strip().lower(),
+                    "sha256": str(response.get("sha256") or "").strip().lower(),
+                    "change_id": str(metadata.get("change_id") or "").strip(),
+                }.items()
+                if value
+            }
+
+        def same_draft_receipt(
+            current: Mapping[str, Any],
+            expected: Mapping[str, Any],
+        ) -> bool:
+            current_identity = draft_receipt_identity(current)
+            expected_identity = {
+                str(key): str(value).strip().rstrip("/") if key == "stored_path" else str(value).strip()
+                for key, value in expected.items()
+                if str(value or "").strip()
+            }
+            required = {"stored_path", "commit", "sha256"}
+            return required.issubset(expected_identity) and all(
+                current_identity.get(key) == value
+                for key, value in expected_identity.items()
+            )
+
+        recorded = None
         if change_id and publication.pushed_source_path(kind.rstrip("s"), name).is_file():
             recorded = publication.load_pushed_source(kind.rstrip("s"), name)
             if change_id in recorded.change_ids:
@@ -2925,9 +2958,59 @@ class RootDeveloperService:
                     archive_bytes=archive_bytes,
                 )
             if intent.get("status") in {"dispatching", "uncertain", "remote_confirmed"}:
-                raise RootServiceError(
-                    "Checkpoint outcome is unresolved and does not match the current Forge receipt; refusing a duplicate write"
+                previous_receipt = (
+                    dict(intent.get("previous_receipt"))
+                    if isinstance(intent.get("previous_receipt"), Mapping)
+                    else {}
                 )
+                if not previous_receipt and recorded is not None:
+                    recorded_scope = (
+                        str(recorded.source_ref.path_scope[0]).strip().rstrip("/")
+                        if recorded.source_ref.path_scope
+                        else ""
+                    )
+                    remote_identity = draft_receipt_identity(draft_info)
+                    remote_change_id = str(remote_identity.get("change_id") or "").strip()
+                    recorded_change_ids = {str(item).strip() for item in recorded.change_ids}
+                    if (
+                        remote_identity.get("commit") == recorded.source_ref.revision
+                        and remote_identity.get("stored_path") == recorded_scope
+                        and (
+                            not recorded.source_tree
+                            or remote_identity.get("tree_sha") == recorded.source_tree
+                        )
+                        and remote_change_id
+                        and remote_change_id in recorded_change_ids
+                    ):
+                        previous_receipt = remote_identity
+                archive_digest = str(intent.get("archive_sha256") or "").strip().lower()
+                prepared_archive_matches = bool(
+                    intent_archive_path is not None
+                    and intent_archive_path.is_file()
+                    and archive_digest
+                    and hashlib.sha256(intent_archive_path.read_bytes()).hexdigest() == archive_digest
+                )
+                if (
+                    prepared_archive_matches
+                    and previous_receipt
+                    and same_draft_receipt(draft_info, previous_receipt)
+                ):
+                    # The remote still exposes the exact receipt observed before
+                    # dispatch, so the uncertain write provably did not become
+                    # authoritative. Resume the immutable prepared archive; do
+                    # not rebuild it or bump the manifest a second time.
+                    write_intent(
+                        "prepared",
+                        archive_sha256=archive_digest,
+                        previous_receipt=previous_receipt,
+                        resolution="remote_receipt_unchanged",
+                    )
+                else:
+                    raise RootServiceError(
+                        "Checkpoint outcome is unresolved and does not match the current Forge receipt; refusing a duplicate write"
+                    )
+
+            previous_receipt = draft_receipt_identity(draft_info) if draft_info else {}
 
         rollback_paths = [
             source / ("skill.yaml" if kind == "skills" else "scenario.yaml"),
@@ -3021,7 +3104,11 @@ class RootDeveloperService:
             digest = hashlib.sha256(archive_bytes).hexdigest()
             if change_id and intent_archive_path is not None:
                 atomic_write_bytes(intent_archive_path, archive_bytes)
-                write_intent("prepared", archive_sha256=digest)
+                write_intent(
+                    "prepared",
+                    archive_sha256=digest,
+                    previous_receipt=previous_receipt,
+                )
             push_method = (
                 client.push_skill_draft if kind == "skills" else client.push_scenario_draft
             )
