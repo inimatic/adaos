@@ -373,6 +373,64 @@ def select_target(
     }
 
 
+def refresh_follow_active_target(
+    object_type: str,
+    object_id: str,
+    *,
+    revision: str,
+    source_webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Advance a follow-active Prototype target without rebuilding Preview inline."""
+
+    kind = str(object_type or "").strip().lower().rstrip("s")
+    project_id = str(object_id or "").strip()
+    revision_token = str(revision or "").strip()
+    if kind != "scenario":
+        raise ValueError("only scenario Lifecycle nodes can be shown in Preview")
+    if not project_id or not revision_token:
+        raise ValueError("object_id and revision are required")
+    source = canonical_source_webspace_id(source_webspace_id)
+    service = _service()
+    current_binding = _plain(service.get_workspace_binding(source))
+    current_target = _plain(current_binding.get("preview_target"))
+    if not bool(current_target.get("follow_active")):
+        return {"ok": True, "skipped": "preview_target_not_following_active", "binding": current_binding}
+    if (
+        str(current_target.get("object_type") or "").strip().lower().rstrip("s") != kind
+        or str(current_target.get("object_id") or "").strip() != project_id
+    ):
+        return {"ok": True, "skipped": "preview_target_project_mismatch", "binding": current_binding}
+    if str(current_target.get("stage") or "").strip().lower() != "prototype":
+        return {"ok": True, "skipped": "follow_active_target_is_not_prototype", "binding": current_binding}
+
+    selected = select_project(
+        kind,
+        project_id,
+        source_webspace_id=source,
+        ensure_ready=False,
+        wait_for_rebuild=False,
+        publish_event=False,
+    )
+    target = {
+        **current_target,
+        "schema": "adaos.builder.preview_target.v1",
+        "object_type": kind,
+        "object_id": project_id,
+        "stage": "prototype",
+        "revision": revision_token,
+        "label": f"proto: {project_id} · UI {revision_token}",
+        "follow_active": True,
+    }
+    binding = _plain(service.set_preview_target(source_webspace_id=source, target=target))
+    return {
+        "ok": bool(binding.get("ok", True)),
+        "target": target,
+        "binding": binding,
+        "selection": selected,
+        "materialization": "deferred",
+    }
+
+
 def open_workspace(source_webspace_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
     source = canonical_source_webspace_id(source_webspace_id)
     return _plain(_service().open_dev_webspace(source, base_url=base_url))
@@ -485,6 +543,7 @@ __all__ = [
     "open_dev_webspace",
     "reload",
     "reload_async",
+    "refresh_follow_active_target",
     "select_project",
     "select_target",
     "set_active_draft",
