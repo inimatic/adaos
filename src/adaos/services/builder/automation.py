@@ -418,6 +418,25 @@ class BuilderAutomationService:
                 result.append(token)
         return result
 
+    def _refresh_session_companion_skill_ids(
+        self,
+        session: dict[str, Any],
+    ) -> list[str]:
+        """Merge durable session companions with current functional lineage."""
+
+        resolved = self._resolve_companion_skill_ids(
+            str(session.get("object_type") or ""),
+            str(session.get("object_id") or ""),
+        )
+        companions: list[str] = []
+        for value in [*resolved, *self._session_companion_skill_ids(session)]:
+            token = _safe_token(value, fallback="")
+            if token and token not in companions:
+                companions.append(token)
+        session["companion_skill_ids"] = companions
+        session["companion_skill_id"] = companions[0] if companions else None
+        return companions
+
     def submit_turn(
         self,
         *,
@@ -512,6 +531,7 @@ class BuilderAutomationService:
                 "task",
             ):
                 session.pop(stale_key, None)
+            self._refresh_session_companion_skill_ids(session)
             submitted = self._submit(session, iteration_instruction=instruction)
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
@@ -1169,7 +1189,10 @@ class BuilderAutomationService:
     def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
         kind = str(session["object_type"])
         project_id = str(session["object_id"])
-        companions = self._session_companion_skill_ids(session)
+        companions = self._resolve_companion_skill_ids(kind, project_id)
+        for skill_id in self._session_companion_skill_ids(session):
+            if skill_id not in companions:
+                companions.append(skill_id)
         companion = companions[0] if companions else str(session.get("companion_skill_id") or "")
         sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
         source_artifacts: list[tuple[str, str, Path]] = [

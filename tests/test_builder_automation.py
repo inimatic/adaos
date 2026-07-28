@@ -308,6 +308,59 @@ def test_scenario_automation_retains_published_companions_as_immutable_baseline(
     ).exists()
 
 
+def test_followup_refreshes_companions_from_current_publication(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the first functional recipe edition.",
+        webspace_id="prompt-dev",
+    )
+    assert service.workspace_service is not None
+    assert service.workspace_service.scenarios_root is not None
+    publication = Path(service.workspace_service.scenarios_root) / "recipes"
+    publication.mkdir(parents=True)
+    (publication / "scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "recipes",
+                "version": "0.4.0",
+                "depends": ["recipes_skill", "recipes_control_skill"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    assert service.workspace_service is not None
+    service.workspace_service.create_draft(
+        kind="skill",
+        artifact_id="recipes_control_skill",
+        source_idea="Existing published control dependency.",
+        template_id="skill_default",
+    )
+
+    followed = service.submit_turn(
+        text="Apply the next approved prototype without dropping published behavior.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+
+    assert followed["session"]["companion_skill_ids"] == [
+        "recipes_skill",
+        "recipes_control_skill",
+    ]
+    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == [
+        "recipes_skill",
+        "recipes_control_skill",
+    ]
+
+
 @pytest.mark.parametrize("corrupted", ["???????? ??????", "Damaged \ufffd text"])
 def test_automation_start_rejects_transport_corrupted_brief_before_writes(
     tmp_path: Path,
