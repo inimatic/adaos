@@ -811,7 +811,17 @@ def _sync_scenario_content_metadata(
         ui = webui.get("ui")
         if not isinstance(ui, Mapping):
             raise RootServiceError(f"Scenario WebUI at {webui_path} must contain an object ui")
-        payload["ui"] = dict(ui)
+        projected_ui = dict(ui)
+        canonical_version = canonical.get("version")
+        if canonical_version is not None:
+            projected_ui["version"] = canonical_version
+        canonical_ui = canonical.get("ui")
+        if isinstance(canonical_ui, Mapping) and canonical_ui.get("manifest") is not None:
+            projected_ui["manifest"] = canonical_ui["manifest"]
+        if projected_ui != ui:
+            webui["ui"] = projected_ui
+            _write_manifest(webui_path, webui)
+        payload["ui"] = projected_ui
     _write_manifest(content_path, payload)
 
 
@@ -2921,6 +2931,7 @@ class RootDeveloperService:
         ]
         if kind == "scenarios":
             rollback_paths.append(source / "scenario.json")
+            rollback_paths.append(source / "webui.json")
         snapshots = {
             path: path.read_bytes() if path.is_file() else None
             for path in rollback_paths
