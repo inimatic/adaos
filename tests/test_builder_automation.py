@@ -917,6 +917,42 @@ def test_refresh_restores_recovered_return_to_prototype_transition(
     assert refreshed["last_result"]["summary"] == "Safe prototype recovered."
 
 
+def test_validated_result_recovery_finalizes_recovered_workflow_transition(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.prototype",
+        "status": "completed",
+        "task": {"task_id": "task.prototype", "status": "completed"},
+        "last_result": {"summary": "Safe prototype recovered."},
+        "pending_workflow_transition": "return_to_prototype",
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        completed.pop("pending_workflow_transition", None)
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+
+    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+
+    assert result["ok"] is True
+    assert result["worker"]["recovery_stage"] == "workflow_transition"
+    assert finalized[0]["status"] == "commit_ready"
+    assert finalized[0]["pending_workflow_transition"] == "return_to_prototype"
+
+
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []

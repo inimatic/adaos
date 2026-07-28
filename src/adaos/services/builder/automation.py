@@ -570,13 +570,22 @@ class BuilderAutomationService:
             current = self.refresh_session(session)
             task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
             failure = current.get("last_failure") if isinstance(current.get("last_failure"), Mapping) else {}
-            if str(current.get("status") or "") != "failed":
+            current_status = str(current.get("status") or "")
+            pending_transition = str(current.get("pending_workflow_transition") or "").strip()
+            recovered_transition_pending = (
+                current_status == "completed"
+                and bool(pending_transition)
+                and isinstance(current.get("last_result"), Mapping)
+                and not isinstance(current.get("completion_readiness"), Mapping)
+            )
+            if current_status != "failed" and not recovered_transition_pending:
                 raise ValueError("validated result recovery requires a failed Automation task")
             task_id = str(current.get("current_task_id") or "").strip()
             task_status = str(task.get("status") or "")
             failure_stage = str(failure.get("stage") or "")
             if (
-                task_status == "completed"
+                recovered_transition_pending
+                or task_status == "completed"
                 and failure_stage == "live_readiness"
                 and isinstance(current.get("last_result"), Mapping)
             ):
@@ -584,9 +593,14 @@ class BuilderAutomationService:
                     "ok": True,
                     "task_id": task_id,
                     "reused_validated_result": True,
-                    "recovery_stage": "live_readiness",
+                    "recovery_stage": (
+                        "workflow_transition"
+                        if recovered_transition_pending
+                        else "live_readiness"
+                    ),
                 }
-                current["reuse_confirmed_checkpoints"] = True
+                if not recovered_transition_pending:
+                    current["reuse_confirmed_checkpoints"] = True
             else:
                 if task_status != "failed":
                     raise ValueError("validated result recovery requires a failed Automation task")
