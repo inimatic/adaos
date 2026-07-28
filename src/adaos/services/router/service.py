@@ -66,6 +66,41 @@ VOICE_CHAT_HISTORY_LIMIT = 200
 VOICE_CHAT_STREAM_TEXT_MAX_CHARS = 1200
 VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = 4096
 VOICE_CHAT_STREAM_ACTIONS_MAX = 6
+
+
+def _builder_transport_integrity_error(
+    text: Any,
+    *,
+    meta: Mapping[str, Any] | None = None,
+    dialog_channel_id: str | None = None,
+) -> str | None:
+    """Return a rejection reason before a Builder chat turn is persisted.
+
+    Builder requests can create durable change evidence or launch an LLM job, so
+    text whose Unicode code points were already lost must be rejected at the
+    voice-chat ingress boundary.  Other dialog channels keep their existing
+    punctuation semantics.
+    """
+
+    metadata = dict(meta or {})
+    channel = str(
+        dialog_channel_id
+        or metadata.get("dialog_channel_id")
+        or metadata.get("conversation_channel_id")
+        or ""
+    ).strip().lower()
+    agent_id = str(metadata.get("active_agent_id") or "").strip().lower()
+    if channel != BUILDER_DIALOG_CHANNEL_ID and agent_id not in {
+        "agent:builder_skill:builder",
+        "agent:builder_skill",
+    }:
+        return None
+    token = str(text or "")
+    if "\ufffd" in token:
+        return "replacement_character"
+    if "????" in token:
+        return "suspicious_question_mark_run"
+    return None
 try:
     VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = max(
         4096,
@@ -6345,6 +6380,53 @@ class RouterService:
                     f"pre_addressed={bool(pre_addressed_agent)}"
                 ),
             )
+            transport_integrity_error = _builder_transport_integrity_error(
+                text,
+                meta=meta,
+                dialog_channel_id=requested_dialog_channel_id,
+            )
+            if transport_integrity_error:
+                rejection = {
+                    "id": _make_id("m"),
+                    "from": "hub",
+                    "text": (
+                        "Builder rejected a transport-corrupted message before persistence. "
+                        "Resend the original text as UTF-8."
+                    ),
+                    "ts": time.time(),
+                    "_meta": {
+                        **meta,
+                        "route_id": "voice_chat",
+                        "transport_integrity": "rejected",
+                        "transport_integrity_reason": transport_integrity_error,
+                    },
+                }
+                try:
+                    await _append_voice_chat_message(ws, rejection, target_node_id)
+                except Exception:
+                    pass
+                try:
+                    self.bus.publish(
+                        Event(
+                            type="io.out.chat.append",
+                            source="router.voice",
+                            ts=time.time(),
+                            payload={
+                                **rejection,
+                                "_meta": {
+                                    **dict(rejection["_meta"]),
+                                    "skip_voice_chat": True,
+                                },
+                            },
+                        )
+                    )
+                except Exception:
+                    pass
+                _log_voice_phase(
+                    "transport_integrity_rejected",
+                    extra=f"reason={transport_integrity_error}",
+                )
+                return
             if requested_dialog_channel_id == GENERAL_DIALOG_CHANNEL_ID:
                 _persist_general_dialog_channel(ws, event="general_channel_requested")
                 current_dialog_channel = dialog_runtime.get_active_channel(ws)

@@ -194,6 +194,79 @@ async def test_voice_chat_user_ignores_other_target_node(monkeypatch) -> None:
     assert seen == []
 
 
+def test_builder_transport_integrity_guard_is_scoped_to_builder() -> None:
+    valid_russian = "\u041f\u043e\u043a\u0430\u0436\u0438 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u043e\u0435\u043a\u0442"
+
+    assert (
+        router_service_module._builder_transport_integrity_error(
+            valid_russian,
+            meta={"active_agent_id": "agent:builder_skill:builder"},
+        )
+        is None
+    )
+    assert (
+        router_service_module._builder_transport_integrity_error(
+            "????? ??????",
+            dialog_channel_id="builder",
+        )
+        == "suspicious_question_mark_run"
+    )
+    assert (
+        router_service_module._builder_transport_integrity_error(
+            "really????",
+            dialog_channel_id="general",
+        )
+        is None
+    )
+
+
+async def test_builder_transport_corruption_is_rejected_before_user_persistence(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "builder-utf8-guard-ws"
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    seen_nlu: list[Event] = []
+    seen_chat: list[Event] = []
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.chat.append", lambda ev: seen_chat.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "????? ?????? ???????",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert len(seen_chat) == 1
+    rejection = seen_chat[0].payload
+    assert rejection["from"] == "hub"
+    assert rejection["_meta"]["transport_integrity"] == "rejected"
+    assert rejection["_meta"]["transport_integrity_reason"] == "suspicious_question_mark_run"
+    assert rejection["_meta"]["skip_voice_chat"] is True
+    assert "????" not in json.dumps(rejection, ensure_ascii=False)
+
+
 async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[tuple[str, dict[str, object]]] = []
