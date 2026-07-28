@@ -379,6 +379,8 @@ def refresh_follow_active_target(
     *,
     revision: str,
     source_webspace_id: str = "desktop",
+    title: str | None = None,
+    description: str | None = None,
 ) -> dict[str, Any]:
     """Advance a follow-active Prototype target without rebuilding Preview inline."""
 
@@ -403,13 +405,20 @@ def refresh_follow_active_target(
     if str(current_target.get("stage") or "").strip().lower() != "prototype":
         return {"ok": True, "skipped": "follow_active_target_is_not_prototype", "binding": current_binding}
 
-    selected = select_project(
-        kind,
-        project_id,
-        source_webspace_id=source,
-        ensure_ready=False,
-        wait_for_rebuild=False,
-        publish_event=False,
+    current_selection = _plain(current_binding.get("selection"))
+    selected_title = str(title or current_selection.get("title") or project_id).strip() or project_id
+    selected_description = str(
+        description if description is not None else current_selection.get("description") or ""
+    ).strip()
+    selected_binding = _plain(
+        service.set_selected_project(
+            source_webspace_id=source,
+            object_type=kind,
+            object_id=project_id,
+            title=selected_title,
+            description=selected_description,
+            persist_projection=False,
+        )
     )
     target = {
         **current_target,
@@ -426,7 +435,7 @@ def refresh_follow_active_target(
         "ok": bool(binding.get("ok", True)),
         "target": target,
         "binding": binding,
-        "selection": selected,
+        "selection": _plain(selected_binding.get("selection")),
         "materialization": "deferred",
     }
 

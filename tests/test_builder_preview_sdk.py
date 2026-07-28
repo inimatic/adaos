@@ -28,24 +28,36 @@ class _Workbench:
         self.target = dict(target)
         return {"preview_target": dict(self.target), "selection": dict(self.selection)}
 
+    def set_selected_project(
+        self,
+        *,
+        source_webspace_id,
+        object_type,
+        object_id,
+        title,
+        description,
+        persist_projection,
+    ):
+        self.selection = {
+            "object_type": object_type,
+            "object_id": object_id,
+            "title": title,
+            "description": description,
+        }
+        return {"selection": dict(self.selection)}
+
 
 def test_refresh_follow_active_target_updates_metadata_without_materializing(monkeypatch) -> None:
     service = _Workbench()
-    selections: list[dict[str, object]] = []
     monkeypatch.setattr(preview, "_service", lambda: service)
-
-    def _select_project(object_type, object_id, **kwargs):
-        selections.append({"object_type": object_type, "object_id": object_id, **kwargs})
-        service.selection = {"object_id": object_id, "title": "Кулинарные рецепты"}
-        return {"ok": True, "binding": {"selection": dict(service.selection)}}
-
-    monkeypatch.setattr(preview, "select_project", _select_project)
 
     result = preview.refresh_follow_active_target(
         "scenario",
         "recipes",
         revision="005",
         source_webspace_id="desktop",
+        title="Кулинарные рецепты",
+        description="Каталог рецептов",
     )
 
     assert result["ok"] is True
@@ -53,27 +65,13 @@ def test_refresh_follow_active_target_updates_metadata_without_materializing(mon
     assert result["target"]["revision"] == "005"
     assert result["target"]["label"] == "proto: recipes · UI 005"
     assert result["binding"]["selection"]["title"] == "Кулинарные рецепты"
-    assert selections == [
-        {
-            "object_type": "scenario",
-            "object_id": "recipes",
-            "source_webspace_id": "desktop",
-            "ensure_ready": False,
-            "wait_for_rebuild": False,
-            "publish_event": False,
-        }
-    ]
+    assert result["selection"]["description"] == "Каталог рецептов"
     assert len(service.set_calls) == 1
 
 
 def test_refresh_follow_active_target_preserves_explicit_snapshot(monkeypatch) -> None:
     service = _Workbench(follow_active=False)
     monkeypatch.setattr(preview, "_service", lambda: service)
-    monkeypatch.setattr(
-        preview,
-        "select_project",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("selection must not move")),
-    )
 
     result = preview.refresh_follow_active_target(
         "scenario",
