@@ -349,9 +349,9 @@ class LocalSkillFactoryWorker:
             }
         )
 
-    def run_once(self) -> dict[str, Any]:
+    def run_once(self, *, task_id: str | None = None) -> dict[str, Any]:
         self.ensure_registered()
-        polled = self.factory.poll_assignment(self.node_id)
+        polled = self.factory.poll_assignment(self.node_id, task_id=task_id)
         if not polled.get("assigned"):
             return polled
         assignment = dict(polled["assignment"])

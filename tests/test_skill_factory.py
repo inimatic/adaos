@@ -113,6 +113,46 @@ def test_skill_factory_queue_assigns_and_accepts_valid_result(tmp_path: Path) ->
     assert completed["task"]["provenance"]["schema"] == "adaos.skill_factory.task_provenance.v1"
 
 
+def test_targeted_poll_assigns_the_requested_task_not_an_older_queue_item(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    older = service.submit_realize_request(
+        {
+            "request_id": "realize.test.older",
+            "target": {"type": "scenario", "id": "older"},
+        }
+    )["task"]
+    requested = service.submit_realize_request(
+        {
+            "request_id": "realize.test.requested",
+            "target": {"type": "scenario", "id": "requested"},
+        }
+    )["task"]
+    service.register_dev_node({"node_id": "devnode.targeted"})
+
+    assignment = service.poll_assignment(
+        "devnode.targeted",
+        task_id=requested["task_id"],
+    )
+
+    assert assignment["assigned"] is True
+    assert assignment["assignment"]["task_id"] == requested["task_id"]
+    tasks = {
+        item["task_id"]: item
+        for item in service.snapshot(include_tasks=True)["tasks"]
+    }
+    assert tasks[older["task_id"]]["status"] == "queued"
+    assert tasks[requested["task_id"]]["status"] == "assigned"
+
+
+def test_skill_factory_fails_closed_on_corrupt_authoritative_state(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    service.state_path.parent.mkdir(parents=True, exist_ok=True)
+    service.state_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="failed to read Skill Factory state"):
+        service.snapshot(include_tasks=True)
+
+
 def test_skill_factory_rejects_result_outside_sparse_paths(tmp_path: Path) -> None:
     service = SkillFactoryService(state_dir=tmp_path)
     task = service.submit_realize_request({"target": {"type": "scenario", "id": "morning"}})["task"]

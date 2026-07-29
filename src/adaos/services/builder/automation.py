@@ -1511,6 +1511,11 @@ class BuilderAutomationService:
 
     def _run_worker(self, session_id: str) -> None:
         with _WORKER_LOCK:
+            with _LOCK:
+                submitted_session = self._find_session_by_id(session_id)
+                expected_task_id = str(
+                    (submitted_session or {}).get("current_task_id") or ""
+                ).strip()
             worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
                 state_dir=self.state_dir,
                 repo_root=self.repo_root,
@@ -1531,7 +1536,7 @@ class BuilderAutomationService:
                     status,
                     message,
                 )
-            worker_result = worker.run_once()
+            worker_result = worker.run_once(task_id=expected_task_id or None)
             should_finalize = False
             finalizing_projection: dict[str, Any] | None = None
             with _LOCK:

@@ -114,6 +114,34 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    older = service.factory.submit_realize_request(
+        {
+            "request_id": "realize.test.older-builder-task",
+            "target": {"type": "scenario", "id": "older_scenario"},
+        }
+    )["task"]
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the approved recipe prototype.",
+        webspace_id="prompt-dev",
+        conversation_id="conv.builder.recipes",
+    )
+
+    status = service.status(object_type="scenario", object_id="recipes")
+    assert status["session"]["status"] == "completed"
+    submitted_task_id = status["session"]["current_task_id"]
+    tasks = {
+        item["task_id"]: item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+    }
+    assert tasks[older["task_id"]]["status"] == "queued"
+    assert tasks[submitted_task_id]["status"] == "completed"
+
+
 def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service._workflow().transition(

@@ -4,11 +4,13 @@ import hashlib
 import json
 import re
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
 
@@ -387,6 +389,18 @@ class SkillFactoryService:
     def state_path(self) -> Path:
         return self.root / "state.json"
 
+    @property
+    def state_lock_path(self) -> Path:
+        return self.root / ".state.lock"
+
+    @contextmanager
+    def _state_lock(self) -> Iterator[None]:
+        """Serialize the state read/modify/write cycle across processes."""
+
+        with _LOCK:
+            with mutation_lock(self.state_lock_path, timeout_s=30.0):
+                yield
+
     def forge_policy(self) -> dict[str, Any]:
         return {
             "backend": "adaos_registry_local_forge_compatible",
@@ -524,7 +538,7 @@ class SkillFactoryService:
 
     def submit_realize_request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         request = self.normalize_realize_request(payload)
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             for existing in state["tasks"].values():
                 refs = _mapping(existing.get("source_refs"))
@@ -597,7 +611,7 @@ class SkillFactoryService:
         raw = _mapping(payload.get("registration")) or _mapping(payload)
         now = _now_iso()
         node_id = _text(raw.get("node_id")) or f"devnode.{new_id()}"
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             existing = _mapping(state["dev_nodes"].get(node_id))
             assigned_tasks = _string_list(existing.get("assigned_tasks"))
@@ -627,7 +641,7 @@ class SkillFactoryService:
         node_token = _text(node_id or raw.get("node_id"))
         if not node_token:
             raise ValueError("node_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             node = _mapping(state["dev_nodes"].get(node_token))
             if not node:
@@ -646,11 +660,12 @@ class SkillFactoryService:
             self._write_state(state)
             return {"ok": True, "node": _json_clone(node), "queue": self._queue_summary(state)}
 
-    def poll_assignment(self, node_id: str) -> dict[str, Any]:
+    def poll_assignment(self, node_id: str, *, task_id: str | None = None) -> dict[str, Any]:
         node_token = _text(node_id)
         if not node_token:
             raise ValueError("node_id is required")
-        with _LOCK:
+        requested_task_id = _text(task_id)
+        with self._state_lock():
             state = self._read_state()
             self._expire_overdue_tasks(state)
             node = _mapping(state["dev_nodes"].get(node_token))
@@ -679,6 +694,21 @@ class SkillFactoryService:
                 if _text(task.get("assigned_node_id")) == node_token and _text(task.get("status")) in TASK_ACTIVE_STATES
             ]
             if active_for_node:
+                if requested_task_id:
+                    matching = [
+                        task for task in active_for_node if _text(task.get("task_id")) == requested_task_id
+                    ]
+                    if not matching:
+                        self._write_state(state)
+                        return {
+                            "ok": True,
+                            "assigned": False,
+                            "reason": "node_busy",
+                            "requested_task_id": requested_task_id,
+                            "current_task_id": _text(active_for_node[0].get("task_id")),
+                            "queue": self._queue_summary(state),
+                        }
+                    active_for_node = matching
                 task = sorted(active_for_node, key=lambda item: _text(item.get("assigned_at")))[0]
                 assignment = self._assignment_payload(task, node)
                 self._write_state(state)
@@ -706,6 +736,7 @@ class SkillFactoryService:
                 if _text(task.get("status")) == "queued"
                 and not bool(task.get("cancellation_requested"))
                 and node_token not in _string_list(_mapping(task).get("avoid_node_ids"))
+                and (not requested_task_id or _text(task.get("task_id")) == requested_task_id)
             ]
             queued.sort(key=lambda item: (-int(item.get("priority") or 0), _text(item.get("created_at")), _text(item.get("task_id"))))
             if not queued:
@@ -714,7 +745,13 @@ class SkillFactoryService:
                 node["updated_at"] = node["heartbeat_at"]
                 state["dev_nodes"][node_token] = node
                 self._write_state(state)
-                return {"ok": True, "assigned": False, "reason": "queue_empty", "queue": self._queue_summary(state)}
+                return {
+                    "ok": True,
+                    "assigned": False,
+                    "reason": "task_not_assignable" if requested_task_id else "queue_empty",
+                    "requested_task_id": requested_task_id or None,
+                    "queue": self._queue_summary(state),
+                }
 
             task = queued[0]
             now = _now_iso()
@@ -740,7 +777,7 @@ class SkillFactoryService:
         task_token = _text(task_id or payload.get("task_id"))
         if not task_token:
             raise ValueError("task_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_token)
             current_status = _text(task.get("status"))
@@ -791,7 +828,7 @@ class SkillFactoryService:
         task_id = _text(raw.get("task_id"))
         if not task_id:
             raise ValueError("task_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_id)
             node_id = _text(raw.get("node_id"))
@@ -843,7 +880,7 @@ class SkillFactoryService:
             raise ValueError("task_id is required")
         if not _text(recovery.get("reason")) or not _text(recovery.get("validated_run_dir")):
             raise ValueError("result recovery requires reason and validated_run_dir evidence")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_id)
             if _text(task.get("status")) != "failed":
@@ -898,7 +935,7 @@ class SkillFactoryService:
         task_id = _text(raw.get("task_id"))
         if not task_id:
             raise ValueError("task_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_id)
             node_id = _text(raw.get("node_id"))
@@ -935,7 +972,7 @@ class SkillFactoryService:
         task_token = _text(task_id)
         if not task_token:
             raise ValueError("task_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_token)
             current_status = _text(task.get("status"))
@@ -968,7 +1005,7 @@ class SkillFactoryService:
             return {"ok": True, "task": _json_clone(task)}
 
     def set_queue_paused(self, *, paused: bool, reason: str | None = None, actor: str | None = None) -> dict[str, Any]:
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             queue = _mapping(state.get("queue"))
             queue["paused"] = bool(paused)
@@ -984,7 +1021,7 @@ class SkillFactoryService:
         node_token = _text(node_id)
         if not node_token:
             raise ValueError("node_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             node = _mapping(state["dev_nodes"].get(node_token))
             if not node:
@@ -1002,7 +1039,7 @@ class SkillFactoryService:
         node_token = _text(node_id)
         if not node_token:
             raise ValueError("node_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             node = _mapping(state["dev_nodes"].get(node_token))
             if not node:
@@ -1020,7 +1057,7 @@ class SkillFactoryService:
         node_token = _text(node_id)
         if not node_token:
             raise ValueError("node_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             node = _mapping(state["dev_nodes"].get(node_token))
             if not node:
@@ -1040,7 +1077,7 @@ class SkillFactoryService:
         task_token = _text(task_id)
         if not task_token:
             raise ValueError("task_id is required")
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_token)
             status = _text(task.get("status"))
@@ -1101,7 +1138,7 @@ class SkillFactoryService:
             raise ValueError(f"result must include provenance evidence path: {provenance_path}")
 
     def snapshot(self, *, include_tasks: bool = True) -> dict[str, Any]:
-        with _LOCK:
+        with self._state_lock():
             state = self._read_state()
             self._expire_overdue_tasks(state)
             self._write_state(state)
@@ -1151,10 +1188,10 @@ class SkillFactoryService:
             return self._initial_state()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
+        except Exception as exc:
+            raise RuntimeError(f"failed to read Skill Factory state: {path}") from exc
         if not isinstance(data, dict):
-            data = {}
+            raise RuntimeError(f"invalid Skill Factory state root: {path}")
         state = self._initial_state()
         for key in ("forge", "queue", "dev_nodes", "tasks", "ready_events", "events", "created_at"):
             if key in data:
@@ -1176,8 +1213,7 @@ class SkillFactoryService:
         payload = _json_clone(state)
         payload["schema"] = STATE_SCHEMA
         payload["updated_at"] = _now_iso()
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(self.state_path, payload)
 
     def _append_event(self, state: dict[str, Any], event_type: str, payload: Mapping[str, Any]) -> None:
         events = _list(state.get("events"))
