@@ -690,6 +690,8 @@ def test_active_change_set_requires_explicit_supersession(
         },
     )["workflow"]
     assert superseded["change_set"]["change_set_id"] == "CS-2"
+    assert superseded["change"]["supersedes_change_id"] == "CS-1"
+    assert superseded["change_set"]["supersedes_change_set_id"] == "CS-1"
 
 
 def test_followup_request_extends_active_change_set_and_invalidates_trial(
@@ -900,6 +902,39 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
     assert returned["automation"]["status"] == "frozen"
     assert returned["prototype"]["derived_from_automation_task"] == "task.2"
     assert returned["capabilities"]["can_preview_automation"] is True
+
+
+def test_return_to_prototype_marks_checkpoint_delivery_stale(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.1", "snapshot_path": "retained/automation"},
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "implementation-checkpoint",
+            "package_digest": "sha256:" + "a" * 64,
+            "source_revision": "source-revision",
+        },
+    )
+
+    returned = service.transition(
+        "scenario",
+        "recipes",
+        "return_to_prototype",
+        metadata={"revision": "002", "task_id": "task.2"},
+    )["workflow"]
+
+    assert returned["delivery"]["status"] == "stale"
+    assert returned["delivery"]["stale_reason"] == "returned_to_prototype"
 
 
 def test_failed_prototype_adaptation_restores_completed_automation(

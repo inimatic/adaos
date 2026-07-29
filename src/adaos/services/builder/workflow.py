@@ -185,6 +185,10 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
         ][-100:],
         "created_at": str(value.get("created_at") or "").strip() or None,
         "updated_at": str(value.get("updated_at") or "").strip() or None,
+        "supersedes_change_set_id": str(
+            value.get("supersedes_change_set_id") or value.get("supersedes_change_id") or ""
+        ).strip()
+        or None,
     }
 
 
@@ -260,7 +264,9 @@ def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any
     value.pop("context_packet_digest", None)
     value.pop("project_ref", None)
     value.pop("base_ref", None)
-    value.pop("supersedes_change_id", None)
+    value["supersedes_change_set_id"] = str(
+        value.pop("supersedes_change_id", None) or value.get("supersedes_change_set_id") or ""
+    ).strip() or None
     return value
 
 
@@ -388,6 +394,17 @@ class BuilderWorkflowService:
         change = _normalize_change(raw_change if isinstance(raw_change, Mapping) else raw_change_set)
         if change:
             change["project_ref"] = change.get("project_ref") or f"{_kind(object_type)}:{_project_id(object_id)}"
+            if not change.get("supersedes_change_id"):
+                for event in reversed(raw.get("history") or []):
+                    if not isinstance(event, Mapping) or event.get("action") != "plan_change_set":
+                        continue
+                    event_metadata = _mapping(event.get("metadata"))
+                    if str(event_metadata.get("change_set_id") or "") != change["change_id"]:
+                        continue
+                    supersedes = str(event_metadata.get("supersedes_change_set_id") or "").strip()
+                    if supersedes:
+                        change["supersedes_change_id"] = supersedes
+                    break
         change_set = _change_set_compatibility(change)
         current_revision = self.current_prototype_revision(object_type, object_id)
         prototype.setdefault("head_revision", current_revision)
@@ -1077,7 +1094,7 @@ class BuilderWorkflowService:
             current["updated_at"] = changed_at
 
         def invalidate_delivery(reason: str) -> None:
-            if str(delivery.get("status") or "idle") in {"trial", "accepted"}:
+            if str(delivery.get("status") or "idle") in {"checkpoint", "trial", "accepted"}:
                 delivery.update(
                     {
                         "status": "stale",
@@ -1126,6 +1143,10 @@ class BuilderWorkflowService:
                 ][-100:],
                 "created_at": changed_at,
                 "updated_at": changed_at,
+                "supersedes_change_set_id": str(
+                    metadata.get("supersedes_change_set_id") or ""
+                ).strip()
+                or None,
             }
             interaction = _mapping(workflow.get("interaction"))
             interaction["conversation_focus"] = f"change:{change_set_id}"
