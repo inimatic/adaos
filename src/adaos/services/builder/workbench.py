@@ -1093,6 +1093,16 @@ async def _on_builder_source_webspace_reloaded(evt: Any) -> None:
     }:
         return
     service = BuilderWorkbenchService()
+    # A Builder opened inside another Builder's preview is a bounded self-host.
+    # Claim that topology as soon as scenario materialization tells us the
+    # authoritative scenario id. UI actions do not always carry scenario_id in
+    # their tool metadata, so deferring the claim until the first action can
+    # incorrectly resolve ``dev1-dev`` back to ``dev1`` and overwrite the
+    # Builder itself instead of allocating ``dev1-dev-dev`` for its project.
+    source_webspace_id = service.resolve_action_source_webspace_id(
+        source_webspace_id,
+        current_scenario_id=scenario_id,
+    )
     if not service.binding_path(source_webspace_id).is_file():
         return
     _schedule_projection_publish(service, source_webspace_id)

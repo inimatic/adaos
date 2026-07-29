@@ -746,7 +746,16 @@ async def test_builder_source_reload_republishes_durable_selection(monkeypatch, 
         persist_projection=False,
     )
     scheduled: list[str] = []
+    claimed: list[tuple[str, str]] = []
 
+    monkeypatch.setattr(
+        BuilderWorkbenchService,
+        "resolve_action_source_webspace_id",
+        lambda _self, source_webspace_id, *, current_scenario_id: claimed.append(
+            (source_webspace_id, current_scenario_id)
+        )
+        or source_webspace_id,
+    )
     monkeypatch.setattr(workbench_module, "BuilderWorkbenchService", lambda: service)
     monkeypatch.setattr(
         workbench_module,
@@ -765,3 +774,4 @@ async def test_builder_source_reload_republishes_durable_selection(monkeypatch, 
     )
 
     assert scheduled == ["desktop"]
+    assert claimed == [("desktop", "builder"), ("unbound", "builder")]
