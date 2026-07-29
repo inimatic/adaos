@@ -161,6 +161,62 @@ class BuilderAutomationService:
             identity.encode("utf-8")
         ).hexdigest()[:16]
 
+    def _capture_preview_binding(self, session: dict[str, Any]) -> None:
+        """Remember the user's Preview choice so completion cannot overwrite a later one."""
+
+        if str(session.get("object_type") or "").strip().lower().rstrip("s") != "scenario":
+            return
+        try:
+            from adaos.services.builder.workbench import BuilderWorkbenchService
+
+            workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+            binding = dict(
+                workbench.get_workspace_binding(
+                    str(session.get("webspace_id") or "desktop").strip() or "desktop"
+                )
+                or {}
+            )
+            target = binding.get("preview_target")
+            session["preview_binding_at_submit"] = {
+                "captured": True,
+                "updated_at": binding.get("updated_at"),
+                "target": dict(target) if isinstance(target, Mapping) else None,
+            }
+        except Exception as exc:
+            _log.debug("Builder Preview intent capture skipped: %s", exc)
+
+    @staticmethod
+    def _preview_binding_unchanged(
+        session: Mapping[str, Any],
+        binding: Mapping[str, Any],
+    ) -> bool:
+        captured = session.get("preview_binding_at_submit")
+        if not isinstance(captured, Mapping) or not bool(captured.get("captured")):
+            return False
+        current_target = binding.get("preview_target")
+        normalized_current = dict(current_target) if isinstance(current_target, Mapping) else None
+        submitted_target = captured.get("target")
+        normalized_submitted = dict(submitted_target) if isinstance(submitted_target, Mapping) else None
+        return (
+            normalized_current == normalized_submitted
+            and binding.get("updated_at") == captured.get("updated_at")
+        )
+
+    @staticmethod
+    def _preview_target_matches_project(
+        target: Mapping[str, Any] | None,
+        *,
+        object_type: str,
+        object_id: str,
+    ) -> bool:
+        if not target:
+            return False
+        return (
+            str(target.get("object_type") or "").strip().lower().rstrip("s")
+            == str(object_type or "").strip().lower().rstrip("s")
+            and str(target.get("object_id") or "").strip() == str(object_id or "").strip()
+        )
+
     def start_from_execute(
         self,
         *,
@@ -264,6 +320,7 @@ class BuilderAutomationService:
                 iteration=0,
                 seed=str(session["created_at"]),
             )
+            self._capture_preview_binding(session)
             submitted = self._submit(session, iteration_instruction="")
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
@@ -559,6 +616,7 @@ class BuilderAutomationService:
             ):
                 session.pop(stale_key, None)
             self._refresh_session_companion_skill_ids(session)
+            self._capture_preview_binding(session)
             submitted = self._submit(session, iteration_instruction=instruction)
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
@@ -1451,6 +1509,7 @@ class BuilderAutomationService:
             "completed_at": None,
         }
         failed_checkpoints: list[Mapping[str, Any]] = []
+        existing_binding: dict[str, Any] = {}
         preview_target: Mapping[str, Any] | None = None
         try:
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
@@ -1598,7 +1657,29 @@ class BuilderAutomationService:
                         ),
                     },
                 )
-            if object_type == "scenario" and object_id and preview_target and bool(preview_target.get("follow_active")):
+            preview_matches_project = self._preview_target_matches_project(
+                preview_target,
+                object_type=object_type,
+                object_id=object_id,
+            )
+            if (
+                preview_target
+                and bool(preview_target.get("follow_active"))
+                and not str(preview_target.get("object_type") or "").strip()
+                and not str(preview_target.get("object_id") or "").strip()
+            ):
+                # Compatibility with bindings created before Preview targets
+                # carried explicit project identity.
+                preview_matches_project = True
+            preview_binding_unchanged = self._preview_binding_unchanged(current, existing_binding)
+            preview_should_follow = bool(
+                preview_matches_project
+                and (
+                    bool(preview_target.get("follow_active"))
+                    or preview_binding_unchanged
+                )
+            )
+            if object_type == "scenario" and object_id and preview_should_follow:
                 from adaos.sdk.builder import preview
 
                 target_stage = "prototype" if pending_transition == "return_to_prototype" else "automation"
@@ -1617,6 +1698,25 @@ class BuilderAutomationService:
                             or "selected preview target materialization failed"
                         )
                     )
+                readiness["preview_transition"] = {
+                    "status": "followed_completed_work",
+                    "stage": target_stage,
+                    "reason": (
+                        "follow_active"
+                        if bool(preview_target.get("follow_active"))
+                        else "unchanged_since_submit"
+                    ),
+                }
+            elif object_type == "scenario" and object_id and preview_target:
+                readiness["preview_transition"] = {
+                    "status": "preserved_user_selection",
+                    "stage": str(preview_target.get("stage") or "").strip() or None,
+                    "reason": (
+                        "project_mismatch"
+                        if not preview_matches_project
+                        else "changed_since_submit"
+                    ),
+                }
             if pending_transition != "return_to_prototype":
                 primary_checkpoint = next(
                     (

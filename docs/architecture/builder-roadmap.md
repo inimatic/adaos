@@ -605,9 +605,12 @@ Open work:
 - [x] `[should]` Add the first reviewable prototype workbench affordances:
   the dev preview can enter review mode, select widgets/fields, collect
   per-revision comments, copy those notes into the next Builder prompt, and
-  locally drag widgets/fields to express layout intent. The first slice is
-  intentionally lightweight: annotations are browser-session feedback, not a
-  durable Builder review store.
+  locally drag widgets/fields to express layout intent. Layout dragging now
+  requires `Ctrl`/`Command`, leaving ordinary drag available for text
+  selection, and every pending note can be removed before Apply so an
+  erroneous instruction is never inevitable. The first slice is intentionally
+  lightweight: annotations are browser-session feedback, not a durable
+  Builder review store.
 - [ ] `[should]` Promote review annotations into a durable Builder context
   artifact that follows UI revisions and is automatically included in the next
   LLM transform request.
@@ -950,6 +953,10 @@ observed projection matches the latest desired generation.
   no synthetic Automation row; Lifecycle node selection switches the
   phase-specific Conversation surface, and all three exact Builder previews
   are synchronized and materialization-ready.
+- [x] `[must]` Capture the selected Preview binding when an Automation turn is
+  submitted. On completion, advance it to the current `active:` result only
+  when the binding is still unchanged or already follows the active result;
+  preserve a Lifecycle choice made by the user while Codex was running.
 - [ ] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.

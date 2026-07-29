@@ -1033,6 +1033,102 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["progress"]["task_id"] == "task.1"
 
 
+@pytest.mark.parametrize(
+    ("binding_updated_at", "expected_preview_calls", "expected_transition"),
+    [
+        ("2026-07-29T03:45:00+00:00", 1, "followed_completed_work"),
+        ("2026-07-29T03:50:00+00:00", 0, "preserved_user_selection"),
+    ],
+)
+def test_finalize_follows_completed_automation_only_when_preview_choice_is_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+    binding_updated_at: str,
+    expected_preview_calls: int,
+    expected_transition: str,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    preview_calls: list[dict] = []
+    public_target = {
+        "schema": "adaos.builder.preview_target.v1",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "stage": "publication",
+        "revision": "0.1.0",
+        "follow_active": False,
+    }
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: [
+            {
+                "ok": True,
+                "kind": "scenario",
+                "name": "recipes",
+                "commit": "forge-1",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "forge-1",
+            }
+        ],
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def get_workspace_binding(self, source_webspace_id):  # noqa: ARG002
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "updated_at": binding_updated_at,
+                "preview_target": public_target,
+            }
+
+    class FakeWorkflow:
+        def snapshot_current_automation(self, *args, **kwargs):  # noqa: ARG002
+            return {"path": "automation/0.1.1"}
+
+        def describe(self, *args, **kwargs):  # noqa: ARG002
+            return {"active_phase": "automation"}
+
+        def transition(self, *args, **kwargs):  # noqa: ARG002
+            return {"delivery": {"status": "checkpoint"}}
+
+    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.select_target",
+        lambda *args, **kwargs: preview_calls.append(dict(kwargs))
+        or {"ok": True, "preview_webspace_id": "desktop-dev"},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", lambda self, value: dict(value))
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "preview_binding_at_submit": {
+                "captured": True,
+                "updated_at": "2026-07-29T03:45:00+00:00",
+                "target": public_target,
+            },
+        }
+    )
+
+    assert len(preview_calls) == expected_preview_calls
+    if preview_calls:
+        assert preview_calls[0]["stage"] == "automation"
+        assert preview_calls[0]["follow_active"] is True
+    assert saved[-1]["completion_readiness"]["preview_transition"]["status"] == expected_transition
+    assert saved[-1]["status"] == "completed"
+
+
 def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     saved: list[dict] = []
