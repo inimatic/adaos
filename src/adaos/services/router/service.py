@@ -3083,22 +3083,34 @@ class RouterService:
             def _mutator(data_map: Any, txn: Any) -> None:
                 data_map.set(txn, "dialog", snapshot)
 
+            write_task = asyncio.create_task(
+                _mutate_data_map(
+                    webspace_id,
+                    _mutator,
+                    channel="core.router.dialog.store",
+                    prefer_live_room=True,
+                ),
+                name=f"dialog-state-projection:{webspace_id}",
+            )
             try:
-                await asyncio.wait_for(
-                    _mutate_data_map(
-                        webspace_id,
-                        _mutator,
-                        channel="core.router.dialog.store",
-                        prefer_live_room=True,
-                    ),
+                done, _pending = await asyncio.wait(
+                    {write_task},
                     timeout=_voice_chat_yjs_timeout_s(),
                 )
-            except asyncio.TimeoutError:
-                logging.getLogger("adaos.router.dialog").warning(
-                    "dialog.state yjs write timed out webspace=%s event=%s",
-                    webspace_id,
-                    event,
-                )
+                if not done:
+                    logging.getLogger("adaos.router.dialog").warning(
+                        "dialog.state yjs write exceeded latency budget webspace=%s event=%s; projection continues in background",
+                        webspace_id,
+                        event,
+                    )
+                # Do not cancel an in-flight YDoc session when the latency
+                # budget is exceeded.  Cancellation can leave native y_py
+                # objects in a coroutine cycle which a later skill worker GC
+                # then drops on the wrong thread.  The durable conversation
+                # store is authoritative; this task only refreshes its compact
+                # browser projection and is already isolated by the per-space
+                # coalescing worker below.
+                await write_task
             except Exception:
                 logging.getLogger("adaos.router.dialog").warning(
                     "dialog.state yjs write failed webspace=%s event=%s",
@@ -4919,7 +4931,7 @@ class RouterService:
             for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws, target_node_id)
                 await _ensure_tts_state(ws)
-                await _write_dialog_state(ws, event="voice_open")
+                _schedule_dialog_state_write(ws, event="voice_open")
                 await _publish_voice_chat_snapshot(
                     ws,
                     target_node_id,
@@ -5751,7 +5763,7 @@ class RouterService:
                         )
                     except Exception:
                         pass
-                await _write_dialog_state(webspace_id, event="exit")
+                _schedule_dialog_state_write(webspace_id, event="exit")
                 return True
 
             if kind != "skill_tool":
@@ -6076,7 +6088,7 @@ class RouterService:
             event_name = str(ev.type or "").rsplit(".", 1)[-1] or "changed"
             if event_name == "deactivated":
                 _persist_general_dialog_channel(webspace_id, event=event_name)
-            await _write_dialog_state(webspace_id, event=event_name)
+            _schedule_dialog_state_write(webspace_id, event=event_name)
 
         async def _on_dialog_channel_select(ev: Event) -> None:
             payload = ev.payload or {}
@@ -6117,10 +6129,10 @@ class RouterService:
                             },
                             _resolve_voice_target_node_id(payload, route_meta, default_local=False),
                         )
-                    await _write_dialog_state(ws, event="selected")
+                    _schedule_dialog_state_write(ws, event="selected")
                     continue
                 if current_id == channel_id:
-                    await _write_dialog_state(ws, event="selected")
+                    _schedule_dialog_state_write(ws, event="selected")
                     continue
                 if channel_id != "conversational":
                     try:
@@ -6144,7 +6156,7 @@ class RouterService:
                             "unsupported dialog channel selected: %r",
                             channel_id,
                         )
-                        await _write_dialog_state(ws, event="select_failed")
+                        _schedule_dialog_state_write(ws, event="select_failed")
                         continue
                     default_skill = str(channel.get("default_skill") or "").strip()
                     owner = str(channel.get("owner") or "").strip()
@@ -6207,7 +6219,7 @@ class RouterService:
                         bus=self.bus,
                         source="router.dialog",
                     )
-                    await _write_dialog_state(ws, event="selected")
+                    _schedule_dialog_state_write(ws, event="selected")
                     continue
                 try:
                     result = await asyncio.to_thread(
@@ -6223,7 +6235,7 @@ class RouterService:
                         ws,
                         exc_info=True,
                     )
-                    await _write_dialog_state(ws, event="select_failed")
+                    _schedule_dialog_state_write(ws, event="select_failed")
                     continue
                 if isinstance(result, dict) and bool(result.get("ok")):
                     try:
@@ -6241,7 +6253,7 @@ class RouterService:
                             "conversation_companions start result state update failed",
                             exc_info=True,
                         )
-                await _write_dialog_state(ws, event="selected")
+                _schedule_dialog_state_write(ws, event="selected")
 
         async def _activate_requested_dialog_channel(
             webspace_id: str,
@@ -6396,7 +6408,7 @@ class RouterService:
                     bus=self.bus,
                     source="router.voice.requested_channel",
                 )
-                await _write_dialog_state(ws, event="requested_channel")
+                _schedule_dialog_state_write(ws, event="requested_channel")
             except Exception:
                 logging.getLogger("adaos.router.dialog").debug(
                     "requested dialog channel activation failed webspace=%s channel=%s",
@@ -6625,7 +6637,7 @@ class RouterService:
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
                 _apply_general_agent_metadata(meta)
                 try:
-                    await _write_dialog_state(ws, event="general_channel_requested")
+                    _schedule_dialog_state_write(ws, event="general_channel_requested")
                 except Exception:
                     pass
                 _log_voice_phase("general_channel_requested")
@@ -6762,7 +6774,7 @@ class RouterService:
                 _apply_general_agent_metadata(meta)
                 if not addressed_general_text:
                     try:
-                        await _write_dialog_state(ws, event="general_agent_addressed")
+                        _schedule_dialog_state_write(ws, event="general_agent_addressed")
                     except Exception:
                         pass
                     try:
@@ -6787,7 +6799,7 @@ class RouterService:
                     return
                 if _is_agent_roster_question(addressed_general_text):
                     try:
-                        await _write_dialog_state(ws, event="general_agent_addressed")
+                        _schedule_dialog_state_write(ws, event="general_agent_addressed")
                     except Exception:
                         pass
                     _record_voice_turn_trace(
@@ -6868,7 +6880,7 @@ class RouterService:
                             bus=self.bus,
                             source="router.voice.addressed_agent",
                         )
-                        await _write_dialog_state(ws, event="agent_addressed")
+                        _schedule_dialog_state_write(ws, event="agent_addressed")
                     except Exception:
                         logging.getLogger("adaos.router.dialog").debug(
                             "addressed agent state update failed webspace=%s agent=%s",

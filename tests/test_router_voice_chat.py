@@ -98,6 +98,30 @@ class _AsyncDoc:
         return False
 
 
+class _SlowAsyncDoc:
+    def __init__(
+        self,
+        doc: _Doc,
+        *,
+        entered: asyncio.Event,
+        release: asyncio.Event,
+        exits: list[type[BaseException] | None],
+    ) -> None:
+        self.doc = doc
+        self.entered = entered
+        self.release = release
+        self.exits = exits
+
+    async def __aenter__(self):
+        self.entered.set()
+        await self.release.wait()
+        return self.doc
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self.exits.append(exc_type)
+        return False
+
+
 class _MetaCtx:
     async def __aenter__(self):
         return {}
@@ -713,6 +737,57 @@ async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> Non
     assert dialog["active_agent"]["label"] == "Домашний ассистент"
     assert dialog["active_agent"]["voice_profile"]["gender"] == "male"
     assert [item["id"] for item in dialog["channels"][:2]] == ["general", "conversational"]
+
+
+async def test_dialog_projection_is_non_blocking_and_does_not_cancel_slow_ydoc(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    exits: list[type[BaseException] | None] = []
+    webspace_id = "dialog-slow-projection-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_YJS_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "mutate_live_room", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        router_service_module,
+        "async_get_ydoc",
+        lambda *_args, **_kwargs: _SlowAsyncDoc(
+            doc,
+            entered=entered,
+            release=release,
+            exits=exits,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.publish(
+        Event(
+            type="dialog.channel.activated",
+            source="test",
+            ts=1.0,
+            payload={"webspace_id": webspace_id},
+        )
+    )
+
+    assert await bus.wait_for_idle(timeout=0.2)
+    await asyncio.wait_for(entered.wait(), timeout=0.2)
+    await asyncio.sleep(0.08)
+    assert exits == []
+    assert any(not task.done() for task in router._dialog_state_tasks.values())
+
+    release.set()
+    await _drain_voice_chat_persist(router)
+    assert exits == [None]
+    assert doc.get_map("data")["dialog"]["webspace_id"] == webspace_id
 
 
 def test_general_agent_registry_uses_subnet_alias_without_ada_alias(monkeypatch) -> None:
