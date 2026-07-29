@@ -7,13 +7,20 @@ import pytest
 from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef, StableSubscription
 from adaos.services.artifact_pipeline import (
     ActivationError,
+    ArtifactAttestationAdmission,
+    ArtifactAttestationPublisher,
     ArtifactPublicationService,
+    ArtifactTrustStore,
+    ContentAddressedAttestationStore,
+    Ed25519ArtifactSigner,
     PublicationError,
     PublicationStaleError,
+    ReleaseAttestationSet,
     ReleasePlan,
     ReleaseRepository,
     WorkspaceActivationManager,
 )
+from adaos.services.artifact_pipeline import packages as package_module
 
 
 class _Remote:
@@ -23,6 +30,9 @@ class _Remote:
         self.tree = "f" * 40
         self.channel_writes = 0
         self.fail_after_channel_once = False
+        self.attestation_sets: dict[str, ReleaseAttestationSet] = {}
+        self.attestation_binding_writes = 0
+        self.fail_after_attestation_binding_once = False
 
     def put_release(self, plan: ReleasePlan, archives: dict[str, bytes]) -> None:
         self.archives.update(archives)
@@ -30,6 +40,30 @@ class _Remote:
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
         return self.releases.get_release(project_id, release_digest)
+
+    def put_release_attestation_set(
+        self,
+        attestation_set: ReleaseAttestationSet,
+    ) -> ReleaseAttestationSet:
+        sealed = attestation_set.seal()
+        self.attestation_binding_writes += 1
+        existing = self.attestation_sets.get(sealed.release_digest)
+        if existing is not None and existing != sealed:
+            raise RuntimeError("immutable attestation set conflict")
+        self.attestation_sets[sealed.release_digest] = sealed
+        if self.fail_after_attestation_binding_once:
+            self.fail_after_attestation_binding_once = False
+            raise TimeoutError("attestation binding acknowledgement was lost")
+        return sealed
+
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> ReleaseAttestationSet:
+        result = self.attestation_sets[release_digest]
+        assert result.project_id == project_id
+        return result
 
     def set_channel(
         self,
@@ -79,6 +113,29 @@ def _scenario(root: Path) -> Path:
     )
     (scenario / "webui.json").write_text('{"ui": {}}\n', encoding="utf-8")
     return scenario
+
+
+def _named_scenario(root: Path, name: str, *, marker: str) -> Path:
+    scenario = root / name
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text(
+        f"id: {name}\nversion: 1.0.0\ntitle: {name}\n",
+        encoding="utf-8",
+    )
+    (scenario / "webui.json").write_text(
+        f'{{"ui": {{"marker": "{marker}"}}}}\n',
+        encoding="utf-8",
+    )
+    return scenario
+
+
+def _source_for(name: str) -> ArtifactSourceRef:
+    return ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=(f"subnets/dev/nodes/node/scenarios/{name}/",),
+    )
 
 
 def _skill(root: Path) -> Path:
@@ -172,6 +229,302 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert '"stable"' in registry
 
 
+def test_paused_promotion_recovers_failed_activation_with_new_identity(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-recipes",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+
+    with pytest.raises(ActivationError, match="health check failed"):
+        service.promote(
+            prepared.candidate.candidate_id,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "pytest",
+                "reason": "no live runtime",
+            },
+            health_check=lambda _lock: False,
+        )
+    failed_operation_id = WorkspaceActivationManager.operation_id(
+        f"stable:{prepared.candidate.release_digest}"
+    )
+    recovery = service.recover_promotion_activation(
+        prepared.candidate.candidate_id,
+        failed_operation_id,
+    )
+
+    assert recovery["status"] == "recovered"
+    assert recovery["operation_id"] == failed_operation_id
+    promoted = service.promote(
+        prepared.candidate.candidate_id,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest",
+            "reason": "no live runtime",
+        },
+        health_check=lambda _lock: True,
+    )
+    assert promoted.pointer.release == "recipes@1.0.0"
+    assert promoted.activation.operation_id == recovery["next_operation_id"]
+    promotion = service.load_promotion(prepared.candidate.candidate_id)
+    assert promotion is not None
+    assert (
+        promotion["receipts"]["activation_recovered"]["operation_id"]
+        == failed_operation_id
+    )
+
+
+def test_stable_promotion_retains_other_subscribed_workspace_projects(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+
+    promoted = None
+    for name, marker in (("recipes", "one"), ("planner", "two")):
+        dev = _named_scenario(tmp_path / "dev", name, marker=marker)
+        service.record_push(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            source_ref=_source_for(name),
+        )
+        prepared = service.prepare_candidate(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            change_ids=(f"change-{name}",),
+            validation_evidence={"suite": "scenario-validation", "status": "passed"},
+        )
+        service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+        promoted = _promote(service, prepared.candidate.candidate_id)
+
+    assert promoted is not None
+    lock = promoted.activation.workspace_lock
+    assert {item.project_id for item in lock.slots} == {"recipes", "planner"}
+    assert {item.key for item in lock.components} == {
+        "scenario:recipes",
+        "scenario:planner",
+    }
+    assert (workspace / "scenarios" / "recipes" / "webui.json").is_file()
+    assert (workspace / "scenarios" / "planner" / "webui.json").is_file()
+    assert set(service.subscriptions.load()) == {"recipes", "planner"}
+    registry = (workspace / "registry.json").read_text(encoding="utf-8")
+    assert '"recipes"' in registry
+    assert '"planner"' in registry
+
+
+def test_current_subscription_repairs_a_missing_legacy_workspace_slot(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+
+    plans = {}
+    for name, marker in (("recipes", "one"), ("planner", "two")):
+        dev = _named_scenario(tmp_path / "dev", name, marker=marker)
+        service.record_push(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            source_ref=_source_for(name),
+        )
+        prepared = service.prepare_candidate(
+            kind="scenario",
+            artifact_id=name,
+            artifact_dir=dev,
+            change_ids=(f"change-{name}",),
+            validation_evidence={"suite": "scenario-validation", "status": "passed"},
+        )
+        plans[name] = prepared.plan
+        service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+        _promote(service, prepared.candidate.candidate_id)
+
+    manager = WorkspaceActivationManager(
+        workspace_root=workspace,
+        package_store=service.package_store,
+        state_root=service.state_root / "activation",
+    )
+    manager.activate(
+        plans["planner"],
+        idempotency_key="simulate-legacy-primary-replacement",
+        slot_id="primary",
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest.legacy_workspace",
+            "reason": "simulate the former single-slot activation",
+        },
+        health_policy={
+            "mode": "skip",
+            "approved_by": "pytest.legacy_workspace",
+            "reason": "simulation has no live runtime",
+        },
+    )
+    assert not (workspace / "scenarios" / "recipes").exists()
+
+    notice = service.check_subscription("recipes")
+    assert notice.available is True
+    assert notice.activation_allowed is True
+    assert notice.reason == "workspace_slot_missing"
+    reviewed = service.plan_subscription_update("recipes", notice=notice)
+    repaired = service.activate_subscription_update(
+        "recipes",
+        expected_plan_digest=reviewed.plan_digest,
+        reload_policy={
+            "mode": "skip",
+            "approved_by": "pytest.subscription_repair",
+            "reason": "test Workspace has no live runtime",
+        },
+        health_policy={
+            "mode": "skip",
+            "approved_by": "pytest.subscription_repair",
+            "reason": "test Workspace has no live runtime",
+        },
+    )
+
+    assert notice.reason == "workspace_slot_missing"
+    assert {item.project_id for item in repaired.activation.workspace_lock.slots} == {
+        "recipes",
+        "planner",
+    }
+    assert (workspace / "scenarios" / "recipes" / "webui.json").is_file()
+    assert (workspace / "scenarios" / "planner" / "webui.json").is_file()
+
+
+def test_configured_promotion_publishes_exact_attestations_before_channel(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    remote = _Remote(tmp_path / "remote")
+    attestation_store = ContentAddressedAttestationStore(tmp_path / "attestations")
+    signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    trust_store = ArtifactTrustStore(tmp_path / "trust.json")
+    trust_store.add(signer.trusted_key())
+    attestation_publisher = ArtifactAttestationPublisher(
+        state_root=tmp_path / "state",
+        store=attestation_store,
+        signer=signer,
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+        attestation_publisher=attestation_publisher,
+        attestation_admission=ArtifactAttestationAdmission(
+            store=attestation_store,
+            trust_store=trust_store,
+        ),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-attested-promotion",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+
+    promoted = _promote(service, prepared.candidate.candidate_id)
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+
+    assert operation is not None
+    phases = [event["phase"] for event in operation["events"]]
+    assert phases.index("attestations_published") < phases.index("channel_moved")
+    assert phases.index("attestations_bound") < phases.index("channel_moved")
+    publication = operation["receipts"]["attestations_published"]["publication"]
+    assert publication["status"] == "completed"
+    assert [item["subject_kind"] for item in publication["attestations"]] == [
+        "package",
+        "release",
+    ]
+    assert remote.get_channel("recipes").release_digest == promoted.pointer.release_digest
+
+
+def test_unknown_attestation_binding_is_reconciled_without_second_write(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    attestation_store = ContentAddressedAttestationStore(tmp_path / "attestations")
+    publisher = ArtifactAttestationPublisher(
+        state_root=tmp_path / "state",
+        store=attestation_store,
+        signer=Ed25519ArtifactSigner.generate(issuer="inimatic.release"),
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+        attestation_publisher=publisher,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-binding-timeout",),
+        validation_evidence={"status": "passed"},
+    )
+    candidate_id = prepared.candidate.candidate_id
+    service.decide_candidate(candidate_id, accepted=True)
+    remote.fail_after_attestation_binding_once = True
+
+    with pytest.raises(TimeoutError, match="acknowledgement was lost"):
+        _promote(service, candidate_id)
+    assert remote.attestation_binding_writes == 1
+    with pytest.raises(PublicationError, match="outcome is uncertain"):
+        _promote(service, candidate_id)
+    assert remote.attestation_binding_writes == 1
+
+    reconciled = service.reconcile_release_attestation_binding(candidate_id)
+    promoted = _promote(service, candidate_id)
+
+    assert reconciled.release_digest == promoted.pointer.release_digest
+    assert remote.attestation_binding_writes == 1
+    operation = service.load_promotion(candidate_id)
+    assert operation is not None
+    assert operation["attestation_binding"]["completed_via"] == "reconciliation"
+
+
 def test_candidate_rejects_legacy_workspace_downgrade_before_trial(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     workspace = tmp_path / "workspace"
@@ -263,6 +616,75 @@ def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:
             change_ids=("change-after-push",),
             validation_evidence={"status": "passed"},
         )
+
+
+def test_candidate_reuses_exact_checkpoint_after_build_policy_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    old_policy = "sha256:" + "1" * 64
+    new_policy = "sha256:" + "2" * 64
+    monkeypatch.setattr(package_module, "PACKAGE_BUILD_POLICY_DIGEST", old_policy)
+    pushed = service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+
+    monkeypatch.setattr(package_module, "PACKAGE_BUILD_POLICY_DIGEST", new_policy)
+    verified = service.verify_pushed_source(pushed, dev)
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-policy-only",),
+        validation_evidence={"status": "passed"},
+    )
+
+    assert pushed.package.build_policy_digest == old_policy
+    assert verified.ref == pushed.package
+    assert prepared.plan.packages == (pushed.package,)
+    assert remote.archives[pushed.package.digest] == verified.archive_bytes
+
+
+def test_build_policy_change_does_not_hide_dev_content_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    monkeypatch.setattr(
+        package_module,
+        "PACKAGE_BUILD_POLICY_DIGEST",
+        "sha256:" + "1" * 64,
+    )
+    pushed = service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    monkeypatch.setattr(
+        package_module,
+        "PACKAGE_BUILD_POLICY_DIGEST",
+        "sha256:" + "2" * 64,
+    )
+    (dev / "webui.json").write_text('{"ui": {"changed": true}}\n', encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="changed after"):
+        service.verify_pushed_source(pushed, dev)
 
 
 def test_promotion_rechecks_persisted_public_source_tree(tmp_path: Path) -> None:
@@ -411,6 +833,175 @@ def test_scenario_candidate_includes_companion_skill_from_same_change_set(
     assert (
         prepared.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
     ).is_file()
+
+
+def test_scenario_candidate_migrates_installed_dependency_without_dev_copy(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    scenario_dir = _scenario(dev_root / "scenarios")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    installed_skill = _skill(workspace / "skills")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("change-recipes",),
+    )
+
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("change-recipes",),
+        validation_evidence={"status": "passed"},
+    )
+
+    dependency = next(
+        item for item in prepared.plan.packages if item.key == "skill:shopping_skill"
+    )
+    assert dependency.version == "2.1.0"
+    assert dependency.source_ref.forge == "workspace-migration"
+    assert dependency.source_ref.repository == "installed-workspace"
+    assert dependency.source_ref.revision.startswith("sha256:")
+    assert not (dev_root / "skills" / "shopping_skill").exists()
+    assert installed_skill.is_dir()
+    assert (
+        prepared.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
+    ).is_file()
+
+
+def test_follow_up_candidate_reuses_dependency_from_stable_project_release(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    scenario_dir = _scenario(dev_root / "scenarios")
+    skill_dir = _skill(dev_root / "skills")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+        change_ids=("initial-project-release",),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("initial-project-release",),
+    )
+    initial = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("initial-project-release",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(initial.candidate.candidate_id, accepted=True)
+    _promote(service, initial.candidate.candidate_id)
+
+    # The companion component has no independent shopping_skill/stable
+    # channel: it is owned by the stable recipes release set.
+    with pytest.raises(FileNotFoundError):
+        remote.get_channel("shopping_skill", "stable")
+
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.1\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("scenario-follow-up",),
+    )
+
+    follow_up = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("scenario-follow-up",),
+        validation_evidence={"status": "passed"},
+    )
+
+    components = {
+        (item.kind, item.artifact_id): item.version
+        for item in follow_up.plan.packages
+    }
+    assert components == {
+        ("scenario", "recipes"): "1.0.1",
+        ("skill", "shopping_skill"): "2.1.0",
+    }
+    assert (
+        follow_up.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
+    ).is_file()
+
+
+def test_scenario_candidate_includes_dependency_from_an_earlier_change_set_member(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    scenario_dir = _scenario(dev_root / "scenarios")
+    skill_dir = _skill(dev_root / "skills")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+        change_ids=("change-skill",),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=("change-scenario",),
+    )
+
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("change-skill", "change-scenario"),
+        validation_evidence={"status": "passed"},
+    )
+
+    skill_package = next(item for item in prepared.plan.packages if item.kind == "skill")
+    assert skill_package.version == "2.1.0"
+    assert skill_package.source_ref == _source()
 
 
 def test_scenario_candidate_does_not_mix_unrelated_dev_dependency(

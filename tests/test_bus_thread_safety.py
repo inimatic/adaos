@@ -52,3 +52,30 @@ def test_thread_safe_plain_records_yjs_thread_affinity_fault():
         assert snapshot["items"][0]["severity"] == "degraded"
     finally:
         incident_registry.reset_incident_registry()
+
+
+async def _run_envelope_metadata_flow(seen: dict) -> None:
+    original = {"state": "ready", "_meta": {"actor": "system"}}
+
+    async def handler(payload: dict):
+        seen["payload"] = payload
+
+    await bus.on("unit.envelope", handler)
+    await bus.emit("unit.envelope", original, source="testcase", ts=123.5)
+    await asyncio.sleep(0.05)
+    seen["original"] = original
+
+
+def test_bus_subscription_payload_preserves_event_envelope_metadata():
+    seen = {}
+
+    asyncio.run(_run_envelope_metadata_flow(seen))
+
+    assert seen["payload"]["state"] == "ready"
+    assert seen["payload"]["_meta"] == {
+        "actor": "system",
+        "event_type": "unit.envelope",
+        "event_source": "testcase",
+        "event_ts": 123.5,
+    }
+    assert seen["original"] == {"state": "ready", "_meta": {"actor": "system"}}

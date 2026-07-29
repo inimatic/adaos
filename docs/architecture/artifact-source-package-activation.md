@@ -736,8 +736,59 @@ Migration uses adapters instead of a flag-day rewrite:
 - Channel mutation requires explicit policy authority.
 - A package accepted in trial is promoted by digest; it is not silently
   rebuilt for stable.
-- GitHub identities and signatures may add attestations but never replace
-  AdaOS approval and activation records.
+- Signed provenance is detached from PackageRef and ProjectRelease so adding or
+  rotating a publisher signature never changes their canonical content digest.
+- `adaos.artifact.attestation.v1` binds an Ed25519 signature to subject kind,
+  package/release digest, project id, publisher issuer/key id, issuance time,
+  predicate type, and predicate digest. The signed record has its own immutable
+  attestation digest.
+- Trust is local policy, not a property asserted by the package. Trust keys are
+  purpose-scoped (`package`/`release`), may have signing windows, rotate by
+  adding a new key id, and fail closed after revocation. A revoked key does not
+  retain implicit historical trust.
+- Required attestation admission runs before remote package fetch and again
+  inside the Workspace writer lease before staging/switch. This closes the
+  revocation race without putting remote I/O under the mutation lease.
+- Detached attestations can live in the local content-addressed store or behind
+  an external immutable-asset adapter. An unknown external write outcome is not
+  automatically repeated.
+- Publication persists the complete deterministic package-then-release
+  signature set before its first external write. Each dispatch intent is
+  journaled atomically. A timeout or interrupted dispatch enters an uncertain
+  state that blocks replay; a separate reconciliation performs remote reads
+  only and must find the exact attestation digest before another explicit
+  publication call can continue still-pending items.
+- The release-binding PUT follows the same no-replay rule. Its dispatch intent
+  is persisted first; an unknown outcome blocks promotion until an explicit
+  read-only lookup finds the exact set. Promotion never repeats that PUT by
+  itself.
+- When an attestation publisher is configured, stable promotion records its
+  exact completed publication result, binds one immutable
+  `adaos.artifact.release_attestation_set.v1` to that release, and only then
+  performs channel compare-and-switch. Resume re-reads both journals/remote
+  binding and rejects a receipt that no longer matches; compatibility mode
+  remains explicit until remote trust policy is deployed.
+- A release attestation set covers the release plus every selected package,
+  including exact subject, issuer/key, predicate, and attestation digests. The
+  registry validates canonical identity and coverage but does not grant trust;
+  the installing AdaOS verifies Ed25519 signatures against its local policy.
+- The MVP binding is immutable per release. If the only signing key for an old
+  release is revoked, recovery uses a new patch release and a new attestation
+  set rather than mutating historical authorization metadata.
+- Admission recomputes package and release provenance predicates from the exact
+  reviewed `PackageRef` and `ProjectRelease`. A valid publisher signature over
+  a different provenance statement is rejected.
+- Historical package activation remains compatible when no attestation policy
+  is configured. A project/publisher policy that requires attestations never
+  falls back to unsigned activation.
+- Runtime composition is explicit through
+  `ADAOS_ARTIFACT_ATTESTATIONS_MODE=off|publish|required`. Publishing requires a
+  persistent 32-byte Ed25519 key file and issuer; required admission requires a
+  non-empty, separately provisioned trust store and may restrict issuers. AdaOS
+  neither generates a production publisher key nor trusts its public half on
+  first use.
+- GitHub identities and signatures may provide issuer evidence but never
+  replace AdaOS trial approval, reviewed activation, or health records.
 
 ## Deferred Extension Seams
 

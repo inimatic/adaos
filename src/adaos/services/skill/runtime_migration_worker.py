@@ -359,9 +359,13 @@ def migration_candidates(
         deactivation = runtime_state.get("deactivation") if isinstance(runtime_state, dict) and isinstance(runtime_state.get("deactivation"), dict) else {}
         reason = "force" if force else ""
         if not force:
-            if not _runtime_is_behind(workspace_version, runtime_version):
+            explicitly_recovering = bool(requested_name and runtime_state.get("deactivated"))
+            if explicitly_recovering:
+                reason = "explicit_quarantine_recovery"
+            elif not _runtime_is_behind(workspace_version, runtime_version):
                 continue
-            reason = "runtime_version_behind"
+            else:
+                reason = "runtime_version_behind"
         candidates.append(
             {
                 "skill": name,
@@ -374,6 +378,37 @@ def migration_candidates(
             }
         )
     return candidates
+
+
+def quarantined_runtimes(
+    ctx: AgentContext,
+    mgr: SkillManager,
+) -> list[dict[str, Any]]:
+    """Report quarantined runtimes without turning discovery into a retry."""
+
+    names = set(_registered_skill_names(ctx)) | set(_registry_versions(ctx))
+    items: list[dict[str, Any]] = []
+    for skill_name in sorted(names):
+        try:
+            status = mgr.runtime_status(skill_name)
+        except Exception:
+            continue
+        if not bool(status.get("deactivated")):
+            continue
+        deactivation = status.get("deactivation") if isinstance(status.get("deactivation"), dict) else {}
+        items.append(
+            {
+                "skill": skill_name,
+                "version": str(status.get("version") or ""),
+                "active_slot": str(status.get("active_slot") or ""),
+                "reason": str(deactivation.get("reason") or "deactivated"),
+                "failed_stage": str(deactivation.get("failed_stage") or ""),
+                "failure_kind": str(deactivation.get("failure_kind") or ""),
+                "comment": str(deactivation.get("comment") or ""),
+                "operation_id": str(deactivation.get("operation_id") or ""),
+            }
+        )
+    return items
 
 
 def _manager(ctx: AgentContext) -> SkillManager:
@@ -427,6 +462,7 @@ def _run_migration_sync(
     if sync_workspace:
         mgr.sync(force=True if force else None)
     candidates = migration_candidates(ctx, mgr, force=force, name=name)
+    quarantine_before = quarantined_runtimes(ctx, mgr)
     payload: dict[str, Any] = {
         "ok": True,
         "state": "running",
@@ -444,6 +480,8 @@ def _run_migration_sync(
         "completed_total": 0,
         "failed_total": 0,
         "deactivated_total": 0,
+        "quarantined_total": len(quarantine_before),
+        "quarantined_skills": quarantine_before,
         "skills": candidates,
     }
     _write_status(ctx, payload)
@@ -488,15 +526,28 @@ def _run_migration_sync(
                 ensure_installed=True,
                 require_active_version=bool(candidate.get("workspace_version")),
                 disable_during_migration=False,
+                retry_deactivated=bool(candidate.get("deactivated")),
             )
             entry["runtime_refresh"] = refresh
+            if bool(refresh.get("skipped")) or bool(refresh.get("deactivated")):
+                raise RuntimeError("runtime refresh left the skill deactivated")
             if run_tests:
                 entry["stage"] = "tests"
                 payload["current"] = {"skill": name, "index": index, "stage": "tests"}
                 _write_status(ctx, payload)
                 tests = mgr.run_skill_tests(name, source="installed")
-                entry["tests"] = {str(test): str(getattr(result, "status", result) or "") for test, result in tests.items()}
-                failed_tests = {test: status for test, status in entry["tests"].items() if status != "passed"}
+                entry["tests"] = {
+                    str(test): {
+                        "status": str(getattr(result, "status", result) or ""),
+                        "detail": str(getattr(result, "detail", "") or ""),
+                    }
+                    for test, result in tests.items()
+                }
+                failed_tests = {
+                    test: result
+                    for test, result in entry["tests"].items()
+                    if str(result.get("status") or "") != "passed"
+                }
                 if failed_tests:
                     raise RuntimeError(f"skill tests failed: {failed_tests}")
             entry["stage"] = "completed"
@@ -564,6 +615,14 @@ def _run_migration_sync(
     final["finished_at"] = _now()
     final["elapsed_s"] = round(final["finished_at"] - started_at, 3)
     final["skills"] = results
+    quarantine_after = quarantined_runtimes(ctx, mgr)
+    final["quarantined_total"] = len(quarantine_after)
+    final["quarantined_skills"] = quarantine_after
+    if not failed and quarantine_after:
+        final["message"] = (
+            "skill runtime migration completed; "
+            f"{len(quarantine_after)} skill runtime(s) remain quarantined"
+        )
     try:
         final["webspace_rebuild"] = rebuild_webspace_projection_sync(
             webspace_id=webspace_id,

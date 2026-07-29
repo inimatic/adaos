@@ -13,6 +13,27 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   AI-assisted, and human-in-the-loop capability creation workflows
 - `builder.draft.v1.schema.json` - Builder draft workspace metadata before
   validation, preview, approval, and runtime apply
+- `builder.issue.v1.schema.json` - one independently testable Builder
+  requirement, defect, or acceptance concern
+- `builder.change.v1.schema.json` - canonical bounded delivery scope spanning
+  Issues, Runs, revisions, Trial, and Release evidence
+- `builder.run.v1.schema.json` - one LLM, Codex, deterministic transformer,
+  evaluator, or recovery attempt linked to a Change
+- `builder.context_packet.v1.schema.json` - bounded, stable-digested execution
+  context assembled from refs instead of an unbounded transcript
+- `builder.interaction_frame.v1.schema.json` - chat-first message, context,
+  risk-aware actions, and rich-view projection
+- `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation
+  against stable declarative UI refs
+- `builder.review_anchor.v1.schema.json` - durable target model for Review
+  feedback; current browser-local storage remains a compatibility draft
+- `artifact.attestation.v1.schema.json` - detached Ed25519 package/release
+  provenance statement bound to immutable subject and predicate digests
+- `artifact.release-attestation-set.v1.schema.json` - immutable exact
+  attestation references bound to one ProjectRelease without changing its
+  canonical release digest
+- `artifact.trust-store.v1.schema.json` - local publisher trust keys, allowed
+  signing purposes, validity windows, rotation, and fail-closed revocation state
 - `endpoint-audio-events.v1.schema.json` - MVP endpoint audio event wire
   contract for ReDevice and future endpoint agents
 - `nlu.teacher.v1.schema.json` - NLU Teacher request/thread, candidate,

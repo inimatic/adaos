@@ -1392,16 +1392,35 @@ class SayRequest(BaseModel):
     voice: str | None = Field(default=None, description="Опционально: имя/идентификатор голоса")
 
 
+class TtsSynthesizeRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    voice: str | None = Field(default=None, max_length=128)
+    lang: str | None = Field(default=None, max_length=32)
+    voice_gender: str | None = Field(default=None, max_length=32)
+
+
 class SayResponse(BaseModel):
     ok: bool
     duration_ms: int
 
 
-def _make_tts():
+def _make_tts(voice: str | None = None, lang: str | None = None):
     mode = get_tts_backend()
     if mode == "rhasspy":
-        return RhasspyTTSAdapter()
-    return NativeTTS()
+        return RhasspyTTSAdapter(voice=voice, lang=lang)
+    lang_hint = (lang or "").split("-", 1)[0] or None
+    return NativeTTS(voice=voice, lang_hint=lang_hint)
+
+
+def _synthesize_tts_audio(payload: TtsSynthesizeRequest) -> bytes:
+    tts = _make_tts(voice=payload.voice, lang=payload.lang)
+    synthesize = getattr(tts, "synthesize", None)
+    if not callable(synthesize):
+        raise RuntimeError("tts_synthesize_unavailable")
+    data = synthesize(payload.text)
+    if not isinstance(data, (bytes, bytearray)) or not data:
+        raise RuntimeError("tts_synthesize_empty")
+    return bytes(data)
 
 
 class SetAliasRequest(BaseModel):
@@ -2248,9 +2267,29 @@ async def get_service_doctor_reports(name: str) -> dict:
 @app.post("/api/say", response_model=SayResponse, dependencies=[Depends(require_token)])
 async def say(payload: SayRequest):
     t0 = time.perf_counter()
-    _make_tts().say(payload.text)
+    _make_tts(voice=payload.voice).say(payload.text)
     dt = int((time.perf_counter() - t0) * 1000)
     return SayResponse(ok=True, duration_ms=dt)
+
+
+@app.post("/api/tts/synthesize", dependencies=[Depends(require_token)])
+async def tts_synthesize(payload: TtsSynthesizeRequest):
+    t0 = time.perf_counter()
+    try:
+        audio = _synthesize_tts_audio(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"tts_synthesize_failed: {exc}") from exc
+    dt = int((time.perf_counter() - t0) * 1000)
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "no-store",
+            "X-ADAOS-TTS-Duration-Ms": str(dt),
+        },
+    )
 
 
 # --- IO console endpoint for cross-node routing ---

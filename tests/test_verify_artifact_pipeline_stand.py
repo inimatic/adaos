@@ -9,8 +9,15 @@ import pytest
 
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
+    ArtifactAttestationAdmission,
+    ArtifactAttestationPolicy,
+    ArtifactAttestationPublisher,
+    ArtifactTrustStore,
+    ContentAddressedAttestationStore,
     ContentAddressedPackageStore,
+    Ed25519ArtifactSigner,
     PackageCatalog,
+    ReleaseAttestationSet,
     build_artifact_package,
     build_project_release,
 )
@@ -60,6 +67,26 @@ def _proof_fixture(tmp_path: Path):
     return plan, source_store, evidence_path
 
 
+class _BoundLocalRemote(LocalProofRemote):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.binding: ReleaseAttestationSet | None = None
+
+    def put_release_attestation_set(self, attestation_set: ReleaseAttestationSet):
+        sealed = attestation_set.seal()
+        if self.binding is not None and self.binding != sealed:
+            raise RuntimeError("immutable release attestation binding conflict")
+        self.binding = sealed
+        return sealed
+
+    def get_release_attestation_set(self, project_id: str, release_digest: str):
+        if self.binding is None:
+            raise FileNotFoundError("release attestation binding not found")
+        assert self.binding.project_id == project_id
+        assert self.binding.release_digest == release_digest
+        return self.binding
+
+
 def test_external_stand_fetches_into_empty_cache_and_workspace(tmp_path: Path) -> None:
     plan, source_store, evidence_path = _proof_fixture(tmp_path)
     stand_root = tmp_path / "stand"
@@ -94,6 +121,49 @@ def test_external_stand_fetches_into_empty_cache_and_workspace(tmp_path: Path) -
             source_evidence=evidence_path,
             backend_health={"ready": True},
         )
+
+
+def test_external_stand_binds_and_requires_exact_release_attestations(
+    tmp_path: Path,
+) -> None:
+    plan, source_store, evidence_path = _proof_fixture(tmp_path)
+    stand_root = tmp_path / "stand"
+    remote = _BoundLocalRemote(tmp_path / "remote")
+    signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    trust = ArtifactTrustStore(tmp_path / "trust.json")
+    trust.add(signer.trusted_key())
+    attestations = ContentAddressedAttestationStore(tmp_path / "attestations")
+    publisher = ArtifactAttestationPublisher(
+        state_root=stand_root / "state",
+        store=attestations,
+        signer=signer,
+    )
+    admission = ArtifactAttestationAdmission(
+        store=attestations,
+        trust_store=trust,
+        policy=ArtifactAttestationPolicy(allowed_issuers=("inimatic.release",)),
+        release_sets=remote,
+    )
+
+    result = run_external_stand(
+        plan=plan,
+        source_store=source_store,
+        remote=remote,
+        stand_root=stand_root,
+        channel="stand-attested",
+        source_evidence=evidence_path,
+        backend_health={"version": "test", "commit": "1" * 7, "ready": True},
+        attestation_publisher=publisher,
+        attestation_admission=admission,
+    )
+
+    phases = [item["phase"] for item in result["phases"]]
+    assert result["status"] == "passed"
+    assert phases.index("remote-attestations-bound") < phases.index(
+        "remote-channel-cas"
+    )
+    assert remote.binding is not None
+    assert result["phases"][-1]["attestations_required"] is True
 
 
 def test_release_plan_is_reconstructed_from_pipeline_evidence(tmp_path: Path) -> None:

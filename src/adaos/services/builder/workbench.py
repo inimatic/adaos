@@ -25,6 +25,7 @@ from adaos.services.workspaces.relations import (
 
 
 BUILDER_WORKBENCH_SCENARIO_ID = "prompt_engineer_scenario"
+BUILDER_HOST_SCENARIO_ID = "builder"
 BUILDER_RUNTIME_FALLBACK_SCENARIO_ID = "web_desktop"
 BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
@@ -1049,6 +1050,35 @@ async def _on_builder_context_selected(evt: Any) -> None:
         description=str(payload.get("description") or "").strip() or None,
         persist_projection=False,
     )
+    _schedule_projection_publish(service, source_webspace_id)
+
+
+@subscribe("desktop.webspace.reloaded")
+async def _on_builder_source_webspace_reloaded(evt: Any) -> None:
+    """Restore dynamic Builder context after scenario materialization.
+
+    A governed webspace reset rebuilds scenario-owned branches before emitting
+    ``desktop.webspace.reloaded``.  Builder selection is runtime-owned state,
+    so the durable workbench binding must be projected once the rebuild has
+    completed instead of allowing the scenario seed to become authoritative.
+    """
+
+    payload = _payload_from_event(evt)
+    source_webspace_id = str(payload.get("webspace_id") or "").strip()
+    scenario_id = str(
+        payload.get("scenario_id")
+        or payload.get("current_scenario")
+        or payload.get("materialized_scenario")
+        or ""
+    ).strip()
+    if not source_webspace_id or scenario_id not in {
+        BUILDER_HOST_SCENARIO_ID,
+        BUILDER_WORKBENCH_SCENARIO_ID,
+    }:
+        return
+    service = BuilderWorkbenchService()
+    if not service.binding_path(source_webspace_id).is_file():
+        return
     _schedule_projection_publish(service, source_webspace_id)
 
 

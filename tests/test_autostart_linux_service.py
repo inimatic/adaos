@@ -39,6 +39,8 @@ def test_linux_autostart_service_restarts_after_clean_exit(monkeypatch, tmp_path
     service_path = home / ".config" / "systemd" / "user" / "adaos.service"
     text = service_path.read_text(encoding="utf-8")
     assert "Restart=always" in text
+    assert "StartLimitIntervalSec=300" in text
+    assert "StartLimitBurst=10" in text
     assert "MemoryMax=" not in text
 
 
@@ -56,6 +58,8 @@ def test_linux_system_service_sets_memory_limits(tmp_path: Path) -> None:
     assert "MemorySwapMax=1024M" in text
     assert "OOMPolicy=stop" in text
     assert "KillMode=process" in text
+    assert "StartLimitIntervalSec=300" in text
+    assert "StartLimitBurst=10" in text
     assert "WantedBy=multi-user.target" in text
 
 

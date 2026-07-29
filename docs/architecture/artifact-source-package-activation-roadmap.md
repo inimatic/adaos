@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Last reviewed: 2026-07-26.
+Last reviewed: 2026-07-27.
 
 ## Outcome
 
@@ -99,6 +99,10 @@ Validated-local implementation now provides:
 - a source-faithful local verifier that compares mutable DEV against the exact
   pushed package file inventory before rebuilding under a newer package policy,
   and exercises the current channel-CAS and explicit runtime-reload contracts.
+- exact-build core-slot admission with durable active/previous markers, one-shot
+  restart semantics, and server-authoritative initial Yjs reconnect protection;
+- a read-only subscribed-project update plan that reports an explicit
+  `up_to_date` no-op instead of converting current state into an HTTP conflict.
 
 The reproducible result and exact digests are recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
@@ -175,13 +179,13 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
-| AP1 | 8/12 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, and deployed binary transport whose durable host store survived a blue/green redeploy | external signing, streamed/object-store transport, multi-zone durability, and lifecycle diagnostics |
+| AP1 | 10/13 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, deployed immutable exact release binding, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, package lifecycle diagnostics, publisher namespaces, and commercial entitlements remain open/deferred |
 | AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
-| AP6 | 11/13 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, and one fail-closed package/legacy route contract | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
-| AP7 | 13/14 | validated-stand + production-route-verified (bounded) | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 304 final focused regressions, live Builder `0.2.20` publication, external-backend clean-stand activation, package/release/channel survival across redeploy, and continuous backend HTTP health across two clean blue/green control runs in both deployment zones | frontend/WebSocket continuity plus broad production and marketplace acceptance remain open/deferred |
+| AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
+| AP7 | 14/16 | validated-stand + second-machine-core-recovered (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 375 final core/Yjs/artifact regressions, live Builder `0.2.20` publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery under real browser reconnects, and generation-bound second-machine core convergence | candidate-before-health proxy admission is reopened under AP7-14; frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -259,8 +263,25 @@ symlink, size, and corruption tests.
   digest before visibility.
 - [x] `[must]` `AP1-06` Persist source revision, builder identity, package
   manifest digest, and validation evidence references.
-- [ ] `[should]` `AP1-07` Add signed attestations and external immutable release
+- [x] `[should]` `AP1-07` Add signed attestations and external immutable release
   asset support behind a package-store adapter.
+  - [x] Persist one exact package-then-release signature set before external
+    mutation, reuse it across idempotent resumes, and gate stable-channel
+    movement on its completed receipt when the publisher policy is configured.
+  - [x] Treat an interrupted or failed dispatch as uncertain, prohibit
+    automatic replay, and require read-only exact-digest reconciliation before
+    a separate explicit continuation. The same rule covers both attestation
+    assets and their immutable release-binding PUT.
+  - [x] Define one immutable exact attestation set per release, validate complete
+    package/release provenance coverage, expose remote asset/set adapters, and
+    gate configured promotion on binding that set before channel movement.
+  - [x] Wire explicit `off`/`publish`/`required` runtime composition with a
+    persistent externally supplied signing key and a separately provisioned
+    fail-closed subscriber trust store; never generate or auto-trust a key.
+  - [x] Merge/deploy the backend binding routes and provision the actual
+    publisher secret/trusted public keys on the stand.
+  - [x] Prove required-mode activation from those remote assets on a clean
+    stand, including timeout/reconciliation recovery.
 - [ ] `[could]` `AP1-08` Add package deduplication and bounded garbage collection
   diagnostics.
 - [ ] `[deferred]` `AP1-09` Add commercial license and entitlement payloads to
@@ -273,6 +294,10 @@ symlink, size, and corruption tests.
 - [ ] `[should]` `AP1-12` Replace whole-body binary buffering and the
   single-zone host mount with streamed/object-store transport, lifecycle
   controls, and multi-zone durability evidence.
+- [x] `[should]` `AP1-13` Establish the detached attestation trust boundary:
+  versioned Ed25519 records, purpose-scoped key rotation/revocation, local and
+  external immutable stores, and fail-closed activation admission before fetch
+  and again under the Workspace writer lease.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
@@ -297,6 +322,33 @@ and rejected a mismatched digest before visibility. Unknown upload outcomes do
 not fall back or replay the mutation. `AP1-12` remains open because the current
 route deliberately buffers a bounded body and the durable filesystem is local
 to one deployment zone.
+`AP1-13` is closed locally by `tests/test_artifact_attestations.py` and the full
+`test_artifact*.py` regression. Detached signatures bind
+the exact subject and provenance predicate digests without changing existing
+PackageRef/ProjectRelease identities. Trust-store readers reject unknown
+schemas/fields, key ids are derived from raw Ed25519 public keys, key purpose,
+signing windows, issuer allowlists, rotation, and revocation are enforced, and
+activation records the exact accepted signatures and immutable release-set
+binding before materialization. The
+external immutable-asset adapter has an explicit no-retry regression for an
+unknown write outcome. The local portion of `AP1-07` now journals one exact
+signature set before any external mutation. A dispatch with an unknown outcome
+is never replayed: an explicit read-only reconciliation must find the exact
+attestation digest before a later explicit publish call may continue pending
+items. The idempotency key cannot be rebound to a different plan, and package
+and release predicates are recomputed from the exact reviewed refs rather than
+trusted as signer-supplied labels. The completed remote slice adds
+`adaos.artifact.release_attestation_set.v1`, remote clients/stores, and promotion
+ordering `assets -> immutable release binding -> channel`. Backend PR `#4`
+merged commits `cd5da95` and `4f5cb80` as `8f4f2c1`; live health and mTLS route
+probes confirmed that deployment. The clean stand
+`20260727t070101z-required` provisioned a separate signer and trust store,
+published and bound all three release subjects, moved only the dedicated
+`stand-required-20260727t070101z` channel, fetched both packages into an empty
+cache, and activated an empty Workspace with exact binding admission. A wrong
+trust store failed before package fetch, operation creation, or Workspace
+mutation. The 166-test artifact/attestation gate covers journal interruption,
+read-only reconciliation, explicit continuation, and no automatic replay.
 
 ## Milestone AP2: Dependency-Locked Project Releases
 
@@ -565,6 +617,9 @@ injected failure.
   subscribed projects require package activation, only subscription absence
   admits labelled legacy source pull, corrupt subscription state fails closed,
   and package-path failures never trigger compatibility fallback.
+- [x] `[must]` `AP6-14` Make read-only update inspection total for a valid
+  subscription: an already-current project returns a typed `up_to_date` no-op
+  plan, while real activation remains fail-closed and separately reviewed.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and channel/subscription regressions in
@@ -623,6 +678,12 @@ coordinator regressions prove the package route for subscribed projects and
 fail-closed handling of a malformed subscription store. The legacy bridge
 remains only for projects with no subscription and stays explicitly labelled;
 its eventual retirement is not required for this bounded rollout.
+AP6-14 is closed by the `adaos.artifact.subscription_update_noop.v1` response
+and live Builder inspection on core commit `bc603cb8`. `POST
+/api/scenarios/update` with `dry_run=true` returned HTTP 200,
+`mode=package_plan`, `updated=false`, `package_required=true`,
+`legacy_allowed=false`, and `status=up_to_date`; it did not mutate Workspace or
+turn an already-current subscription into `409 Conflict`.
 
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 
@@ -660,9 +721,15 @@ dependency-conflict, interruption, and rollback cases.
   release backend.
 - [ ] `[deferred]` `AP7-13` Claim production acceptance or marketplace readiness
   from the single-machine proof.
-- [x] `[should]` `AP7-14` Eliminate the public-route gap during blue/green
+- [ ] `[should]` `AP7-14` Eliminate the public-route gap during blue/green
   upstream handoff and prove continuous health while replacing a backend that
   serves persisted artifact state.
+- [x] `[must]` `AP7-15` Recover the local runtime through an exact-build A/B
+  slot, one bounded restart, and real browser Yjs reconnects without accepting
+  listener-only readiness or automatically repeating a state-changing phase.
+- [x] `[must]` `AP7-16` Prove second-machine core-release convergence after a
+  partial root promotion: verified-slot supervisor fallback, transactional root
+  repair, truthful restart authority, and one subsequent clean update cycle.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 including its reproducible verifier command, immutable digests, operation
@@ -693,9 +760,40 @@ pinned, and observer helpers do not issue duplicate reloads. Bootstrap run
 `30229453608` passed both zones with `325` and `295` strict samples. Clean
 opposite-direction controls `30229653248` and `30229788369` passed with
 `322/298` and `321/297` samples, no server-side failures, and zero proxy
-recreates. This closes bounded backend HTTP handoff only; frontend replacement,
-long-lived WebSocket continuity, and a future dynamic proxy control plane are
-not implied by this checkbox.
+recreates. A later PR `#4` deployment exposed a remaining race: nginx-proxy
+observed the candidate Docker start before its healthcheck passed, and the
+strict public probe recorded `curl rc=55`. The backend did commit successfully
+as `8f4f2c1`, so repeating deployment would have been unsafe. `AP7-14` is
+reopened until infra commit `5f9a5b0` is merged and a clean control proves that
+the candidate warms on a private network and joins `inimatic_proxy` only after
+`healthy`. Frontend replacement and long-lived WebSocket continuity remain
+separate acceptance scopes.
+`AP7-15` is closed for the bounded local topology by commit `bc603cb8`. Slot A
+was built from that exact local revision, passed structural/import validation
+and all 35 installed handler imports, then became active through durable
+markers. One API restart reached the same full Git commit and remained ready
+under one PID for seven samples over 36 seconds. Real `dev1`, `dev1-dev`, and
+`desktop-dev` browser handshakes exercised server-authoritative initial Yjs
+admission without reproducing the native Yrs panic. This does not prove
+long-lived WebSocket continuity across cutover, and initial offline-only browser
+drafts are deliberately not merged in this MVP safety mode.
+`AP7-16` is closed for the affected Linux node `192.168.0.30` by the bounded
+release sequence ending at `0.1.614` (`f9faba41`, CI run `30260047119`). The
+earlier partial promotion was recovered from the verified active slot; root
+copy now uses candidate-owned commit receipts and backup/rollback metadata,
+wrapper/CLI replacement is atomic, and the monitor resumes from durable state.
+Automatic releases `0.1.611` and `0.1.612` completed slot/root convergence with
+one self-restart each; `0.1.613` activated the generation gate. The strict
+`0.1.614` control was observed without any manual reconcile or complete call:
+the durable `root_promoted` state named old supervisor PID `824452` and instance
+`0a6507...` while `root_restart_completed_at` was absent; that PID exited,
+systemd started PID `827238`, and only its distinct instance `9834e0...` wrote
+completion 7.9 seconds after the restart request. Slot B changed to A, root
+version became `0.1.614`, direct runtime ping identified active slot A on 8777,
+root parity had no mismatched paths, restart count advanced exactly once, and
+both status and attempt reported no subsequent transition. This is bounded
+second-machine core convergence, not broad production, multi-zone, or
+long-lived browser WebSocket acceptance.
 
 ## Explicit Deferred Backlog
 

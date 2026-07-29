@@ -677,6 +677,31 @@ def _emit_entity_registry_changed_if_needed(
         )
 
 
+def _emit_member_access_reactivated(
+    node_id: str,
+    previous: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+) -> None:
+    try:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit as bus_emit
+
+        token = str(node_id or "").strip()
+        if not token:
+            return
+        payload = {
+            "node_id": token,
+            "reason": "member_link.reactivated",
+            "previous_admission_policy": str((previous or {}).get("admission_policy") or "").strip() or None,
+            "admission_policy": str(current.get("admission_policy") or "").strip() or None,
+            "connection_state": str(current.get("connection_state") or "").strip() or None,
+            "online": current.get("online"),
+        }
+        bus_emit(get_ctx().bus, "subnet.member.access.reactivated", payload, source="access_links")
+    except Exception:
+        return
+
+
 def _emit_entity_event_envelopes(events: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]) -> None:
     try:
         from adaos.services.agent_context import get_ctx
@@ -904,6 +929,17 @@ def touch_member_link(
     entry.setdefault("access_class", "device")
     entry.setdefault("autorotate", True)
     entry.setdefault("lifetime_mode", "permanent")
+    connected_state = str(connection_state or "").strip().lower()
+    reactivated = False
+    if (
+        not bool(entry.get("revoked"))
+        and str(entry.get("admission_policy") or "").strip().lower() == "detached"
+        and (online is True or connected_state in {"connected", "open", "ready", "online"})
+    ):
+        entry["admission_policy"] = "allow"
+        entry["detached_at"] = None
+        entry["denied_at"] = None
+        reactivated = True
     if hostname is not None:
         entry["hostname"] = str(hostname or "").strip() or None
     if node_names is not None:
@@ -917,6 +953,8 @@ def touch_member_link(
     saved = _put_entry(registry, "member", entry)
     _save_registry(registry)
     _emit_entity_registry_changed_if_needed("member", previous, saved, reason="member_link.changed")
+    if reactivated:
+        _emit_member_access_reactivated(token, previous, saved)
     return saved
 
 

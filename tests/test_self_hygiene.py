@@ -32,7 +32,10 @@ def test_apply_retention_policy_writes_linux_policy_files(monkeypatch, tmp_path:
     assert (etc_dir / "logrotate.d" / "adaos").exists()
     assert (systemd_dir / "adaos-hygiene.service").exists()
     assert (systemd_dir / "adaos-hygiene.timer").exists()
-    assert str(base_dir.resolve()) in (systemd_dir / "adaos-hygiene.service").read_text(encoding="utf-8")
+    service_text = (systemd_dir / "adaos-hygiene.service").read_text(encoding="utf-8")
+    assert str(base_dir.resolve()) in service_text
+    assert "ExecStart=/usr/local/bin/adaos maintenance run" in service_text
+    assert " -m adaos " not in service_text
     state = json.loads((base_dir / "state" / "self_hygiene" / "retention-policy.json").read_text(encoding="utf-8"))
     assert state["base_dir"] == str(base_dir.resolve())
 

@@ -16,6 +16,14 @@ state-changing phase. See the
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
 and its [local evidence](artifact-pipeline-local-evidence-2026-07-24.md).
 
+The chat-first product model, canonical `Issue -> Change -> Run -> Revision ->
+Release` terminology, semantic UI changes, context packets, channel capability
+boundary, and future collaboration seams are defined in
+[Builder Conversational Development Architecture](builder-conversational-development.md).
+That document refines the current `change_set` and per-turn Builder Change
+compatibility terminology; this page continues to own the active implementation
+pipeline until migration is complete.
+
 AdaOS Builder is the role and workflow that turns an idea into governed AdaOS
 artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests, and
 runtime-ready changes.
@@ -117,11 +125,34 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
 
 ## Prototype And Automation Workflow
 
-Builder has one mutable process at a time. `Prototype` and `Automation` are
-the only possible values of `workflow.active_phase`; `Publication` is an
+Builder projects every user request onto one bounded
+`adaos.builder.change_set.v1`. A change set contains the original intent,
+individually testable issue items, acceptance criteria, durable Builder Change
+references, and one execution route. Follow-up remarks normally extend the
+active set; they do not create a new set unless the previous set is terminal or
+the user explicitly starts unrelated work. This is a project-local execution
+contract, not the deferred global/multi-user Issue registry.
+
+Issue items use two execution lanes:
+
+- `prototype`: interface, layout, content hierarchy, presentation, and other
+  safely mockable interaction requirements;
+- `automation`: behavior, persistence, integration, dependency, migration,
+  runtime, and test requirements.
+
+If any unresolved item belongs to `prototype`, the route is
+`prototype_first`. The built-in interactive LLM changes only the deterministic
+Prototype, and Automation cannot start until that gate is approved. A purely
+functional request may use `automation_direct`; Builder records the set and
+requires an explicit implementation brief before isolated Codex starts. A
+heuristic classification is never sufficient to launch Codex by itself.
+
+Builder still has one mutable process at a time. `Prototype` and `Automation`
+are the only possible values of `workflow.active_phase`; `Publication` is an
 immutable release snapshot and is never an active editing phase. The
 authoritative persisted contract is `adaos.builder.workflow.v1` in the DEV
-project's `prompt_state.json`.
+project's `prompt_state.json`, with the active change set embedded in that
+projection.
 
 Lifecycle selection, workflow state, and Preview are independent:
 
@@ -132,13 +163,14 @@ Lifecycle selection, workflow state, and Preview are independent:
 
 The supported transitions are:
 
-| From | Action | To | Durable effect |
+| Change-set gate | Action | Next gate | Durable effect |
 | --- | --- | --- | --- |
-| Prototype | hand off/start Automation | Automation | current Prototype head becomes frozen input |
-| Automation working | Automation completes | Automation completed | replace the single retained Automation snapshot |
-| Automation completed/failed | submit another Automation turn | Automation working | reopen the same Automation process with a new iteration and task id |
-| Automation completed | publish | Automation completed | create or replace the current Publication snapshot |
-| Automation completed | return to Prototype | Prototype | built-in LLM derives a new safe Prototype revision |
+| Prototype | approve/stabilize Prototype | Automation | approved revision becomes immutable requirement input |
+| Automation | isolated Codex completes | Trial | result, checks, source Prototype, and member changes are checkpointed |
+| Trial | reject or request changes | Prototype or Automation | candidate stays non-promotable and the affected issue items reopen |
+| Trial | accept | Publication | accepted trial evidence admits stable promotion |
+| Publication | publish | Complete | immutable release and publication evidence reference the change set |
+| Complete/Automation | return result to Prototype | Prototype | built-in LLM derives a new safe Prototype revision for a later set |
 
 Returning to Prototype does not thaw or overwrite the completed Automation.
 The local realization worker receives the retained Automation as immutable
@@ -148,13 +180,31 @@ tool, service, credential, device, external-network, and production-data
 bindings are removed from the new Prototype and replaced with bounded local
 state or mock data. A later handoff receives both that Prototype as the current
 requirement and the retained Automation as its previous implementation.
+It also receives the currently installed Workspace Publication as a separate
+immutable implementation baseline. Companion skills are resolved from the
+current Prototype, retained Automation, and current Publication as a union, so
+a safely disconnected Prototype cannot silently erase established functional
+dependencies. The Publication attachment is read-only, is rejected if Codex
+changes it, and is stripped before DEV activation and package construction.
 If adaptation fails, Builder records the adaptation diagnostic and restores
 the retained Automation to `completed`; the failed side process never
 invalidates the last working implementation or Publication snapshot.
 
-Only one Automation snapshot is retained under Builder runtime state; a new
-completed Automation replaces it. It is not copied into the published
-scenario. Historical implementation recovery remains a Forge/VCS concern.
+Lifecycle projects dependency, not three independent stage buckets:
+
+```text
+Prototype revision
+  -> Automation result produced from that revision
+       -> Publication produced from that Automation result
+```
+
+Only the retained current Automation and current Publication are previewable.
+Legacy publication evidence without provenance is shown under an explicitly
+inferred historical Automation node instead of being silently attributed to
+the current result. Only one Automation snapshot is retained under Builder
+runtime state; a new completed Automation replaces it. It is not copied into
+the published scenario. Historical implementation recovery remains a
+Forge/VCS concern.
 
 The scenario version source of truth is `scenario.yaml`. Compatibility
 `scenario.json` content must not override its lifecycle or publication version.
@@ -355,6 +405,25 @@ replace them. For `ui.list`, `inputs.buttons` are per-item/card commands. The
 single list-level Add command next to card search uses `inputs.addButton`,
 `inputs.addButtonLabel`, and an `add` or `click:add` widget action.
 
+Visual freedom does not make the functional control plane disposable. A
+schema-valid prototype may replace layout, copy, and bounded mock presentation,
+but every existing skill data source, stream, mutation action, Lifecycle
+command, project kind, and governed confirmation remains a compatibility
+contract unless an accepted issue explicitly removes it. Builder carries the
+machine-readable `adaos.builder.functional_parity.v1` contract with the
+scenario and rejects Prototype or Automation results that lose required
+bindings, even when the resulting UI still renders successfully.
+
+Builder self-development always uses a shadow scenario and an executable
+reference revision. The active Builder is never used simultaneously as the
+experimental prototype, the functional baseline, and the recovery tool. A
+self-hosted change must pass deterministic parity, scenario validation, SDK
+tests, and A/B browser rendering before it can replace `dev:builder`; Workspace
+and stable Publication remain unchanged until the recovered DEV revision passes
+Trial. Static/mock-only experiments may inform a later implementation, but they
+cannot become the Automation source for a functional replacement without an
+explicit binding migration plan.
+
 Every promoted revision stamps the actual revision and scenario into
 `pageSchema.meta.builder`. Review Apply messages carry a localized semantic
 origin (`Review notes` / `Замечания`) instead of being indistinguishable from a
@@ -378,6 +447,17 @@ provider/model-agnostic and sends a compact ABI summary plus a prototyping
 affordance map. Later profiles may tune wording, temperature, examples, or
 schema compression for a specific provider/model, but the output contract must
 remain the same complete `adaos.webui.v1` manifest.
+
+User-authored text crosses Builder boundaries as Unicode, not as console text.
+Browser/API ingress, Builder workflow persistence, Skill Factory packets,
+Codex prompts, Forge evidence, and UI projections must all preserve the same
+UTF-8 code points. Windows operator tooling passes non-ASCII payloads through
+UTF-8 files and `--json-file`; PowerShell native-process pipelines are not a
+supported request transport. New text containing a replacement character or a
+long question-mark run is rejected before persistence. Historical corrupted
+evidence remains immutable; UI projections must label it transport-corrupted,
+and Builder adds a clean follow-up record instead of guessing the lost source
+characters.
 
 The Root-owned `development` model profile uses `gpt-5` as its baseline. Prompt
 IDE obtains the scoped profile list from `/v1/llm/models?scope=development`, and
@@ -536,7 +616,18 @@ revision; retry and recovery remain possible from the dev workspace.
 Automation completion applies the same rule to every materialized artifact:
 a scenario and its companion skill receive separate Forge checkpoints using
 the terminal implementation-result summary as their commit message before
-runtime preparation begins.
+runtime preparation begins. The workflow advances to `checkpoint_recorded`
+only when the primary artifact checkpoint contains a change id, package
+digest, and source revision. An explicit recovery path can reuse those durable
+receipts after an interrupted finalization; it never reruns isolated Codex or
+repeats an already confirmed Forge push.
+
+Candidate dependency resolution considers every approved checkpoint member of
+the active change set, not only the most recent primary-artifact receipt. This
+allows an earlier companion-skill checkpoint from the same set to satisfy the
+scenario dependency while still rejecting an unrelated or unapproved DEV
+dependency.
+
 Before automation starts, every missing DEV target (including a scenario's
 companion skill) is scaffolded through `RootDeveloperService.create_scenario`
 or `create_skill`. The worker consumes existing DEV sources and must not copy a

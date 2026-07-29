@@ -191,6 +191,21 @@ This identity must flow through:
 
 Without that, a candidate process can look indistinguishable from the active process and accidentally steal or overwrite control-plane state.
 
+### Restart acceptance boundary
+
+A local restart is successful only when the runtime API is ready, reports the
+full Git commit recorded by the active-slot manifest, and remains continuously
+ready for the configured stability window. A bound listener is not sufficient,
+and the detached bootstrap PID is not the runtime identity because Windows may
+hand listener ownership to a child process.
+
+The `active` and `previous` slot markers are durable pointer commits: write a
+same-directory temporary file, flush and `fsync` it, then atomically replace the
+marker. Candidate structure, required imports, and installed handler imports
+must pass before that pointer switch. Restart/start is issued once; an unknown
+or failed state-changing attempt is recorded for operator recovery and is not
+automatically repeated.
+
 ## Candidate passive mode
 
 Before cutover is explicitly committed, a prewarmed `candidate` runtime must stay passive on root-facing traffic subjects.
@@ -443,11 +458,83 @@ Rules:
 - root promotion should use the same validated candidate source, not a fresh mutable branch tip
 - current implementation promotes bootstrap-managed and operator-control files
   into the explicit validated root target recorded for that slot, writes a
-  backup snapshot plus restore metadata, refreshes the autostart wrapper so the
-  next supervisor process uses the stable root checkout/root `.venv`, records
-  an explicit supervisor attempt state while waiting for restart, and on
-  autostart-managed Linux deployments requests the service restart
-  automatically so the new supervisor/bootstrap code becomes active
+  backup snapshot plus restore metadata, and validates the exact projected
+  post-promotion package by importing the supervisor, CLI, and autostart runner
+  with the root interpreter before mutating root. Promotion paths are confined
+  to the source/root/backup trees; apply and metadata commit are one transaction,
+  and any partial copy or commit failure restores the complete snapshot before
+  returning failure
+- promotion execution belongs to the validated candidate generation, not to
+  the older supervisor that requested the transition. The supervisor confines
+  the manifest repository and interpreter to the selected A/B slot, then runs
+  `adaos.apps.core_update_root_promote` with that slot's interpreter and only
+  that slot's source on `PYTHONPATH`. The candidate performs root promotion and
+  generates the replacement wrapper; the old supervisor accepts the structured
+  receipt and must not regenerate that wrapper from old code. Because this is a
+  standalone process, the runner initializes its own candidate-owned
+  `AgentContext` before calling autostart services; it never assumes that the
+  requesting supervisor's process context crosses the subprocess boundary
+- bootstrap dependency closure is a tested contract. A package re-export added
+  to a root-controlled `__init__.py` must bring its imported module into the
+  bootstrap path set; the projected import preflight remains the final guard
+  against an omitted transitive dependency
+- root promotion refreshes the autostart wrapper before restart. Shell wrappers
+  and the managed Linux CLI shim use a same-directory temporary file, `fsync`,
+  `bash -n` validation where Bash is native, and atomic replace; a failed write
+  or syntax check preserves the previous executable. On every Linux
+  service start the wrapper verifies root imports without changing root. If
+  that check fails, it starts the supervisor from the first importable active,
+  previous, A, or B slot and records `state/root_recovery/latest.env`. This
+  preserves an independent recovery/update plane; it replaces file-specific
+  startup repair scripts and does not treat the fallback slot as proof that root
+  is healthy
+- managed wrappers normalize `PYTHONPATH` to exactly one selected AdaOS source
+  tree (root for normal supervisor boot, selected slot for recovery). Refreshes
+  do not append inherited root/slot entries, so repeated updates cannot create a
+  mixed-generation import graph
+- break-glass recovery uses `tools/recover-node-update.sh` with an exact branch
+  and 40-character commit SHA. Run `--dry-run` first; a real run records a
+  durable intent under `state/node_recovery/<sha>/intent.env` before issuing one
+  normal supervisor update request. If dispatch fails or its acknowledgement is
+  lost, inspect the supervisor status and the intent with `--observe`; never
+  repeat the state-changing command automatically. Observation also verifies
+  the active commit, root-control imports, and replacement-supervisor terminal
+  validation. A legacy bootstrap may stop at `succeeded/root_promoted` after
+  the promoted root imports successfully but before the replacement supervisor
+  generation starts. Only in that exact state, run
+  `--finalize-root-restart` once. The command requires the original pinned
+  recovery intent, persists a separate root-restart receipt before calling
+  `systemctl`, and refuses a second dispatch even if the acknowledgement is
+  lost. The recovery script itself is a bootstrap-critical root-promotion path,
+  so every validated release installs the matching operator entry point even
+  when the stable root is not a Git checkout. The A/B updater remains the only
+  component that prepares, validates, switches, backs up, or rolls back a slot
+- periodic release reconciliation is gated by the local runtime API that owns
+  the direct root mTLS client, not by realtime hub-root route readiness. A
+  degraded WS/Yjs/control route therefore cannot strand an otherwise healthy
+  node on an old core release; retries remain bounded by the supervisor interval
+- the supervisor monitor is a reconciler, not an ephemeral command owner. An
+  iteration exception is recorded and retried with bounded exponential backoff
+  against durable status/attempt guards; status exposes the monitor heartbeat,
+  last failure, and recovery count so a dead control scheduler cannot remain a
+  silent partial failure
+- a slot runtime may validate its application boot, but only the supervisor
+  control plane may commit `root_promoted` as a completed root restart. The
+  promotion receipt records the immutable supervisor instance id and PID that
+  requested activation. That same process generation is forbidden from
+  finalizing its own restart even when the active runtime is already ready.
+  Only a replacement supervisor instance may add the completion instance/PID
+  receipt after service restart and source-parity validation, so neither an old
+  surviving runtime nor the pre-restart supervisor can turn a failed or merely
+  scheduled restart into false success
+- terminal reconciliation treats `subsequent_transition_request` as the durable
+  execution authority. A carried boolean without that request is an orphaned
+  diagnostic marker: the supervisor clears it instead of displaying or replaying
+  a nonexistent state-changing command
+- managed systemd services rate-limit a completely unrecoverable restart loop
+  while retaining normal `Restart=always` behavior. On autostart-managed Linux
+  deployments the supervisor requests the service restart automatically so the
+  new supervisor/bootstrap code becomes active
 - managed Linux units use `KillMode=process`. During a supervisor-requested
   root restart, the supervisor deliberately preserves the already-ready active
   runtime and realtime sidecar. The replacement supervisor adopts both

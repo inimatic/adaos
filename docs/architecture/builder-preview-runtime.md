@@ -193,6 +193,19 @@ separate **Show in Preview** action selects one of these sources:
 | Automation | single retained Builder runtime snapshot | current completed result only | `active:` |
 | Publication | workspace artifact | current published version only | `public:` |
 
+The visual tree is a provenance projection, not three independent lists:
+
+```text
+Prototype revision
+  -> Automation result whose source_prototype_revision matches
+       -> Publication whose source Automation identity matches
+```
+
+Legacy Publication records without exact provenance may be attached only to an
+explicitly inferred historical Automation node. They must never make an old
+release appear to be the output of the current Automation merely because it is
+the only retained runtime snapshot.
+
 Prototype and Automation use DEV skill declarations; Publication uses
 workspace declarations. The Automation snapshot lives outside the DEV
 artifact tree, so publication cannot accidentally package Builder runtime
@@ -284,6 +297,18 @@ paired `dev1-dev` preview:
 This verifies that project selection is a Builder data/context change. It does
 not switch or reload the Builder host scenario. Scenario materialization is
 owned only by the explicitly related preview webspace.
+
+The 2026-07-28 local runtime acceptance used the real DEV Builder scenario
+`0.2.23` and control skill `0.1.32`. Explicit selection of the retained nodes
+materialized and persisted matching labels for all target kinds:
+
+- Prototype `042`: `proto: builder · UI 042`;
+- current Automation task: `active: builder · 0.2.20`;
+- current Publication: `public: builder · 0.2.20`.
+
+The same live projection confirmed one Lifecycle root with dependent stages,
+Automation `0.2.20` nested under its source Prototype `041`, and older
+provenance-free publications represented as non-previewable inferred lineage.
 
 The 2026-07-23 root-cause benchmark cleared resolved/materialized caches after
 building the process-owned declaration catalog, then materialized the real

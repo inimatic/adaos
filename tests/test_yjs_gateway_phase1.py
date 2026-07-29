@@ -153,6 +153,7 @@ def _clear_yws_guard_state() -> None:
     gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
     gateway_module._YWS_CLIENT_SHORT_SESSION_HISTORY.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
+    gateway_module._YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.clear()
     gateway_module._YWS_GUARD_INCIDENTS.clear()
 
 
@@ -326,6 +327,109 @@ def test_room_serve_preflights_state_vector_before_native_call(monkeypatch) -> N
     assert processed == []
     assert room._diag_native_preflight_block_total == 1
     assert room._diag_native_preflight_last_reason == "native_panic"
+
+
+def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch) -> None:
+    processed: list[bytes] = []
+
+    class _Websocket:
+        path = "/yws/desktop-dev"
+
+        def __init__(self) -> None:
+            self._messages = iter([b"\x00\x01empty-update"])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, _message: bytes) -> None:
+            return None
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        return None
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda _payload: b"\x00\x00")
+    monkeypatch.setattr(
+        gateway_module,
+        "_preflight_inbound_y_sync_payload",
+        lambda *_args, **_kwargs: (True, "ok"),
+    )
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_INITIAL_REPLAY", False)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC", True)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == []
+    assert room._diag_authoritative_initial_skip_total == 1
+    assert room._diag_authoritative_initial_skip_bytes == 2
+    assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
+
+
+def test_room_serve_answers_step1_and_applies_updates_after_authoritative_initial_sync(monkeypatch) -> None:
+    processed: list[bytes] = []
+
+    class _Websocket:
+        path = "/yws/desktop-dev"
+
+        def __init__(self) -> None:
+            self._messages = iter(
+                [
+                    b"\x00\x00client-vector",
+                    b"\x00\x01initial-client-state",
+                    b"\x00\x02subsequent-update",
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, _message: bytes) -> None:
+            return None
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        return None
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(
+        gateway_module,
+        "_preflight_inbound_y_sync_payload",
+        lambda *_args, **_kwargs: (True, "ok"),
+    )
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_INITIAL_REPLAY", False)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC", True)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == [b"\x00client-vector", b"\x02subsequent-update"]
+    assert room._diag_authoritative_initial_skip_total == 1
+    assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
 
 
 def test_repair_room_effective_branches_runs_directly_on_owner_thread(monkeypatch) -> None:
@@ -2194,7 +2298,11 @@ def test_apply_materialized_payload_does_not_wait_for_client_sync_without_client
     gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
 
 
-def test_apply_materialized_payload_client_sync_wait_is_opt_in(monkeypatch) -> None:
+def test_live_room_refresh_waits_for_client_delivery_by_default() -> None:
+    assert gateway_module._LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS > 0.0
+
+
+def test_apply_materialized_payload_client_sync_wait_can_be_disabled(monkeypatch) -> None:
     key = "gateway-client-sync-wait-disabled"
     update = b"wait-disabled-update"
     gateway_module.y_server.rooms[key] = SimpleNamespace(ystore=None, clients=[object()])
@@ -2308,7 +2416,15 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
     ydoc = Y.YDoc()
     with ydoc.begin_transaction() as txn:
         ydoc.get_map("runtime").set(txn, "old_snapshot_only", "x" * 512)
-    room = SimpleNamespace(ydoc=ydoc, clients=[])
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.messages: list[bytes] = []
+
+        async def send(self, message: bytes) -> None:
+            self.messages.append(bytes(message))
+
+    client = _FakeClient()
+    room = SimpleNamespace(ydoc=ydoc, clients=[client])
 
     class _FakeStore:
         def __init__(self) -> None:
@@ -2375,6 +2491,12 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
     assert result["full_state_snapshot_persisted"] is True
     assert store.replace_calls
     assert result["broadcast_update_bytes"] == len(update)
+    assert result["direct_client_broadcast_count"] == 1
+    assert result["direct_client_broadcast_failed"] == 0
+    assert client.messages == [
+        gateway_module.create_update_message(store.replace_calls[-1]["snapshot"])
+    ]
+    assert result["direct_client_broadcast_bytes"] == len(store.replace_calls[-1]["snapshot"])
     assert result["full_state_update_bytes"] == len(store.replace_calls[-1]["snapshot"])
     assert store.replace_calls[-1]["snapshot"] != update
     assert len(store.replace_calls[-1]["snapshot"]) > len(update)
@@ -2980,6 +3102,7 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
         "client_attempt_history_cleared": 0,
         "client_short_session_history_cleared": 0,
         "quarantine_cleared": 0,
+        "recovery_in_flight_cleared": 0,
         "incident_cleared": 0,
         "log_cleared": 0,
         "notify_cleared": 0,
@@ -4166,6 +4289,82 @@ def test_yws_guard_rejects_sustained_single_client_reconnect_loop(monkeypatch) -
     reason_again, diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
     assert reason_again == "client_reconnect_backoff"
     assert diag_again["quarantine_ttl_s"] is not None
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_admits_single_recovery_when_no_active_yws_and_route_ready(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECOVERY_IN_PROGRESS_S", 10.0)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda *, now_ts=None: {
+            "ready": True,
+            "reason": "route_signal_ready",
+            "route_status": "ready",
+        },
+    )
+
+    for _idx in range(6):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-a")
+
+    reason, diag = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+
+    assert reason == ""
+    assert diag["active_total"] == 0
+    assert diag["client_reconnect_storm"] is True
+    assert diag["dependency_recovery_allowed"] is True
+    assert diag["dependency_recovery_reason"] == "client_reconnect_storm_no_active_yws"
+    assert diag["recovery_admission_reserved"] is True
+    assert diag["recovery_in_progress_ttl_s"] == 10.0
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+
+    reason_again, diag_again = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+    assert reason_again == "client_recovery_in_progress"
+    assert diag_again["quarantine_ttl_s"] is not None
+    assert diag_again["quarantine_ttl_s"] <= 10.0
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_reports_recovery_in_progress_for_active_scoped_client(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECOVERY_IN_PROGRESS_S", 10.0)
+    client_key = gateway_module._yws_client_limit_key("dev-hot", browser_session_id="tab-a")
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
+    gateway_module._ACTIVE_YWS_CLIENTS["desktop"] = {client_key: 1}
+
+    for _idx in range(6):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-a")
+
+    reason, diag = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+
+    assert reason == "client_recovery_in_progress"
+    assert diag["active_total"] == 1
+    assert diag["active_client_total"] == 1
+    assert diag["client_reconnect_storm"] is True
+    assert diag["quarantine_ttl_s"] == 10.0
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
 
 

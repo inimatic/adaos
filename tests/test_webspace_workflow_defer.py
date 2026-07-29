@@ -563,6 +563,23 @@ def test_builder_revision_apply_does_not_use_scenario_switch_live_room_defer_fla
     assert webspace_runtime_module._defer_live_room_refresh_for_rebuild("builder_revision_apply") is True
 
 
+def test_skill_runtime_rebuild_actions_refresh_the_live_room_with_materialized_payload() -> None:
+    for action in {
+        "skill_activation_sync",
+        "skill_batch_runtime_sync",
+        "skill_install_sync",
+        "skill_runtime_sync",
+        "skill_uninstall_sync",
+        "skill_update_sync",
+        "artifact_subscription_sync",
+    }:
+        assert webspace_runtime_module._rebuild_action_refreshes_live_room(action) is True
+        assert webspace_runtime_module._rebuild_action_applies_live_payload(action) is True
+
+    assert webspace_runtime_module._rebuild_action_refreshes_live_room("member_snapshot_rebuild") is False
+    assert webspace_runtime_module._rebuild_action_applies_live_payload("restore") is False
+
+
 def test_builder_revision_apply_publishes_live_room_by_default(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
     monkeypatch.delenv("ADAOS_BUILDER_REVISION_LIVE_ROOM_UPDATES", raising=False)
@@ -572,6 +589,62 @@ def test_builder_revision_apply_publishes_live_room_by_default(monkeypatch) -> N
 
     monkeypatch.setenv("ADAOS_BUILDER_REVISION_LIVE_ROOM_UPDATES", "0")
     assert webspace_runtime_module._publish_live_room_for_rebuild("builder_revision_apply") is False
+
+
+def test_builder_revision_payload_only_preview_persists_live_snapshot(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_BUILDER_REVISION_LIVE_ROOM_UPDATES", "0")
+    monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "1")
+    refresh_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def _fake_materialize(self, webspace_id: str, **kwargs):  # noqa: ARG001
+        self._last_rebuild_timings_ms = {"total": 1.0}
+        self._last_rebuild_ydoc_timings_ms = {"payload_only": 0.0, "total": 1.0}
+        self._last_apply_summary = {"payload_only": True}
+        self._last_materialized_payload = {
+            "schema": "adaos.webspace.materialized_payload.v1",
+            "webspace_id": webspace_id,
+            "scenario_id": "builder",
+            "application": {"desktop": {"pageSchema": {"title": "public: builder"}}},
+            "catalog": {"apps": [], "widgets": []},
+            "registry": {"modals": [], "widgets": []},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {"installed": {"apps": [], "widgets": []}},
+            "webio": {},
+            "routing": {"routes": {}},
+        }
+        return SimpleNamespace(scenario_id="builder", apps=[], widgets=[])
+
+    async def _fake_live_refresh(webspace_id: str, **kwargs):
+        refresh_calls.append((webspace_id, dict(kwargs)))
+        return {"ok": True, "materialized_payload": {"ready": True}}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway",
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.rebuild_webspace_from_sources(
+            "builder-preview-no-clients",
+            action="builder_revision_apply",
+            scenario_id="builder",
+            scenario_resolution="explicit",
+            source_of_truth="builder_revision",
+            scenario_content_override={"title": "public: builder"},
+            reseed_from_scenario=False,
+        )
+    )
+
+    assert result["payload_only_rebuild"] is True
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0][1]["persist_repair"] is True
+    assert refresh_calls[0][1]["force_full_state_update"] is True
 
 
 def test_builder_revision_apply_skips_projection_refresh_by_default(monkeypatch) -> None:

@@ -35,19 +35,52 @@ If the UI shows `????`, treat it as a data-path bug until proven otherwise:
 check the source file bytes, the API payload, stream/Yjs projection, and the
 browser rendering payload separately.
 
+For `adaos dev skill run`, never pass user-authored Unicode as inline JSON on
+Windows. Store the payload as UTF-8 and use `--json-file`; reserve `--json` for
+short ASCII-only payloads:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev skill run builder_skill chat `
+  --json-file .adaos\state\builder\requests\chat.json
+```
+
+If a persisted request already contains `????`, the original code points have
+been lost. Do not guess and silently rewrite history. Mark that evidence as
+transport-corrupted/deferred and add a clean follow-up request.
+
 PowerShell 5.1 re-encodes text sent through a native-process pipeline. Setting
 only `PYTHONIOENCODING=utf-8` can therefore make Python decode an ASCII/legacy
 pipeline as UTF-8 and turn a valid request into `????`. Set `$OutputEncoding`
-before piping, or avoid the text pipeline entirely. A reliable API-test pattern
-is to pass UTF-8 text as Base64 through an environment variable:
+before piping, or avoid the text pipeline entirely. When a payload file cannot
+be used, construct test text from ASCII-only Unicode escapes before converting
+it to Base64:
 
 ```powershell
-$prompt = "Проверь текущий прототип"
+$promptJson = '"\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f"'
+$prompt = ConvertFrom-Json $promptJson
 $env:ADAOS_PROMPT_B64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes($prompt)
 )
 .venv\Scripts\python.exe -c "import base64, os; print(base64.b64decode(os.environ['ADAOS_PROMPT_B64']).decode('utf-8'))"
 ```
+
+For Codex-operated Builder changes, the stronger repository rule is:
+
+- create non-ASCII request payloads as UTF-8 files (normally with
+  `apply_patch`) and pass them with `--json-file`;
+- never generate a Cyrillic payload with a PowerShell here-string piped into
+  Python, and never embed user text in `python -c` source;
+- use Python only to *read* the UTF-8 file with an explicit encoding; use
+  ASCII `\uXXXX` escapes or Base64 only when a file cannot be used;
+- set `PYTHONIOENCODING=utf-8` for native-process output, or render diagnostic
+  JSON with `ensure_ascii=True` when the surrounding console encoding is not
+  under our control;
+- verify the persisted bytes before invoking a state-changing tool. If the
+  value already contains a replacement character or a long question-mark run,
+  reject it at ingress rather than trying to reconstruct the original text.
+
+This rule applies to request text, addenda, acceptance criteria, commit
+messages, and any other user-authored text that becomes durable provenance.
 
 ## Python Tests
 
@@ -114,6 +147,32 @@ If a tool still runs old skill behavior after push/activation, do not hide it
 with an API restart as the first answer. Check the active slot and handler reload
 path, then restart only as a diagnostic or temporary recovery step.
 
+Installed dependencies named by a scenario are not automatically project-owned
+DEV companions. Keep an installed-only dependency immutable during Automation.
+Publication may synthesize its first package identity from the installed
+Workspace copy, but the resulting `WorkspaceLock` must pin its digest and source
+as `workspace-migration`; subsequent builds resolve it from stable releases.
+
+## Publication Activation Recovery
+
+Stable Publication is a transaction across the channel pointer, WorkspaceLock,
+materialized artifacts, runtime reload, and exact health verification. Do not
+retry `publish_project` after an uncertain or failed response. Inspect the
+promotion and activation receipts first.
+
+If the activation operation is explicitly `failed`, is confirmed rolled back,
+and the promotion is paused without a Workspace receipt, recover it once:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev root recover-promotion-activation `
+  <candidate-id> <failed-operation-id>
+```
+
+The command validates the exact candidate, release, and failed operation, then
+records a new idempotency key. Resume the ordinary publication command only
+after this explicit recovery. The existing channel receipt is reused; the
+stable pointer is not moved a second time.
+
 ## Local Runtime Restart
 
 When a local API restart is needed during debugging:
@@ -122,7 +181,11 @@ When a local API restart is needed during debugging:
 $procs = Get-CimInstance Win32_Process | Where-Object {
   $_.Name -eq "python.exe" -and $_.CommandLine -match "adaos api serve"
 }
-foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }
+foreach ($p in $procs) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.ProcessId)" |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+  Stop-Process -Id $p.ProcessId -Force
+}
 Start-Sleep -Seconds 2
 Start-Process `
   -FilePath "D:\git\inimatic\adaos\.venv\Scripts\python.exe" `
@@ -133,6 +196,18 @@ Start-Process `
 
 The local browser client is commonly served on `http://127.0.0.1:8100`, and the
 hub/API on `http://127.0.0.1:8777` in current debugging sessions.
+
+After restart, verify the listener owner instead of assuming the newly launched
+parent owns the port:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8777 -State Listen |
+  Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+An older child process can survive termination of its launcher and continue to
+serve stale code. Stop only the resolved AdaOS API process tree and re-check the
+listener before starting another instance.
 
 ## Browser Debugging
 

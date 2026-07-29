@@ -194,6 +194,79 @@ async def test_voice_chat_user_ignores_other_target_node(monkeypatch) -> None:
     assert seen == []
 
 
+def test_builder_transport_integrity_guard_is_scoped_to_builder() -> None:
+    valid_russian = "\u041f\u043e\u043a\u0430\u0436\u0438 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u043e\u0435\u043a\u0442"
+
+    assert (
+        router_service_module._builder_transport_integrity_error(
+            valid_russian,
+            meta={"active_agent_id": "agent:builder_skill:builder"},
+        )
+        is None
+    )
+    assert (
+        router_service_module._builder_transport_integrity_error(
+            "????? ??????",
+            dialog_channel_id="builder",
+        )
+        == "suspicious_question_mark_run"
+    )
+    assert (
+        router_service_module._builder_transport_integrity_error(
+            "really????",
+            dialog_channel_id="general",
+        )
+        is None
+    )
+
+
+async def test_builder_transport_corruption_is_rejected_before_user_persistence(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    webspace_id = "builder-utf8-guard-ws"
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    seen_nlu: list[Event] = []
+    seen_chat: list[Event] = []
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.chat.append", lambda ev: seen_chat.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "????? ?????? ???????",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert len(seen_chat) == 1
+    rejection = seen_chat[0].payload
+    assert rejection["from"] == "hub"
+    assert rejection["_meta"]["transport_integrity"] == "rejected"
+    assert rejection["_meta"]["transport_integrity_reason"] == "suspicious_question_mark_run"
+    assert rejection["_meta"]["skip_voice_chat"] is True
+    assert "????" not in json.dumps(rejection, ensure_ascii=False)
+
+
 async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[tuple[str, dict[str, object]]] = []
@@ -2077,10 +2150,233 @@ async def test_voice_chat_user_active_dialog_tool_failure_shows_unavailable_with
     assert seen_nlu == []
     assert calls and calls[0][0:2] == ("conversation_companions", "talk")
     messages = doc.get_map("data")["voice_chat"]["messages"]
-    assert any("runtime tool is not available" in str(item.get("text") or "") for item in messages)
+    assert any("conversation_companions.talk is not available in runtime yet" in str(item.get("text") or "") for item in messages)
     state = dialog_runtime.get_active_channel(webspace_id)
     assert state is not None
     assert state.channel_id == "conversational"
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_user_active_companion_uses_dev_fallback_when_runtime_tool_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from adaos.services import dialog_runtime
+
+    doc = _Doc()
+    bus = LocalEventBus()
+    calls: list[tuple[str, str, str, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "active-companion-dev-fallback-ws"
+    dev_skills_dir = tmp_path / "dev-skills"
+    (dev_skills_dir / "conversation_companions").mkdir(parents=True)
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(
+                skills_workspace_dir=lambda: Path("."),
+                dev_skills_dir=lambda: dev_skills_dir,
+            ),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    class _SkillManager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_tool(self, skill, tool, payload, **_opts):
+            calls.append(("runtime", skill, tool, dict(payload)))
+            raise KeyError("tool 'talk' not found (available: <none>)")
+
+        def run_dev_tool(self, skill, tool, payload, **_opts):
+            calls.append(("dev", skill, tool, dict(payload)))
+            return {
+                "ok": True,
+                "message": "Arseni: dev fallback reply",
+                "dialog": {
+                    "dialog_channel_id": "conversational",
+                    "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                    "owner": "skill:conversation_companions",
+                    "default_tool": "conversation_companions.talk",
+                    "active_agent_id": "agent:conversation_companions:arseni",
+                    "active_agent_label": "Arseni",
+                },
+            }
+
+    monkeypatch.setattr(router_service_module, "SkillManager", _SkillManager)
+    dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        route_id="voice_chat",
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "How far is Mercury from the Sun?",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=5.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert [item[0:3] for item in calls] == [
+        ("runtime", "conversation_companions", "talk"),
+        ("dev", "conversation_companions", "talk"),
+    ]
+    messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert messages[-1]["text"] == "Arseni: dev fallback reply"
+    assert not any("conversation_companions.talk is not available" in str(item.get("text") or "") for item in messages)
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "conversational"
+    dialog_runtime.reset_all()
+
+
+async def test_voice_chat_requested_conversational_channel_uses_fallback_when_manifest_missing(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    doc = _Doc()
+    bus = LocalEventBus()
+    calls: list[tuple[str, str, dict, dict]] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "requested-conversational-node-ws"
+    target_node_id = "node-30"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(router_service_module, "_conversation_manifest_channel_records", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id=target_node_id,
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "Arseni: Mercury averages 57.9 million km from the Sun.",
+            "dialog": {
+                "dialog_channel_id": "conversational",
+                "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
+                "owner": "skill:conversation_companions",
+                "default_tool": "conversation_companions.talk",
+                "active_agent_id": "agent:conversation_companions:arseni",
+                "active_agent_label": "Arseni",
+                "active_agent": {
+                    "id": "agent:conversation_companions:arseni",
+                    "label": "Arseni",
+                    "owner": "skill:conversation_companions",
+                    "kind": "skill_agent",
+                    "gender": "male",
+                    "voice": "ru-male",
+                    "icon": "male-outline",
+                    "voice_profile": {"gender": "male", "voice": "ru-male", "lang": "ru-RU"},
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
+    )
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "How far is Mercury from the Sun?",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "voice_chat_scope": "node",
+                    "target_node_id": target_node_id,
+                    "dialog_channel_id": "conversational",
+                    "active_agent_label": "Arseni",
+                },
+            },
+        )
+    )
+
+    assert await bus.wait_for_idle(timeout=5.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls and calls[0][0:2] == ("conversation_companions", "talk")
+    assert calls[0][2]["webspace_id"] == webspace_id
+    assert calls[0][2]["target_node_id"] == target_node_id
+    assert calls[0][2]["_meta"]["dialog_channel_id"] == "conversational"
+    assert calls[0][2]["_meta"]["target_node_id"] == target_node_id
+    assert calls[0][2]["_meta"]["active_agent_id"] == "agent:conversation_companions:arseni"
+    assert calls[0][2]["_meta"]["active_agent_label"] == "Arseni"
+    assert calls[0][2]["conversation_context"]["conversation_id"] == (
+        f"conv.skill.conversation_companions.default.{webspace_id}"
+    )
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None
+    assert state.channel_id == "conversational"
+    assert state.default_skill == "conversation_companions"
+    assert state.default_tool == "talk"
+    data = doc.get_map("data")
+    messages = data["nodes"][target_node_id]["voice_chat"]["messages"]
+    assert messages[0]["dialog_channel_id"] == "conversational"
+    assert messages[-1]["dialog_channel_id"] == "conversational"
+    assert not any("runtime tool is not available" in str(item.get("text") or "") for item in messages)
     dialog_runtime.reset_all()
 
 

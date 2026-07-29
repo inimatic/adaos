@@ -46,13 +46,13 @@ from adaos.services.core_slots import (
     read_slot_manifest,
     remove_inactive_slot,
     rollback_to_previous_slot,
+    slot_dir,
     slot_status as core_slot_status,
     validate_slot_structure,
 )
 from adaos.services.core_update import clear_plan as clear_core_update_plan
 from adaos.services.core_update import finalize_runtime_boot_status
 from adaos.services.core_update import prepare_pending_update
-from adaos.services.core_update import promote_root_from_slot
 from adaos.services.core_update import read_last_result as read_core_update_last_result
 from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
@@ -110,6 +110,8 @@ from adaos.services.supervisor_memory import (
 _SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
 _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 _LOG = logging.getLogger("adaos.supervisor")
+_SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
+_SUPERVISOR_INSTANCE_STARTED_AT = time.time()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -569,7 +571,7 @@ def _compact_watchdog_verification(value: Any) -> dict[str, Any]:
         return {}
     result = {
         key: _compact_json_value(value.get(key), max_depth=2, max_text=256)
-        for key in ("ok", "state", "attempts", "timeout_sec", "error")
+        for key in ("ok", "state", "source", "attempts", "timeout_sec", "error")
         if value.get(key) is not None
     }
     channel = _compact_watchdog_channel_state(value.get("channel"))
@@ -643,6 +645,80 @@ def _local_update_payload() -> dict[str, Any]:
         "active_manifest": active_slot_manifest(),
         "_local_fallback": True,
     }
+
+
+def _promote_root_with_validated_candidate(
+    *,
+    slot: str,
+    manifest: dict[str, Any],
+    runtime_host: str,
+    runtime_port: int,
+) -> dict[str, Any]:
+    slot_name = str(slot or "").strip().upper()
+    if slot_name not in {"A", "B"}:
+        raise RuntimeError("validated candidate slot is unavailable for root promotion")
+    expected_slot_dir = slot_dir(slot_name).resolve()
+    repo_dir = Path(os.path.abspath(os.path.expanduser(str(manifest.get("repo_dir") or ""))))
+    argv = manifest.get("argv") if isinstance(manifest.get("argv"), list) else []
+    candidate_python = Path(os.path.abspath(os.path.expanduser(str(argv[0] if argv else ""))))
+    expected_repo_dir = expected_slot_dir / "repo"
+    expected_venv_dir = expected_slot_dir / "venv"
+    if repo_dir != expected_repo_dir or expected_venv_dir not in candidate_python.parents:
+        raise RuntimeError("root promotion candidate paths do not belong to the validated slot")
+    if not (repo_dir / "src" / "adaos" / "apps" / "core_update_root_promote.py").is_file():
+        raise RuntimeError("validated candidate does not provide the root promotion runner")
+    if not candidate_python.is_file():
+        raise RuntimeError(f"validated candidate Python is unavailable: {candidate_python}")
+    root_dir_raw = str(manifest.get("root_repo_root") or "").strip()
+    root_dir = Path(root_dir_raw).expanduser().resolve() if root_dir_raw else current_repo_root()
+    if root_dir is None:
+        raise RuntimeError("stable root checkout is unavailable for candidate-owned promotion")
+    env = dict(os.environ)
+    env["ADAOS_BASE_DIR"] = str(current_base_dir())
+    env["ADAOS_ROOT_REPO_ROOT"] = str(root_dir)
+    env["PYTHONPATH"] = str((repo_dir / "src").resolve())
+    completed = subprocess.run(
+        [
+            str(candidate_python),
+            "-m",
+            "adaos.apps.core_update_root_promote",
+            "--slot",
+            slot_name,
+            "--base-dir",
+            str(current_base_dir()),
+            "--root-repo-root",
+            str(root_dir),
+            "--runtime-host",
+            str(runtime_host),
+            "--runtime-port",
+            str(int(runtime_port)),
+        ],
+        cwd=str(repo_dir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180.0,
+    )
+    if completed.returncode != 0:
+        detail = str(completed.stderr or completed.stdout or "candidate promotion failed").strip()[-4000:]
+        raise RuntimeError(f"candidate-owned root promotion failed: {detail}")
+    payload: dict[str, Any] | None = None
+    for line in reversed(str(completed.stdout or "").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if not isinstance(payload, dict) or not bool(payload.get("ok")):
+        raise RuntimeError("candidate-owned root promotion returned no successful result")
+    if str(payload.get("slot") or "").strip().upper() != slot_name:
+        raise RuntimeError("candidate-owned root promotion returned the wrong slot")
+    payload["execution_owner"] = "validated_candidate"
+    payload["candidate_python"] = str(candidate_python)
+    payload["candidate_repo_dir"] = str(repo_dir)
+    return payload
 
 
 def _update_attempt_timeout_sec() -> float:
@@ -1060,6 +1136,16 @@ def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] 
         "restart_required": bool(source.get("restart_required")),
         "restart_mode": str(source.get("restart_mode") or "").strip() or None,
         "restart_requested_at": _epoch(source.get("restart_requested_at")) or None,
+        "restart_requested_by_instance_id": str(source.get("restart_requested_by_instance_id") or "").strip()
+        or None,
+        "restart_requested_by_pid": int(_epoch(source.get("restart_requested_by_pid"))) or None,
+        "restart_requested_by_started_at": _epoch(source.get("restart_requested_by_started_at")) or None,
+        "root_promotion_supervisor_instance_id": str(
+            source.get("root_promotion_supervisor_instance_id") or ""
+        ).strip()
+        or None,
+        "root_promotion_supervisor_pid": int(_epoch(source.get("root_promotion_supervisor_pid"))) or None,
+        "root_promotion_supervisor_started_at": _epoch(source.get("root_promotion_supervisor_started_at")) or None,
         "min_update_period_sec": _epoch(source.get("min_update_period_sec")) or None,
         "subsequent_transition": bool(source.get("subsequent_transition")),
         "subsequent_transition_requested_at": _epoch(source.get("subsequent_transition_requested_at")) or None,
@@ -1217,6 +1303,23 @@ def _is_root_restart_pending_status(payload: dict[str, Any] | None) -> bool:
     return state == "succeeded" and phase == "root_promoted"
 
 
+def _root_promotion_owner_instance(payload: dict[str, Any] | None) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    return str(
+        data.get("root_promotion_supervisor_instance_id")
+        or data.get("restart_requested_by_instance_id")
+        or ""
+    ).strip()
+
+
+def _root_restart_crossed_supervisor_generation(payload: dict[str, Any] | None) -> bool:
+    owner_instance = _root_promotion_owner_instance(payload)
+    # Legacy receipts did not carry a process generation. Preserve their
+    # existing recovery path, while every newly written receipt is gated by
+    # the immutable per-process instance id below.
+    return not owner_instance or owner_instance != _SUPERVISOR_INSTANCE_ID
+
+
 def _is_transition_in_progress(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> bool:
     status_map = status if isinstance(status, dict) else {}
     attempt_map = attempt if isinstance(attempt, dict) else {}
@@ -1242,6 +1345,8 @@ def _runtime_ready_for_boot_status_finalize(status: dict[str, Any] | None, runti
     if state == "succeeded" and phase == "validate":
         return False
     if state == "validated" and phase == "root_promotion_pending":
+        return False
+    if state == "succeeded" and phase == "root_promoted" and not _root_restart_crossed_supervisor_generation(status):
         return False
     finalizable = state in {"restarting", "applying", "validated"} or (
         state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
@@ -1305,6 +1410,37 @@ def _subsequent_transition_request(attempt: dict[str, Any] | None) -> dict[str, 
     data = attempt if isinstance(attempt, dict) else {}
     queued = data.get("subsequent_transition_request")
     return dict(queued) if isinstance(queued, dict) and queued else None
+
+
+def _clear_orphaned_subsequent_transition_status(
+    status: dict[str, Any],
+    attempt: dict[str, Any] | None,
+    *,
+    updated_at: float | None = None,
+) -> dict[str, Any]:
+    status_payload = dict(status)
+    if _subsequent_transition_request(attempt) is not None:
+        return status_payload
+    had_stale_marker = bool(status_payload.get("subsequent_transition")) or any(
+        key in status_payload
+        for key in (
+            "subsequent_transition_action",
+            "subsequent_transition_target_rev",
+            "subsequent_transition_target_version",
+        )
+    )
+    if not had_stale_marker:
+        return status_payload
+    status_payload["subsequent_transition"] = False
+    status_payload["subsequent_transition_requested_at"] = None
+    for key in (
+        "subsequent_transition_action",
+        "subsequent_transition_target_rev",
+        "subsequent_transition_target_version",
+    ):
+        status_payload.pop(key, None)
+    status_payload["updated_at"] = time.time() if updated_at is None else float(updated_at)
+    return write_core_update_status(status_payload)
 
 
 def _target_version_matches(left: Any, right: Any) -> bool:
@@ -1554,7 +1690,18 @@ def _complete_update_attempt(*, state: str, status: dict[str, Any] | None, reaso
     if reason:
         payload["completion_reason"] = str(reason)
     if isinstance(status, dict):
-        payload["last_status"] = dict(status)
+        status_payload = dict(status)
+        # Rollout status intentionally carries a queued transition through
+        # prepare, promotion, and restart.  Once the attempt is terminal there
+        # must also be an actual durable queued request, otherwise preserving
+        # an old boolean makes read surfaces claim that another mutation is
+        # pending even though the reconciler has nothing it can execute.
+        status_payload = _clear_orphaned_subsequent_transition_status(
+            status_payload,
+            payload,
+            updated_at=now,
+        )
+        payload["last_status"] = status_payload
     return _write_update_attempt(payload)
 
 
@@ -1792,11 +1939,37 @@ def _fail_root_restart_attempt(
     )
 
 
+def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
+    current = read_core_update_status()
+    if _is_root_restart_pending_status(current) and not _root_restart_crossed_supervisor_generation(current):
+        return None
+    finalized = finalize_runtime_boot_status(supervisor_authorized=True)
+    if not isinstance(finalized, dict):
+        return None
+    if float(finalized.get("root_restart_completed_at") or 0.0) > 0.0:
+        finalized = dict(finalized)
+        for key in (
+            "root_promotion_supervisor_instance_id",
+            "root_promotion_supervisor_pid",
+            "root_promotion_supervisor_started_at",
+            "restart_requested_by_instance_id",
+            "restart_requested_by_pid",
+            "restart_requested_by_started_at",
+        ):
+            if key not in finalized and current.get(key) is not None:
+                finalized[key] = current[key]
+        finalized["root_restart_completed_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
+        finalized["root_restart_completed_by_pid"] = os.getpid()
+        finalized["root_restart_completed_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
+        finalized = write_core_update_status(finalized)
+    return finalized
+
+
 def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     if _runtime_ready_for_boot_status_finalize(status, runtime):
-        finalized_status = finalize_runtime_boot_status()
+        finalized_status = _finalize_runtime_boot_status_from_supervisor()
         if isinstance(finalized_status, dict):
             status = finalized_status
             payload["status"] = finalized_status
@@ -1810,6 +1983,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(attempt, dict):
         return payload
 
+    cleaned_status = _clear_orphaned_subsequent_transition_status(status, attempt)
+    if cleaned_status != status:
+        status = cleaned_status
+        payload["status"] = cleaned_status
+        payload["_served_by"] = "supervisor_orphaned_subsequent_recovery"
     payload["attempt"] = dict(attempt)
     recovered_status = _recover_active_attempt_target_already_active(
         status=status,
@@ -1857,7 +2035,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             # If a new runtime is already serving status, let it finalize a stale
             # root-promoted marker before declaring the update failed.
-            finalized_status = finalize_runtime_boot_status()
+            finalized_status = (
+                _finalize_runtime_boot_status_from_supervisor()
+                if _runtime_ready_for_boot_status_finalize(status, runtime)
+                else None
+            )
             if _is_root_restart_completed_status(finalized_status):
                 payload["status"] = finalized_status
                 payload["attempt"] = _complete_update_attempt(
@@ -2686,6 +2868,12 @@ class SupervisorManager:
         self._stopping = False
         self._lock = asyncio.Lock()
         self._monitor_task: asyncio.Task[Any] | None = None
+        self._monitor_loop_started_at: float | None = None
+        self._monitor_last_iteration_at: float | None = None
+        self._monitor_last_failure_at: float | None = None
+        self._monitor_last_failure: str | None = None
+        self._monitor_failure_total = 0
+        self._monitor_recovery_total = 0
         self._retired_runtime_tasks: set[asyncio.Task[Any]] = set()
         self._retired_runtime_procs: dict[int, Any] = {}
         self._restart_count = 0
@@ -4110,7 +4298,12 @@ class SupervisorManager:
         )
         self._persist_runtime_state()
 
-    def _schedule_service_restart(self, *, reason: str) -> dict[str, Any]:
+    def _schedule_service_restart(
+        self,
+        *,
+        reason: str,
+        candidate_wrapper_refresh: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         delay_sec = _root_restart_delay_sec()
         if not _autostart_self_restart_supported():
             return {
@@ -4120,7 +4313,11 @@ class SupervisorManager:
                 "delay_sec": None,
                 "reason": "autostart self-restart is unavailable for the current supervisor process",
             }
-        wrapper_refresh = self._refresh_autostart_wrapper(reason=reason)
+        wrapper_refresh = (
+            dict(candidate_wrapper_refresh)
+            if isinstance(candidate_wrapper_refresh, dict) and bool(candidate_wrapper_refresh.get("ok"))
+            else self._refresh_autostart_wrapper(reason=reason)
+        )
         if self._service_restart_pending:
             return {
                 "ok": True,
@@ -4363,13 +4560,25 @@ class SupervisorManager:
                 "_served_by": "supervisor",
             }
 
-        restart = self._schedule_service_restart(reason=reason)
+        root_promotion = status.get("root_promotion") if isinstance(status.get("root_promotion"), dict) else {}
+        candidate_wrapper_refresh = (
+            root_promotion.get("wrapper_refresh")
+            if isinstance(root_promotion.get("wrapper_refresh"), dict)
+            else None
+        )
+        restart = self._schedule_service_restart(
+            reason=reason,
+            candidate_wrapper_refresh=candidate_wrapper_refresh,
+        )
         now = time.time()
         status_payload = dict(status)
         status_payload["state"] = "succeeded"
         status_payload["phase"] = "root_promoted"
         status_payload["root_promotion_required"] = False
         status_payload["restart_mode"] = str(restart.get("mode") or "manual")
+        status_payload["restart_requested_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
+        status_payload["restart_requested_by_pid"] = os.getpid()
+        status_payload["restart_requested_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
         status_payload["updated_at"] = now
         if restart.get("requested"):
             status_payload["message"] = "root promotion completed; restarting autostart service to activate updated supervisor"
@@ -4385,6 +4594,9 @@ class SupervisorManager:
         attempt_payload["awaiting_restart"] = True
         attempt_payload["restart_required"] = True
         attempt_payload["restart_mode"] = str(restart.get("mode") or "manual")
+        attempt_payload["restart_requested_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
+        attempt_payload["restart_requested_by_pid"] = os.getpid()
+        attempt_payload["restart_requested_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
         attempt_payload["requested_at"] = _epoch(attempt_payload.get("requested_at")) or now
         attempt_payload["transitioned_at"] = _epoch(attempt_payload.get("transitioned_at")) or now
         attempt_payload["updated_at"] = now
@@ -5507,12 +5719,15 @@ class SupervisorManager:
             else {}
         )
         root_probe_state = str(root_probe.get("state") or "").strip().lower()
-        if not channel_ready and root_probe_state != "ready":
-            return None
+        verification_state = (
+            "ready"
+            if channel_ready
+            else ("root_perspective_ready" if root_probe_state == "ready" else "local_runtime_api_ready")
+        )
         verification = {
             "ok": True,
-            "state": "ready" if channel_ready else "root_perspective_ready",
-            "source": "supervisor.periodic_core_update_reconcile",
+            "state": verification_state,
+            "source": "supervisor.periodic_core_update_reconcile.direct_root_mtls",
             "channel": dict(channel_state),
             "root_perspective_probe": dict(root_probe),
         }
@@ -6498,6 +6713,15 @@ class SupervisorManager:
             "last_exit_at": self._last_exit_at,
             "last_exit_code": self._last_exit_code,
             "last_error": self._last_error,
+            "monitor": {
+                "running": bool(self._monitor_task is not None and not self._monitor_task.done()),
+                "loop_started_at": self._monitor_loop_started_at,
+                "last_iteration_at": self._monitor_last_iteration_at,
+                "last_failure_at": self._monitor_last_failure_at,
+                "last_failure": self._monitor_last_failure,
+                "consecutive_failure_total": int(self._monitor_failure_total),
+                "recovery_total": int(self._monitor_recovery_total),
+            },
             "runtime_self_heal": self._runtime_self_heal_status_payload(),
             "updated_at": time.time(),
         }
@@ -8190,9 +8414,10 @@ class SupervisorManager:
             self._persist_runtime_state()
         return payload
 
-    async def monitor_forever(self) -> None:
+    async def _monitor_iteration_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            self._monitor_last_iteration_at = time.time()
             reconnect_hub_root_after_sidecar_restart = False
             sidecar_proc = self._sidecar_proc
             if sidecar_proc is not None and sidecar_proc.poll() is not None:
@@ -8457,6 +8682,44 @@ class SupervisorManager:
                         reason="supervisor.monitor.respawn_after_exit",
                         adopt_existing=True,
                     )
+
+    async def monitor_forever(self) -> None:
+        """Resume monitoring after a bounded iteration failure.
+
+        Mutating transitions retain their durable status and attempt guards, so
+        restarting this scheduler resumes reconciliation instead of blindly
+        replaying a completed command.
+        """
+        while not self._stopping:
+            started_at = time.time()
+            self._monitor_loop_started_at = started_at
+            try:
+                await self._monitor_iteration_loop()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                lived_for = max(0.0, time.time() - started_at)
+                if lived_for >= 60.0:
+                    self._monitor_failure_total = 0
+                self._monitor_failure_total += 1
+                self._monitor_recovery_total += 1
+                self._monitor_last_failure_at = time.time()
+                self._monitor_last_failure = f"{type(exc).__name__}: {exc}"
+                self._last_error = f"supervisor monitor recovered after {self._monitor_last_failure}"
+                self._persist_runtime_state()
+                delay_sec = min(30.0, float(2 ** min(4, max(0, self._monitor_failure_total - 1))))
+                _LOG.exception(
+                    "supervisor monitor iteration failed; resuming from durable state in %.1fs",
+                    delay_sec,
+                )
+                await asyncio.sleep(delay_sec)
+            else:
+                if not self._stopping:
+                    self._monitor_failure_total += 1
+                    self._monitor_recovery_total += 1
+                    self._monitor_last_failure_at = time.time()
+                    self._monitor_last_failure = "RuntimeError: monitor loop returned unexpectedly"
+                    await asyncio.sleep(1.0)
 
     async def start(self) -> None:
         try:
@@ -9490,7 +9753,8 @@ class SupervisorManager:
                     candidate_memory_guard = candidate_refresh.get("candidate_memory_guard")
 
             if (
-                _warm_switch_strict_cutover_enabled()
+                _warm_switch_enabled()
+                and _warm_switch_strict_cutover_enabled()
                 and not _warm_switch_cold_fallback_enabled()
                 and candidate_prewarm_state != "ready"
             ):
@@ -10262,7 +10526,13 @@ class SupervisorManager:
             )
             _complete_update_attempt(state="completed", status=status, reason=reason)
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
-        promotion = promote_root_from_slot(slot=str((manifest or {}).get("slot") or active_slot() or ""))
+        promotion_slot = str((manifest or {}).get("slot") or active_slot() or "")
+        promotion = _promote_root_with_validated_candidate(
+            slot=promotion_slot,
+            manifest=manifest or {},
+            runtime_host=self.runtime_host,
+            runtime_port=self.runtime_port,
+        )
         status = write_core_update_status(
             {
                 "state": "succeeded",
@@ -10274,6 +10544,9 @@ class SupervisorManager:
                 "bootstrap_update": bootstrap_update,
                 "root_promotion": promotion,
                 "promotion_reason": reason,
+                "root_promotion_supervisor_instance_id": _SUPERVISOR_INSTANCE_ID,
+                "root_promotion_supervisor_pid": os.getpid(),
+                "root_promotion_supervisor_started_at": _SUPERVISOR_INSTANCE_STARTED_AT,
                 "finished_at": time.time(),
             }
         )
@@ -10287,6 +10560,9 @@ class SupervisorManager:
                 "accepted": True,
                 "awaiting_restart": True,
                 "restart_required": True,
+                "root_promotion_supervisor_instance_id": _SUPERVISOR_INSTANCE_ID,
+                "root_promotion_supervisor_pid": os.getpid(),
+                "root_promotion_supervisor_started_at": _SUPERVISOR_INSTANCE_STARTED_AT,
                 "requested_at": _epoch(previous_attempt.get("requested_at")) or now,
                 "transitioned_at": now,
                 "updated_at": now,

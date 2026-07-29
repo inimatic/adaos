@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from adaos.sdk.builder import artifacts, automation, preview
+from adaos.services.builder.automation import BuilderAutomationService
 
 
 class _AutomationService:
@@ -21,6 +22,37 @@ class _AutomationService:
         self.calls.append(("projection", kwargs))
         return {"ok": True, "automation": {"status": "running", "iteration": 2}}
 
+    def recover_validated_result(self, **kwargs):
+        self.calls.append(("recover_validated_result", kwargs))
+        return {"ok": True, "recovered": True}
+
+
+def test_automation_service_runs_inline_for_one_shot_dev_tool(monkeypatch) -> None:
+    service = _AutomationService()
+    calls: list[dict] = []
+
+    def from_context(*, background: bool = True):
+        calls.append({"background": background})
+        return service
+
+    monkeypatch.setattr(BuilderAutomationService, "from_context", from_context)
+    monkeypatch.setenv("ADAOS_DEV_TOOL_EXECUTION_MODE", "oneshot")
+
+    assert automation._service() is service
+    assert calls == [{"background": False}]
+
+
+def test_automation_facade_recovers_validated_result_without_resubmission(monkeypatch) -> None:
+    service = _AutomationService()
+    monkeypatch.setattr(automation, "_service", lambda: service)
+
+    recovered = automation.recover_validated_result(object_type="scenario", object_id="recipes")
+
+    assert recovered == {"ok": True, "recovered": True}
+    assert service.calls == [
+        ("recover_validated_result", {"object_type": "scenario", "object_id": "recipes"})
+    ]
+
 
 def test_automation_facade_returns_projection_without_exposing_service(monkeypatch) -> None:
     service = _AutomationService()
@@ -32,14 +64,25 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
         implementation_brief="Implement the approved brief",
         webspace_id="desktop-dev",
     )
-    submitted = automation.submit("Add tests", object_type="scenario", object_id="builder")
-    state = automation.get_state(object_type="scenario", object_id="builder")
+    submitted = automation.submit(
+        "Add tests",
+        object_type="scenario",
+        object_id="builder",
+        conversation_id="conv.builder",
+    )
+    state = automation.get_state(
+        object_type="scenario",
+        object_id="builder",
+        conversation_id="conv.builder",
+    )
 
     assert started["automation"]["status"] == "queued"
     assert submitted["automation"]["iteration"] == 2
     assert state["automation"]["status"] == "running"
     assert state["session_present"] is True
     assert [name for name, _kwargs in service.calls] == ["start", "submit", "projection", "projection"]
+    assert service.calls[1][1]["conversation_id"] == "conv.builder"
+    assert service.calls[-1][1]["conversation_id"] == "conv.builder"
 
 
 def test_automation_facade_treats_missing_session_as_idle_state(monkeypatch) -> None:
@@ -201,7 +244,12 @@ def test_preview_facade_never_blocks_event_driven_selection_on_rebuild(monkeypat
 def test_preview_target_materializes_exact_prototype_without_changing_workflow(monkeypatch) -> None:
     service = _PreviewService()
     materializations: list[dict] = []
+    events: list[tuple[str, dict]] = []
     monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.sdk.data.events.publish",
+        lambda topic, payload, **_kwargs: events.append((topic, payload)),
+    )
     monkeypatch.setattr(
         "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
         lambda: SimpleNamespace(
@@ -238,6 +286,8 @@ def test_preview_target_materializes_exact_prototype_without_changing_workflow(m
     assert materializations[0]["preview_stage"] == "prototype"
     assert materializations[0]["revision"] == "002"
     assert service.preview_targets[0]["target"]["follow_active"] is False
+    assert [topic for topic, _payload in events] == ["builder.context.selected"]
+    assert events[0][1]["object_id"] == "recipes"
 
 
 def test_preview_target_materializes_current_content_when_a_scenario_has_no_ui_revision(monkeypatch) -> None:
@@ -320,6 +370,88 @@ def test_preview_follow_active_resolves_current_automation(monkeypatch) -> None:
     assert result["target"]["revision"] == "task.current"
     assert result["target"]["label"] == "active: recipes · 0.2.0"
     assert materializations[0]["preview_stage"] == "automation"
+
+
+def test_preview_target_materializes_only_current_automation_with_active_prefix(monkeypatch) -> None:
+    service = _PreviewService()
+    materializations: list[dict] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
+        lambda: SimpleNamespace(
+            describe=lambda kind, project_id: {
+                "active_phase": "automation",
+                "prototype": {"head_revision": "003"},
+                "automation": {
+                    "head_task_id": "task.current",
+                    "snapshot_task_id": "task.snapshot",
+                    "result_version": "0.2.0",
+                },
+                "publication": {},
+                "capabilities": {
+                    "can_preview_prototype": True,
+                    "can_preview_automation": True,
+                    "can_preview_publication": False,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
+    )
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="automation",
+        revision="task.snapshot",
+        source_webspace_id="desktop",
+    )
+
+    assert result["target"]["label"] == "active: recipes · 0.2.0"
+    assert result["target"]["revision"] == "task.snapshot"
+    assert materializations[0]["preview_stage"] == "automation"
+
+
+def test_preview_target_materializes_only_current_publication_with_public_prefix(monkeypatch) -> None:
+    service = _PreviewService()
+    materializations: list[dict] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.services.builder.workflow.BuilderWorkflowService.from_context",
+        lambda: SimpleNamespace(
+            describe=lambda kind, project_id: {
+                "active_phase": "automation",
+                "prototype": {"head_revision": "003"},
+                "automation": {"result_version": "0.2.0"},
+                "publication": {"current_version": "0.2.1"},
+                "capabilities": {
+                    "can_preview_prototype": True,
+                    "can_preview_automation": True,
+                    "can_preview_publication": True,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
+    )
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="publication",
+        revision="0.2.1",
+        source_webspace_id="desktop",
+    )
+
+    assert result["target"]["label"] == "public: recipes · 0.2.1"
+    assert result["target"]["revision"] == "0.2.1"
+    assert materializations[0]["preview_stage"] == "publication"
 
 
 def test_artifact_checkpoint_forwards_public_metadata(monkeypatch) -> None:

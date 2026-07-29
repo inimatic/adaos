@@ -25,6 +25,22 @@ def _load_service_skill_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize(
+    "schema_name",
+    [
+        "builder.issue.v1.schema.json",
+        "builder.change.v1.schema.json",
+        "builder.run.v1.schema.json",
+        "builder.context_packet.v1.schema.json",
+        "builder.interaction_frame.v1.schema.json",
+        "builder.semantic_ui_change.v1.schema.json",
+        "builder.review_anchor.v1.schema.json",
+    ],
+)
+def test_conversational_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
+    Draft202012Validator.check_schema(_load_schema(schema_name))
+
+
 def test_skill_schema_accepts_runtime_activation_policy() -> None:
     schema = _load_schema("skill.schema.json")
     payload = {

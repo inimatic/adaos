@@ -323,6 +323,24 @@ def root_login(
     _echo_login_result(result)
 
 
+@root_app.command("recover-promotion-activation")
+def root_recover_promotion_activation(
+    candidate_id: str = typer.Argument(..., help="Accepted candidate identity."),
+    operation_id: str = typer.Argument(..., help="Exact failed activation operation identity."),
+) -> None:
+    """Reconcile one rolled-back activation before explicitly resuming promotion."""
+
+    try:
+        result = _service().recover_artifact_candidate_activation(
+            candidate_id,
+            operation_id,
+        )
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 @root_app.command("logs")
 @_run_safe
 def root_logs(
@@ -1527,29 +1545,66 @@ def dev_skill_setup(
         typer.echo(str(result))
 
 
+def _echo_utf8_json(value: Any) -> None:
+    """Write machine JSON independently of the Windows console code page."""
+
+    rendered = json.dumps(value, ensure_ascii=False)
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is None:
+        typer.echo(rendered)
+        return
+    binary.write(rendered.encode("utf-8") + b"\n")
+    binary.flush()
+
+
 @_run_safe
 @skill_app.command("run")
 def dev_skill_run(
     name: str = typer.Argument(..., help="skill name in DEV space"),
     tool: Optional[str] = typer.Argument(None, help="tool name to run (defaults to default_tool)"),
-    payload: str = typer.Option("{}", "--json", help="JSON payload for the tool call"),
+    payload: Optional[str] = typer.Option(None, "--json", help="Inline JSON payload for the tool call"),
     timeout: Optional[float] = typer.Option(None, "--timeout", help="tool execution timeout"),
     slot: Optional[str] = typer.Option(None, "--slot", help="run against specific slot (A/B)"),
+    payload_file: Optional[Path] = typer.Option(
+        None,
+        "--json-file",
+        help="Path to a UTF-8 JSON payload; safer than inline JSON across shell boundaries",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
 ) -> None:
+    if payload is not None and payload_file is not None:
+        typer.secho("invalid payload: use either --json or --json-file, not both", fg=typer.colors.RED)
+        raise typer.Exit(1)
     try:
-        payload_obj = json.loads(payload or "{}")
+        payload_text = payload_file.read_text(encoding="utf-8-sig") if payload_file else payload or "{}"
+    except (OSError, UnicodeError) as exc:
+        typer.secho(f"invalid payload file: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    try:
+        payload_obj = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         typer.secho(f"invalid payload: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
     mgr = _mgr()
+    previous_execution_mode = os.environ.get("ADAOS_DEV_TOOL_EXECUTION_MODE")
+    os.environ["ADAOS_DEV_TOOL_EXECUTION_MODE"] = "oneshot"
     try:
-        result = mgr.run_dev_tool(name, tool, payload_obj, timeout=timeout, slot=slot)
+        try:
+            result = mgr.run_dev_tool(name, tool, payload_obj, timeout=timeout, slot=slot)
+        finally:
+            if previous_execution_mode is None:
+                os.environ.pop("ADAOS_DEV_TOOL_EXECUTION_MODE", None)
+            else:
+                os.environ["ADAOS_DEV_TOOL_EXECUTION_MODE"] = previous_execution_mode
     except Exception as exc:
         typer.secho(f"run failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
 
-    typer.echo(json.dumps(result, ensure_ascii=False))
+    _echo_utf8_json(result)
 
 
 @_run_safe

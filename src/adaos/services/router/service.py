@@ -55,6 +55,7 @@ GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
 BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
+CONVERSATION_COMPANIONS_SKILL_ID = "conversation_companions"
 DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
 VOICE_CHAT_USER_EVENT = "voice.chat.user"
 VOICE_CHAT_STREAM_RECEIVER = "voice_chat.messages"
@@ -66,6 +67,41 @@ VOICE_CHAT_HISTORY_LIMIT = 200
 VOICE_CHAT_STREAM_TEXT_MAX_CHARS = 1200
 VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = 4096
 VOICE_CHAT_STREAM_ACTIONS_MAX = 6
+
+
+def _builder_transport_integrity_error(
+    text: Any,
+    *,
+    meta: Mapping[str, Any] | None = None,
+    dialog_channel_id: str | None = None,
+) -> str | None:
+    """Return a rejection reason before a Builder chat turn is persisted.
+
+    Builder requests can create durable change evidence or launch an LLM job, so
+    text whose Unicode code points were already lost must be rejected at the
+    voice-chat ingress boundary.  Other dialog channels keep their existing
+    punctuation semantics.
+    """
+
+    metadata = dict(meta or {})
+    channel = str(
+        dialog_channel_id
+        or metadata.get("dialog_channel_id")
+        or metadata.get("conversation_channel_id")
+        or ""
+    ).strip().lower()
+    agent_id = str(metadata.get("active_agent_id") or "").strip().lower()
+    if channel != BUILDER_DIALOG_CHANNEL_ID and agent_id not in {
+        "agent:builder_skill:builder",
+        "agent:builder_skill",
+    }:
+        return None
+    token = str(text or "")
+    if "\ufffd" in token:
+        return "replacement_character"
+    if "????" in token:
+        return "suspicious_question_mark_run"
+    return None
 try:
     VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = max(
         4096,
@@ -411,6 +447,28 @@ def _dialog_channel_label(channel_id: Any) -> str:
     if token == "builder":
         return "Builder"
     return token.replace("_", " ").replace("-", " ").title() if token else "Dialog"
+
+
+def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> bool:
+    token = str(skill_id or "").strip()
+    if token == BUILDER_SKILL_ID:
+        return True
+    if token != CONVERSATION_COMPANIONS_SKILL_ID:
+        return False
+    detail = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        marker in detail
+        for marker in (
+            "not activated",
+            "not prepared",
+            "not found",
+            "unavailable",
+            "deactivated",
+            "no default tool",
+            "resolved_manifest",
+            "manifest",
+        )
+    )
 
 
 def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) -> dict[str, Any]:
@@ -5304,7 +5362,7 @@ class RouterService:
                         )
                         return result
                     except Exception as workspace_exc:
-                        if skill != BUILDER_SKILL_ID or not hasattr(mgr, "run_dev_tool"):
+                        if not _dialog_runtime_dev_fallback_allowed(skill, workspace_exc) or not hasattr(mgr, "run_dev_tool"):
                             log.warning(
                                 "dialog runtime tool run failed skill=%s tool=%s webspace=%s fallback=none manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
                                 skill,
@@ -5330,7 +5388,8 @@ class RouterService:
                             )
                             raise workspace_exc
                         logging.getLogger("adaos.router.voice_chat").info(
-                            "workspace builder skill unavailable; trying dev runtime tool=%s",
+                            "workspace dialog skill unavailable; trying dev runtime skill=%s tool=%s",
+                            skill,
                             tool,
                             exc_info=True,
                         )
@@ -6055,6 +6114,45 @@ class RouterService:
                 )
             except Exception:
                 channel = None
+            if not isinstance(channel, dict) and cid == CONVERSATIONAL_DIALOG_CHANNEL_ID:
+                requested_agent_id = str(meta.get("active_agent_id") or "").strip()
+                if not requested_agent_id.startswith("agent:conversation_companions:"):
+                    requested_agent_id = "agent:conversation_companions:arseni"
+                agent_record = _agent_record_by_id(requested_agent_id) or _agent_record_by_id(
+                    "agent:conversation_companions:arseni"
+                )
+                agent = _agent_projection_from_record(agent_record) if isinstance(agent_record, dict) else {}
+                active_agent_id = str(agent.get("id") or requested_agent_id).strip()
+                active_agent_label = str(agent.get("label") or meta.get("active_agent_label") or "Arseni").strip()
+                active_agent_owner = str(agent.get("owner") or "skill:conversation_companions").strip()
+                active_agent_kind = str(agent.get("kind") or "skill_agent").strip()
+                active_agent_gender = str(agent.get("gender") or "").strip()
+                active_agent_voice = str(agent.get("voice") or "").strip()
+                active_agent_icon = str(agent.get("icon") or "").strip()
+                active_agent_avatar_ref = str(agent.get("avatar_ref") or "").strip()
+                channel = {
+                    "id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
+                    "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
+                    "label": active_agent_label or "Conversational",
+                    "owner": "skill:conversation_companions",
+                    "conversation_id": _skill_conversation_id("conversation_companions", ws),
+                    "default_skill": "conversation_companions",
+                    "default_tool": "talk",
+                    "route_id": "voice_chat",
+                    "policy": _dialog_channel_policy(
+                        CONVERSATIONAL_DIALOG_CHANNEL_ID,
+                        default_tool="conversation_companions.talk",
+                    ),
+                    "active_agent_id": active_agent_id or None,
+                    "active_agent_label": active_agent_label or None,
+                    "active_agent_owner": active_agent_owner or "skill:conversation_companions",
+                    "active_agent_kind": active_agent_kind or "skill_agent",
+                    "active_agent_gender": active_agent_gender or None,
+                    "active_agent_voice": active_agent_voice or None,
+                    "active_agent_icon": active_agent_icon or None,
+                    "active_agent_avatar_ref": active_agent_avatar_ref or None,
+                    "meta": {"source": "core:conversation_companions_dialog_fallback"},
+                }
             if not isinstance(channel, dict) and cid == BUILDER_DIALOG_CHANNEL_ID:
                 channel = {
                     "id": BUILDER_DIALOG_CHANNEL_ID,
@@ -6097,14 +6195,53 @@ class RouterService:
                     default_skill=default_skill,
                     default_tool=default_tool,
                     conversation_id=str(channel.get("conversation_id") or f"conv.{cid}.{ws}").strip(),
-                    active_agent_id=str(meta.get("active_agent_id") or "").strip() or None,
-                    active_agent_label=str(meta.get("active_agent_label") or "").strip() or None,
-                    active_agent_owner=str(meta.get("active_agent_owner") or channel.get("owner") or "").strip() or None,
-                    active_agent_kind=str(meta.get("active_agent_kind") or "skill_agent").strip() or None,
-                    active_agent_gender=str(meta.get("active_agent_gender") or meta.get("voice_gender") or "").strip() or None,
-                    active_agent_voice=str(meta.get("active_agent_voice") or meta.get("voice") or "").strip() or None,
-                    active_agent_icon=str(meta.get("active_agent_icon") or meta.get("agent_icon") or "").strip() or None,
-                    active_agent_avatar_ref=str(meta.get("active_agent_avatar_ref") or meta.get("agent_avatar_ref") or "").strip()
+                    active_agent_id=str(meta.get("active_agent_id") or channel.get("active_agent_id") or "").strip() or None,
+                    active_agent_label=str(
+                        meta.get("active_agent_label") or channel.get("active_agent_label") or channel.get("label") or ""
+                    ).strip()
+                    or None,
+                    active_agent_owner=str(
+                        meta.get("active_agent_owner")
+                        or channel.get("active_agent_owner")
+                        or channel.get("owner")
+                        or ""
+                    ).strip()
+                    or None,
+                    active_agent_kind=str(
+                        meta.get("active_agent_kind") or channel.get("active_agent_kind") or "skill_agent"
+                    ).strip()
+                    or None,
+                    active_agent_gender=str(
+                        meta.get("active_agent_gender")
+                        or channel.get("active_agent_gender")
+                        or meta.get("voice_gender")
+                        or channel.get("gender")
+                        or ""
+                    ).strip()
+                    or None,
+                    active_agent_voice=str(
+                        meta.get("active_agent_voice")
+                        or channel.get("active_agent_voice")
+                        or meta.get("voice")
+                        or channel.get("voice")
+                        or ""
+                    ).strip()
+                    or None,
+                    active_agent_icon=str(
+                        meta.get("active_agent_icon")
+                        or channel.get("active_agent_icon")
+                        or meta.get("agent_icon")
+                        or channel.get("icon")
+                        or ""
+                    ).strip()
+                    or None,
+                    active_agent_avatar_ref=str(
+                        meta.get("active_agent_avatar_ref")
+                        or channel.get("active_agent_avatar_ref")
+                        or meta.get("agent_avatar_ref")
+                        or channel.get("agent_avatar_ref")
+                        or ""
+                    ).strip()
                     or None,
                     route_id=str(channel.get("route_id") or meta.get("route_id") or "voice_chat").strip() or "voice_chat",
                     bus=self.bus,
@@ -6128,10 +6265,42 @@ class RouterService:
             target_node_id: str | None,
         ) -> None:
             label = str(meta.get("active_agent_label") or _dialog_channel_label(channel_id)).strip()
+            default_skill = str(meta.get("default_skill") or "").strip()
+            default_tool = str(meta.get("default_tool") or "").strip()
+            if "." in default_tool:
+                tool_skill, _, tool_name = default_tool.partition(".")
+                default_skill = default_skill or tool_skill
+                default_tool = tool_name
+            if not default_skill or not default_tool:
+                try:
+                    active = dialog_runtime.get_active_channel(webspace_id)
+                except Exception:
+                    active = None
+                if active is not None and str(active.channel_id or "").strip().lower() == str(channel_id or "").strip().lower():
+                    default_skill = default_skill or str(active.default_skill or "").strip()
+                    default_tool = default_tool or str(active.default_tool or "").strip()
+            if not default_skill or not default_tool:
+                try:
+                    channel = conversation_store.get_dialog_channel(webspace_id, str(channel_id or "").strip().lower())
+                except Exception:
+                    channel = None
+                if isinstance(channel, dict):
+                    default_skill = default_skill or str(channel.get("default_skill") or "").strip()
+                    default_tool = default_tool or str(channel.get("default_tool") or "").strip()
+                    if "." in default_tool:
+                        tool_skill, _, tool_name = default_tool.partition(".")
+                        default_skill = default_skill or tool_skill
+                        default_tool = tool_name
+            runtime_ref = f"{default_skill}.{default_tool}".strip(".")
             if str(channel_id or "").strip().lower() == "builder":
                 text = (
                     "Builder channel selected, but builder_skill.chat is not available in runtime yet. "
                     "Install/activate builder_skill, then repeat the request."
+                )
+            elif runtime_ref:
+                text = (
+                    f"{label} channel selected, but {runtime_ref} is not available in runtime yet. "
+                    f"Install/activate {default_skill}, then repeat the request."
                 )
             else:
                 text = f"{label} channel selected, but its runtime tool is not available yet."
@@ -6235,6 +6404,53 @@ class RouterService:
                     f"pre_addressed={bool(pre_addressed_agent)}"
                 ),
             )
+            transport_integrity_error = _builder_transport_integrity_error(
+                text,
+                meta=meta,
+                dialog_channel_id=requested_dialog_channel_id,
+            )
+            if transport_integrity_error:
+                rejection = {
+                    "id": _make_id("m"),
+                    "from": "hub",
+                    "text": (
+                        "Builder rejected a transport-corrupted message before persistence. "
+                        "Resend the original text as UTF-8."
+                    ),
+                    "ts": time.time(),
+                    "_meta": {
+                        **meta,
+                        "route_id": "voice_chat",
+                        "transport_integrity": "rejected",
+                        "transport_integrity_reason": transport_integrity_error,
+                    },
+                }
+                try:
+                    await _append_voice_chat_message(ws, rejection, target_node_id)
+                except Exception:
+                    pass
+                try:
+                    self.bus.publish(
+                        Event(
+                            type="io.out.chat.append",
+                            source="router.voice",
+                            ts=time.time(),
+                            payload={
+                                **rejection,
+                                "_meta": {
+                                    **dict(rejection["_meta"]),
+                                    "skip_voice_chat": True,
+                                },
+                            },
+                        )
+                    )
+                except Exception:
+                    pass
+                _log_voice_phase(
+                    "transport_integrity_rejected",
+                    extra=f"reason={transport_integrity_error}",
+                )
+                return
             if requested_dialog_channel_id == GENERAL_DIALOG_CHANNEL_ID:
                 _persist_general_dialog_channel(ws, event="general_channel_requested")
                 current_dialog_channel = dialog_runtime.get_active_channel(ws)

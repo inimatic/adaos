@@ -21,6 +21,7 @@ from adaos.services.root.service import (
     _normalize_draft_metadata,
     _parse_draft_commit_metadata,
 )
+from adaos.services.root import service as root_service_module
 
 
 def test_draft_metadata_is_allowlisted_and_round_trips_from_git_trailers() -> None:
@@ -234,6 +235,111 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
     assert captured["health_check"] is None
     assert captured["reload_policy"] is None
     assert captured["health_policy"] is None
+
+
+def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() -> None:
+    captured: dict[str, object] = {}
+    component = SimpleNamespace(
+        artifact_id="builder",
+        kind="scenario",
+        version="1.2.3",
+        digest="sha256:" + "a" * 64,
+        source_ref=SimpleNamespace(revision="revision-1"),
+    )
+    promoted = SimpleNamespace(
+        plan=SimpleNamespace(release=SimpleNamespace(components=[component])),
+        candidate=SimpleNamespace(project_id="builder"),
+        pointer=SimpleNamespace(release="builder@1.2.3", release_digest="sha256:" + "b" * 64),
+        activation=SimpleNamespace(
+            workspace_lock=SimpleNamespace(to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64})
+        ),
+        subscription=SimpleNamespace(to_dict=lambda: {"project_id": "builder"}),
+    )
+
+    class _Publication:
+        def promote(self, candidate_id: str, **kwargs):
+            captured["candidate_id"] = candidate_id
+            captured.update(kwargs)
+            return promoted
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+    service._artifact_publication_service = lambda _cfg: _Publication()
+    service._reload_published_workspace_runtime = lambda _lock: {"status": "completed"}
+    service._health_published_workspace_runtime = lambda _lock: {"status": "healthy"}
+
+    result = service.promote_artifact_candidate("candidate-1")
+
+    assert result["ok"] is True
+    assert captured["candidate_id"] == "candidate-1"
+    assert captured["reload_runtime"] is service._reload_published_workspace_runtime
+    assert captured["health_check"] is service._health_published_workspace_runtime
+    assert "reload_policy" not in captured
+    assert "health_policy" not in captured
+
+
+def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario_root = tmp_path / "scenarios"
+    builder_root = scenario_root / "builder"
+    builder_root.mkdir(parents=True)
+    (builder_root / "scenario.yaml").write_text(
+        "id: builder\nversion: 1.2.3\n",
+        encoding="utf-8",
+    )
+    manager = SimpleNamespace(
+        runtime_status=lambda skill_id: {
+            "ready": True,
+            "active_slot": "B",
+            "version": "4.5.6",
+        }
+    )
+    refresh_calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(root_service_module, "_get_skill_manager", lambda _ctx: manager)
+    monkeypatch.setattr(
+        root_service_module,
+        "refresh_skill_runtime",
+        lambda _manager, skill_id, **kwargs: (
+            refresh_calls.append((skill_id, kwargs))
+            or {
+                "active_version_after": "4.5.6",
+                "active_slot_after": "B",
+                "runtime_migrated": True,
+            }
+        ),
+    )
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace(
+        paths=SimpleNamespace(scenarios_dir=lambda: scenario_root)
+    )
+    lock = SimpleNamespace(
+        lock_revision=9,
+        components=[
+            SimpleNamespace(kind="scenario", artifact_id="builder", version="1.2.3"),
+            SimpleNamespace(kind="skill", artifact_id="builder_skill", version="4.5.6"),
+        ],
+    )
+
+    reloaded = service._reload_published_workspace_runtime(lock)
+    healthy = service._health_published_workspace_runtime(lock)
+
+    assert reloaded["status"] == "completed"
+    assert refresh_calls == [
+        (
+            "builder_skill",
+            {
+                "source_version": "4.5.6",
+                "migrate_runtime": True,
+                "ensure_installed": False,
+                "require_active_version": True,
+                "operation_id": "workspace-lock:9",
+            },
+        )
+    ]
+    assert healthy["status"] == "healthy"
+    assert all(check["ok"] for check in healthy["checks"])
 
 
 def test_subscription_activation_exposes_operation_identity() -> None:
@@ -502,4 +608,75 @@ def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_p
     assert state["pushes"] == 1
     assert result.commit == "4" * 40
     assert recorded.source_tree == "5" * 40
+    assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+
+def test_checkpoint_replays_prepared_archive_when_remote_receipt_is_unchanged(tmp_path) -> None:
+    service, publication, skill, _workspace = _checkpoint_service(tmp_path)
+    previous_change_id = "builder-checkpoint-previous"
+    change_id = "builder-checkpoint-replay"
+    previous_ref = ArtifactSourceRef(
+        forge="adaos-root",
+        repository="inimatic/registry",
+        revision="6" * 40,
+        path_scope=("subnets/dev/nodes/node/skills/recipe_skill/",),
+    )
+    previous = publication.record_push(
+        kind="skill",
+        artifact_id="recipe_skill",
+        artifact_dir=skill,
+        source_ref=previous_ref,
+        change_ids=(previous_change_id,),
+        source_tree="7" * 40,
+    )
+    state: dict[str, object] = {"pushes": 0}
+    previous_receipt = {
+        "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
+        "commit": previous_ref.revision,
+        "tree_sha": previous.source_tree,
+        "sha256": previous.package.digest.removeprefix("sha256:"),
+        "metadata": {"change_id": previous_change_id},
+    }
+
+    class _FailBeforeCommitThenSucceedClient:
+        def get_draft_info(self, **_kwargs):
+            return previous_receipt
+
+        def push_skill_draft(self, **kwargs):
+            state["pushes"] = int(state["pushes"]) + 1
+            if state["pushes"] == 1:
+                raise TimeoutError("request failed before commit")
+            return {
+                "stored_path": previous_receipt["stored_path"],
+                "commit": "8" * 40,
+                "tree_sha": "9" * 40,
+                "sha256": kwargs["sha256"],
+                "metadata": {"change_id": change_id},
+            }
+
+        def get_draft_source_tree(self, **_kwargs):
+            raise AssertionError("the successful response already contains a source tree")
+
+    service._client = lambda _cfg: _FailBeforeCommitThenSucceedClient()
+
+    with pytest.raises(TimeoutError, match="failed before commit"):
+        service._push_artifact(
+            "skills",
+            "recipe_skill",
+            message="checkpoint",
+            metadata={"change_id": change_id},
+        )
+
+    assert "version: 1.0.0" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+    result = service._push_artifact(
+        "skills",
+        "recipe_skill",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    assert state["pushes"] == 2
+    assert result.commit == "8" * 40
+    assert result.version == "1.0.1"
     assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")

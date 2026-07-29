@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.apps.autostart_runner import _slot_launch_spec
 from adaos.services.autostart import default_spec, disable, enable, status
 
@@ -61,6 +63,31 @@ def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     assert spec.env["ADAOS_TOKEN"] == "t1"
 
 
+def test_default_autostart_spec_deduplicates_root_and_rejects_slot_pythonpath(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import adaos.services.autostart as autostart
+
+    repo_root = tmp_path / "repo"
+    package_dir = repo_root / "src" / "adaos"
+    package_dir.mkdir(parents=True)
+    slot_source = tmp_path / "base" / "state" / "core_slots" / "slots" / "A" / "repo" / "src"
+    external_source = tmp_path / "external-src"
+    monkeypatch.setenv("ADAOS_ROOT_REPO_ROOT", str(repo_root))
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join(
+            (str(repo_root / "src"), str(repo_root / "src"), str(slot_source), str(external_source))
+        ),
+    )
+
+    spec = autostart.default_spec(_FakeCtx(tmp_path / "base"))
+    entries = spec.env["PYTHONPATH"].split(os.pathsep)
+
+    assert entries == [str((repo_root / "src").resolve()), str(external_source)]
+
+
 def test_shell_wrapper_sources_dotenv_before_managed_exports(tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
@@ -83,7 +110,7 @@ def test_shell_wrapper_sources_dotenv_before_managed_exports(tmp_path: Path) -> 
     assert text.index('. "${ADAOS_SHARED_DOTENV_PATH}"') < text.rindex("export ADAOS_SUPERVISOR_PORT='8776'")
 
 
-def test_shell_wrapper_repairs_legacy_bounded_io_before_exec(tmp_path: Path) -> None:
+def test_shell_wrapper_uses_verified_slot_when_root_import_preflight_fails(tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
     wrapper = tmp_path / "adaos-autostart.sh"
@@ -99,9 +126,12 @@ def test_shell_wrapper_repairs_legacy_bounded_io_before_exec(tmp_path: Path) -> 
 
     text = wrapper.read_text(encoding="utf-8")
 
-    assert 'src/adaos/services/bounded_io.py' in text
-    assert 'from adaos.services.bounded_io import bounded_jsonl_tail' in text
-    assert text.index('src/adaos/services/bounded_io.py') < text.index("exec '/venv/bin/python'")
+    assert "root_import_preflight_failed" in text
+    assert "ADAOS_ROOT_RECOVERY_FALLBACK=1" in text
+    assert 'state/core_slots/slots/${slot}/venv/bin/python' in text
+    assert 'state/core_slots/slots/${slot}/repo' in text
+    assert "import adaos.apps.supervisor,adaos.apps.cli.app,adaos.apps.autostart_runner" in text
+    assert "bounded_io.py" not in text
 
 
 def test_windows_disable_stops_live_autostart_wrapper_tree(monkeypatch, tmp_path: Path) -> None:
@@ -569,6 +599,24 @@ def test_linux_refresh_wrapper_updates_cli_shim(monkeypatch, tmp_path: Path) -> 
     assert res["cli_shim"]["install"]["ok"] is True
     assert res["cli_shim"]["changed"] is True
     assert "adaos.apps.cli.app" in shim.read_text(encoding="utf-8")
+
+
+def test_shell_wrapper_atomic_write_preserves_previous_file_on_replace_failure(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "adaos-autostart.sh"
+    wrapper.write_text("#!/usr/bin/env bash\necho previous\n", encoding="utf-8")
+    monkeypatch.setattr(autostart.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("replace failed")))
+
+    with pytest.raises(OSError, match="replace failed"):
+        autostart._write_wrapper_sh(
+            wrapper,
+            argv=("/root/adaos/.venv/bin/python", "-m", "adaos.apps.supervisor"),
+            env={"ADAOS_ROOT_REPO_ROOT": "/root/adaos", "ADAOS_BASE_DIR": "/root/.adaos"},
+        )
+
+    assert wrapper.read_text(encoding="utf-8") == "#!/usr/bin/env bash\necho previous\n"
+    assert list(tmp_path.glob(".adaos-autostart.sh.*")) == []
 
 
 def test_linux_enable_root_prefers_system_service_even_with_user_bus(monkeypatch, tmp_path: Path) -> None:

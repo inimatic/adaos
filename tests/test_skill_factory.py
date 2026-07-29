@@ -4,6 +4,8 @@ from pathlib import Path
 import shutil
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.services.builder import BuilderWorkspaceService
 from adaos.services.skill_factory import REALIZE_REQUEST_SCHEMA, SkillFactoryService
 
@@ -222,6 +224,104 @@ def test_skill_factory_idempotent_completion_survives_restart(tmp_path: Path) ->
     persisted = {item["task_id"]: item for item in restarted["tasks"]}
     assert persisted[task["task_id"]]["status"] == "completed"
     assert restarted["ready_events"][0]["task_id"] == task["task_id"]
+
+
+def test_skill_factory_cancel_is_terminal_for_late_worker_updates(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request({"target": {"type": "skill", "id": "cancel_demo"}})["task"]
+    service.register_dev_node({"node_id": "devnode.test"})
+    assignment = service.poll_assignment("devnode.test")["assignment"]
+    service.report_progress(
+        task["task_id"],
+        {"node_id": "devnode.test", "status": "in_progress", "message": "working"},
+    )
+
+    cancelled = service.cancel_task(task["task_id"], reason="user cancelled", actor="test")
+
+    assert cancelled["task"]["status"] == "cancelled"
+    with pytest.raises(ValueError, match="is terminal: cancelled"):
+        service.report_progress(
+            task["task_id"],
+            {"node_id": "devnode.test", "status": "tests_running", "message": "late update"},
+        )
+    with pytest.raises(ValueError, match="is terminal: cancelled"):
+        service.complete_task(
+            _dev_result(
+                task_id=task["task_id"],
+                assignment=assignment,
+                node_id="devnode.test",
+                changed_paths=["skills/cancel_demo/skill.yaml"],
+            )
+        )
+    persisted = {item["task_id"]: item for item in service.snapshot(include_tasks=True)["tasks"]}
+    assert persisted[task["task_id"]]["status"] == "cancelled"
+
+
+def test_skill_factory_cannot_cancel_completed_or_committing_task(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request({"target": {"type": "skill", "id": "terminal_demo"}})["task"]
+    service.register_dev_node({"node_id": "devnode.test"})
+    assignment = service.poll_assignment("devnode.test")["assignment"]
+    service.report_progress(
+        task["task_id"],
+        {"node_id": "devnode.test", "status": "commit_ready", "message": "committing"},
+    )
+
+    committing = service.cancel_task(task["task_id"])
+    assert committing["ok"] is False
+    assert committing["terminal"] is False
+    assert committing["task"]["status"] == "commit_ready"
+
+    service.complete_task(
+        _dev_result(
+            task_id=task["task_id"],
+            assignment=assignment,
+            node_id="devnode.test",
+            changed_paths=["skills/terminal_demo/skill.yaml"],
+        )
+    )
+    completed = service.cancel_task(task["task_id"])
+    assert completed["ok"] is False
+    assert completed["terminal"] is True
+    assert completed["task"]["status"] == "completed"
+
+
+def test_skill_factory_recovers_validated_result_without_requeue(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request({"target": {"type": "skill", "id": "recover_demo"}})["task"]
+    service.register_dev_node({"node_id": "devnode.test"})
+    assignment = service.poll_assignment("devnode.test")["assignment"]
+    service.fail_task(
+        {
+            "task_id": task["task_id"],
+            "node_id": "devnode.test",
+            "message": "post-commit activation failed",
+            "retryable": True,
+        }
+    )
+    result = _dev_result(
+        task_id=task["task_id"],
+        assignment=assignment,
+        node_id="devnode.test",
+        changed_paths=["skills/recover_demo/skill.yaml"],
+    )
+
+    recovered = service.recover_task_result(
+        {
+            **result,
+            "recovery": {
+                "reason": "activate preserved validated result",
+                "validated_run_dir": str(tmp_path / "runs" / task["task_id"]),
+                "actor": "test",
+            },
+        }
+    )
+
+    assert recovered["recovered"] is True
+    assert recovered["task"]["status"] == "completed"
+    assert recovered["task"]["attempts"] == 1
+    assert recovered["task"]["result_recovery_history"][-1]["failure_id"]
+    assert len(recovered["task"]["failure_history"]) == 1
 
 
 def test_skill_factory_operator_controls_pause_drain_quarantine_and_retry(tmp_path: Path) -> None:

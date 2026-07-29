@@ -9,6 +9,8 @@ from adaos.services.artifact_pipeline.channels import (
     RELEASE_PLAN_SCHEMA,
     ChannelPointer,
 )
+from adaos.services.artifact_pipeline.attestations import ArtifactAttestation
+from adaos.services.artifact_pipeline.attestation_sets import ReleaseAttestationSet
 from adaos.services.artifact_pipeline.packages import verify_artifact_package
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 
@@ -18,9 +20,17 @@ class ArtifactRegistryClient(Protocol):
 
     def get_artifact_package(self, **kwargs: Any) -> dict: ...
 
+    def put_artifact_attestation(self, **kwargs: Any) -> dict: ...
+
+    def list_artifact_attestations(self, **kwargs: Any) -> dict: ...
+
     def put_project_release(self, **kwargs: Any) -> dict: ...
 
     def get_project_release(self, **kwargs: Any) -> dict: ...
+
+    def put_release_attestation_set(self, **kwargs: Any) -> dict: ...
+
+    def get_release_attestation_set(self, **kwargs: Any) -> dict: ...
 
     def set_artifact_channel(self, **kwargs: Any) -> dict: ...
 
@@ -125,6 +135,43 @@ class RemoteReleaseRepository:
             raise ValueError("artifact registry release digest mismatch")
         return plan
 
+    def put_release_attestation_set(
+        self,
+        attestation_set: ReleaseAttestationSet,
+    ) -> ReleaseAttestationSet:
+        sealed = attestation_set.seal()
+        response = self.client.put_release_attestation_set(
+            project_id=sealed.project_id,
+            release_digest=sealed.release_digest,
+            attestation_set=sealed.to_dict(),
+            **self._transport(),
+        )
+        payload = response.get("attestation_set")
+        if not isinstance(payload, Mapping):
+            raise ValueError("artifact registry returned no release attestation set")
+        observed = ReleaseAttestationSet.from_mapping(payload)
+        if observed != sealed:
+            raise ValueError("artifact registry bound a different release attestation set")
+        return observed
+
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> ReleaseAttestationSet:
+        response = self.client.get_release_attestation_set(
+            project_id=project_id,
+            release_digest=release_digest,
+            **self._transport(),
+        )
+        payload = response.get("attestation_set")
+        if not isinstance(payload, Mapping):
+            raise ValueError("artifact registry returned no release attestation set")
+        observed = ReleaseAttestationSet.from_mapping(payload)
+        if observed.project_id != project_id or observed.release_digest != release_digest:
+            raise ValueError("artifact registry returned an attestation set for another release")
+        return observed
+
     def set_channel(
         self,
         plan: ReleasePlan,
@@ -191,4 +238,50 @@ class RemoteReleaseRepository:
         return tree
 
 
-__all__ = ["ArtifactRegistryClient", "RemoteReleaseRepository"]
+@dataclass(slots=True)
+class RemoteArtifactAttestationStore:
+    client: ArtifactRegistryClient
+    verify: Any = None
+    cert: tuple[str, str] | None = None
+
+    def _transport(self) -> dict[str, Any]:
+        return {"verify": self.verify, "cert": self.cert}
+
+    def put(self, attestation: ArtifactAttestation) -> str:
+        sealed = attestation.seal()
+        response = self.client.put_artifact_attestation(
+            attestation=sealed.to_dict(),
+            **self._transport(),
+        )
+        observed = str(response.get("attestation_digest") or "").strip().lower()
+        if observed != sealed.attestation_digest:
+            raise ValueError("artifact registry stored a different attestation digest")
+        return observed
+
+    def list_for_subject(
+        self,
+        subject_kind: str,
+        subject_digest: str,
+    ) -> tuple[ArtifactAttestation, ...]:
+        response = self.client.list_artifact_attestations(
+            subject_kind=subject_kind,
+            subject_digest=subject_digest,
+            **self._transport(),
+        )
+        raw = response.get("attestations")
+        if not isinstance(raw, list) or any(not isinstance(item, Mapping) for item in raw):
+            raise ValueError("artifact registry returned an invalid attestation list")
+        result = tuple(ArtifactAttestation.from_mapping(item) for item in raw)
+        if any(
+            item.subject_kind != subject_kind or item.subject_digest != subject_digest
+            for item in result
+        ):
+            raise ValueError("artifact registry returned attestations for another subject")
+        return tuple(sorted(result, key=lambda item: str(item.attestation_digest)))
+
+
+__all__ = [
+    "ArtifactRegistryClient",
+    "RemoteArtifactAttestationStore",
+    "RemoteReleaseRepository",
+]

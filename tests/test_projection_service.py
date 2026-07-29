@@ -152,6 +152,15 @@ def _fake_async_get_ydoc(state: dict[str, _FakeMap], calls: list[dict[str, objec
     return _factory
 
 
+async def _no_live_room(*_args, **_kwargs) -> dict[str, object]:
+    return {
+        "accepted": False,
+        "applied": False,
+        "changed": False,
+        "reason": "room_not_ready",
+    }
+
+
 class _FakeAsyncDocWithUpdateCallback(_FakeAsyncDoc):
     def __init__(self, state: dict[str, _FakeMap], kwargs: dict[str, object]) -> None:
         super().__init__(state)
@@ -206,7 +215,7 @@ def test_projection_service_merges_deep_yjs_paths_without_overwriting_siblings(m
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
 
     asyncio.run(
@@ -256,7 +265,7 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
 
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
@@ -292,7 +301,7 @@ def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
 
     asyncio.run(service.apply("runtime", "profile", {"theme": "dark"}, webspace_id="ws-test"))
@@ -317,7 +326,7 @@ def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) ->
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
@@ -431,7 +440,7 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
     monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _capture_metadata)
     monkeypatch.setattr(
@@ -469,11 +478,12 @@ def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monk
         registry=registry,
     )
 
-    monkeypatch.setattr(
-        projection_service_module,
-        "mutate_live_room",
-        lambda ws, _mutator, **_kwargs: mutate_calls.append(ws) or True,
-    )
+    async def _submit_live(ws, mutator, **_kwargs):
+        mutate_calls.append(ws)
+        mutator(_FakeDoc(fake_state), _FakeTxn())
+        return {"accepted": True, "applied": True, "changed": True, "reason": "applied"}
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _submit_live)
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
@@ -490,6 +500,72 @@ def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monk
 
     assert mutate_calls == ["ws-test"]
     assert calls == []
+
+
+def test_projection_service_persists_changed_detached_fallback(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    persist_calls: list[str] = []
+
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/infrastate/summary",
+        webspace_id=None,
+    )
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    async def _persist(webspace_id: str) -> dict[str, object]:
+        persist_calls.append(webspace_id)
+        return {"ok": True, "webspace_id": webspace_id}
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(
+        projection_service_module,
+        "async_get_ydoc",
+        _fake_async_get_ydoc_with_update_callback(fake_state),
+    )
+    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
+    monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _persist)
+
+    asyncio.run(
+        service.apply(
+            "runtime",
+            "infrastate.summary",
+            {"version": "0.1.622"},
+            webspace_id="desktop",
+        )
+    )
+
+    assert persist_calls == ["desktop"]
+
+
+def test_projection_service_surfaces_detached_persistence_failure(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(backend="yjs", path="data/weather", webspace_id=None)
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    async def _fail_persist(_webspace_id: str) -> dict[str, object]:
+        raise RuntimeError("disk unavailable")
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(
+        projection_service_module,
+        "async_get_ydoc",
+        _fake_async_get_ydoc_with_update_callback(fake_state),
+    )
+    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
+    monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _fail_persist)
+
+    try:
+        asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="desktop"))
+    except RuntimeError as exc:
+        assert str(exc) == "disk unavailable"
+    else:
+        raise AssertionError("detached persistence failure must reach the caller")
 
 
 def test_projection_service_compacts_inline_after_detached_write_amplification(monkeypatch, tmp_path) -> None:
@@ -527,7 +603,7 @@ def test_projection_service_compacts_inline_after_detached_write_amplification(m
     )
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
@@ -606,7 +682,7 @@ def test_projection_service_suppresses_recent_amplified_projection(monkeypatch, 
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC", 300.0)
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
@@ -653,7 +729,7 @@ def test_projection_service_throttles_skill_owned_primary_doc_writes_when_policy
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
     monkeypatch.setattr(
         projection_service_module,
@@ -709,7 +785,7 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
     )
 
     async_get_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state, async_get_calls))
     monkeypatch.setattr(
         projection_service_module,
@@ -765,7 +841,7 @@ def test_projection_service_degrades_oversized_yjs_projection_before_write(monke
     )
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(
@@ -876,15 +952,15 @@ def test_projection_service_records_post_write_yjs_amplification(monkeypatch, tm
         registry=registry,
     )
 
-    def _mutate_live_room(_ws: str, mutator, **kwargs) -> bool:
+    async def _submit_live_room_mutation(_ws: str, mutator, **kwargs) -> dict[str, object]:
         mutator(_FakeDoc(fake_state), _FakeTxn())
         callback = kwargs.get("update_callback")
         assert callable(callback)
-        callback({"update_bytes": 88_900})
-        return True
+        callback({"update_bytes": 88_900, "live_room": True})
+        return {"accepted": True, "applied": True, "changed": True, "reason": "applied"}
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", _mutate_live_room)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _submit_live_room_mutation)
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(
         projection_service_module,
@@ -970,7 +1046,7 @@ def test_projection_governance_attributes_sibling_write_amplification_suspect(mo
     )
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(owner_guard, "admit_owner_work", lambda **_kwargs: {"allowed": True})

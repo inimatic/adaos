@@ -1338,6 +1338,83 @@ def _canonical_hub_nats_identity(
     return None, resolved_user
 
 
+def _core_update_status_fingerprint(status: Any) -> str:
+    payload = status if isinstance(status, dict) else {}
+    try:
+        encoded = _json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str)
+    except Exception:
+        encoded = repr(payload)
+    return hashlib.sha256(encoded.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _core_update_waits_for_supervisor_convergence(status: Any) -> bool:
+    payload = status if isinstance(status, dict) else {}
+    state = str(payload.get("state") or "").strip().lower()
+    phase = str(payload.get("phase") or "").strip().lower()
+    # A warm candidate boots while the shared transition can still be in
+    # prepare/countdown.  The same process is promoted without another
+    # bootstrap pass, so arming this bridge only at ``root_promoted`` races
+    # with fast cutover and can lose the terminal validate event.  Follow the
+    # whole bounded transition from candidate boot until a terminal state; the
+    # supervisor remains the sole writer/authority for the status file.
+    if state in {
+        "preparing",
+        "countdown",
+        "draining",
+        "stopping",
+        "restarting",
+        "applying",
+        "validated",
+    }:
+        return True
+    return state == "succeeded" and phase in {
+        "apply",
+        "launch",
+        "shutdown",
+        "root_promoted",
+        "root_promotion_pending",
+    }
+
+
+async def _watch_supervisor_core_update_convergence(
+    bus: Any,
+    *,
+    read_status: Callable[[], dict[str, Any]],
+    initial_status: dict[str, Any],
+    poll_interval_s: float = 0.5,
+    timeout_s: float = 300.0,
+) -> dict[str, Any]:
+    last_status = dict(initial_status or {})
+    last_fingerprint = _core_update_status_fingerprint(last_status)
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    emitted_total = 0
+    while _core_update_waits_for_supervisor_convergence(last_status) and time.monotonic() < deadline:
+        await asyncio.sleep(max(0.05, float(poll_interval_s)))
+        try:
+            current = read_status()
+        except Exception:
+            continue
+        current = dict(current) if isinstance(current, dict) else {}
+        fingerprint = _core_update_status_fingerprint(current)
+        if fingerprint == last_fingerprint:
+            continue
+        last_status = current
+        last_fingerprint = fingerprint
+        await bus.emit(
+            "core.update.status",
+            current,
+            source="supervisor.convergence",
+            actor="system",
+        )
+        emitted_total += 1
+    return {
+        "ok": not _core_update_waits_for_supervisor_convergence(last_status),
+        "emitted_total": emitted_total,
+        "timed_out": _core_update_waits_for_supervisor_convergence(last_status),
+        "status": last_status,
+    }
+
+
 class BootstrapService:
     def __init__(
         self,
@@ -1369,6 +1446,7 @@ class BootstrapService:
         self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
         self._hub_root_authority_waiters: set[asyncio.Event] = set()
         self._hub_root_authority_ready_at: float | None = None
+        self._member_ready_callback: Callable[[], Awaitable[None]] | None = None
 
     def _mark_hub_root_authority_ready(self) -> None:
         """Release cutover waiters only after the active Root route subscription is flushed."""
@@ -1836,7 +1914,8 @@ class BootstrapService:
         except Exception:
             pass
 
-        heartbeat_task = await self._member_register_and_heartbeat(conf)
+        ready_callback = self._member_ready_callback if callable(self._member_ready_callback) else None
+        heartbeat_task = await self._member_register_and_heartbeat(conf, on_registered=ready_callback)
         if heartbeat_task is not None:
             self._boot_tasks.append(heartbeat_task)
         try:
@@ -2519,9 +2598,10 @@ class BootstrapService:
                 read_status as _read_core_update_status,
             )
 
+            initial_core_update_status = _read_core_update_status()
             await bus.emit(
                 "core.update.status",
-                _read_core_update_status(),
+                initial_core_update_status,
                 source="lifecycle",
                 actor="system",
             )
@@ -2531,6 +2611,15 @@ class BootstrapService:
                 source="lifecycle",
                 actor="system",
             )
+            if _core_update_waits_for_supervisor_convergence(initial_core_update_status):
+                self._start_boot_task_once(
+                    "adaos-core-update-supervisor-convergence",
+                    lambda: _watch_supervisor_core_update_convergence(
+                        bus,
+                        read_status=_read_core_update_status,
+                        initial_status=initial_core_update_status,
+                    ),
+                )
         except Exception:
             _finalize_runtime_boot_status = None
             self._log.debug("failed to emit initial core.update.status", exc_info=True)
@@ -2926,6 +3015,13 @@ class BootstrapService:
                     self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
                 _schedule_release_validation_autorun("sys.ready")
 
+            # Keep the original boot-generation callback available to an
+            # explicit member reconnect. If startup registration failed (for
+            # example because a legacy routed token expired), a later
+            # successful rejoin must complete the same readiness/sys.ready
+            # transition instead of leaving the otherwise connected node
+            # permanently at ready=false.
+            self._member_ready_callback = _announce_member_ready
             task = await self._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
             if task:
                 self._boot_tasks.append(task)

@@ -49,12 +49,14 @@ from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.services.runtime_refresh import refresh_skill_runtime
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
     PublicationStaleError,
     RemoteReleaseRepository,
     build_artifact_package,
+    compose_artifact_trust_runtime,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
 
@@ -810,7 +812,17 @@ def _sync_scenario_content_metadata(
         ui = webui.get("ui")
         if not isinstance(ui, Mapping):
             raise RootServiceError(f"Scenario WebUI at {webui_path} must contain an object ui")
-        payload["ui"] = dict(ui)
+        projected_ui = dict(ui)
+        canonical_version = canonical.get("version")
+        if canonical_version is not None:
+            projected_ui["version"] = canonical_version
+        canonical_ui = canonical.get("ui")
+        if isinstance(canonical_ui, Mapping) and canonical_ui.get("manifest") is not None:
+            projected_ui["manifest"] = canonical_ui["manifest"]
+        if projected_ui != ui:
+            webui["ui"] = projected_ui
+            _write_manifest(webui_path, webui)
+        payload["ui"] = projected_ui
     _write_manifest(content_path, payload)
 
 
@@ -2034,11 +2046,111 @@ class RootDeveloperService:
             verify=verify,
             cert=(cert_path, key_path),
         )
+        state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
+        trust = compose_artifact_trust_runtime(
+            state_root=state_root,
+            client=remote.client,
+            verify=remote.verify,
+            cert=remote.cert,
+        )
         return ArtifactPublicationService(
-            state_root=Path(self.ctx.paths.state_dir()) / "artifact_pipeline",
+            state_root=state_root,
             workspace_root=Path(self.ctx.paths.workspace_dir()),
             remote=remote,
+            attestation_publisher=trust.publisher,
+            attestation_admission=trust.admission,
         )
+
+    @staticmethod
+    def _workspace_lock_components(lock: Any, *, kind: str) -> list[Any]:
+        expected = str(kind or "").strip().lower().rstrip("s")
+        return [
+            component
+            for component in getattr(lock, "components", ()) or ()
+            if str(getattr(component, "kind", "") or "").strip().lower().rstrip("s") == expected
+        ]
+
+    def _reload_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
+        """Converge every installed skill runtime to the just-activated WorkspaceLock."""
+
+        manager = _get_skill_manager(self.ctx)
+        refreshed: list[dict[str, Any]] = []
+        for component in self._workspace_lock_components(lock, kind="skill"):
+            skill_id = str(getattr(component, "artifact_id", "") or "").strip()
+            version = str(getattr(component, "version", "") or "").strip()
+            if not skill_id or not version:
+                raise RootServiceError("WorkspaceLock contains an incomplete skill component")
+            result = refresh_skill_runtime(
+                manager,
+                skill_id,
+                source_version=version,
+                migrate_runtime=True,
+                ensure_installed=False,
+                require_active_version=True,
+                operation_id=f"workspace-lock:{getattr(lock, 'lock_revision', '')}",
+            )
+            refreshed.append(
+                {
+                    "skill_id": skill_id,
+                    "version": version,
+                    "active_version": result.get("active_version_after"),
+                    "active_slot": result.get("active_slot_after"),
+                    "runtime_migrated": bool(result.get("runtime_migrated")),
+                }
+            )
+        return {
+            "status": "completed",
+            "lock_revision": getattr(lock, "lock_revision", None),
+            "skills": refreshed,
+        }
+
+    def _health_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
+        manager = _get_skill_manager(self.ctx)
+        checks: list[dict[str, Any]] = []
+        failures: list[str] = []
+        for component in self._workspace_lock_components(lock, kind="skill"):
+            skill_id = str(getattr(component, "artifact_id", "") or "").strip()
+            expected = str(getattr(component, "version", "") or "").strip()
+            status = manager.runtime_status(skill_id)
+            active = str(status.get("version") or "").strip()
+            ready = bool(status.get("ready", True)) and bool(status.get("active_slot")) and active == expected
+            checks.append(
+                {
+                    "kind": "skill_runtime",
+                    "artifact_id": skill_id,
+                    "expected_version": expected,
+                    "active_version": active,
+                    "active_slot": status.get("active_slot"),
+                    "ok": ready,
+                }
+            )
+            if not ready:
+                failures.append(f"skill:{skill_id} expected={expected} active={active or 'none'}")
+        for component in self._workspace_lock_components(lock, kind="scenario"):
+            scenario_id = str(getattr(component, "artifact_id", "") or "").strip()
+            expected = str(getattr(component, "version", "") or "").strip()
+            manifest_path = Path(self.ctx.paths.scenarios_dir()) / scenario_id / "scenario.yaml"
+            manifest = _load_manifest(manifest_path)
+            installed = str(manifest.get("version") or "").strip()
+            ready = bool(scenario_id) and installed == expected
+            checks.append(
+                {
+                    "kind": "scenario_source",
+                    "artifact_id": scenario_id,
+                    "expected_version": expected,
+                    "installed_version": installed,
+                    "ok": ready,
+                }
+            )
+            if not ready:
+                failures.append(f"scenario:{scenario_id} expected={expected} installed={installed or 'none'}")
+        if failures:
+            raise RootServiceError("Published Workspace runtime did not converge: " + "; ".join(failures))
+        return {
+            "status": "healthy",
+            "lock_revision": getattr(lock, "lock_revision", None),
+            "checks": checks,
+        }
 
     def prepare_artifact_candidate(
         self,
@@ -2086,6 +2198,23 @@ class RootDeveloperService:
         )
         return {"ok": True, "candidate": candidate.to_dict()}
 
+    def recover_artifact_candidate_activation(
+        self,
+        candidate_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        try:
+            result = self._artifact_publication_service(cfg).recover_promotion_activation(
+                str(candidate_id or "").strip(),
+                str(operation_id or "").strip(),
+            )
+        except Exception as exc:
+            if isinstance(exc, RootServiceError):
+                raise
+            raise RootServiceError(str(exc)) from exc
+        return {"ok": True, "recovery": result}
+
     def prepare_rebased_artifact_candidate(
         self,
         stale_candidate_id: str,
@@ -2130,16 +2259,8 @@ class RootDeveloperService:
             promoted = publication.promote(
                 candidate_id,
                 permission_decision=permission_decision,
-                reload_policy={
-                    "mode": "skip",
-                    "approved_by": "root.artifact_publication.mvp",
-                    "reason": "live artifact reload adapter is not connected yet",
-                },
-                health_policy={
-                    "mode": "skip",
-                    "approved_by": "root.artifact_publication.mvp",
-                    "reason": "live artifact health adapter is not connected yet",
-                },
+                reload_runtime=self._reload_published_workspace_runtime,
+                health_check=self._health_published_workspace_runtime,
             )
         except PublicationStaleError as exc:
             return {
@@ -2356,7 +2477,11 @@ class RootDeveloperService:
             target,
             name,
             prototype_value,
-            version_bump_index=1,
+            # A template version is the initial version of a newly-created
+            # artifact. Creation is not a new revision of the template and
+            # must not consume a semantic-version bump before the first
+            # checkpoint or publication.
+            version_bump_index=None,
             set_prototype=True,
         )
         if kind == "scenarios":
@@ -2806,6 +2931,39 @@ class RootDeveloperService:
                 raise RootServiceError("Root did not return a verifiable Forge source tree")
             return tree
 
+        def draft_receipt_identity(response: Mapping[str, Any]) -> dict[str, Any]:
+            metadata = _normalize_draft_metadata(
+                response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            )
+            return {
+                key: value
+                for key, value in {
+                    "stored_path": str(response.get("stored_path") or "").strip().rstrip("/"),
+                    "commit": str(response.get("commit") or "").strip(),
+                    "tree_sha": str(response.get("tree_sha") or "").strip().lower(),
+                    "sha256": str(response.get("sha256") or "").strip().lower(),
+                    "change_id": str(metadata.get("change_id") or "").strip(),
+                }.items()
+                if value
+            }
+
+        def same_draft_receipt(
+            current: Mapping[str, Any],
+            expected: Mapping[str, Any],
+        ) -> bool:
+            current_identity = draft_receipt_identity(current)
+            expected_identity = {
+                str(key): str(value).strip().rstrip("/") if key == "stored_path" else str(value).strip()
+                for key, value in expected.items()
+                if str(value or "").strip()
+            }
+            required = {"stored_path", "commit", "sha256"}
+            return required.issubset(expected_identity) and all(
+                current_identity.get(key) == value
+                for key, value in expected_identity.items()
+            )
+
+        recorded = None
         if change_id and publication.pushed_source_path(kind.rstrip("s"), name).is_file():
             recorded = publication.load_pushed_source(kind.rstrip("s"), name)
             if change_id in recorded.change_ids:
@@ -2901,9 +3059,59 @@ class RootDeveloperService:
                     archive_bytes=archive_bytes,
                 )
             if intent.get("status") in {"dispatching", "uncertain", "remote_confirmed"}:
-                raise RootServiceError(
-                    "Checkpoint outcome is unresolved and does not match the current Forge receipt; refusing a duplicate write"
+                previous_receipt = (
+                    dict(intent.get("previous_receipt"))
+                    if isinstance(intent.get("previous_receipt"), Mapping)
+                    else {}
                 )
+                if not previous_receipt and recorded is not None:
+                    recorded_scope = (
+                        str(recorded.source_ref.path_scope[0]).strip().rstrip("/")
+                        if recorded.source_ref.path_scope
+                        else ""
+                    )
+                    remote_identity = draft_receipt_identity(draft_info)
+                    remote_change_id = str(remote_identity.get("change_id") or "").strip()
+                    recorded_change_ids = {str(item).strip() for item in recorded.change_ids}
+                    if (
+                        remote_identity.get("commit") == recorded.source_ref.revision
+                        and remote_identity.get("stored_path") == recorded_scope
+                        and (
+                            not recorded.source_tree
+                            or remote_identity.get("tree_sha") == recorded.source_tree
+                        )
+                        and remote_change_id
+                        and remote_change_id in recorded_change_ids
+                    ):
+                        previous_receipt = remote_identity
+                archive_digest = str(intent.get("archive_sha256") or "").strip().lower()
+                prepared_archive_matches = bool(
+                    intent_archive_path is not None
+                    and intent_archive_path.is_file()
+                    and archive_digest
+                    and hashlib.sha256(intent_archive_path.read_bytes()).hexdigest() == archive_digest
+                )
+                if (
+                    prepared_archive_matches
+                    and previous_receipt
+                    and same_draft_receipt(draft_info, previous_receipt)
+                ):
+                    # The remote still exposes the exact receipt observed before
+                    # dispatch, so the uncertain write provably did not become
+                    # authoritative. Resume the immutable prepared archive; do
+                    # not rebuild it or bump the manifest a second time.
+                    write_intent(
+                        "prepared",
+                        archive_sha256=archive_digest,
+                        previous_receipt=previous_receipt,
+                        resolution="remote_receipt_unchanged",
+                    )
+                else:
+                    raise RootServiceError(
+                        "Checkpoint outcome is unresolved and does not match the current Forge receipt; refusing a duplicate write"
+                    )
+
+            previous_receipt = draft_receipt_identity(draft_info) if draft_info else {}
 
         rollback_paths = [
             source / ("skill.yaml" if kind == "skills" else "scenario.yaml"),
@@ -2911,6 +3119,7 @@ class RootDeveloperService:
         ]
         if kind == "scenarios":
             rollback_paths.append(source / "scenario.json")
+            rollback_paths.append(source / "webui.json")
         snapshots = {
             path: path.read_bytes() if path.is_file() else None
             for path in rollback_paths
@@ -2996,7 +3205,11 @@ class RootDeveloperService:
             digest = hashlib.sha256(archive_bytes).hexdigest()
             if change_id and intent_archive_path is not None:
                 atomic_write_bytes(intent_archive_path, archive_bytes)
-                write_intent("prepared", archive_sha256=digest)
+                write_intent(
+                    "prepared",
+                    archive_sha256=digest,
+                    previous_receipt=previous_receipt,
+                )
             push_method = (
                 client.push_skill_draft if kind == "skills" else client.push_scenario_draft
             )

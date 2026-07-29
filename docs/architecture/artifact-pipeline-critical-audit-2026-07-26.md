@@ -69,12 +69,17 @@ broader frontend/WebSocket handoff remains separate.
 | B16 remote registry loss recovery | corrected, recovered-live (bounded) | reviewed recovery uploaded exact verified packages/release and created the absent stable channel through CAS; ordinary reconciliation then projected it locally and both plans now return `noop` |
 | B17 historical trial contract drift | corrected, recovered-live (bounded) | legacy Builder acceptance claimed `snapshot` without current `data_ref`; recovery refused it until the same immutable release passed a new isolated empty-data activation under current reload/health contracts |
 | B18 update-route policy drift | corrected, validated-local | REST, WebSocket, and Builder now share a versioned subscription-based route decision; subscribed package failure cannot fall through to legacy source pull and malformed subscription state fails closed |
+| B19 local slot/restart identity | corrected, validated-local | active/previous markers use durable replacement; restart requires ready health, the exact active-slot Git commit, and a stability window rather than accepting a listener or bootstrap PID |
+| B20 untrusted initial Yjs reconnect | contained, validated-local (bounded) | malformed/native-risk payloads are subprocess-preflighted and initial browser state is server-authoritative; real reconnects survived, while offline initial draft merge remains deliberately unsupported |
+| B21 builder identity is self-declared | corrected, validated-stand (bounded) | backend `8f4f2c1` stores immutable assets/exact release bindings; a separately provisioned signer/trust pair passed exact-bound required activation from an empty cache/Workspace, wrong trust failed before mutation, and no-replay/reconciliation paths have deterministic regressions |
 | R1 repeated verification | corrected, validated-local | cached activation verifies and extracts every package in one ZIP/file-hash traversal into operation-private staging |
 | R2 base64 transport | improved, validated-stand (bounded) | deployed binary route removes base64 expansion; whole-body buffering and object-store streaming remain open in AP1-12 |
 | R3 materialization identity | improved, validated-local | new packages persist and activation consumes an exact portable target; v1 migration preserves and validates historical install aliases, while their package-only activation cutover remains in AP6 |
 | R4 filesystem durability | corrected, validated-local | durable rename metadata plus pending/active/rolled-back history sidecars prevent false successful history |
 | R5 runtime freshness | improved, validated-local | DEV manifest activation and core-process reload are explicit; stale runtime returns an explicit unavailable result rather than retrying mutation |
-| R6 blue/green route handoff | corrected, production-route-verified (bounded) | clean runs `30229653248` and `30229788369` kept strict server-side health at `322/298` and `321/297` samples across both zones with no failures or proxy recreation; frontend and WebSocket continuity remain separate |
+| R6 blue/green route handoff | regressed, fix-pending | earlier clean runs passed, but backend PR `#4` exposed candidate admission before health and one strict public-probe `curl rc=55`; infra `5f9a5b0` gates proxy network attachment on health and still needs merge plus clean production control |
+| R7 local core-slot preparation | open, should | exact local slot A took 246.6 s: 169.115 s for venv seed/copy and 29.6 s for install; cache/reflink by lock digest is needed without weakening source/import/build gates |
+| R8 memory-profile finalizer logging | open, could | the 375-test regression passes, but late finalizers can log after pytest capture closes and emit non-fatal `ValueError: I/O operation on closed file` noise |
 
 ## What Remains Sound
 
@@ -360,6 +365,75 @@ WebSocket consume that object, and package activation responses expose it for
 Builder/operator diagnostics. Focused transport and coordinator regressions
 cover the shared route and fail-closed store behavior.
 
+### B19. A listener and bootstrap PID were weaker than runtime build identity
+
+The local recovery path could observe a bound port while a stale or incomplete
+slot was running, and Windows process bootstrap could hand ownership to a child
+whose PID differed from the launcher. Slot marker writes also lacked the same
+durability boundary as artifact activation. Together these defects could turn
+"something is listening" into a false successful restart.
+
+Current correction: slot markers are written through a same-directory temporary
+file, flush, `fsync`, and atomic replace. Candidate structure and imports are
+validated before marker cutover. Restart waits on `/health/ready`, requires the
+full Git commit from the active-slot manifest, and then requires a bounded
+stability window; it does not require the short-lived bootstrap PID to remain
+the listener. The durable restart log retains the launched generation and
+failure evidence. Commit `bc603cb8` passed a one-shot live recovery: slot A
+reported the exact commit for seven readiness samples under one PID after all
+35 installed handlers passed isolated import.
+
+### B20. Browser reconnect payloads could abort the native Yrs process
+
+A real browser reconnect against a newly prepared slot triggered a native Yrs
+index-out-of-bounds panic even though structurally similar payloads passed a
+cloned-document subprocess preflight. The remaining risk was application of an
+accepted initial client state to the shared live YDoc while runtime
+materialization and reconnect activity overlapped.
+
+Current correction: malformed frames and native-risk payloads still fail closed
+through a subprocess. In addition, the bounded MVP mode treats the server's
+durable state as authoritative for the initial browser handshake: client
+`SYNC_STEP1` and the first `SYNC_STEP2`/`SYNC_UPDATE` are validated but not
+applied to the live YDoc, and the server sends its effective state. Subsequent
+client updates use the normal path. Real reconnects for `dev1`, `dev1-dev`, and
+`desktop-dev` exercised this branch without a panic while exact-build readiness
+remained stable. The explicit product limitation is that offline-only browser
+drafts present at reconnect are discarded rather than merged. A future safe
+offline-merge protocol requires generation identity and deterministic conflict
+handling; silently re-enabling initial merge is not allowed.
+
+### B21. Builder identity was provenance metadata, not cryptographic authority
+
+Package manifests persist `builder_id`, build-policy digest, source revision,
+and validation evidence references, but those fields were committed only by the
+package digest. Anyone able to publish arbitrary package bytes could make the
+same self-declarations. Digest verification proved integrity after selection;
+it did not prove which publisher authorized the subject.
+
+Current bounded correction: detached `adaos.artifact.attestation.v1` records
+use Ed25519 to bind package/release subject digest, project, issuer/key,
+issuance time, predicate type, and predicate digest. Local trust keys are
+purpose-scoped, rotate by key id, enforce signing windows and issuer allowlists,
+and fail closed after revocation. Attestations have their own content identity
+and can use local or external immutable storage without changing existing
+release digests. Required activation checks the full release/package set before
+fetch and repeats admission under the Workspace writer lease before staging.
+
+This closes the bounded trust/admission path, not broad end-to-end provenance.
+The local AP1-07 publisher now journals one deterministic package-then-release
+attestation set before dispatch, refuses to replay an uncertain write, and
+separates read-only exact-digest reconciliation from explicit continuation. It
+also recomputes each expected predicate from the reviewed release plan, so a
+valid signature over different provenance is not admitted. Backend PR `#4` is
+deployed as `8f4f2c1`, and stand `20260727t070101z-required` proved exact-bound
+required activation over mTLS from an empty cache and Workspace. Consumer
+admission now rejects valid but unbound signatures; a wrong trust store failed
+before fetch or mutation. Deterministic tests cover unknown write outcomes,
+read-only reconciliation, and explicit continuation without inducing transport
+failure in production. The registry validates exact set connectivity but
+deliberately cannot make its signatures trusted.
+
 ## Reliability And Performance Gaps
 
 ### R1. Cached activation verified each archive repeatedly
@@ -468,6 +542,55 @@ bounded backend HTTP route. It does not prove seamless frontend replacement,
 long-lived WebSocket handoff, object-store durability, or broad production
 readiness.
 
+### R7. Windows core-slot preparation is dominated by virtualenv copying
+
+The exact local slot A preparation on 2026-07-27 took 246.6 seconds. Venv
+seed/copy and repair accounted for 169.115 seconds, while project installation
+took 29.6 seconds. Earlier preparations were in the same broad 216-345 second
+range. This is acceptable for a rare recovery but too slow for an interactive
+development loop.
+
+The next optimization should cache or clone a dependency layer by lock digest
+and platform/interpreter identity. Every candidate must still rerun checkout
+identity, required-file, package install metadata, import, installed-handler,
+and build-identity gates; a fast path must not reuse an unverified source tree
+or turn stale slot contents into runtime authority.
+
+### R8. Memory-profile finalizers can outlive test log capture
+
+The final 375-test core/Yjs/artifact regression passed, but two memory-profile
+finalizers attempted a warning after pytest had closed its captured stream.
+Python logging emitted non-fatal `ValueError: I/O operation on closed file`
+diagnostics. This does not change runtime state or test outcome. The eventual
+cleanup should make finalization idempotent and avoid emission through a closed
+handler without hiding real profiling lifecycle failures.
+
+### R9. Root promotion success originally proved runtime readiness, not supervisor replacement
+
+The first recovered second-machine updates exposed two distinct false-success
+paths. The candidate-owned root runner inherited no process `AgentContext`, so
+root copy committed but wrapper refresh failed. After that was corrected, the
+old supervisor could still observe the already-ready slot runtime and write
+`root restart completed` immediately before its own scheduled exit. The files
+were correct, but the receipt did not prove that the promoted supervisor code
+was actually loaded.
+
+Current correction: the standalone runner initializes a candidate-owned
+context before promotion services are used. Promotion and restart status also
+record the immutable supervisor instance id and PID that owned the operation;
+that same instance is barred from finalizing its restart. The replacement
+process records a distinct completion instance/PID only after root parity and
+active-runtime readiness pass. A terminal status boolean cannot authorize a
+queued mutation without a durable `subsequent_transition_request`.
+
+Bounded live proof on `192.168.0.30` ended at release `0.1.614` (`f9faba41`, CI
+run `30260047119`). The watcher captured `root_promoted` under PID `824452` with
+no completion timestamp, then PID exit, systemd restart, and completion under
+PID `827238` with a distinct instance id. Runtime ping returned active slot A on
+8777; systemd restart count advanced once and both queued-transition flags were
+false. This closes the second-machine core convergence gate, but not broad
+production or long-lived browser transport acceptance.
+
 ## Corrected Implementation Order
 
 1. Harden schema admission, version uniqueness, package scrub, portable paths,
@@ -534,7 +657,12 @@ readiness.
     empty-cache/empty-Workspace activation against backend `0.1.144`. The
     dedicated `stand-route-5dd1492f` channel passed exact release read-back and
     delayed verification without moving `stable`.
-22. **Next release boundary:** synchronize the remaining client/core release
+22. **Completed locally:** harden active/previous slot markers and one-shot API
+    restart admission around exact build identity, then recover the local
+    runtime from slot A and keep it ready under real browser reconnects.
+23. **Completed locally:** make an up-to-date subscribed Builder dry-run return
+    a typed package no-op plan without relaxing real activation admission.
+24. **Next release boundary:** synchronize the remaining client/core release
     state. Before broad or multi-zone rollout, replace single-zone whole-body
     buffering with streamed object storage, add signed attestations, and retain
     the compatibility route until telemetry proves historical subscriptions

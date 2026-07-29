@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.review_anchor.v1",
+  "title": "AdaOS Builder Review Anchor",
+  "type": "object",
+  "required": ["schema", "review_id", "change_id", "artifact_ref", "target_ref", "comment", "status", "author_ref", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.builder.review_anchor.v1" },
+    "review_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "artifact_ref": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "target_ref": { "type": "string", "pattern": "^(widget|field|surface):" },
+    "comment": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "status": { "enum": ["open", "accepted", "rejected", "resolved"] },
+    "author_ref": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "issue_id": { "type": ["string", "null"], "maxLength": 80 },
+    "constraint_ref": { "type": ["string", "null"], "maxLength": 300 },
+    "resolution_ref": { "type": ["string", "null"], "maxLength": 300 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "additionalProperties": false
+}

@@ -932,6 +932,44 @@ class RootHttpClient:
             )
         return response
 
+    def put_artifact_attestation(
+        self,
+        *,
+        attestation: Mapping[str, Any],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "POST",
+                "/v1/artifacts/attestations",
+                json={"attestation": dict(attestation)},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=30.0,
+            )
+        )
+
+    def list_artifact_attestations(
+        self,
+        *,
+        subject_kind: str,
+        subject_digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        kind = quote(subject_kind, safe="")
+        digest = quote(subject_digest, safe="")
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/artifacts/attestations/{kind}/{digest}",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=30.0,
+            )
+        )
+
     def put_project_release(
         self,
         *,
@@ -973,6 +1011,48 @@ class RootHttpClient:
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
                 timeout=120.0,
+            )
+        )
+
+    def put_release_attestation_set(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        attestation_set: Mapping[str, Any],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        digest = quote(release_digest, safe="")
+        return dict(
+            self._request(
+                "PUT",
+                f"/v1/artifacts/projects/{project}/releases/{digest}/attestations",
+                json={"attestation_set": dict(attestation_set)},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=30.0,
+            )
+        )
+
+    def get_release_attestation_set(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        digest = quote(release_digest, safe="")
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/artifacts/projects/{project}/releases/{digest}/attestations",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=30.0,
             )
         )
 

@@ -16,7 +16,7 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.scenario.node_data_scope import node_scope_data_path
-from adaos.services.yjs.doc import mutate_live_room, async_get_ydoc
+from adaos.services.yjs.doc import async_get_ydoc, submit_live_room_mutation
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.user.profile import UserProfileService
 from .projection_registry import ProjectionRegistry, ProjectionTarget
@@ -637,6 +637,35 @@ async def _compact_projection_amplification_store(
         result["error"] = f"{type(exc).__name__}: {exc}"
         _log.debug("failed to compact YStore after projection amplification webspace=%s", key, exc_info=True)
     return result
+
+
+async def _persist_detached_projection_store(webspace_id: str) -> dict[str, Any]:
+    """Persist a projection written without an active Yjs room.
+
+    Detached writes are appended to the process-local replay log first.  That
+    makes them visible to a client that connects to the same process, but it is
+    not a restart-safe durability boundary.  A projection fallback is only
+    complete after the replay log has been encoded into the persisted base
+    snapshot.
+    """
+    key = str(webspace_id or "").strip() or "default"
+    from adaos.services.yjs.store import get_ystore_for_webspace
+
+    store = get_ystore_for_webspace(key)
+    before = store.runtime_snapshot()
+    await store.backup_to_disk(
+        compact_runtime=True,
+        backup_kind="projection_detached_fallback",
+    )
+    after = store.runtime_snapshot()
+    if not bool(after.get("persisted_up_to_date")):
+        raise RuntimeError(f"detached_projection_snapshot_not_current:{key}")
+    return {
+        "ok": True,
+        "webspace_id": key,
+        "before": _projection_compaction_runtime_summary(before),
+        "after": _projection_compaction_runtime_summary(after),
+    }
 
 
 def _request_projection_amplification_compaction(webspace_id: str) -> dict[str, Any]:
@@ -1492,10 +1521,17 @@ class ProjectionService:
             )
             return
         detached_compaction_needed = False
+        detached_update_written = False
 
         def _on_yjs_update(update_meta: Mapping[str, Any]) -> None:
-            nonlocal detached_compaction_needed
+            nonlocal detached_compaction_needed, detached_update_written
             live_room_update = bool(update_meta.get("live_room"))
+            if (
+                not live_room_update
+                and _int_or_zero(update_meta.get("update_bytes")) > 0
+                and bool(update_meta.get("persisted"))
+            ):
+                detached_update_written = True
             compaction_needed = _record_yjs_projection_write_amplification(
                 webspace_id=ws_id,
                 owner=owner,
@@ -1542,17 +1578,26 @@ class ProjectionService:
                 return
             root.set(txn, top_key, merged)
 
-        if prefer_live_room and mutate_live_room(
-            ws_id,
-            _mutator,
-            root_names=[root_name],
-            source="projection_service",
-            owner=owner,
-            channel=f"projection.{str(target.backend or 'yjs')}.live_room",
-            governed=True,
-            update_callback=_on_yjs_update,
-        ):
-            return
+        if prefer_live_room:
+            live_result = await submit_live_room_mutation(
+                ws_id,
+                _mutator,
+                root_names=[root_name],
+                source="projection_service",
+                owner=owner,
+                channel=f"projection.{str(target.backend or 'yjs')}.live_room",
+                governed=True,
+                update_callback=_on_yjs_update,
+            )
+            if bool(live_result.get("applied")):
+                return
+            _log.debug(
+                "live-room projection unavailable; using durable YStore fallback "
+                "webspace=%s path=%s reason=%s",
+                ws_id,
+                path,
+                str(live_result.get("reason") or "not_applied"),
+            )
         try:
             async with ystore_write_metadata(
                 root_names=[root_name],
@@ -1569,6 +1614,7 @@ class ProjectionService:
                 ) as ydoc:
                     with ydoc.begin_transaction() as txn:
                         _mutator(ydoc, txn)
+            detached_persisted = False
             if detached_compaction_needed:
                 outcome = await _compact_projection_amplification_store(
                     ws_id,
@@ -1576,14 +1622,18 @@ class ProjectionService:
                     delay_sec=0.0,
                 )
                 if outcome.get("executed"):
+                    detached_persisted = True
                     _log.warning(
                         "YStore compacted inline after detached projection amplification webspace=%s compacted=%s released_replay_bytes=%s",
                         ws_id,
                         bool(outcome.get("compacted")),
                         int(outcome.get("released_replay_bytes") or 0),
                     )
+            if detached_update_written and not detached_persisted:
+                await _persist_detached_projection_store(ws_id)
         except Exception:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)
+            raise
 
     def _apply_kv(self, scope: str, slot: str, value: Any, *, user_id: Optional[str]) -> None:
         # For MVP treat current_user profile slots specially and

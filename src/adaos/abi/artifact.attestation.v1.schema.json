@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/artifact.attestation.v1.schema.json",
+  "title": "AdaOS Detached Artifact Attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "subject_kind",
+    "subject_digest",
+    "project_id",
+    "issuer",
+    "key_id",
+    "issued_at",
+    "predicate_type",
+    "predicate_digest",
+    "algorithm",
+    "signature_b64",
+    "attestation_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.artifact.attestation.v1" },
+    "subject_kind": { "enum": ["package", "release"] },
+    "subject_digest": { "$ref": "#/$defs/digest" },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "issuer": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "key_id": { "$ref": "#/$defs/digest" },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "predicate_type": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "predicate_digest": { "$ref": "#/$defs/digest" },
+    "algorithm": { "const": "ed25519" },
+    "signature_b64": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    },
+    "attestation_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

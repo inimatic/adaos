@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,6 +93,10 @@ class CodexRunResult:
     command: tuple[str, ...] = ()
 
 
+class TaskExecutionCancelled(RuntimeError):
+    """The authoritative Skill Factory task was cancelled while executing."""
+
+
 class SubprocessCodexExecutor:
     """Run the installed Codex CLI without exposing AdaOS credentials in the prompt."""
 
@@ -100,10 +107,12 @@ class SubprocessCodexExecutor:
         model: str | None = None,
         timeout_seconds: int = 4 * 60 * 60,
         sandbox_mode: str | None = None,
+        repo_root: Path | None = None,
     ) -> None:
         self.executable = executable
         self.model = str(model or "").strip() or None
         self.timeout_seconds = max(60, int(timeout_seconds))
+        self.repo_root = Path(repo_root).resolve() if repo_root is not None else None
         configured_sandbox = str(sandbox_mode or os.getenv("ADAOS_LOCAL_CODEX_SANDBOX") or "").strip()
         # Native Codex workspace sandboxing is not currently writable in our
         # Windows host profile.  Local-process is an explicitly trusted debug
@@ -111,7 +120,14 @@ class SubprocessCodexExecutor:
         # Docker workers should override this back to workspace-write.
         self.sandbox_mode = configured_sandbox or ("danger-full-access" if os.name == "nt" else "workspace-write")
 
-    def __call__(self, *, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+    def __call__(
+        self,
+        *,
+        workspace: Path,
+        prompt: str,
+        output_dir: Path,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / "last_message.md"
         live_events_path = output_dir / "codex-live.jsonl"
@@ -137,6 +153,11 @@ class SubprocessCodexExecutor:
         with live_events_path.open("w", encoding="utf-8", newline="\n") as events_file, live_stderr_path.open(
             "w", encoding="utf-8", newline="\n"
         ) as stderr_file:
+            popen_kwargs: dict[str, Any] = {}
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            else:
+                popen_kwargs["start_new_session"] = True
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
@@ -146,13 +167,31 @@ class SubprocessCodexExecutor:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=self._bounded_environment(),
+                env=self._execution_environment(),
+                **popen_kwargs,
             )
             try:
-                process.communicate(input=prompt, timeout=self.timeout_seconds)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+                if process.stdin is None:  # pragma: no cover - Popen contract guard
+                    raise RuntimeError("Codex stdin is unavailable")
+                process.stdin.write(prompt)
+                process.stdin.close()
+                process.stdin = None
+                deadline = time.monotonic() + self.timeout_seconds
+                while process.poll() is None:
+                    if cancel_check is not None and cancel_check():
+                        self._terminate_process_tree(process)
+                        raise TaskExecutionCancelled("Skill Factory task was cancelled")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._terminate_process_tree(process)
+                        raise subprocess.TimeoutExpired(command, self.timeout_seconds)
+                    try:
+                        process.wait(timeout=min(0.5, remaining))
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                if process.poll() is None:
+                    self._terminate_process_tree(process)
                 raise
         events = live_events_path.read_text(encoding="utf-8", errors="replace")
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
@@ -164,6 +203,39 @@ class SubprocessCodexExecutor:
             final_message=final_message,
             command=tuple(command),
         )
+
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+        """Stop only the process group created for this isolated Codex turn."""
+
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            except Exception:
+                process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                process.kill()
+        try:
+            process.wait(timeout=10)
+        except Exception:
+            if process.poll() is None:
+                process.kill()
 
     def _resolve_executable(self) -> str:
         configured = str(os.getenv("ADAOS_CODEX_EXECUTABLE") or "").strip()
@@ -212,6 +284,26 @@ class SubprocessCodexExecutor:
         }
         return {key: value for key, value in os.environ.items() if key.upper() in allowed and value}
 
+    def _execution_environment(self) -> dict[str, str]:
+        environment = self._bounded_environment()
+        environment["PYTHONUTF8"] = "1"
+        environment["PYTHONIOENCODING"] = "utf-8"
+        python_path = Path(sys.executable).resolve()
+        environment["ADAOS_PYTHON"] = str(python_path)
+        environment["VIRTUAL_ENV"] = str(python_path.parent.parent)
+        inherited_path = str(environment.get("PATH") or "").strip()
+        environment["PATH"] = os.pathsep.join(
+            dict.fromkeys(
+                entry
+                for entry in (str(python_path.parent), inherited_path)
+                if entry
+            )
+        )
+        if self.repo_root is not None:
+            environment["ADAOS_REPO_ROOT"] = str(self.repo_root)
+            environment["PYTHONPATH"] = str(self.repo_root / "src")
+        return environment
+
 
 class LocalSkillFactoryWorker:
     """One-task local Skill Factory worker used by Prompt IDE automation."""
@@ -235,7 +327,7 @@ class LocalSkillFactoryWorker:
         self.dev_scenarios_root = Path(dev_scenarios_root)
         self.runs_root = Path(runs_root or (self.state_dir / "skill_factory" / "local_runs"))
         self.node_id = node_id
-        self.executor = executor or SubprocessCodexExecutor()
+        self.executor = executor or SubprocessCodexExecutor(repo_root=self.repo_root)
         self.progress_callback = progress_callback
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
@@ -264,6 +356,297 @@ class LocalSkillFactoryWorker:
             return polled
         assignment = dict(polled["assignment"])
         return self.run_assignment(assignment)
+
+    def recover_validated_run(self, task_id: str) -> dict[str, Any]:
+        """Validate or activate one preserved run without rerunning Codex."""
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        workspace = run_root / "workspace"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("validated run assignment does not match task_id")
+        local_state = _read_json(runtime_dir / "state.json")
+        if str(local_state.get("status") or "") != "failed":
+            raise ValueError("result recovery requires a preserved failed local run")
+        if not workspace.is_dir() or not (workspace / ".git").is_dir():
+            raise ValueError("result recovery requires the preserved task workspace")
+
+        test_report_path = output_dir / "test_report.json"
+        test_report = _read_json(test_report_path) if test_report_path.is_file() else {}
+        dirty = bool(_git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace))
+        report_passed = bool(test_report.get("ok")) and str(test_report.get("status") or "") == "passed"
+        if not report_passed:
+            # A worker/host failure can happen after Codex has returned but
+            # before deterministic validation or the result commit.  Resume
+            # those deterministic steps once against the preserved worktree;
+            # never invoke Codex again from the recovery path.
+            final_message_path = runtime_dir / "codex-final.md"
+            if not final_message_path.is_file():
+                raise ValueError("pre-commit recovery requires a completed Codex result")
+            self._cleanup_generated_files(workspace)
+            # Codex is instructed not to commit, but a surviving child process
+            # can still do so after its API parent has been restarted.  Diff
+            # from the immutable materialization root so both committed and
+            # uncommitted task changes receive the same bounded validation.
+            changed_paths = self._changed_from_baseline(workspace)
+            self._validate_changed_paths(assignment, changed_paths)
+            test_report = self._validate_workspace(assignment, workspace)
+            _write_json(output_dir / "test_report.json", test_report)
+            if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
+                raise ValueError("preserved result does not pass deterministic validation")
+
+            evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+            result_relative = str(
+                evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
+            ).replace("\\", "/")
+            evidence_root = workspace / Path(result_relative).parent
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            (evidence_root / "changed_files.txt").write_text(
+                "\n".join(changed_paths) + "\n", encoding="utf-8"
+            )
+            shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
+            task_prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+            packet_hash = "sha256:" + hashlib.sha256(task_prompt.encode("utf-8")).hexdigest()
+            source_snapshot = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+            provenance = {
+                "schema": "adaos.skill_factory.task_provenance.v1",
+                "runner_version": RUNNER_VERSION,
+                "image_digest": "local-process",
+                "instruction_packet_hash": packet_hash,
+                "dependency_changes": self._dependency_changes(workspace),
+                "source_refs": dict(assignment.get("source_refs") or {}),
+                "base_revision": str((assignment.get("forge") or {}).get("base_revision") or "") or None,
+                "source_snapshot": {
+                    "snapshot_id": source_snapshot.get("snapshot_id"),
+                    "digest": source_snapshot.get("digest"),
+                }
+                if source_snapshot
+                else None,
+                "tool_versions": {"python": sys.version.split()[0]},
+                "created_at": _now_iso(),
+                "recovery": {"mode": "pre_commit_deterministic_resume"},
+            }
+            _write_json(evidence_root / "provenance.json", provenance)
+            result_manifest = {
+                "schema": "adaos.skill_factory.dev_result.v1",
+                "task_id": task_id,
+                "node_id": self.node_id,
+                "status": "completed",
+                "summary": final_message_path.read_text(encoding="utf-8").strip(),
+                "tests": test_report,
+                "packet": _read_json(input_dir / "packet.json"),
+            }
+            _write_json(evidence_root / "result.json", result_manifest)
+            all_changed_paths = self._changed_from_baseline(workspace)
+            (evidence_root / "changed_files.txt").write_text(
+                "\n".join(all_changed_paths) + "\n", encoding="utf-8"
+            )
+            _git(["add", "-A"], cwd=workspace)
+            if _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+                _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
+            dirty = False
+            report_passed = True
+
+        if not report_passed:
+            raise ValueError("result recovery requires a passed deterministic test report")
+        if dirty:
+            raise ValueError("result recovery refuses a modified validated task workspace")
+
+        evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+        result_relative = str(
+            evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
+        ).replace("\\", "/")
+        evidence_root = workspace / Path(result_relative).parent
+        result_manifest = _read_json(evidence_root / "result.json")
+        provenance = _read_json(evidence_root / "provenance.json")
+        if str(result_manifest.get("task_id") or "") != str(task_id or ""):
+            raise ValueError("validated result manifest does not match task_id")
+        if str(result_manifest.get("status") or "") != "completed" or not provenance:
+            raise ValueError("validated result evidence is incomplete")
+
+        self._sync_artifacts(assignment, workspace)
+        result = {
+            "task_id": str(task_id),
+            "node_id": self.node_id,
+            "status": "completed",
+            "commit_hash": _git(["rev-parse", "HEAD"], cwd=workspace),
+            "branch": str((assignment.get("forge") or {}).get("branch") or ""),
+            "changed_paths": self._changed_from_baseline(workspace),
+            "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
+            "provenance": provenance,
+            "summary": str(result_manifest.get("summary") or "").strip(),
+            "local_run_dir": str(run_root),
+        }
+        _write_json(output_dir / "result.json", result)
+        completed = self.factory.recover_task_result(
+            {
+                **result,
+                "recovery": {
+                    "reason": "activate preserved validated result after retryable post-commit failure",
+                    "validated_run_dir": str(run_root),
+                    "actor": self.node_id,
+                },
+            }
+        )
+        _write_json(
+            runtime_dir / "state.json",
+            {
+                "schema": LOCAL_SESSION_SCHEMA,
+                "status": "completed",
+                "recovered": True,
+                "completed_at": _now_iso(),
+            },
+        )
+        return {"ok": True, "recovered": True, "assignment": assignment, "result": result, "completed": completed}
+
+    def recover_orphaned_codex_run(self, task_id: str) -> dict[str, Any]:
+        """Finish a Codex turn whose supervising API process was restarted.
+
+        This is deliberately a one-shot deterministic recovery.  It accepts
+        only a terminal Codex journal plus its final message, marks the local
+        run failed before doing any work, and delegates to the validated-result
+        path.  A second automatic attempt is therefore impossible; an
+        interrupted recovery requires the explicit recovery tool.
+        """
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("orphaned run assignment does not match task_id")
+
+        local_state_path = runtime_dir / "state.json"
+        local_state = _read_json(local_state_path) if local_state_path.is_file() else {}
+        local_status = str(local_state.get("status") or "").strip()
+        if local_status in {"completed", "failed"}:
+            raise ValueError(f"orphaned recovery is not available for local status {local_status!r}")
+
+        events_path = output_dir / "codex-live.jsonl"
+        final_message_path = output_dir / "last_message.md"
+        if not self._codex_journal_completed(events_path):
+            raise ValueError("orphaned recovery requires a terminal Codex journal")
+        if not final_message_path.is_file() or not final_message_path.read_text(
+            encoding="utf-8", errors="strict"
+        ).strip():
+            raise ValueError("orphaned recovery requires the completed Codex message")
+
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(final_message_path, runtime_dir / "codex-final.md")
+        _write_json(
+            local_state_path,
+            {
+                "schema": LOCAL_SESSION_SCHEMA,
+                "status": "failed",
+                "error": "orphaned_after_codex_completion",
+                "failed_at": _now_iso(),
+                "recovery": {"mode": "terminal_journal_resume", "automatic_attempts": 1},
+            },
+        )
+        self.factory.fail_task(
+            {
+                "task_id": str(task_id),
+                "node_id": self.node_id,
+                "message": "Worker supervisor restarted after the Codex turn completed",
+                # ``recover_task_result`` accepts only an explicitly
+                # recoverable failure.  This does not requeue or rerun Codex;
+                # the local state marker still enforces one automatic attempt.
+                "retryable": True,
+            }
+        )
+        try:
+            return self.recover_validated_run(task_id)
+        except Exception as exc:
+            try:
+                self.factory.fail_task(
+                    {
+                        "task_id": str(task_id),
+                        "node_id": self.node_id,
+                        "message": f"Orphaned Codex recovery failed: {type(exc).__name__}: {exc}",
+                        "retryable": False,
+                    }
+                )
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def _codex_journal_completed(path: Path, *, tail_bytes: int = 262_144) -> bool:
+        if not path.is_file():
+            return False
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - max(4096, int(tail_bytes))))
+                raw = stream.read().decode("utf-8", errors="replace")
+        except OSError:
+            return False
+        for line in reversed(raw.splitlines()):
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            event_type = str(event.get("type") or "").strip()
+            if event_type == "turn.completed":
+                return True
+            if event_type in {"turn.failed", "turn.cancelled"}:
+                return False
+        return False
+
+    def repair_preserved_run(self, task_id: str) -> dict[str, Any]:
+        """Run one bounded Codex repair against a preserved failed worktree."""
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        workspace = run_root / "workspace"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("preserved repair assignment does not match task_id")
+        local_state = _read_json(runtime_dir / "state.json")
+        if str(local_state.get("status") or "") != "failed":
+            raise ValueError("preserved repair requires a failed local run")
+        report_path = output_dir / "test_report.json"
+        report = _read_json(report_path) if report_path.is_file() else {}
+        errors = [str(item) for item in report.get("errors") or [] if str(item).strip()]
+        if bool(report.get("ok")) or not errors:
+            raise ValueError("preserved repair requires deterministic validation errors")
+        if not _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+            raise ValueError("preserved repair requires an uncommitted Codex worktree")
+        previous_repairs = sorted(runtime_dir.glob("codex-events-repair-*.jsonl"))
+        if len(previous_repairs) >= self.max_repair_attempts:
+            raise ValueError("preserved repair budget is exhausted")
+
+        prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+        repair_prompt = (
+            prompt
+            + "\n\n# Deterministic validation repair\n\n"
+            + "Continue in the preserved isolated workspace. Fix every deterministic error below, "
+            + "rerun relevant checks, and leave the workspace valid. Do not publish, activate, or "
+            + "change checkpoint-owned version/updated_at metadata.\n\n"
+            + "\n".join(f"- {item}" for item in errors[:40])
+        )
+        attempt = len(previous_repairs) + 1
+        result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
+        self._record_codex_attempt(runtime_dir, result, attempt=attempt)
+        if result.returncode:
+            raise RuntimeError(
+                f"Codex repair exited with code {result.returncode}: {result.stderr[-1000:]}"
+            )
+        if result.final_message:
+            # Recovery uses the primary final-message path for the durable
+            # result summary; the original message remains in the event log.
+            (runtime_dir / "codex-final.md").write_text(result.final_message, encoding="utf-8")
+        return self.recover_validated_run(task_id)
 
     def run_assignment(self, assignment: Mapping[str, Any]) -> dict[str, Any]:
         task_id = str(assignment.get("task_id") or "").strip()
@@ -294,13 +677,16 @@ class LocalSkillFactoryWorker:
 
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
             self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
-            codex_result = self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
+            self._ensure_task_active(task_id)
+            codex_result = self._execute_codex(task_id=task_id, workspace=workspace, prompt=prompt, output_dir=output_dir)
+            self._ensure_task_active(task_id)
             self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
             if codex_result.returncode:
                 raise RuntimeError(f"Codex exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}")
 
             test_report: dict[str, Any] = {}
             for repair_attempt in range(self.max_repair_attempts + 1):
+                self._ensure_task_active(task_id)
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
                 self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
@@ -318,7 +704,13 @@ class LocalSkillFactoryWorker:
                     + "fix every reported issue, rerun relevant checks, and leave the workspace in a valid state.\n\n"
                     + "\n".join(f"- {item}" for item in test_report["errors"][:40])
                 )
-                codex_result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
+                codex_result = self._execute_codex(
+                    task_id=task_id,
+                    workspace=workspace,
+                    prompt=repair_prompt,
+                    output_dir=output_dir,
+                )
+                self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
                 if codex_result.returncode:
                     raise RuntimeError(
@@ -366,11 +758,14 @@ class LocalSkillFactoryWorker:
             (evidence_root / "changed_files.txt").write_text("\n".join(all_changed_paths) + "\n", encoding="utf-8")
 
             self._progress(task_id, "commit_ready", "Committing validated local result")
+            self._ensure_task_active(task_id)
             _git(["add", "-A"], cwd=workspace)
             _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             commit_hash = _git(["rev-parse", "HEAD"], cwd=workspace)
             final_changed_paths = self._changed_from_baseline(workspace)
+            self._ensure_task_active(task_id)
             self._sync_artifacts(assignment, workspace)
+            self._ensure_task_active(task_id)
             result = {
                 "task_id": task_id,
                 "node_id": self.node_id,
@@ -387,6 +782,10 @@ class LocalSkillFactoryWorker:
             completed = self.factory.complete_task(result)
             _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, "status": "completed", "completed_at": _now_iso()})
             return {"ok": True, "assignment": dict(assignment), "result": result, "completed": completed}
+        except TaskExecutionCancelled as exc:
+            cancelled = {"status": "cancelled", "error": str(exc), "cancelled_at": _now_iso()}
+            _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, **cancelled})
+            return {"ok": False, "assignment": dict(assignment), **cancelled, "run_dir": str(run_root)}
         except Exception as exc:
             failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "failed_at": _now_iso()}
             _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, **failure})
@@ -402,6 +801,28 @@ class LocalSkillFactoryWorker:
             except Exception:
                 pass
             return {"ok": False, "assignment": dict(assignment), **failure, "run_dir": str(run_root)}
+
+    def _task_status(self, task_id: str) -> str:
+        snapshot = self.factory.snapshot(include_tasks=True)
+        task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), None)
+        return str((task or {}).get("status") or "missing").strip().lower()
+
+    def _ensure_task_active(self, task_id: str) -> None:
+        status = self._task_status(task_id)
+        if status in {"cancelled", "expired"}:
+            raise TaskExecutionCancelled(f"Skill Factory task is {status}")
+        if status in {"completed", "failed", "missing"}:
+            raise RuntimeError(f"Skill Factory task is no longer active: {status}")
+
+    def _execute_codex(self, *, task_id: str, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+        if isinstance(self.executor, SubprocessCodexExecutor):
+            return self.executor(
+                workspace=workspace,
+                prompt=prompt,
+                output_dir=output_dir,
+                cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
+            )
+        return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
 
     @staticmethod
     def _record_codex_attempt(runtime_dir: Path, result: CodexRunResult, *, attempt: int) -> None:
@@ -444,14 +865,14 @@ class LocalSkillFactoryWorker:
             if not source.exists():
                 raise FileNotFoundError(f"DEV scenario not found: {source}")
             shutil.copytree(source, destination)
-            skill_id = self._companion_skill_id(assignment)
-            skill_source = self.dev_skills_root / skill_id
-            skill_destination = workspace / "skills" / skill_id
-            if not skill_source.exists():
-                raise FileNotFoundError(
-                    f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
-                )
-            shutil.copytree(skill_source, skill_destination)
+            for skill_id in self._companion_skill_ids(assignment):
+                skill_source = self.dev_skills_root / skill_id
+                skill_destination = workspace / "skills" / skill_id
+                if not skill_source.exists():
+                    raise FileNotFoundError(
+                        f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
+                    )
+                shutil.copytree(skill_source, skill_destination)
             automation_snapshot = (
                 self.state_dir
                 / "builder"
@@ -475,17 +896,31 @@ class LocalSkillFactoryWorker:
         return None
 
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
+        companions = self._companion_skill_ids(assignment)
+        return companions[0] if companions else ""
+
+    def _companion_skill_ids(self, assignment: Mapping[str, Any]) -> list[str]:
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         target = dict(assignment.get("target") or {})
-        return _safe_token(artifacts.get("companion_skill_id") or f"{target.get('id')}_skill", fallback="generated_skill")
+        values = artifacts.get("companion_skill_ids")
+        explicit_values = isinstance(values, (list, tuple))
+        if not explicit_values:
+            values = [artifacts.get("companion_skill_id") or f"{target.get('id')}_skill"]
+        result: list[str] = []
+        for value in values:
+            token = _safe_token(value, fallback="")
+            if token and token not in result:
+                result.append(token)
+        return result if explicit_values else (result or ["generated_skill"])
 
     def _build_packet(self, assignment: Mapping[str, Any], workspace: Path, input_dir: Path) -> dict[str, Any]:
         request = dict(assignment.get("realize_request") or {})
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill")
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
-        companion = self._companion_skill_id(assignment) if target_type == "scenario" else target_id
+        companions = self._companion_skill_ids(assignment) if target_type == "scenario" else [target_id]
+        companion = companions[0] if companions else None
         source = dict(request.get("source") or {})
         artifacts = dict(request.get("artifacts") or {})
         brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()
@@ -497,6 +932,7 @@ class LocalSkillFactoryWorker:
             "task_id": assignment.get("task_id"),
             "target": target,
             "companion_skill_id": companion,
+            "companion_skill_ids": companions,
             "allowed_paths": allowed,
             "acceptance": dict(assignment.get("acceptance") or {}),
             "constraints": dict(assignment.get("constraints") or {}),
@@ -509,14 +945,18 @@ class LocalSkillFactoryWorker:
         transition_requirements = """
 ## Workflow transition constraints
 
-This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill or the retained `.builder_previous_automation` snapshot. The functional Automation implementation remains frozen for Preview and for the next Automation cycle.
+This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill, the retained `.builder_previous_automation` snapshot, or the `.builder_current_publication` baseline. The functional Automation implementation and current Publication remain frozen for Preview and for the next Automation cycle.
 """ if workflow_transition == "return_to_prototype" else """
 ## Previous Automation
 
 When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as the immutable previous Automation edition supplied alongside the current Prototype requirements. Use it as implementation context, but never edit it.
+
+## Current Publication
+
+When `scenarios/{target_id}/.builder_current_publication` exists, treat it as the immutable currently installed functional edition. Use it as the implementation baseline when the current Prototype or previous Automation is non-functional or omits established bindings. Merge the approved Prototype requirements into that baseline; never edit the retained publication directory itself.
 """
         required_result = """1. Inspect all existing files under the target paths before editing.
-2. Edit only the current scenario's declarative prototype files; do not modify the companion skill.
+2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
 3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
 4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
 5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
@@ -524,16 +964,19 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect all existing files under the target paths before editing.
 2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
-3. For a scenario prototype, connect `scenarios/{target_id}` to `skills/{companion}` through `depends`, declarative actions and data routes as appropriate.
+3. For a scenario prototype, connect `scenarios/{target_id}` to every required companion skill ({companions_label}) through `depends`, declarative actions and data routes as appropriate.
 4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
-6. Run relevant bounded checks. Fix failures caused by your changes.
+6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK source exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
-9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields."""
+9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields. Tests must validate their shape or semantics and must not assert an exact value for either field, because checkpointing changes them after your checks.
+10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it.
+11. Do not edit `.builder_current_publication`; it is immutable implementation input."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
+            companions_label=", ".join(companions),
             allowed_paths=", ".join(allowed),
         )
         prompt = f"""# AdaOS local realization task
@@ -544,7 +987,7 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 
 - Type: {target_type}
 - ID: {target_id}
-- Companion skill: {companion}
+- Companion skills: {", ".join(companions)}
 
 ## Approved implementation brief
 
@@ -589,8 +1032,35 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         return paths
 
     def _changed_from_baseline(self, workspace: Path) -> list[str]:
-        output = _git(["diff", "--name-only", "HEAD~1", "HEAD"], cwd=workspace)
-        return [line.strip().replace("\\", "/") for line in output.splitlines() if line.strip()]
+        # The isolated repository starts with exactly one materialization
+        # commit.  During validation the generated result is still in the
+        # worktree; after finalization it is a second commit.  ``HEAD~1`` is
+        # therefore invalid at the first boundary and also assumes Codex did
+        # not create an intermediate commit.  Always diff from the repository
+        # root and merge the current porcelain paths instead.
+        if not (workspace / ".git").is_dir():
+            # Direct deterministic-validator tests may provide a materialized
+            # tree without the worker's git envelope.  In that case every
+            # source file is conservatively considered in scope.
+            return [
+                path.relative_to(workspace).as_posix()
+                for path in sorted(workspace.rglob("*"))
+                if path.is_file() and ".git" not in path.parts
+            ]
+        roots = _git(["rev-list", "--max-parents=0", "HEAD"], cwd=workspace).splitlines()
+        if not roots:
+            raise RuntimeError("isolated realization workspace has no baseline commit")
+        baseline = roots[-1].strip()
+        committed = _git(["diff", "--name-only", baseline, "HEAD"], cwd=workspace)
+        paths = [
+            line.strip().replace("\\", "/")
+            for line in committed.splitlines()
+            if line.strip()
+        ]
+        for path in self._changed_paths(workspace):
+            if path not in paths:
+                paths.append(path)
+        return paths
 
     def _validate_changed_paths(self, assignment: Mapping[str, Any], changed_paths: list[str]) -> None:
         allowed = [str(item).replace("\\", "/").strip("/") + "/" for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
@@ -611,6 +1081,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     "return_to_prototype may not modify the frozen Automation implementation: "
                     f"{forbidden}"
                 )
+        immutable_publication = [
+            path
+            for path in changed_paths
+            if "/.builder_current_publication/" in f"/{path}"
+        ]
+        if immutable_publication:
+            raise ValueError(
+                "Automation may not modify the current Publication baseline: "
+                f"{immutable_publication}"
+            )
 
     def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
         errors: list[str] = []
@@ -618,7 +1098,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
+        changed_paths = set(self._changed_from_baseline(workspace))
         self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
+        self._validate_tests_do_not_pin_checkpoint_metadata(
+            workspace,
+            checks,
+            errors,
+            changed_paths=changed_paths,
+        )
+        self._validate_skill_data_routes(workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -653,9 +1141,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     payload = _read_json(path)
                     validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
                     if validation_errors:
-                        errors.extend(
-                            f"{path.relative_to(workspace)}: webui schema: {item.message}" for item in validation_errors[:20]
-                        )
+                        for item in validation_errors[:20]:
+                            pointer = "/".join(str(part) for part in item.absolute_path) or "<root>"
+                            errors.append(
+                                f"{path.relative_to(workspace)}: webui schema at {pointer}: {item.message}"
+                            )
                     else:
                         checks.append({"kind": "webui.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
             except Exception as exc:
@@ -711,8 +1201,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
         target = dict(assignment.get("target") or {})
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
-        skill_id = self._companion_skill_id(assignment) if target.get("type") == "scenario" else target_id
-        required = [workspace / "skills" / skill_id / "skill.yaml", workspace / "skills" / skill_id / "handlers" / "main.py"]
+        skill_ids = self._companion_skill_ids(assignment) if target.get("type") == "scenario" else [target_id]
+        required = [
+            path
+            for skill_id in skill_ids
+            for path in (
+                workspace / "skills" / skill_id / "skill.yaml",
+                workspace / "skills" / skill_id / "handlers" / "main.py",
+            )
+        ]
         if target.get("type") == "scenario":
             required.append(workspace / "scenarios" / target_id / "scenario.yaml")
         for path in required:
@@ -727,6 +1224,93 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    @staticmethod
+    def _validate_tests_do_not_pin_checkpoint_metadata(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        changed_paths: set[str] | None = None,
+    ) -> None:
+        def checkpoint_key(node: ast.AST) -> str | None:
+            if isinstance(node, ast.Subscript):
+                key = node.slice
+                if isinstance(key, ast.Constant) and key.value in {"version", "updated_at"}:
+                    return str(key.value)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value in {"version", "updated_at"}
+            ):
+                return str(node.args[0].value)
+            return None
+
+        def exact_literal(node: ast.AST) -> bool:
+            if isinstance(node, ast.Constant):
+                return isinstance(node.value, (str, int, float))
+            if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+                return bool(node.elts) and all(exact_literal(item) for item in node.elts)
+            return False
+
+        for path in sorted(workspace.glob("**/tests/test_*.py")):
+            relative = path.relative_to(workspace).as_posix()
+            if changed_paths is not None and relative not in changed_paths:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError, UnicodeError):
+                continue
+            violations: list[tuple[int, str]] = []
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Compare):
+                    continue
+                expressions = [node.left, *node.comparators]
+                keys = [key for item in expressions if (key := checkpoint_key(item))]
+                if not keys:
+                    continue
+                if any(exact_literal(item) for item in expressions if checkpoint_key(item) is None):
+                    violations.append((int(getattr(node, "lineno", 0) or 0), keys[0]))
+            if violations:
+                errors.extend(
+                    f"{relative}:{line}: generated test pins checkpoint-owned manifest {key}; "
+                    "validate its format or semantics instead of an exact value"
+                    for line, key in violations
+                )
+            else:
+                checks.append({"kind": "checkpoint_test_contract", "path": relative, "ok": True})
+
+    @staticmethod
+    def _validate_skill_data_routes(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Apply install-strict causal and budget rules before a result can commit."""
+
+        from adaos.services.skill.validation import validate_data_route_contract
+
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                errors.append(f"{relative}: data route validation failed: {type(exc).__name__}: {exc}")
+                continue
+            if not isinstance(manifest, dict):
+                errors.append(f"{relative}: skill manifest must be an object")
+                continue
+            route_issues = validate_data_route_contract(manifest)
+            if route_issues:
+                errors.extend(
+                    f"{relative}: {issue.code}: {issue.message} ({issue.where})"
+                    for issue in route_issues
+                )
+            else:
+                checks.append({"kind": "skill.data_routes.strict", "path": relative, "ok": True})
 
     @staticmethod
     def _validate_checkpoint_owned_manifest_metadata(
@@ -928,8 +1512,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         sources: list[tuple[Path, Path]] = []
         if target.get("type") == "scenario":
             sources.append((workspace / "scenarios" / target_id, self.dev_scenarios_root / target_id))
-            skill_id = self._companion_skill_id(assignment)
-            sources.append((workspace / "skills" / skill_id, self.dev_skills_root / skill_id))
+            sources.extend(
+                (workspace / "skills" / skill_id, self.dev_skills_root / skill_id)
+                for skill_id in self._companion_skill_ids(assignment)
+            )
         else:
             sources.append((workspace / "skills" / target_id, self.dev_skills_root / target_id))
         snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
@@ -1002,6 +1588,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 previous_automation = staged / ".builder_previous_automation"
                 if previous_automation.exists():
                     shutil.rmtree(previous_automation)
+                current_publication = staged / ".builder_current_publication"
+                if current_publication.exists():
+                    shutil.rmtree(current_publication)
                 self._cleanup_generated_files(staged)
                 staged_rows.append((staged, destination, backup))
 
@@ -1044,4 +1633,4 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     shutil.rmtree(backup, ignore_errors=True)
 
 
-__all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor"]
+__all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor", "TaskExecutionCancelled"]

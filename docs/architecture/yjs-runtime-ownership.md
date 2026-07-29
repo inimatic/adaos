@@ -118,6 +118,22 @@ APIs. Reconcile cannot accept a prepared payload, and apply cannot silently
 fall back to source resolution. Ordinary scenario switching uses resolve then
 apply. Hard room reset is not a switch primitive.
 
+### Browser reconnect admission
+
+Initial browser sync is an untrusted native boundary. Malformed frames and
+payloads that fail isolated native preflight are rejected before the live YDoc
+is touched. The current bounded MVP additionally uses server-authoritative
+initial reconnect: browser `SYNC_STEP1` and the first client state update are
+validated but not applied, and the server replays its durable effective state.
+Subsequent updates follow the normal live-room path.
+
+This policy prevents a stale or concurrently materialized browser document from
+aborting or corrupting the shared native YDoc. Its explicit tradeoff is that an
+offline-only browser draft present at reconnect is not merged. Safe offline
+merge requires generation/checkpoint identity, conflict policy, and a bounded
+reconciliation protocol; disabling this guard is not a substitute for that
+design.
+
 Bootstrap preserves runtime-owned `runtime.environment.materialization`
 metadata while refreshing static environment fields. A durable snapshot is
 reused without decoding large effective branches when its ready marker,

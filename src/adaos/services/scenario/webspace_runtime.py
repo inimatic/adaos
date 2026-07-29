@@ -1081,7 +1081,13 @@ def _mark_modal_def(entry: Any, *, source: str, skill: str, dev: bool) -> Dict[s
     return data
 
 
-def _apply_node_display_to_entry(entry: Dict[str, Any], display: Mapping[str, Any] | None, *, node_id: str | None = None) -> Dict[str, Any]:
+def _apply_node_display_to_entry(
+    entry: Dict[str, Any],
+    display: Mapping[str, Any] | None,
+    *,
+    node_id: str | None = None,
+    override_existing: bool = False,
+) -> Dict[str, Any]:
     data = dict(entry)
     resolved_node_id = str(node_id or data.get("node_id") or "").strip()
     if resolved_node_id and not str(data.get("node_id") or "").strip():
@@ -1089,16 +1095,16 @@ def _apply_node_display_to_entry(entry: Dict[str, Any], display: Mapping[str, An
     if not isinstance(display, Mapping):
         return data
     node_label = str(display.get("node_label") or "").strip()
-    if node_label and not str(data.get("node_label") or "").strip():
+    if node_label and (override_existing or not str(data.get("node_label") or "").strip()):
         data["node_label"] = node_label
     compact_label = str(display.get("node_compact_label") or "").strip()
-    if compact_label and not str(data.get("node_compact_label") or "").strip():
+    if compact_label and (override_existing or not str(data.get("node_compact_label") or "").strip()):
         data["node_compact_label"] = compact_label
     node_color = str(display.get("node_color") or "").strip()
-    if node_color and not str(data.get("node_color") or "").strip():
+    if node_color and (override_existing or not str(data.get("node_color") or "").strip()):
         data["node_color"] = node_color
     node_index = display.get("node_index")
-    if node_index is not None and data.get("node_index") is None:
+    if node_index is not None and (override_existing or data.get("node_index") is None):
         data["node_index"] = node_index
     return data
 
@@ -1172,23 +1178,41 @@ def _apply_node_context_to_ui(
     *,
     node_id: str,
     modal_id_map: Mapping[str, str] | None = None,
+    override_node_display: bool = False,
 ) -> Any:
     if not node_id:
         return _clone_json_like(value)
     if isinstance(value, list):
         return [
-            _apply_node_context_to_ui(item, display, node_id=node_id, modal_id_map=modal_id_map)
+            _apply_node_context_to_ui(
+                item,
+                display,
+                node_id=node_id,
+                modal_id_map=modal_id_map,
+                override_node_display=override_node_display,
+            )
             for item in value
         ]
     if not isinstance(value, Mapping):
         return _clone_json_like(value)
 
     data: Dict[str, Any] = {
-        str(key): _apply_node_context_to_ui(item, display, node_id=node_id, modal_id_map=modal_id_map)
+        str(key): _apply_node_context_to_ui(
+            item,
+            display,
+            node_id=node_id,
+            modal_id_map=modal_id_map,
+            override_node_display=override_node_display,
+        )
         for key, item in value.items()
     }
     if data.get("id") or data.get("type") or data.get("dataSource") or data.get("actions") or data.get("source"):
-        data = _apply_node_display_to_entry(data, display, node_id=node_id)
+        data = _apply_node_display_to_entry(
+            data,
+            display,
+            node_id=node_id,
+            override_existing=override_node_display,
+        )
     if isinstance(data.get("dataSource"), Mapping):
         data["dataSource"] = _scope_node_data_source(data.get("dataSource"), node_id=node_id)
     if isinstance(data.get("source"), str):
@@ -1664,6 +1688,55 @@ def _detached_member_node_ids() -> set[str]:
         if node_id:
             out.add(node_id)
     return out
+
+
+def _member_device_inventory_display_map() -> dict[str, dict[str, Any]]:
+    try:
+        from adaos.services.device_inventory import list_devices
+    except Exception:
+        return {}
+    try:
+        devices = list_devices(kind="member", include_detached=True)
+    except Exception:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in list(devices or []):
+        if not isinstance(item, Mapping):
+            continue
+        identity = item.get("identity") if isinstance(item.get("identity"), Mapping) else {}
+        policy = item.get("policy") if isinstance(item.get("policy"), Mapping) else {}
+        node_id = str(identity.get("node_id") or "").strip()
+        if not node_id:
+            continue
+        effective_name = (
+            str(policy.get("effective_name") or "").strip()
+            or str(policy.get("display_name") or "").strip()
+        )
+        display: dict[str, Any] = {}
+        if effective_name:
+            display["node_label"] = effective_name
+        if display:
+            out[node_id] = display
+    return out
+
+
+def _remote_member_node_display(
+    node: Mapping[str, Any],
+    *,
+    inventory_display: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    display = node_display_from_directory_node(node)
+    node_id = str(node.get("node_id") or "").strip()
+    overlay = (
+        inventory_display.get(node_id)
+        if node_id and isinstance(inventory_display, Mapping)
+        else None
+    )
+    if isinstance(overlay, Mapping):
+        for key, value in overlay.items():
+            if value is not None and str(value or "").strip():
+                display[str(key)] = value
+    return display
 
 
 def _scope_remote_catalog_entry_id(entry: Dict[str, Any], *, node_id: str) -> Dict[str, Any]:
@@ -3719,6 +3792,33 @@ def _refresh_live_room_after_rebuild_enabled() -> bool:
     return _env_flag_default_enabled("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM")
 
 
+def _rebuild_action_refreshes_live_room(action: str) -> bool:
+    action_token = str(action or "").strip().lower()
+    if action_token in {
+        "scenario_switch_rebuild",
+        "builder_revision_apply",
+        "reload",
+        "reset",
+        "restore",
+        "artifact_subscription_sync",
+    }:
+        return True
+    return action_token.startswith("skill_") and action_token.endswith("_sync")
+
+
+def _rebuild_action_applies_live_payload(action: str) -> bool:
+    action_token = str(action or "").strip().lower()
+    if action_token in {
+        "scenario_switch_rebuild",
+        "builder_revision_apply",
+        "reload",
+        "reset",
+        "artifact_subscription_sync",
+    }:
+        return True
+    return action_token.startswith("skill_") and action_token.endswith("_sync")
+
+
 def _defer_live_room_refresh_for_rebuild(action: str) -> bool:
     action_token = str(action or "").strip()
     return action_token == "builder_revision_apply" and _env_flag_enabled(
@@ -5254,6 +5354,7 @@ class WebspaceScenarioRuntime:
             nodes = []
         local_node_id = _local_node_id()
         detached_node_ids = _detached_member_node_ids()
+        inventory_display = _member_device_inventory_display_map()
         decls: List[Dict[str, Any]] = []
         for node in nodes:
             if not isinstance(node, Mapping):
@@ -5355,7 +5456,7 @@ class WebspaceScenarioRuntime:
                 ydoc_defaults = fallback_ydoc_defaults
             if not apps and not widgets and not registry and not resources and not ui_interface and not ui_interfaces and not webio and not ydoc_defaults:
                 continue
-            display = node_display_from_directory_node(node)
+            display = _remote_member_node_display(node, inventory_display=inventory_display)
             modal_id_map = _node_scoped_modal_ids(registry, node_id=node_id)
             decl: Dict[str, Any] = {
                 "skill": f"subnet.member.{node_id}",
@@ -5384,6 +5485,7 @@ class WebspaceScenarioRuntime:
                             display,
                             node_id=node_id,
                             modal_id_map=modal_id_map,
+                            override_node_display=True,
                         ),
                         source=f"skill:subnet.member.{node_id}",
                         skill=f"subnet.member.{node_id}",
@@ -5401,6 +5503,7 @@ class WebspaceScenarioRuntime:
                         display,
                         node_id=node_id,
                         modal_id_map=modal_id_map,
+                        override_node_display=True,
                     )
             if isinstance(resources, Mapping):
                 for key, value in resources.items():
@@ -5434,7 +5537,13 @@ class WebspaceScenarioRuntime:
                 if scenario_id and not _scenario_exists_for_switch(scenario_id, space="workspace"):
                     continue
                 entry = _scope_remote_catalog_entry_id(
-                    _apply_node_context_to_ui(item, display, node_id=node_id, modal_id_map=modal_id_map),
+                    _apply_node_context_to_ui(
+                        item,
+                        display,
+                        node_id=node_id,
+                        modal_id_map=modal_id_map,
+                        override_node_display=True,
+                    ),
                     node_id=node_id,
                 )
                 decl["apps"].append(entry)
@@ -5454,7 +5563,13 @@ class WebspaceScenarioRuntime:
                 if _catalog_entry_is_foreign_relay(item, node_id=node_id):
                     continue
                 entry = _scope_remote_catalog_entry_id(
-                    _apply_node_context_to_ui(item, display, node_id=node_id, modal_id_map=modal_id_map),
+                    _apply_node_context_to_ui(
+                        item,
+                        display,
+                        node_id=node_id,
+                        modal_id_map=modal_id_map,
+                        override_node_display=True,
+                    ),
                     node_id=node_id,
                 )
                 decl["widgets"].append(entry)
@@ -9048,10 +9163,32 @@ async def _member_catalog_projection_missing(*, webspace_id: str, node_id: str) 
     return _member_catalog_projection_missing_from_catalog(catalog, expected)
 
 
+def _member_entity_event_node_id(payload: Mapping[str, Any] | None) -> str:
+    data = payload if isinstance(payload, Mapping) else {}
+    scope = data.get("scope") if isinstance(data.get("scope"), Mapping) else {}
+    entity_ref = str(data.get("entity_ref") or "").strip()
+    entity_kind = str(data.get("entity_kind") or "").strip().lower()
+    link_kind = str(scope.get("link_kind") or "").strip().lower()
+    if link_kind and link_kind != "member":
+        return ""
+    if entity_kind and entity_kind != "device.member":
+        return ""
+    if entity_ref and not entity_ref.startswith("device:member:"):
+        return ""
+    node_id = (
+        str(scope.get("device_id") or "").strip()
+        or str(scope.get("node_id") or "").strip()
+    )
+    if not node_id and entity_ref.startswith("device:member:"):
+        node_id = entity_ref.removeprefix("device:member:").strip()
+    return node_id
+
+
 async def _schedule_member_snapshot_rebuild_from_event(
     evt: Any,
     *,
     only_when_catalog_missing: bool = False,
+    force_rebuild: bool = False,
 ) -> None:
     payload = _payload(evt)
     node_id = str(payload.get("node_id") or "").strip() or "member"
@@ -9069,10 +9206,12 @@ async def _schedule_member_snapshot_rebuild_from_event(
         stats["last_reason"] = reason
         stats["last_requested_at"] = time.time()
         stats["last_request_id"] = request_id
+        if force_rebuild:
+            _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.pop(key, None)
         material_fingerprint = _member_snapshot_desktop_material_fingerprint(node_id)
         if material_fingerprint:
             previous_fingerprint = _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.get(key)
-            if previous_fingerprint == material_fingerprint:
+            if previous_fingerprint == material_fingerprint and not force_rebuild:
                 stats["skipped_unchanged_total"] = int(stats.get("skipped_unchanged_total") or 0) + 1
                 stats["last_skipped_unchanged_at"] = time.time()
                 stats["last_material_fingerprint"] = material_fingerprint
@@ -9091,7 +9230,7 @@ async def _schedule_member_snapshot_rebuild_from_event(
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running", request_id=request_id)
             continue
         last_at = float(_MEMBER_SNAPSHOT_REBUILD_AT.get(key) or 0.0)
-        if interval_s > 0 and last_at > 0 and now - last_at < interval_s:
+        if not force_rebuild and interval_s > 0 and last_at > 0 and now - last_at < interval_s:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window", request_id=request_id)
             _schedule_member_snapshot_rebuild_delayed(
                 webspace_id=webspace_id,
@@ -9113,6 +9252,33 @@ async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
 @subscribe("subnet.member.snapshot.refreshed")
 async def _on_subnet_member_snapshot_refreshed(evt: Any) -> None:
     await _schedule_member_snapshot_rebuild_from_event(evt, only_when_catalog_missing=True)
+
+
+@subscribe("subnet.member.access.reactivated")
+async def _on_subnet_member_access_reactivated(evt: Any) -> None:
+    await _schedule_member_snapshot_rebuild_from_event(evt, force_rebuild=True)
+
+
+@subscribe("subnet.member.meta.changed")
+async def _on_subnet_member_meta_changed(evt: Any) -> None:
+    await _schedule_member_snapshot_rebuild_from_event(evt, force_rebuild=True)
+
+
+@subscribe("entity.display_name.changed")
+@subscribe("entity.observed")
+async def _on_member_entity_name_changed(evt: Any) -> None:
+    payload = _payload(evt)
+    node_id = _member_entity_event_node_id(payload)
+    if not node_id:
+        return
+    await _schedule_member_snapshot_rebuild_from_event(
+        {
+            "node_id": node_id,
+            "type": _topic(evt) or str(payload.get("reason") or "entity.name.changed"),
+            "source": str(payload.get("source") or "").strip() or "entity",
+        },
+        force_rebuild=True,
+    )
 
 
 def _schedule_member_snapshot_rebuild(
@@ -9757,6 +9923,7 @@ async def rebuild_webspace_from_sources(
         if _is_control_flow_base_exception(exc):
             raise
         error_token = "webspace_rebuild_timeout" if isinstance(exc, asyncio.TimeoutError) else "webspace_rebuild_failed"
+        error_detail = f"{type(exc).__name__}: {exc}"[:1000]
         finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
         semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
         ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
@@ -9787,11 +9954,12 @@ async def rebuild_webspace_from_sources(
             phase_timings_ms=phase_timings,
         )
         _log.warning(
-            "failed to rebuild webspace from sources webspace=%s action=%s scenario=%s error=%s timings_ms=%s semantic_timings_ms=%s",
+            "failed to rebuild webspace from sources webspace=%s action=%s scenario=%s error=%s detail=%s timings_ms=%s semantic_timings_ms=%s",
             webspace_id,
             requested_action,
             target_scenario,
             error_token,
+            error_detail,
             finalized_timings,
             semantic_timings,
             exc_info=True,
@@ -9815,6 +9983,7 @@ async def rebuild_webspace_from_sources(
             "ydoc_timings_ms": ydoc_timings,
             "phase_timings_ms": phase_timings,
             "error": error_token,
+            "error_detail": error_detail,
         }
 
     semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
@@ -9836,22 +10005,22 @@ async def rebuild_webspace_from_sources(
             scenario_switch_payload_rebuild
             or _refresh_live_room_after_rebuild_enabled()
         )
-        and requested_action
-        in {
-            "scenario_switch_rebuild",
-            "builder_revision_apply",
-            "reload",
-            "reset",
-            "restore",
-        }
+        and _rebuild_action_refreshes_live_room(requested_action)
     )
-    force_full_state_update = bool(fresh_doc_rebuild and ystore_reset)
+    force_full_state_update = bool(
+        fresh_doc_rebuild
+        and (
+            ystore_reset
+            or (requested_action == "builder_revision_apply" and payload_only_rebuild)
+        )
+    )
     if should_refresh_live_room:
         if _defer_live_room_refresh_for_rebuild(requested_action):
             persist_repair = not (
                 requested_action == "builder_revision_apply"
                 and builder_fresh_doc_rebuild
                 and _builder_revision_replace_ystore_snapshot_enabled()
+                and not payload_only_rebuild
             )
             deferred_refresh_kwargs: dict[str, Any] = {
                 "persist_repair": persist_repair,
@@ -9874,11 +10043,12 @@ async def rebuild_webspace_from_sources(
                     webspace_id,
                     requested_action,
                 )
-                if requested_action in {"scenario_switch_rebuild", "builder_revision_apply", "reload", "reset"}:
+                if _rebuild_action_applies_live_payload(requested_action):
                     persist_repair = not (
                         requested_action == "builder_revision_apply"
                         and builder_fresh_doc_rebuild
                         and _builder_revision_replace_ystore_snapshot_enabled()
+                        and not payload_only_rebuild
                     )
                     refresh_kwargs: dict[str, Any] = {
                         "reason": f"semantic_rebuild:{requested_action}",
@@ -10600,6 +10770,88 @@ def _ensure_builder_empty_canvas_widget(page: dict[str, Any], scenario_id: str) 
     page["meta"] = meta
 
 
+def _builder_publication_package_content(
+    scenario_id: str,
+    *,
+    revision: str | None,
+) -> dict[str, Any] | None:
+    """Read an installed immutable Publication even when its slot is not active.
+
+    Workspace files are an active materialization, while subscriptions and
+    release packages are the durable source for every installed project.
+    """
+
+    from io import BytesIO
+    from zipfile import BadZipFile, ZipFile
+
+    from adaos.domain.artifact_release import ProjectRelease
+    from adaos.services.artifact_pipeline.channels import ChannelError, SubscriptionStore
+    from adaos.services.artifact_pipeline.packages import (
+        ContentAddressedPackageStore,
+        PackageVerificationError,
+    )
+    from adaos.services.runtime_paths import current_state_dir
+
+    scenario_root = scenarios_loader.scenario_root_for_space(scenario_id, "workspace")
+    workspace_root = scenario_root.parent.parent
+    try:
+        subscription = SubscriptionStore(
+            workspace_root / ".adaos" / "subscriptions.json"
+        ).load().get(scenario_id)
+    except ChannelError as exc:
+        raise ValueError("Builder publication subscription metadata is invalid") from exc
+    if subscription is None or not subscription.installed_digest:
+        return None
+    expected_release = f"{scenario_id}@{str(revision or '').strip()}"
+    if revision and subscription.installed_release != expected_release:
+        return None
+
+    release_path = (
+        workspace_root
+        / ".adaos"
+        / "releases"
+        / f"{subscription.installed_digest.split(':', 1)[-1]}.json"
+    )
+    if not release_path.is_file():
+        return None
+    try:
+        release = ProjectRelease.from_mapping(
+            json.loads(release_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError("Builder publication release metadata is invalid") from exc
+    release_digest = release.release_digest or release.computed_digest()
+    if (
+        release.project_id != scenario_id
+        or release_digest != subscription.installed_digest
+        or (revision and release.version != str(revision).strip())
+    ):
+        raise ValueError("Builder publication release identity does not match its subscription")
+    component = next(
+        (
+            item
+            for item in release.components
+            if item.kind == "scenario" and item.artifact_id == scenario_id
+        ),
+        None,
+    )
+    if component is None:
+        raise ValueError("Builder publication release has no scenario component")
+
+    store = ContentAddressedPackageStore(
+        Path(current_state_dir()) / "artifact_pipeline" / "packages"
+    )
+    try:
+        archive, verified = store.read_verified(component.digest)
+        if verified.ref != component:
+            raise ValueError("published package identity differs from its release")
+        with ZipFile(BytesIO(archive), "r") as bundle:
+            payload = json.loads(bundle.read("webui.json").decode("utf-8-sig"))
+    except (OSError, KeyError, ValueError, BadZipFile, PackageVerificationError) as exc:
+        raise ValueError("Builder publication package is unavailable or invalid") from exc
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
 def _builder_preview_content_override(
     scenario_id: str,
     *,
@@ -10645,6 +10897,11 @@ def _builder_preview_content_override(
         content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
     if not isinstance(content, Mapping):
         content = scenarios_loader.read_content(scenario_id, space=source_space)
+    if stage_token == "publication" and (not isinstance(content, Mapping) or not content):
+        content = _builder_publication_package_content(
+            scenario_id,
+            revision=revision_token or None,
+        )
     if not isinstance(content, Mapping) or not content:
         raise ValueError(f"Builder {stage_token} preview source is unavailable: {scenario_id}")
 

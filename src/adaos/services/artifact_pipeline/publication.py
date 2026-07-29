@@ -20,6 +20,12 @@ from adaos.services.artifact_pipeline.activation import (
     ActivationResult,
     WorkspaceActivationManager,
 )
+from adaos.services.artifact_pipeline.attestation_publication import (
+    ArtifactAttestationPublisher,
+    AttestationPublicationResult,
+)
+from adaos.services.artifact_pipeline.attestation_sets import ReleaseAttestationSet
+from adaos.services.artifact_pipeline.attestations import ArtifactAttestationAdmission
 from adaos.services.artifact_pipeline.candidates import (
     CandidateRecord,
     CandidateStore,
@@ -89,6 +95,17 @@ class PublicationRemote(Protocol):
     def put_release(self, plan: ReleasePlan, archives: Mapping[str, bytes]) -> None: ...
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan: ...
+
+    def put_release_attestation_set(
+        self,
+        attestation_set: ReleaseAttestationSet,
+    ) -> ReleaseAttestationSet: ...
+
+    def get_release_attestation_set(
+        self,
+        project_id: str,
+        release_digest: str,
+    ) -> ReleaseAttestationSet: ...
 
     def set_channel(
         self,
@@ -289,10 +306,14 @@ class ArtifactPublicationService:
         state_root: Path,
         workspace_root: Path,
         remote: PublicationRemote,
+        attestation_publisher: ArtifactAttestationPublisher | None = None,
+        attestation_admission: ArtifactAttestationAdmission | None = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.remote = remote
+        self.attestation_publisher = attestation_publisher
+        self.attestation_admission = attestation_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
@@ -307,6 +328,174 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             remote=self.remote,
         )
+
+    def _workspace_slot_id(
+        self,
+        project_id: str,
+        *,
+        activation_manager: WorkspaceActivationManager | None = None,
+    ) -> str:
+        """Keep each installed project in a stable Workspace slot.
+
+        Older activations used the single ``primary`` slot. Preserve that slot
+        for its existing project, but never replace it when another subscribed
+        project is promoted or updated.
+        """
+
+        manager = activation_manager or WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
+        )
+        current = manager.load_lock()
+        if current is None or not current.slots:
+            return "primary"
+        for slot in sorted(current.slots, key=lambda item: item.slot_id):
+            if slot.project_id == project_id:
+                return slot.slot_id
+        occupied = {item.slot_id for item in current.slots}
+        if project_id not in occupied:
+            return project_id
+        suffix = canonical_payload_digest({"project_id": project_id}).split(":", 1)[1][:16]
+        return f"project-{suffix}"
+
+    def reconcile_attestation_publication(
+        self,
+        operation_id: str,
+    ) -> AttestationPublicationResult:
+        if self.attestation_publisher is None:
+            raise PublicationError("artifact attestation publication is not configured")
+        return self.attestation_publisher.reconcile(operation_id)
+
+    def reconcile_release_attestation_binding(
+        self,
+        candidate_id: str,
+    ) -> ReleaseAttestationSet:
+        try:
+            with mutation_lock(self.promotion_lock_path(candidate_id)):
+                operation = self.load_promotion(candidate_id)
+                if operation is None:
+                    raise PublicationError("candidate promotion has no binding operation")
+                state = operation.get("attestation_binding")
+                if not isinstance(state, dict):
+                    raise PublicationError("candidate promotion has no attestation binding intent")
+                if state.get("status") == "completed":
+                    receipt = operation.get("receipts", {}).get("attestations_bound")
+                    if not isinstance(receipt, Mapping):
+                        raise PublicationError("completed attestation binding has no receipt")
+                    return ReleaseAttestationSet.from_mapping(
+                        receipt["attestation_set"]
+                    )
+                if state.get("status") not in {"dispatching", "uncertain"}:
+                    raise PublicationError("attestation binding is not reconcilable")
+                state["status"] = "uncertain"
+                state["updated_at"] = _now()
+                self._write_promotion(operation)
+                raw_set = state.get("attestation_set")
+                if not isinstance(raw_set, Mapping):
+                    raise PublicationError("attestation binding intent has no exact set")
+                expected = ReleaseAttestationSet.from_mapping(raw_set)
+                observed = self.remote.get_release_attestation_set(
+                    expected.project_id,
+                    expected.release_digest,
+                )
+                if observed != expected:
+                    raise PublicationError(
+                        "remote release attestation binding differs from dispatch intent"
+                    )
+                state["status"] = "completed"
+                state["completed_via"] = "reconciliation"
+                state["updated_at"] = _now()
+                state.pop("last_error", None)
+                self._promotion_receipt(
+                    operation,
+                    "attestations_bound",
+                    {"attestation_set": observed.to_dict()},
+                )
+                return observed
+        except MutationLockTimeout as exc:
+            raise PublicationError("candidate promotion is already running") from exc
+
+    def recover_promotion_activation(
+        self,
+        candidate_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Reconcile one failed, rolled-back activation without replaying it."""
+
+        try:
+            with mutation_lock(self.promotion_lock_path(candidate_id)):
+                promotion = self.load_promotion(candidate_id)
+                if promotion is None:
+                    raise PublicationError("candidate promotion has no durable operation")
+                if promotion.get("status") != "paused":
+                    raise PublicationError("candidate promotion is not paused")
+                receipts = promotion.setdefault("receipts", {})
+                if isinstance(receipts.get("workspace_activated"), Mapping):
+                    raise PublicationError("candidate Workspace activation is already complete")
+                release_digest = str(promotion.get("release_digest") or "").strip()
+                if not release_digest:
+                    raise PublicationError("candidate promotion has no immutable release digest")
+                manager = WorkspaceActivationManager(
+                    workspace_root=self.workspace_root,
+                    package_store=self.package_store,
+                    state_root=self.state_root / "activation",
+                    attestation_admission=self.attestation_admission,
+                )
+                previous_recovery = receipts.get("activation_recovered")
+                expected_key = f"stable:{release_digest}"
+                if isinstance(previous_recovery, Mapping):
+                    expected_key = str(
+                        previous_recovery.get("new_idempotency_key") or ""
+                    ).strip()
+                expected_operation_id = manager.operation_id(expected_key)
+                operation_token = str(operation_id or "").strip()
+                if operation_token != expected_operation_id:
+                    raise PublicationError(
+                        "failed activation does not match the current promotion attempt"
+                    )
+                operation_path = manager.operation_path(operation_token)
+                try:
+                    activation_operation = json.loads(
+                        operation_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, ValueError) as exc:
+                    raise PublicationError(
+                        f"cannot read failed activation operation {operation_token}: {exc}"
+                    ) from exc
+                if (
+                    activation_operation.get("release_digest") != release_digest
+                    or activation_operation.get("status") != "failed"
+                    or activation_operation.get("rolled_back") is not True
+                ):
+                    raise PublicationError(
+                        "activation recovery requires the exact failed and rolled-back release operation"
+                    )
+                recovered = manager.recover_interrupted(operation_token)
+                new_key = f"stable-recovery:{release_digest}:{operation_token}"
+                self._promotion_receipt(
+                    promotion,
+                    "activation_recovered",
+                    {
+                        "operation_id": operation_token,
+                        "operation_status": recovered.get("status"),
+                        "new_idempotency_key": new_key,
+                    },
+                )
+                promotion["status"] = "paused"
+                promotion["phase"] = "activation_recovered"
+                promotion["paused_at"] = _now()
+                self._write_promotion(promotion)
+                return {
+                    "status": "recovered",
+                    "candidate_id": candidate_id,
+                    "release_digest": release_digest,
+                    "operation_id": operation_token,
+                    "next_operation_id": manager.operation_id(new_key),
+                }
+        except MutationLockTimeout as exc:
+            raise PublicationError("candidate promotion is already running") from exc
 
     def plan_registry_reconciliation(
         self,
@@ -445,13 +634,36 @@ class ArtifactPublicationService:
         except KeyError as exc:
             raise PublicationError(f"project has no stable subscription: {project_id}") from exc
         pointer = self.remote.get_channel(project_id, subscription.channel)
-        available = pointer.release_digest != subscription.installed_digest
-        allowed = available and subscription.policy == "notify"
+        channel_moved = pointer.release_digest != subscription.installed_digest
+        activation_manager = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
+        )
+        lock = activation_manager.load_lock()
+        installed_slot = next(
+            (
+                item
+                for item in (lock.slots if lock is not None else ())
+                if item.project_id == subscription.project_id
+                and item.release == subscription.installed_release
+                and item.release_digest == subscription.installed_digest
+            ),
+            None,
+        )
+        workspace_slot_missing = bool(subscription.installed_digest and installed_slot is None)
+        available = channel_moved or workspace_slot_missing
+        allowed = workspace_slot_missing and not channel_moved
+        if channel_moved:
+            allowed = subscription.policy == "notify"
         reason = "up_to_date"
-        if available and subscription.policy == "pinned":
+        if channel_moved and subscription.policy == "pinned":
             reason = "pinned"
-        elif available:
+        elif channel_moved:
             reason = "channel_moved"
+        elif workspace_slot_missing:
+            reason = "workspace_slot_missing"
         return SubscriptionUpdateNotice(subscription, pointer, available, allowed, reason)
 
     def plan_subscription_update(
@@ -476,8 +688,15 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             package_store=self.package_store,
             state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
         )
-        activation_plan = activation_manager.plan_activation(release_plan)
+        activation_plan = activation_manager.plan_activation(
+            release_plan,
+            slot_id=self._workspace_slot_id(
+                project_id,
+                activation_manager=activation_manager,
+            ),
+        )
         return SubscriptionUpdatePlan(notice, release_plan, activation_plan)
 
     def activate_subscription_update(
@@ -501,16 +720,19 @@ class ArtifactPublicationService:
         if expected_plan_digest is not None and str(expected_plan_digest).strip().lower() != prepared.plan_digest:
             raise PublicationError("subscription update plan changed; review the new plan before activation")
         plan = prepared.release_plan
-        activation = WorkspaceActivationManager(
+        activation_manager = WorkspaceActivationManager(
             workspace_root=self.workspace_root,
             package_store=self.package_store,
             state_root=self.state_root / "activation",
-        ).activate(
+            attestation_admission=self.attestation_admission,
+        )
+        activation = activation_manager.activate(
             plan,
             idempotency_key=(
                 str(idempotency_key or "").strip()
                 or f"subscription:{project_id}:{notice.pointer.release_digest}"
             ),
+            slot_id=str(prepared.activation_plan.get("slot_id") or "primary"),
             fetch_package=self.remote.fetch_package,
             reload_runtime=reload_runtime,
             health_check=health_check,
@@ -582,11 +804,45 @@ class ArtifactPublicationService:
             kind=record.kind,  # type: ignore[arg-type]
             source_ref=record.source_ref,
         )
-        if current.ref != record.package:
+        if current.ref == record.package:
+            return current
+
+        try:
+            checkpoint_bytes, checkpoint = self.package_store.read_verified(
+                record.package.digest
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise PublicationError(
+                "exact Forge checkpoint package is unavailable or invalid"
+            ) from exc
+        if checkpoint.ref != record.package:
+            raise PublicationError(
+                "exact Forge checkpoint package does not match its pushed source receipt"
+            )
+
+        # A core update may change only the package build-policy digest (for
+        # example, by adding a reserved transient directory to the exclusion
+        # set). That changes deterministic archive bytes even when every
+        # publishable source byte is unchanged. Compare the signed file
+        # inventory and all other package semantics, then keep using the
+        # immutable checkpoint archive. Any policy change that affects the
+        # selected files still changes this projection and is rejected.
+        def _source_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
+            projected = dict(manifest)
+            projected.pop("build_policy_digest", None)
+            return projected
+
+        if _source_projection(current.package_manifest) != _source_projection(
+            checkpoint.package_manifest
+        ):
             raise PublicationError(
                 "DEV content changed after the exact Forge checkpoint; push a new checkpoint"
             )
-        return current
+        return BuiltArtifactPackage(
+            ref=checkpoint.ref,
+            archive_bytes=checkpoint_bytes,
+            package_manifest=checkpoint.package_manifest,
+        )
 
     def verify_pushed_source(
         self,
@@ -608,6 +864,60 @@ class ArtifactPublicationService:
             raise PublicationError(f"canonical manifest {path} must contain an object")
         return payload
 
+    def _installed_dependency_package(
+        self,
+        requirement: DependencyRequirement,
+    ) -> tuple[BuiltArtifactPackage, Path] | None:
+        """Synthesize an immutable package identity for a legacy Workspace install.
+
+        This is the AP0 compatibility boundary for an installed dependency that
+        predates independent stable release channels.  It never reads mutable
+        DEV and labels the provenance explicitly as a Workspace migration.
+        """
+
+        dependency_dir = (
+            self.workspace_root
+            / ("skills" if requirement.kind == "skill" else "scenarios")
+            / requirement.artifact_id
+        )
+        if not dependency_dir.is_dir():
+            return None
+        path_scope = (
+            f"skills/{requirement.artifact_id}/"
+            if requirement.kind == "skill"
+            else f"scenarios/{requirement.artifact_id}/"
+        )
+        provisional_ref = ArtifactSourceRef(
+            forge="workspace-migration",
+            repository="installed-workspace",
+            revision="workspace:bootstrap",
+            path_scope=(path_scope,),
+        )
+        provisional = build_artifact_package(
+            dependency_dir,
+            kind=requirement.kind,
+            source_ref=provisional_ref,
+        )
+        if provisional.ref.key != requirement.key:
+            raise PublicationError(
+                "installed Workspace dependency identity does not match its path: "
+                f"expected {requirement.key}, found {provisional.ref.key}"
+            )
+        source_ref = ArtifactSourceRef(
+            forge="workspace-migration",
+            repository="installed-workspace",
+            revision=f"sha256:{provisional.ref.digest.removeprefix('sha256:')}",
+            path_scope=(path_scope,),
+        )
+        return (
+            build_artifact_package(
+                dependency_dir,
+                kind=requirement.kind,
+                source_ref=source_ref,
+            ),
+            dependency_dir,
+        )
+
     def _dependency_inputs(
         self,
         *,
@@ -615,6 +925,7 @@ class ArtifactPublicationService:
         artifact_dir: Path,
         own_package: ArtifactPackageRef,
         checkpoint_change_ids: tuple[str, ...],
+        base_release: ReleasePlan | None = None,
     ) -> tuple[
         PackageCatalog,
         dict[str, tuple[DependencyRequirement, ...]],
@@ -630,6 +941,11 @@ class ArtifactPublicationService:
         }
         archives: dict[str, bytes] = {}
         loaded_releases: set[str] = set()
+        base_packages = (
+            {item.key: item for item in base_release.packages}
+            if base_release is not None
+            else {}
+        )
 
         pending_requirements = list(requirements)
         processed_requirements: set[tuple[str, str, str]] = set()
@@ -682,25 +998,48 @@ class ArtifactPublicationService:
                 pending_requirements.extend(local_requirements)
                 continue
 
-            try:
-                pointer = self.remote.get_channel(requirement.artifact_id, "stable")
-                dependency_plan = self.remote.get_release(
-                    requirement.artifact_id,
-                    pointer.release_digest,
-                )
-            except Exception as exc:
-                status = getattr(exc, "status_code", None)
-                code = str(getattr(exc, "error_code", "") or "")
-                missing = status == 404 or code in {"channel_not_found", "release_not_found"} or isinstance(
-                    exc, FileNotFoundError
-                )
-                if missing and requirement.optional:
-                    continue
-                if missing:
-                    raise PublicationError(
-                        f"required stable dependency is unavailable: {requirement.key}"
-                    ) from exc
-                raise
+            # A channel belongs to a project release set, not necessarily to
+            # every component in that set.  Preserve the dependency selected
+            # by the current stable project release unless the same change set
+            # checkpoints a replacement above.  Only projects without such a
+            # component fall back to an independently published dependency.
+            if requirement.key in base_packages and base_release is not None:
+                dependency_plan = base_release
+            else:
+                try:
+                    pointer = self.remote.get_channel(requirement.artifact_id, "stable")
+                    dependency_plan = self.remote.get_release(
+                        requirement.artifact_id,
+                        pointer.release_digest,
+                    )
+                except Exception as exc:
+                    status = getattr(exc, "status_code", None)
+                    code = str(getattr(exc, "error_code", "") or "")
+                    missing = status == 404 or code in {"channel_not_found", "release_not_found"} or isinstance(
+                        exc, FileNotFoundError
+                    )
+                    if missing:
+                        installed = self._installed_dependency_package(requirement)
+                        if installed is None:
+                            if requirement.optional:
+                                continue
+                            raise PublicationError(
+                                f"required stable dependency is unavailable: {requirement.key}"
+                            ) from exc
+                        installed_built, installed_dir = installed
+                        catalog.add(installed_built.ref)
+                        archives[installed_built.ref.digest] = installed_built.archive_bytes
+                        installed_requirements = parse_artifact_requirements(
+                            self._manifest(installed_dir, requirement.kind),
+                            kind=requirement.kind,  # type: ignore[arg-type]
+                        )
+                        requirements_by_package.setdefault(
+                            installed_built.ref.digest,
+                            [],
+                        ).extend(installed_requirements)
+                        pending_requirements.extend(installed_requirements)
+                        continue
+                    raise
 
             release_digest = (
                 dependency_plan.release.release_digest
@@ -849,7 +1188,8 @@ class ArtifactPublicationService:
             kind=kind,
             artifact_dir=artifact_dir,
             own_package=built.ref,
-            checkpoint_change_ids=record.change_ids,
+            checkpoint_change_ids=change_ids,
+            base_release=stable,
         )
         plan = build_project_release(
             project_id=artifact_id,
@@ -1153,6 +1493,103 @@ class ArtifactPublicationService:
         self._write_promotion(operation)
         receipts = operation.setdefault("receipts", {})
         try:
+            published_result: AttestationPublicationResult | None = None
+            attestation_receipt = receipts.get("attestations_published")
+            if isinstance(attestation_receipt, Mapping):
+                if self.attestation_publisher is None:
+                    raise PublicationError(
+                        "promotion requires its configured attestation publisher to resume"
+                    )
+                raw_publication = attestation_receipt.get("publication")
+                if not isinstance(raw_publication, Mapping):
+                    raise PublicationError(
+                        "promotion attestation receipt has no publication result"
+                    )
+                published_result = self.attestation_publisher.load(
+                    str(raw_publication.get("operation_id") or "")
+                )
+                persisted = published_result.to_dict()
+                if persisted != dict(raw_publication) or published_result.status != "completed":
+                    raise PublicationError(
+                        "promotion attestation receipt does not match completed publisher state"
+                    )
+            elif self.attestation_publisher is not None:
+                published_result = self.attestation_publisher.publish(
+                    plan,
+                    idempotency_key=f"stable-attestations:{candidate.release_digest}",
+                )
+                if published_result.status != "completed":
+                    raise PublicationError("release attestations are not fully published")
+                self._promotion_receipt(
+                    operation,
+                    "attestations_published",
+                    {"publication": published_result.to_dict()},
+                )
+
+            if published_result is not None:
+                exact_set = published_result.release_attestation_set(plan)
+                binding_receipt = receipts.get("attestations_bound")
+                if isinstance(binding_receipt, Mapping):
+                    raw_set = binding_receipt.get("attestation_set")
+                    if not isinstance(raw_set, Mapping):
+                        raise PublicationError(
+                            "promotion attestation binding receipt has no exact set"
+                        )
+                    expected_set = ReleaseAttestationSet.from_mapping(raw_set).validate_plan(plan)
+                    observed_set = self.remote.get_release_attestation_set(
+                        candidate.project_id,
+                        candidate.release_digest,
+                    ).validate_plan(plan)
+                    if observed_set != expected_set or observed_set != exact_set:
+                        raise PublicationError(
+                            "remote release attestation binding differs from promotion receipt"
+                        )
+                else:
+                    binding_state = operation.get("attestation_binding")
+                    if isinstance(binding_state, dict):
+                        if binding_state.get("status") in {"dispatching", "uncertain"}:
+                            if binding_state.get("status") == "dispatching":
+                                binding_state["status"] = "uncertain"
+                                binding_state["last_error"] = (
+                                    "promotion interrupted after binding dispatch intent"
+                                )
+                                binding_state["updated_at"] = _now()
+                                self._write_promotion(operation)
+                            raise PublicationError(
+                                "release attestation binding outcome is uncertain; "
+                                "reconcile it explicitly before resuming promotion"
+                            )
+                        raise PublicationError(
+                            "promotion has an invalid attestation binding state"
+                        )
+                    binding_state = {
+                        "status": "dispatching",
+                        "attestation_set": exact_set.to_dict(),
+                        "updated_at": _now(),
+                    }
+                    operation["attestation_binding"] = binding_state
+                    self._write_promotion(operation)
+                    try:
+                        bound = self.remote.put_release_attestation_set(exact_set).validate_plan(plan)
+                    except Exception as exc:
+                        binding_state["status"] = "uncertain"
+                        binding_state["last_error"] = f"{type(exc).__name__}: {exc}"[:1024]
+                        binding_state["updated_at"] = _now()
+                        self._write_promotion(operation)
+                        raise
+                    if bound != exact_set:
+                        raise PublicationError(
+                            "remote registry bound a different release attestation set"
+                        )
+                    binding_state["status"] = "completed"
+                    binding_state["completed_via"] = "write_acknowledgement"
+                    binding_state["updated_at"] = _now()
+                    self._promotion_receipt(
+                        operation,
+                        "attestations_bound",
+                        {"attestation_set": bound.to_dict()},
+                    )
+
             channel_receipt = receipts.get("channel_moved")
             if isinstance(channel_receipt, Mapping):
                 pointer = ChannelPointer.from_mapping(channel_receipt["pointer"])
@@ -1214,10 +1651,25 @@ class ArtifactPublicationService:
                     workspace_root=self.workspace_root,
                     package_store=self.package_store,
                     state_root=self.state_root / "activation",
+                    attestation_admission=self.attestation_admission,
                 )
+                activation_key = f"stable:{candidate.release_digest}"
+                recovery_receipt = receipts.get("activation_recovered")
+                if isinstance(recovery_receipt, Mapping):
+                    activation_key = str(
+                        recovery_receipt.get("new_idempotency_key") or ""
+                    ).strip()
+                    if not activation_key:
+                        raise PublicationError(
+                            "promotion activation recovery receipt has no next idempotency key"
+                        )
                 activation = activation_manager.activate(
                     plan,
-                    idempotency_key=f"stable:{candidate.release_digest}",
+                    idempotency_key=activation_key,
+                    slot_id=self._workspace_slot_id(
+                        candidate.project_id,
+                        activation_manager=activation_manager,
+                    ),
                     fetch_package=self.remote.fetch_package,
                     reload_runtime=reload_runtime,
                     health_check=health_check,

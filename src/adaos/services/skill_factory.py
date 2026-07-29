@@ -743,6 +743,9 @@ class SkillFactoryService:
         with _LOCK:
             state = self._read_state()
             task = self._require_task(state, task_token)
+            current_status = _text(task.get("status"))
+            if current_status in TASK_TERMINAL_STATES:
+                raise ValueError(f"task '{task_token}' is terminal: {current_status}")
             node_id = _text(payload.get("node_id"))
             self._validate_assigned_node(task, node_id)
             self._ensure_node_credentials_active(state, node_id)
@@ -825,6 +828,71 @@ class SkillFactoryService:
             self._write_state(state)
             return {"ok": True, "task": _json_clone(task), "ready_event": ready_event}
 
+    def recover_task_result(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Accept an already validated result after a retryable post-commit failure.
+
+        This is deliberately separate from retrying a task: the caller must
+        present the exact committed result and recovery evidence, and Codex is
+        never assigned again.
+        """
+
+        raw = _mapping(payload.get("dev_result")) or _mapping(payload)
+        recovery = _mapping(payload.get("recovery") or raw.get("recovery"))
+        task_id = _text(raw.get("task_id"))
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not _text(recovery.get("reason")) or not _text(recovery.get("validated_run_dir")):
+            raise ValueError("result recovery requires reason and validated_run_dir evidence")
+        with _LOCK:
+            state = self._read_state()
+            task = self._require_task(state, task_id)
+            if _text(task.get("status")) != "failed":
+                raise ValueError(f"task '{task_id}' result recovery requires failed status")
+            failures = [_mapping(item) for item in _list(task.get("failure_history"))]
+            latest_failure = failures[-1] if failures else {}
+            if not latest_failure or not bool(latest_failure.get("retryable")):
+                raise ValueError(f"task '{task_id}' does not have a retryable failure")
+            node_id = _text(raw.get("node_id"))
+            self._validate_assigned_node(task, node_id)
+            self._ensure_node_credentials_active(state, node_id)
+            if not _mapping(raw.get("provenance")):
+                raise ValueError("result provenance is required")
+            result = self._normalize_result(raw, task)
+            self.validate_result_paths(task, result)
+            now = _now_iso()
+            task["status"] = "completed"
+            task["result"] = result
+            task["dependency_delta"] = _mapping(result.get("dependency_delta"))
+            task["provenance"] = _mapping(result.get("provenance"))
+            recovery_entry = {
+                "reason": _text(recovery.get("reason")),
+                "validated_run_dir": _text(recovery.get("validated_run_dir")),
+                "failure_id": _text(latest_failure.get("failure_id")) or None,
+                "actor": _text(recovery.get("actor")) or "local_worker",
+                "recovered_at": now,
+            }
+            task.setdefault("result_recovery_history", []).append(recovery_entry)
+            task["result_recovery_history"] = task["result_recovery_history"][-20:]
+            task["completed_at"] = now
+            task["updated_at"] = now
+            task.pop("failed_at", None)
+            self._release_node_after_task(state, task, status="cleanup")
+            ready_event = self._ready_event(task, result)
+            state["tasks"][task_id] = task
+            state.setdefault("ready_events", []).append(ready_event)
+            self._append_event(
+                state,
+                "skill_factory.task_result_recovered",
+                {"task_id": task_id, "branch": result["branch"], "failure_id": recovery_entry["failure_id"]},
+            )
+            self._write_state(state)
+            return {
+                "ok": True,
+                "recovered": True,
+                "task": _json_clone(task),
+                "ready_event": ready_event,
+            }
+
     def fail_task(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         raw = _mapping(payload.get("failure")) or _mapping(payload)
         task_id = _text(raw.get("task_id"))
@@ -870,8 +938,23 @@ class SkillFactoryService:
         with _LOCK:
             state = self._read_state()
             task = self._require_task(state, task_token)
-            if _text(task.get("status")) == "cancelled":
+            current_status = _text(task.get("status"))
+            if current_status == "cancelled":
                 return {"ok": True, "duplicate": True, "task": _json_clone(task)}
+            if current_status in TASK_TERMINAL_STATES:
+                return {
+                    "ok": False,
+                    "terminal": True,
+                    "error": f"task '{task_token}' is already terminal: {current_status}",
+                    "task": _json_clone(task),
+                }
+            if current_status == "commit_ready":
+                return {
+                    "ok": False,
+                    "terminal": False,
+                    "error": f"task '{task_token}' is committing and can no longer be cancelled safely",
+                    "task": _json_clone(task),
+                }
             now = _now_iso()
             task["status"] = "cancelled"
             task["cancellation_requested"] = True

@@ -40,6 +40,45 @@ def get_meta(payload: dict) -> dict:
     return payload.get("_meta", {}) if isinstance(payload, dict) else {}
 
 
+def _payload_with_event_meta(ev: Any, data: Any) -> Any:
+    """Preserve the bus envelope while keeping the payload-dict SDK contract.
+
+    Skill handlers historically receive the payload rather than the Event
+    instance. Copy envelope identity into reserved metadata so multi-topic
+    handlers can distinguish lifecycle events without changing existing
+    handler signatures or mutating the publisher's payload.
+    """
+
+    if not isinstance(data, dict):
+        return data
+    if hasattr(ev, "type"):
+        event_type = str(getattr(ev, "type", "") or "").strip()
+        event_source = str(getattr(ev, "source", "") or "").strip()
+        event_ts = getattr(ev, "ts", None)
+    elif isinstance(ev, dict):
+        event_type = str(ev.get("type") or "").strip()
+        event_source = str(ev.get("source") or "").strip()
+        event_ts = ev.get("ts")
+    else:
+        event_type = ""
+        event_source = ""
+        event_ts = None
+    if not event_type and not event_source and event_ts is None:
+        return data
+
+    payload = dict(data)
+    raw_meta = payload.get("_meta")
+    meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+    if event_type:
+        meta["event_type"] = event_type
+    if event_source:
+        meta["event_source"] = event_source
+    if event_ts is not None:
+        meta["event_ts"] = event_ts
+    payload["_meta"] = meta
+    return payload
+
+
 def _topic_matches_any(topic: str, patterns: str) -> bool:
     topic0 = str(topic or "")
     for raw in str(patterns or "").split(","):
@@ -190,6 +229,7 @@ async def on(topic: str, handler: Callable[[dict], Awaitable[Any]]):
             data = ev.get("payload")
         else:
             data = ev
+        data = _payload_with_event_meta(ev, data)
         if inspect.iscoroutinefunction(handler):
             return await handler(data)
         if _run_sync_handler_in_thread(topic):

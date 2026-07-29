@@ -79,6 +79,17 @@ adaos dev skill test <NAME> --runtime
 
 ```bash
 adaos dev skill setup <NAME>
-adaos dev skill run <NAME> [TOOL] [--json PAYLOAD]
+adaos dev skill run <NAME> [TOOL] [--json PAYLOAD | --json-file PATH]
 ```
+
+Для payload с кириллицей или другим не-ASCII текстом используйте
+`--json-file`. Файл читается строго как UTF-8 (допускается UTF-8 BOM), поэтому
+PowerShell не может повредить строку при передаче аргументов нативному процессу:
+
+```powershell
+adaos dev skill run builder_skill chat --json-file .adaos\state\builder\requests\chat.json
+```
+
+`--json` и `--json-file` взаимоисключающие. Inline `--json` оставлен для
+коротких ASCII payload; не используйте его для пользовательского Unicode-текста.
 

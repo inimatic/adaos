@@ -1,6 +1,6 @@
 # Issue Tracker
 
-Snapshot: 2026-07-23.
+Snapshot: 2026-07-27.
 
 This document contains only active AdaOS execution work. Architecture,
 sequencing, and milestone completion are owned by the documents listed in the
@@ -70,6 +70,7 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `NER-006` | open | Migrate remaining client/operator consumers to canonical refs and delete duplicate display-name fallbacks after coverage exists. | [Device Access Roadmap](architecture/device-access-roadmap.md) |
 | `BUILDER-LEGACY` | open | Move the remaining Prompt IDE DEV file lifecycle behind `adaos.sdk.developer.projects` before legacy retirement. | [Builder SDK Boundary](architecture/builder-sdk-boundary.md) |
 | `BUILDER-RELOAD` | in progress | Preserve widget and coarse branch identity on no-op semantic reloads and pass reconnect/reload soak coverage. | [Builder Roadmap](architecture/builder-roadmap.md#phase-8-product-experience), [Webspace Evolution](architecture/webspace-evolution-roadmap.md) |
+| `AP7-14` | in progress | Merge infra `5f9a5b0`, then prove one clean production deploy with candidate warming outside `inimatic_proxy`, admission only after health, strict continuous public samples, and no automatic repeat of the already committed rollout. | [Artifact Pipeline Roadmap](architecture/artifact-source-package-activation-roadmap.md#milestone-ap7-end-to-end-proof-and-legacy-retirement-decision) |
 
 ## Could
 

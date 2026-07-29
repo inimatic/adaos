@@ -222,6 +222,77 @@ observability gap.
   unless server-side Yjs datachannel enablement is visible in diagnostics and
   browser-side direct-path cooldown has been cleared or expired.
 
+### Stand checkpoint: 2026-07-27, `.30` / `192.168.0.30`
+
+The routed browser exposed a protocol-level first-sync defect after a successful
+core rollout. Runtime, sidecar, and root route diagnostics were ready, while the
+browser remained `runtime=connecting:yws`, `first=timeout`, and
+`resync=provider_disconnected`; Infra State therefore kept an old `slot --`
+projection and inventory widgets remained at their initial `Loading` values.
+
+- The server-authoritative Yjs guard incorrectly discarded browser
+  `SYNC_STEP1`. That frame is a read-only state-vector request; discarding it
+  prevents the server from returning `SYNC_STEP2`, so `y-websocket` never marks
+  the provider synced and repeatedly recreates it.
+- Six short reconnects activated the server reconnect-storm guard and converted
+  the protocol defect into a ten-minute `client_reconnect_backoff`, which made
+  healthy sidecar and root routes look like a transport outage.
+- Release `0.1.615` now processes `SYNC_STEP1` while still rejecting the initial
+  mutating browser `SYNC_STEP2`/`SYNC_UPDATE` under server-authoritative policy.
+  The full gateway suite passed, CI run `30265531570` passed, and `.30`
+  automatically promoted slot `B` with runtime port `8778`.
+- A live post-promotion probe through sidecar `/yws/desktop` received the
+  expected `SYNC_STEP2`. Direct Infra State tools returned
+  `slot B | 0.1.615 | a96d3fe`, update state `succeeded`, 36 installed skills,
+  and 6 registered scenarios.
+- Published `infrastate_skill` release `0.75.55` was migrated once through the
+  normal runtime path. Its always-demand summary then materialized from the
+  disk snapshot as `ready`, `slot B | 0.1.615 | a96d3fe`, rather than retaining
+  the initial `slot --` placeholder.
+- Browser-protocol stream probes subscribed through the live `/ws` endpoint and
+  received complete inventory lists: 36 installed skills and 6 registered
+  scenarios. This closes the two indefinitely loading inventory states.
+- A sidecar `/yws/desktop` session held for 25 seconds, exchanged server
+  `SYNC_STEP1` and `SYNC_STEP2`, and remained `attached / complete / ready /
+  fresh` without reconnect-storm activation.
+
+This closes the handshake defect and proves the post-promotion endpoint. It
+does not yet close the wider acceptance item for one already-open real
+root-routed browser session surviving the complete A/B interval.
+
+### Stand checkpoint: 2026-07-27, `91.98.89.76`
+
+The hub exposed two independent bootstrap deadlocks while converging from
+`0.1.565` to the current core release.
+
+- The host explicitly disabled warm switch, so candidate prewarm correctly
+  returned `skipped`. The strict warm-cutover gate nevertheless required
+  candidate readiness and repeatedly cycled through prepare, countdown, and
+  `candidate_not_ready` deferral. Release `0.1.617` now applies that readiness
+  gate only when warm switch is enabled; configured cold transitions no longer
+  require an impossible passive candidate.
+- The first recovered cold transition reached slot `B` and validated runtime
+  `0.1.617`, but root parity remained pending. Partial root promotion had
+  projected only the files named by the bootstrap comparison, so import
+  preflight combined new candidate modules with stale root modules and failed
+  on a transitive `adaos.services.skill.declarations` import.
+- Release `0.1.618` treats `src/adaos` as one atomic root-promotion unit whenever
+  any package member changes. Preflight therefore validates the exact complete
+  import graph that will be committed; the existing backup and rollback
+  transaction still covers the whole promoted unit.
+- Live recovery completed on slot `A` with build
+  `0.1.618+1.5d59c42`: update state is `succeeded / validate`, root promotion is
+  no longer required, runtime API readiness and active-slot ownership agree,
+  and the supervisor monitor has zero consecutive failures. The temporary cold
+  fallback was removed after validation; the original configuration backup is
+  retained on the host.
+
+A supervisor restart cancelled the already scheduled push-driven attempt, and
+the release was not reissued during the bounded observation window. Recovery
+used one pinned operator request. Automatic intent redelivery across that exact
+restart boundary remains an explicit acceptance item rather than an assumed
+property.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -584,6 +655,106 @@ lifecycle and update attempt state.
   supervisor/root updates.
 - [x] `[must]` Validate every candidate in an inactive slot before allowing any
   root/bootstrap promotion.
+- [x] `[must]` Validate the exact projected post-promotion root imports before
+  mutation and enforce bootstrap re-export dependency closure by regression
+  test.
+- [x] `[must]` Treat an explicitly disabled warm switch as a configured cold
+  transition; do not apply passive-candidate readiness gates to that mode.
+- [x] `[must]` Promote the root `src/adaos` package as one transactional import
+  graph so newly introduced transitive modules cannot be mixed with stale root
+  modules. Live proof completed on `91.98.89.76` with release `0.1.618`.
+- [x] `[must]` Make root promotion transactional: confine relative paths, back
+  up the complete change set before apply, atomically persist metadata, and
+  roll back every partial apply/commit failure.
+- [x] `[must]` Keep an independent Linux recovery path in the managed wrapper:
+  if root imports fail, launch the supervisor from a verified active/previous
+  A/B slot without ad-hoc root mutation and retain a durable recovery marker.
+- [x] `[must]` Allow only the supervisor control plane—not a surviving active or
+  candidate runtime—to confirm completion of a root restart.
+- [x] `[must]` Bridge the supervisor-owned `root_promoted -> validate` commit
+  back into the new runtime event bus and make Infra State materialize
+  `sys.ready` plus terminal core-update state inline.
+- [x] `[must]` Arm supervisor convergence from the passive candidate's first
+  bounded transition state (`preparing` / `countdown` / drain / restart), not
+  only after `root_promoted`, so fast warm-switch promotion cannot lose the
+  terminal event when the candidate becomes active without another bootstrap.
+- [x] `[must]` Await the actual live-room Yjs transaction before reporting a
+  projection as applied; when no room is ready, write through the detached
+  replay log and synchronously persist/compact the resulting snapshot. Surface
+  persistence failure to the SDK caller instead of recording false success.
+- [x] `[must]` Recover a same-version quarantined skill runtime only through an
+  explicit named migration, retain backup/rollback semantics, and keep
+  background migration from automatically repeating that state-changing
+  operation.
+- [x] `[must]` Prove terminal Infra State server/disk convergence on both Linux
+  nodes. Automatic release `0.1.624` (`a25f227`) converged `192.168.0.30` and
+  `91.98.89.76`; fresh processes read the same slot summary from disk, both
+  runtimes retained active `infrastate_skill 0.75.59`, and no update or refresh
+  command was repeated.
+- [x] `[must]` Prevent a structural last-good render snapshot from overriding
+  live operational `data/infrastate` and node-scoped Infra State. The client
+  regression covers stale `slot —` cache versus current local and member Yjs
+  values while materialization is incomplete.
+- [x] `[must]` Resolve local node-owned projections to their live unscoped
+  producer path instead of the first-paint `data/nodes/<local>/...` federation
+  alias. Fix `f623040` is released in client `0.0.245+a497386`; its regression
+  distinguishes a current local `data/infrastate/summary` from a stale local
+  alias, and all 95 focused page-data tests plus the production build pass.
+  Remote node projections remain scoped. Live probes on `192.168.0.30` and
+  `91.98.89.76` both report `succeeded`, `slot A | 0.1.628 | fede6a4`, from
+  active `infrastate_skill 0.75.60`.
+- [x] `[must]` Keep manual and CI client publication on the same Firebase
+  project. `.firebaserc`, local deploy scripts, and CI use the `inimatic`
+  project alias, and release verification uses `https://inimatic.com`. The
+  immutable legacy Google project ID is confined to the alias mapping and
+  service-account identity.
+- [x] `[must]` Recover the interrupted same-version `infrastate_skill`
+  quarantine on `91.98.89.76` through one explicit named transactional
+  migration. Operation `skill-migrate-bab5a15abc` passed all 115 skill tests,
+  activated slot B, cleared the deactivation marker, and did not introduce an
+  automatic state-changing retry.
+- [ ] `[must]` Confirm restart-safe Infra State first paint in the existing
+  routed browser sessions on `192.168.0.30` and `91.98.89.76`. Core `0.1.628`
+  (`fede6a4`) and client `0.0.245` are released and both live server projections
+  are current; visual confirmation remains open until the existing browser
+  sessions reload the released client bundle.
+- [x] `[must]` Provide a pinned one-shot recovery entry point for a node with a
+  broken root checkout. `tools/recover-node-update.sh` selects an importable
+  root/A/B control runtime, validates an exact remote branch SHA, persists the
+  intent before dispatch, invokes the normal transactional updater exactly
+  once, and treats a lost acknowledgement as ambiguous instead of retrying.
+  Observation proves active-slot/root-import/replacement-supervisor agreement;
+  the separately guarded `--finalize-root-restart` handles only the legacy
+  `succeeded/root_promoted` boundary and has its own one-shot durable receipt.
+  The script is included in bootstrap-critical root promotion, ensuring the
+  runbook remains locally executable after recovering a non-Git root checkout.
+- [x] `[must]` Decouple periodic core-release reconciliation from realtime
+  hub-root route readiness; use the ready local runtime and its direct root mTLS
+  client as the bounded update-discovery path.
+- [ ] `[should]` Prove that a push-driven update intent cancelled by supervisor
+  restart is automatically redelivered and completed without a pinned operator
+  request.
+- [x] `[must]` Make routed member credentials survive Root Redis
+  restart/redeploy and rotate before expiry. Root now issues signed,
+  subnet/node-scoped join sessions and accepts one-time legacy-session upgrade;
+  member runtime refreshes the credential proactively and reports refresh
+  diagnostics without logging the token. An explicit rejoin/reconnect also
+  reuses the original boot-generation readiness callback after successful
+  registration, so recovery cannot leave a connected member permanently at
+  `ready=false`. Production backend `0.1.148` (`80b7942`) issued the signed
+  session used to rejoin `192.168.0.40`; after its next ordinary restart the
+  node reports `ready=true`, `connected_to_subnet=true`, and
+  `connected_to_hub=true`.
+- [x] `[must]` Distinguish scenario Catalog, Workspace source, and active
+  Runtime in Infra State. Release `infrastate_skill 0.75.60` labels a missing
+  sparse source explicitly and presents its cloud action as source restore;
+  equal Catalog/Runtime versions no longer look like a hidden version update.
+- [x] `[must]` Prove the hardened root promotion and slot fallback through two
+  consecutive release updates on the affected second machine. Evidence is
+  recorded under
+  [`AP7-16`](artifact-source-package-activation-roadmap.md#milestone-ap7-end-to-end-proof-and-legacy-retirement-decision):
+  automatic `0.1.611`/`0.1.612` convergence followed by the generation-bound
+  `0.1.614` control on `192.168.0.30`.
 - [x] `[must]` Detect bootstrap-managed file changes and surface
   `root_promotion_required` explicitly instead of silently mixing slot and
   root drift.
@@ -663,6 +834,19 @@ lifecycle and update attempt state.
   deterministically.
 - [x] `[must]` Rollback decision is owned by supervisor logic rather than only
   runtime-side best effort.
+- [x] `[must]` A failed root import cannot be reported as a successful root
+  restart by a surviving runtime process.
+- [x] `[must]` A second-machine recovery record shows root import failure,
+  verified-slot fallback, transactional root repair, and a subsequent clean
+  release cycle. `192.168.0.40` recovered transactionally to slot B on
+  `0.1.625` (`5407a0d`): the exact pinned update was dispatched once, root
+  import passed after promotion, the legacy `root_promoted` boundary received
+  one guarded service restart, and the replacement supervisor committed
+  `succeeded/validate`. With its signed Root-proxy session restored, the hub
+  then delivered the ordinary `0.1.626` (`9d319b9`) release automatically.
+  That clean cycle completed through candidate validation, root promotion, and
+  replacement-supervisor validation without operator update/reconnect; final
+  probes confirm root imports and member readiness/connectivity.
 - [x] `[must]` Sidecar remains transport-only and does not absorb
   process/update authority.
 - [x] `[must]` Operators can identify which installed skill failed during a
@@ -781,6 +965,12 @@ Make Yjs transport-independent without building a second distributed system arou
 - [x] `[must]` Client local persistence.
 - [x] `[must]` Awareness explicitly ephemeral.
 - [x] `[must]` Explicit resync path after route or transport churn.
+- [x] `[must]` Preserve a standards-complete server-authoritative handshake:
+  answer the read-only browser `SYNC_STEP1` and reject only the initial mutating
+  client state/update frames.
+- [x] `[must]` Validate the released handshake and Infra State first-paint path
+  on `.30`: sidecar `/yws` reached `ready:fresh`, the current core summary was
+  materialized, and both inventory streams returned complete lists.
 - [ ] `[should]` Validate SyncChannel recovery during A/B runtime switch with
   an already-open rooted browser `/yws` session.
 - [ ] `[deferred]` Move Yjs websocket termination and live room/session

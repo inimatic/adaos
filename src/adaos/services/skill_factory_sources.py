@@ -12,6 +12,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, replace_
 
 SOURCE_SNAPSHOT_SCHEMA = "adaos.skill_factory.source_snapshot.v1"
 _IGNORED_DIRS = {
+    ".builder_current_publication",
     ".builder_previous_automation",
     ".git",
     ".pytest_cache",

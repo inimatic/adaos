@@ -21,9 +21,23 @@ Workspace. The exact evidence is recorded in
 Clean-stand repetition remains open, so this is not a production-acceptance
 claim.
 
+The 2026-07-28 change-oriented slice is `validated-local`: scenario `0.2.28`,
+control skill `0.1.36`, and interactive `builder_skill` `0.3.13` were advanced
+through one bounded change set, isolated Automation, Forge checkpoints, an
+accepted dependency-locked trial, stable Publication, and exact Workspace
+materialization. It adds issue lanes and gates, dependent Lifecycle lineage,
+and exact `proto:`/`active:`/`public:` target selection. The accepted candidate
+was `builder-0-2-28-940229ddbf49`, with release digest
+`sha256:ad74d7a6ccec5d4787e793ff244a5bc08ce682db12dd4cc7b5928714278ab4df`.
+Clean-stand and production-soak repetition remain open, so this is not a
+production-acceptance claim.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
+- [Builder Conversational Development Architecture](builder-conversational-development.md)
+  defines the chat-first product model, canonical Issue/Change/Run terms,
+  context packets, semantic UI changes, and future collaboration seams.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
 - Checked items mean an implementation slice exists, not necessarily full
@@ -71,6 +85,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
+| 11. Conversational Development | Architecture fixed; implementation open: canonical Change/Run compatibility projection, context packet, risk-aware interaction actions, semantic UI operation, on-demand Process view, and chat-first Workbench parity. | Open: richer view registry, evaluator evidence, issue split/merge, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -594,9 +609,12 @@ Open work:
 - [x] `[should]` Add the first reviewable prototype workbench affordances:
   the dev preview can enter review mode, select widgets/fields, collect
   per-revision comments, copy those notes into the next Builder prompt, and
-  locally drag widgets/fields to express layout intent. The first slice is
-  intentionally lightweight: annotations are browser-session feedback, not a
-  durable Builder review store.
+  locally drag widgets/fields to express layout intent. Layout dragging now
+  requires `Ctrl`/`Command`, leaving ordinary drag available for text
+  selection, and every pending note can be removed before Apply so an
+  erroneous instruction is never inevitable. The first slice is intentionally
+  lightweight: annotations are browser-session feedback, not a durable
+  Builder review store.
 - [ ] `[should]` Promote review annotations into a durable Builder context
   artifact that follows UI revisions and is automatically included in the next
   LLM transform request.
@@ -786,6 +804,151 @@ Open work:
 - [ ] `[could]` Add multi-node pools, task placement policy, and parallel tasks
   after one-task-per-node isolation is proven.
 
+## Phase 11. Conversational Development Control Plane
+
+Goal: make Builder conversation-first without using chat history as the source
+of truth, while simplifying the product model to `Issue -> Change -> Run ->
+Revision -> Trial/Release` and preserving the recovered functional control
+plane.
+
+Architecture:
+
+- [x] `[must]` Define the chat-first, state-backed target architecture,
+  channel capability boundary, canonical development model, context packet,
+  semantic UI Change IR, risk-aware actions, Process view, evidence trace, and
+  multi-user extension seams in
+  [Builder Conversational Development Architecture](builder-conversational-development.md).
+- [x] `[must]` Keep Telegram and similar transports as limited control
+  channels rather than a lowest-common-denominator product requirement. Rich
+  search, selection, diff, artifact, and spatial Review surfaces remain Web
+  capabilities with compact/deep-link fallbacks.
+- [x] `[deferred]` Reserve, but do not implement in this refactoring slice,
+  miniapp rendering, hard cross-channel feature parity, trusted groups,
+  proposal exchange, WorkLog extraction, public candidate discovery, and
+  cross-deployment evidence aggregation.
+
+Canonical model and context:
+
+- [x] `[must]` Publish versioned `Issue`, `Change`, `Run`, context-packet,
+  interaction-frame, semantic-UI-change, and Review-anchor ABI contracts.
+- [x] `[must]` Migrate the existing persisted `change_set` to one canonical
+  `change` projection. `change_set_id` remains a compatibility alias of
+  `change_id`; divergent identities are rejected.
+- [ ] `[must]` Reclassify per-turn
+  `adaos.conversation.development_change.v1` evidence as Runs linked to one
+  Change. A follow-up turn extends the Change and creates a new Run, not a
+  second product-level Change.
+- [x] `[must]` Construct a bounded, stable-digested
+  `adaos.builder.context_packet.v1` from Change, acceptance, exact base,
+  selected Prototype, retained Implementation, dependencies, permissions,
+  relevant refs, and prior-Run evidence.
+- [ ] `[must]` Carry context-packet identity through Prototype/Implementation
+  execution, Forge evidence, candidate preparation, Trial, and Publication.
+- [x] `[should]` Add a context-packet inspector that shows included refs,
+  omitted categories, budgets, digest, and construction diagnostics without
+  exposing secrets or copying full transcripts.
+
+Commands, projections, and Workbench:
+
+- [x] `[must]` Emit typed interaction actions with command, risk class,
+  expected workflow generation, target refs, presentation hint, and fallback.
+  Stale actions fail without mutation and return the current projection.
+- [x] `[must]` Introduce explicit conversation focus, inspected ref, and
+  Preview target fields. Selecting a Process item must not implicitly
+  materialize it in Preview.
+- [x] `[must]` Replace the permanent Lifecycle navigation surface with an
+  on-demand Process projection derived from Change/Run/Revision/Trial/Release
+  provenance. Retain the old Lifecycle data tool as a compatibility adapter.
+- [x] `[must]` Refactor the recovered Builder Workbench around the canonical
+  conversation, dynamic action row, exact context/Preview header, adjacent
+  Preview, and contextual Process/Overview/Specification/Artifacts/Run detail
+  views while retaining the functional-parity gate.
+- [x] `[must]` Preserve rich Web project/file search, artifact browsing, diff,
+  and spatial Preview behavior. Limited channels receive compact status,
+  deterministic actions, and context-preserving deep links.
+- [ ] `[should]` Add a declarative rich-view registry with browser
+  panel/modal/drawer presentations and compact message/link fallbacks.
+- [ ] `[should]` Add an explicit Issue split/merge/regroup workbench when
+  automatic decomposition is ambiguous.
+
+Semantic changes and Review:
+
+- [x] `[must]` Implement at least one reversible
+  `adaos.builder.semantic_ui_change.v1` operation against stable widget/field
+  refs, with source-revision precondition, ABI validation, Revision output,
+  provenance, and deterministic undo data.
+- [ ] `[must]` Translate supported Review feedback into typed semantic
+  acceptance constraints and verify them against later UI revisions.
+- [ ] `[should]` Extend semantic operations from move/rename/show/hide to
+  bounded field/widget add/remove and mock/real binding changes after the
+  first operation is proven.
+- [ ] `[deferred]` Move added Review records from browser local storage into a
+  durable backend Change store, including reload/Preview-switch survival,
+  disposition, resolution, and author identity. The previously diagnosed
+  local-storage loss remains tracked but is intentionally not mixed into the
+  first core refactoring commit.
+
+Autonomy, evidence, and acceptance:
+
+- [ ] `[must]` Apply a common risk vocabulary to inspect, reversible local
+  edit, isolated DEV write, Trial activation, Workspace activation,
+  Publication, and destructive commands. Model confidence is rationale, not
+  authorization.
+- [ ] `[must]` Preserve exact base digest, actor, environment, executor,
+  allowed paths, semantic/source changes, commits, tests, Trial, Release, and
+  activation evidence across the Change trace.
+- [ ] `[must]` Prove the slice on a non-Builder scenario through request,
+  Change, Prototype or direct Implementation, isolated Run, Trial,
+  Publication, and exact DEV evidence. Do not use autonomous Builder
+  self-modification as the first acceptance case.
+- [ ] `[must]` Run Builder workflow/SDK/scenario tests, ABI validation,
+  functional parity, and wide/compact browser acceptance. Workspace Builder
+  remains unchanged until the DEV candidate is explicitly trialed and
+  accepted.
+- [ ] `[should]` Add evaluator evidence for semantic UI constraints,
+  functional tests, usability probes, and source/dependency impact without
+  requiring a separate model agent for every low-risk change.
+- [ ] `[could]` Add optional planner/generator/evaluator Run topologies for
+  long or high-risk Changes after single-executor latency, quality, and cost
+  baselines exist.
+
+### Phase 11 implementation evidence (2026-07-29)
+
+- [x] The core compatibility slice is committed as `7308fe5d`, `a65ecd92`,
+  `a5c29719`, `05ba3671`, and `313fc53b`: target architecture, canonical
+  Change/Run/context contracts, risk-aware Interaction Frames, the first
+  reversible semantic UI operation, the chat-first Workbench, and hardened
+  lineage invalidation.
+- [x] DEV Builder is `0.2.48 / UI 055`; the page metadata, active UI pointer,
+  `scenario.json`, `webui.json`, and canonical `scenario.yaml` version agree.
+  Forge scenario commit `c51a5810bd8b0145e8c0459e92c3b8c32124ae93`
+  contains the corrected deterministic workbench. The supporting DEV control
+  skill is `0.1.50` at Forge commit
+  `5adde98fc9d6543bc6771fc7ea65fb6a7c7309fe`.
+- [x] The selected core Builder regression set passes 139/139 tests. DEV
+  control-skill and scenario tests pass 56/56, functional-parity reports no
+  missing/forbidden contracts, and scenario plus strict probed skill
+  validation report no issues.
+- [x] A freshly started API process from the current checkout materializes
+  `prototype:builder:055` into `dev1-dev` and atomically records the independent
+  Preview context (`interaction_updated=true`). The normal local DEV server
+  was then restarted from the same checkout and repeated this live call
+  successfully.
+- [x] The current persisted Builder source, UI, translations, and workflow
+  contain no replacement code point or four-character question-mark run.
+  The manifest declares only `en` and `ru`; no Ukrainian-specific locale text
+  was found. UTF-8 JSON-file/tool ingress remains mandatory for non-ASCII
+  automation.
+- [x] The installed Workspace Builder remains the earlier published
+  `0.2.40 / UI 053`; the new `0.2.48 / UI 055` candidate exists only in DEV.
+  Workspace git differences are accounted for by the installed release package
+  relative to its older `0.2.19` repository snapshot and by files intentionally
+  omitted from release packages. No Workspace source was edited in this slice.
+- [ ] Human wide/compact browser comparison, a representative non-Builder
+  end-to-end Change, Trial, and Publication remain acceptance gates. UI 055 is
+  not a Workspace publication merely because automated and live API checks
+  passed.
+
 ## Cross-Document Anchors
 
 Builder is intentionally cross-cutting. Detailed work remains in:
@@ -795,6 +958,9 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE2 Personal
   Builder proof gate and its dependencies on managed deployment and repair
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
+- [Builder Conversational Development Architecture](builder-conversational-development.md):
+  chat-first product model, canonical Change/Run terminology, interaction
+  frames, semantic UI operations, and future proposal collaboration
 - [Builder SDK Boundary](builder-sdk-boundary.md): SDK ownership, functional
   Builder control architecture, migration checklist, and local proof record
 - [Skill Factory and Isolated Dev Nodes](skill-factory.md): target remote
@@ -824,12 +990,14 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 The Builder Workbench prototype now uses one project-oriented surface instead
 of the legacy Prompt IDE toolbar split:
 
-- the left navigation owns project selection and the three-stage lifecycle
-  tree (`Prototype`, `Automation`, `Publication`)
+- the left navigation owns project selection and a dependent lifecycle lineage:
+  Prototype revisions contain the Automation results derived from them, which
+  in turn contain their Publications
 - the main area switches between project overview, the durable Builder
   conversation, and the selected artifact
 - the auxiliary area is contextual: runtime projection on Overview,
-  development/LLM controls on Conversation, and the artifact tree on Artifacts
+  development/LLM plus active change-set controls on Conversation, and the
+  artifact tree on Artifacts
 - `ui.chat` supports an optional multiline composer; `Shift+Enter` inserts a
   newline while `Enter` and `Ctrl/Cmd+Enter` submit by default
 - split layouts can declare bounded sidebar and auxiliary widths while medium
@@ -865,6 +1033,111 @@ observed projection matches the latest desired generation.
   materialization events when their scenario no longer matches the latest
   source-webspace binding. This prevents an older asynchronous event from
   replacing the currently selected Builder projection.
+- [x] `[must]` Persist `adaos.builder.change_set.v1` inside the authoritative
+  project workflow with bounded issue items, acceptance criteria, member
+  Builder Changes, and `prototype_first` / `automation_direct` routes.
+- [x] `[must]` Aggregate follow-up interface and functional remarks into the
+  active set, keep unresolved Prototype issues at the Prototype gate, and
+  prevent isolated Codex from starting before Prototype approval.
+- [x] `[must]` Carry the active change-set identity and acceptance criteria into
+  Automation, checkpoint, candidate, trial, and Publication evidence.
+- [x] `[must]` Advance the workflow to `checkpoint_recorded` only after the
+  primary Automation checkpoint has a confirmed change id, package digest,
+  and source revision. Recovery reuses confirmed checkpoints without rerunning
+  isolated Codex or repeating a Forge push.
+- [x] `[must]` Resolve required candidate dependencies across all approved
+  checkpoint members of the active change set, while rejecting unrelated DEV
+  dependencies that are not part of the set.
+- [x] `[must]` Project the active set and issue progress in the contextual
+  Conversation panel; preserve Prototype development settings and expose them
+  only while Prototype is editable.
+- [x] `[must]` Replace independent stage roots with dependent
+  Prototype -> Automation -> Publication lineage. Only the retained current
+  Automation and Publication nodes are previewable; uncertain legacy lineage
+  is marked inferred.
+- [x] `[must]` Verify exact local runtime selection labels and bindings for
+  `proto: builder · UI 053`, `active: builder · 0.2.40`, and
+  `public: builder · 0.2.40`.
+- [x] `[must]` Run one fresh user request through issue extraction, built-in LLM
+  Prototype approval or direct Automation, isolated Codex, candidate trial,
+  stable Publication, and Workspace materialization on this machine.
+  Candidate `builder-0-2-28-940229ddbf49` locked scenario `0.2.28`, control
+  skill `0.1.36`, and interactive skill `0.3.13`; the deliverable files in DEV,
+  trial, and Workspace were byte-for-byte equal after promotion.
+- [x] `[must]` Reject newly corrupted user-authored text at Builder workflow,
+  interactive Builder, and Automation ingress before it becomes durable
+  evidence. Codex-operated non-ASCII tool requests use UTF-8 files and
+  `--json-file`, not PowerShell native-process text pipelines.
+- [x] `[must]` Refresh a declarative host from updates to its configured root
+  Yjs `initialStateSource`, so create/select project changes redraw Builder
+  without navigation or a page reload. The client regression covers a
+  `test03_recipes` to `test04_recipes` selection change.
+- [x] `[must]` Treat `idle`, `not_started`, and default Automation projections
+  as absence rather than lineage evidence. A fresh `test04_recipes` projects
+  one Prototype revision, does not synthesize an Automation row, and never
+  borrows the Prototype version for a nonexistent result. Control skill
+  `0.1.39` carries the focused regression and strict validation evidence.
+- [x] `[must]` Preserve every functional companion skill across Automation
+  turns and provide the installed Workspace Publication as an immutable
+  implementation baseline. The worker rejects changes to that baseline and
+  removes it before DEV activation or release-package construction.
+- [x] `[must]` Treat installed-only dependencies as immutable release inputs,
+  not mutable DEV companions. A missing legacy stable identity is migrated
+  into a deterministic package with an explicit `workspace-migration` source
+  reference and included in the project release lock.
+- [x] `[must]` Activate every component from the promoted WorkspaceLock and
+  require exact scenario and active skill-runtime versions before recording a
+  successful Workspace receipt. A failed, rolled-back activation can only be
+  resumed by the explicit one-shot `recover-promotion-activation` command,
+  which issues a new idempotency key and never repeats the channel move.
+- [x] `[must]` Complete the corrective functional Builder Automation from the
+  current Prototype plus installed Publication, then repeat candidate Trial,
+  stable Publication, exact Workspace materialization, and byte/lock checks.
+  Candidate `builder-0-2-40-26af92f3eaef` passed isolated Trial and promoted
+  release `builder@0.2.40`; WorkspaceLock revision `9` pins Builder `0.2.40`,
+  `builder_skill` `0.3.16`, `builder_sdk_control_skill` `0.1.44`, and migrated
+  `voice_chat_skill` `0.6.17`. Reload and post-activation health receipts are
+  exact for every component.
+- [x] `[must]` Complete browser acceptance for atomic create/select redraw,
+  canonical single-response project chat, and `proto:` / `active:` /
+  `public:` Preview selection after the corrective Publication.
+  The current browser projects `test04_recipes` as one Prototype revision with
+  no synthetic Automation row; Lifecycle node selection switches the
+  phase-specific Conversation surface, and all three exact Builder previews
+  are synchronized and materialization-ready.
+- [x] `[must]` Capture the selected Preview binding when an Automation turn is
+  submitted. On completion, advance it to the current `active:` result only
+  when the binding is still unchanged or already follows the active result;
+  preserve a Lifecycle choice made by the user while Codex was running.
+- [x] `[must]` Validate Choose Project through the complete declarative
+  initial-state/data-source contract. Every referenced selection field is
+  initialized before `list_projects` runs; browser acceptance on Builder
+  `0.2.42` resolves two live groups and 22 project cards without a static
+  fallback.
+- [x] `[must]` Recover Builder after the mock-only self-hosting regression.
+  UI revision `042` is preserved as the executable DEV scenario
+  `builder_reference_042`; recovery UI `054` rebases the active DEV Builder on
+  its complete control plane and forward-ports bounded Yjs project selection,
+  live `list_projects`, search, archived filtering, and Scenario/Skill template
+  selection. The embedded `adaos.builder.functional_parity.v1` gate requires
+  all widgets, modals, bindings, Lifecycle commands, and project kinds.
+- [x] `[must]` Complete local recovery evidence: reference and recovered
+  scenarios validate, parity reports no missing or forbidden contracts,
+  scenario tests pass 13/13, SDK tests pass 40/40, core Automation tests pass
+  43/43, and browser A/B rendering resolves `proto: builder_reference_042`
+  versus `proto: builder · UI 054`. Both revisions are checkpointed in Forge;
+  Workspace remains unchanged.
+- [ ] `[must]` Complete human comparison and isolated Trial of recovery UI 054
+  before Publication. Remove the temporary reference scenario only after the
+  recovered Workspace release is accepted.
+- [ ] `[should]` Mark immutable historical values that already contain lossy
+  replacement runs as transport-corrupted in Specification projections while
+  retaining their raw provenance; never infer the missing source characters.
+- [ ] `[should]` Add an explicit split/merge editor when automatic issue
+  decomposition is ambiguous; the current bounded list supports status edits
+  but not structural regrouping.
+- [ ] `[deferred]` Promote project-local issue items into a federated multi-user
+  Issue/extraction and proposal-exchange model.
 - [ ] `[must]` Persist the authoritative Builder transition record in the skill
   and make transition submission idempotent by generation id.
 - [ ] `[must]` Materialize only the latest desired generation and mark older

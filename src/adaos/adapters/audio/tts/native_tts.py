@@ -7,7 +7,9 @@
 """
 
 from __future__ import annotations
+from pathlib import Path
 import sys
+import tempfile
 from typing import Optional
 import typer
 
@@ -75,6 +77,21 @@ class NativeTTS:
     def say(self, text: str) -> None:
         self.engine.say(text)
         self.engine.runAndWait()
+
+    def synthesize(self, text: str) -> bytes:
+        tmp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp_path = tmp.name
+            self.engine.save_to_file(text, tmp_path)
+            self.engine.runAndWait()
+            return Path(tmp_path).read_bytes()
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def stop(self) -> None:
         try:

@@ -122,6 +122,7 @@ _YWS_ATTEMPT_HISTORY: deque[float] = deque(maxlen=1024)
 _YWS_CLIENT_ATTEMPT_HISTORY: dict[str, deque[float]] = {}
 _YWS_CLIENT_SHORT_SESSION_HISTORY: dict[str, deque[float]] = {}
 _YWS_GUARD_QUARANTINE_UNTIL: dict[str, float] = {}
+_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL: dict[str, float] = {}
 _YWS_GUARD_LAST_LOG_AT: dict[str, float] = {}
 _YWS_GUARD_LAST_NOTIFY_AT: dict[str, float] = {}
 _YWS_GUARD_INCIDENTS: dict[str, dict[str, float]] = {}
@@ -413,9 +414,13 @@ _GATEWAY_LIVE_PERSIST_AUTOCOMPACT_COOLDOWN_SEC = _env_float(
 )
 _GATEWAY_LIVE_PERSIST_COMPACTION_LOCK = threading.RLock()
 _GATEWAY_LIVE_PERSIST_COMPACTION_NEXT_AT: dict[str, float] = {}
+# Materialization mutates the authoritative YDoc synchronously, while YRoom
+# fans the resulting update out on its async observer task. Keep the wait
+# bounded, but enabled by default so a successful preview switch also means
+# that every currently connected browser has received the update.
 _LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS = _env_float(
     "ADAOS_YJS_LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS",
-    0.0,
+    250.0,
     minimum=0.0,
 )
 _LIVE_ROOM_REFRESH_DIAG_TTL_SEC = _env_float("ADAOS_YJS_LIVE_ROOM_REFRESH_DIAG_TTL_SEC", 60.0, minimum=1.0)
@@ -435,6 +440,7 @@ _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S
 _YWS_GUARD_NOTIFY_INTERVAL_S = _env_float("ADAOS_YWS_GUARD_NOTIFY_INTERVAL_S", 30.0, minimum=1.0)
 _YWS_GUARD_REJECT_HOLD_MAX_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_MAX_SEC", 0.0, minimum=0.0)
 _YWS_GUARD_REJECT_HOLD_STEP_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_STEP_SEC", 1.0, minimum=0.05)
+_YWS_GUARD_RECOVERY_IN_PROGRESS_S = _env_float("ADAOS_YWS_GUARD_RECOVERY_IN_PROGRESS_S", 10.0, minimum=1.0)
 _YWS_GUARD_MIN_STABLE_SESSION_S = _env_float("ADAOS_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0, minimum=0.0)
 _YWS_GUARD_SHORT_SESSION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0, minimum=1.0)
 _YWS_GUARD_SHORT_SESSION_LIMIT = _env_int("ADAOS_YWS_GUARD_SHORT_SESSION_LIMIT", 3, minimum=1)
@@ -458,6 +464,10 @@ _YROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC = _env_float(
     "ADAOS_YJS_ROOM_NATIVE_PREFLIGHT_TIMEOUT_SEC",
     5.0,
     minimum=0.25,
+)
+_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC = _env_flag(
+    "ADAOS_YJS_SERVER_AUTHORITATIVE_INITIAL_SYNC",
+    True,
 )
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
@@ -1294,6 +1304,9 @@ class DiagnosticYRoom(YRoom):
         self._diag_native_preflight_block_total = 0
         self._diag_native_preflight_block_bytes = 0
         self._diag_native_preflight_last_reason = ""
+        self._diag_authoritative_initial_skip_total = 0
+        self._diag_authoritative_initial_skip_bytes = 0
+        self._diag_authoritative_initial_last_sync_type = ""
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
         self._diag_effective_initial_replay_total = 0
@@ -1369,6 +1382,11 @@ class DiagnosticYRoom(YRoom):
             "native_preflight_block_total": int(self._diag_native_preflight_block_total),
             "native_preflight_block_bytes": int(self._diag_native_preflight_block_bytes),
             "native_preflight_last_reason": str(self._diag_native_preflight_last_reason or ""),
+            "authoritative_initial_skip_total": int(self._diag_authoritative_initial_skip_total),
+            "authoritative_initial_skip_bytes": int(self._diag_authoritative_initial_skip_bytes),
+            "authoritative_initial_last_sync_type": str(
+                self._diag_authoritative_initial_last_sync_type or ""
+            ),
             "effective_repair_total": int(self._diag_effective_repair_total),
             "effective_repair_bytes": int(self._diag_effective_repair_bytes),
             "effective_repair_replay_pending": len(self._effective_repair_replay_entries()),
@@ -1960,11 +1978,55 @@ class DiagnosticYRoom(YRoom):
                                 )
                                 await self._send_initial_effective_state_replay(websocket)
                                 continue
+                        # A browser SYNC_STEP1 contains only its state vector.  It
+                        # cannot mutate the server document and must reach
+                        # process_sync_message so the server returns SYNC_STEP2.
+                        # y-websocket marks the provider synced only after that
+                        # response; dropping STEP1 leaves the provider forever in
+                        # `connecting` and eventually creates a reconnect storm.
+                        # Keep the server-authoritative guard on the initial
+                        # client state/update frames, which are the mutating part
+                        # of the handshake.
+                        authoritative_initial = bool(
+                            sync_type is not None
+                            and inbound_payload is not None
+                            and _YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC
+                            and initial_native_update_pending
+                            and sync_type
+                            in {
+                                int(YSyncMessageType.SYNC_STEP2),
+                                int(YSyncMessageType.SYNC_UPDATE),
+                            }
+                        )
+                        if authoritative_initial:
+                            sync_name = (
+                                YSyncMessageType(int(sync_type)).name
+                                if int(sync_type) in {0, 1, 2}
+                                else str(sync_type)
+                            )
+                            self._diag_authoritative_initial_skip_total += 1
+                            self._diag_authoritative_initial_skip_bytes += len(inbound_payload)
+                            self._diag_authoritative_initial_last_sync_type = sync_name
                             if sync_type in {
                                 int(YSyncMessageType.SYNC_STEP2),
                                 int(YSyncMessageType.SYNC_UPDATE),
                             }:
                                 initial_native_update_pending = False
+                                await self._send_initial_effective_state_replay(websocket)
+                            _ylog.warning(
+                                "ignored initial browser Y sync payload in server-authoritative mode "
+                                "webspace=%s sync_type=%s bytes=%s digest=%s",
+                                self._diag_room_id(),
+                                sync_name,
+                                len(inbound_payload),
+                                hashlib.sha256(inbound_payload).hexdigest(),
+                            )
+                            continue
+                        if sync_type in {
+                            int(YSyncMessageType.SYNC_STEP2),
+                            int(YSyncMessageType.SYNC_UPDATE),
+                        }:
+                            initial_native_update_pending = False
                         tg.start_soon(
                             process_sync_message,
                             message[1:],
@@ -4191,6 +4253,7 @@ def clear_yws_guard_state_for_webspace(
         client_attempt_history_cleared = _drop_prefixed(_YWS_CLIENT_ATTEMPT_HISTORY, history_prefix)
         client_short_session_history_cleared = _drop_prefixed(_YWS_CLIENT_SHORT_SESSION_HISTORY, history_prefix)
         quarantine_cleared = _drop_prefixed(_YWS_GUARD_QUARANTINE_UNTIL, history_prefix)
+        recovery_in_flight_cleared = _drop_prefixed(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL, history_prefix)
         incident_cleared = _drop_prefixed(_YWS_GUARD_INCIDENTS, history_prefix)
         log_cleared = _drop_prefixed(_YWS_GUARD_LAST_LOG_AT, log_prefix)
         notify_cleared = _drop_prefixed(_YWS_GUARD_LAST_NOTIFY_AT, log_prefix)
@@ -4199,6 +4262,7 @@ def clear_yws_guard_state_for_webspace(
             + client_attempt_history_cleared
             + client_short_session_history_cleared
             + quarantine_cleared
+            + recovery_in_flight_cleared
             + incident_cleared
             + log_cleared
             + notify_cleared
@@ -4219,6 +4283,7 @@ def clear_yws_guard_state_for_webspace(
         "client_attempt_history_cleared": client_attempt_history_cleared,
         "client_short_session_history_cleared": client_short_session_history_cleared,
         "quarantine_cleared": quarantine_cleared,
+        "recovery_in_flight_cleared": recovery_in_flight_cleared,
         "incident_cleared": incident_cleared,
         "log_cleared": log_cleared,
         "notify_cleared": notify_cleared,
@@ -4312,6 +4377,7 @@ def _yws_guard_reject_hold_seconds(reason: str, diag: dict[str, Any] | None) -> 
     if reason_token not in {
         "client_reconnect_storm",
         "client_reconnect_backoff",
+        "client_recovery_in_progress",
         "client_short_session_storm",
         "webspace_reconnect_storm",
         "webspace_reconnect_backoff",
@@ -4674,6 +4740,12 @@ def _yws_guard_reject_reason(
     webspace_distinct_clients_10s = 0
     client_15s = 0
     client_short_sessions = 0
+    active_client_total = _active_yws_connection_total_for_client(
+        webspace_key,
+        dev_key,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
     client_reconnect_storm = False
     client_short_session_storm = False
     webspace_reconnect_storm = False
@@ -4682,6 +4754,9 @@ def _yws_guard_reject_reason(
     quarantine_until = 0.0
     quarantine_ttl_s: float | None = None
     quarantine_incident_count: int | None = None
+    recovery_in_progress_until = 0.0
+    recovery_in_progress_ttl_s: float | None = None
+    recovery_admission_reserved = False
     route_dependency: dict[str, Any] = {}
     dependency_recovery_allowed = False
     dependency_recovery_reason = ""
@@ -4711,6 +4786,31 @@ def _yws_guard_reject_reason(
         _YWS_GUARD_DIAG["last_dependency_recovery_route_reason"] = str(route_dependency.get("reason") or "")
 
     with _YWS_STORM_LOCK:
+        def _reserve_recovery_admission_locked(trigger: str) -> bool:
+            nonlocal recovery_in_progress_until, recovery_in_progress_ttl_s
+            nonlocal recovery_admission_reserved, dependency_recovery_allowed, dependency_recovery_reason
+            existing_until = float(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.get(client_key) or 0.0)
+            if existing_until > now:
+                recovery_in_progress_until = existing_until
+                recovery_in_progress_ttl_s = max(0.0, existing_until - now)
+                return False
+            ttl_s = max(1.0, float(_YWS_GUARD_RECOVERY_IN_PROGRESS_S))
+            recovery_in_progress_until = now + ttl_s
+            recovery_in_progress_ttl_s = ttl_s
+            _YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL[client_key] = recovery_in_progress_until
+            recovery_admission_reserved = True
+            dependency_recovery_allowed = True
+            dependency_recovery_reason = str(trigger or "").strip() or "client_recovery_admission"
+            _record_dependency_recovery()
+            _YWS_GUARD_DIAG["recovery_admission_reserved_total"] = int(
+                _YWS_GUARD_DIAG.get("recovery_admission_reserved_total") or 0
+            ) + 1
+            _YWS_GUARD_DIAG["last_recovery_admission_at"] = now
+            _YWS_GUARD_DIAG["last_recovery_admission_webspace_id"] = webspace_key
+            _YWS_GUARD_DIAG["last_recovery_admission_dev_id"] = dev_key
+            _YWS_GUARD_DIAG["last_recovery_admission_reason"] = dependency_recovery_reason
+            return True
+
         cutoff_60 = now - 60.0
         while _YWS_OPEN_HISTORY and _YWS_OPEN_HISTORY[0] < cutoff_60:
             _YWS_OPEN_HISTORY.popleft()
@@ -4744,6 +4844,9 @@ def _yws_guard_reject_reason(
         for key0 in list(_YWS_GUARD_QUARANTINE_UNTIL.keys()):
             if float(_YWS_GUARD_QUARANTINE_UNTIL.get(key0) or 0.0) <= now:
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(key0, None)
+        for key0 in list(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.keys()):
+            if float(_YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.get(key0) or 0.0) <= now:
+                _YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL.pop(key0, None)
         recent_10s, webspace_distinct_clients_10s = _yws_client_recent_open_counts_locked(webspace_key, now)
         client_key = _yws_guard_client_history_key(
             webspace_key,
@@ -4760,9 +4863,17 @@ def _yws_guard_reject_reason(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
         if client_quarantine_until > now:
-            quarantine_until = client_quarantine_until
-            quarantine_ttl_s = max(0.0, client_quarantine_until - now)
-            reason = "client_reconnect_backoff"
+            if active_total <= 0 and _dependency_allows_recovery("client_reconnect_backoff_no_active_yws"):
+                _YWS_GUARD_QUARANTINE_UNTIL.pop(client_key, None)
+                cleared_client_quarantine = True
+                if not _reserve_recovery_admission_locked("client_reconnect_backoff_no_active_yws"):
+                    reason = "client_recovery_in_progress"
+                    quarantine_until = recovery_in_progress_until
+                    quarantine_ttl_s = recovery_in_progress_ttl_s
+            else:
+                quarantine_until = client_quarantine_until
+                quarantine_ttl_s = max(0.0, client_quarantine_until - now)
+                reason = "client_reconnect_backoff"
         elif webspace_quarantine_until > now:
             if active_total > 0:
                 reason = "webspace_reconnect_backoff"
@@ -4785,7 +4896,18 @@ def _yws_guard_reject_reason(
                     webspace_recent_10s=recent_10s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
                 )
-                if (
+                if active_client_total > 0:
+                    reason = "client_recovery_in_progress"
+                    quarantine_until = now + max(1.0, float(_YWS_GUARD_RECOVERY_IN_PROGRESS_S))
+                    quarantine_ttl_s = max(1.0, float(_YWS_GUARD_RECOVERY_IN_PROGRESS_S))
+                    recovery_in_progress_until = quarantine_until
+                    recovery_in_progress_ttl_s = quarantine_ttl_s
+                elif active_total <= 0 and _dependency_allows_recovery("client_reconnect_storm_no_active_yws"):
+                    if not _reserve_recovery_admission_locked("client_reconnect_storm_no_active_yws"):
+                        reason = "client_recovery_in_progress"
+                        quarantine_until = recovery_in_progress_until
+                        quarantine_ttl_s = recovery_in_progress_ttl_s
+                elif (
                     webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
                     and client_15s < _yws_single_client_reconnect_escalation_limit()
                 ):
@@ -4859,6 +4981,7 @@ def _yws_guard_reject_reason(
                 _YWS_GUARD_DIAG["last_reject_incident_count"] = quarantine_incident_count
     diag = {
         "active_total": active_total,
+        "active_client_total": active_client_total,
         "recent_open_10s": recent_10s,
         "webspace_distinct_clients_10s": webspace_distinct_clients_10s,
         "client_open_15s": client_15s,
@@ -4873,6 +4996,9 @@ def _yws_guard_reject_reason(
         "quarantine_until": quarantine_until,
         "quarantine_ttl_s": quarantine_ttl_s,
         "quarantine_incident_count": quarantine_incident_count,
+        "recovery_admission_reserved": recovery_admission_reserved,
+        "recovery_in_progress_until": recovery_in_progress_until,
+        "recovery_in_progress_ttl_s": recovery_in_progress_ttl_s,
         "route_dependency": route_dependency,
         "dependency_recovery_allowed": dependency_recovery_allowed,
         "dependency_recovery_reason": dependency_recovery_reason,
@@ -6868,6 +6994,35 @@ async def _apply_room_materialized_payload(
         else:
             phase_timings_ms["mark_backend_update"] = 0.0
             phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        direct_client_broadcast_count = 0
+        direct_client_broadcast_failed = 0
+        client_broadcast_update = (
+            full_state_update
+            if force_full_state_update and full_state_update
+            else update
+        )
+        if client_broadcast_update:
+            stage_started = time.perf_counter()
+            clients = list(getattr(room, "clients", []) or [])
+            if clients:
+                message = create_update_message(bytes(client_broadcast_update))
+
+                async def _send_materialized_update(client: Any) -> bool:
+                    try:
+                        await client.send(message)
+                        return True
+                    except Exception:
+                        return False
+
+                delivery_results = await asyncio.gather(
+                    *(_send_materialized_update(client) for client in clients)
+                )
+                direct_client_broadcast_count = sum(1 for delivered in delivery_results if delivered)
+                direct_client_broadcast_failed = len(delivery_results) - direct_client_broadcast_count
+            phase_timings_ms["direct_client_broadcast"] = _elapsed_ms_since(stage_started)
+        else:
+            phase_timings_ms["direct_client_broadcast"] = 0.0
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
         try:
             setattr(room, "_last_materialized_payload", _compact_materialized_payload_for_room_history(payload))
         except Exception:
@@ -6888,6 +7043,9 @@ async def _apply_room_materialized_payload(
             "full_state_snapshot_result": full_state_snapshot_result,
             "broadcast_update_bytes": len(update or b""),
             "full_state_update_bytes": len(full_state_update or b""),
+            "direct_client_broadcast_count": int(direct_client_broadcast_count),
+            "direct_client_broadcast_failed": int(direct_client_broadcast_failed),
+            "direct_client_broadcast_bytes": len(client_broadcast_update or b""),
         }
     except BaseException as exc:
         if _is_control_flow_base_exception(exc):

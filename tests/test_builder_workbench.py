@@ -732,3 +732,36 @@ async def test_builder_preview_selected_skips_superseded_builder_event(monkeypat
     )
 
     assert ensure_calls == []
+
+
+@pytest.mark.asyncio
+async def test_builder_source_reload_republishes_durable_selection(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.builder.workbench as workbench_module
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="scenario",
+        object_id="shopping",
+        persist_projection=False,
+    )
+    scheduled: list[str] = []
+
+    monkeypatch.setattr(workbench_module, "BuilderWorkbenchService", lambda: service)
+    monkeypatch.setattr(
+        workbench_module,
+        "_schedule_projection_publish",
+        lambda _service, source_webspace_id, **_kwargs: scheduled.append(source_webspace_id),
+    )
+
+    await workbench_module._on_builder_source_webspace_reloaded(
+        {"webspace_id": "desktop", "scenario_id": "builder"}
+    )
+    await workbench_module._on_builder_source_webspace_reloaded(
+        {"webspace_id": "desktop", "scenario_id": "shopping"}
+    )
+    await workbench_module._on_builder_source_webspace_reloaded(
+        {"webspace_id": "unbound", "scenario_id": "builder"}
+    )
+
+    assert scheduled == ["desktop"]

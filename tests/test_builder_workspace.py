@@ -619,7 +619,7 @@ def test_root_dev_scenario_create_rewrites_the_complete_default_template(tmp_pat
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
 
     assert manifest["id"] == manifest["name"] == "recipe_book"
-    assert manifest["version"] == "0.2.0"
+    assert manifest["version"] == "0.1.0"
     assert manifest["ui"] == {"manifest": "webui.json"}
     assert content["id"] == content["name"] == "recipe_book"
     assert content["version"] == manifest["version"]

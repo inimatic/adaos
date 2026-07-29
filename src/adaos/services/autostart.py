@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import json
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,11 +192,24 @@ def default_spec(
             env[key] = value
     if repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(repo_root)
-        pythonpath_entries = [str(repo_root / "src")]
+        root_source = (repo_root / "src").resolve()
+        pythonpath_entries = [str(root_source)]
         existing_pythonpath = str(os.getenv("PYTHONPATH") or "").strip()
         if existing_pythonpath:
-            pythonpath_entries.append(existing_pythonpath)
-        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(entry for entry in pythonpath_entries if str(entry).strip()))
+            for entry in existing_pythonpath.split(os.pathsep):
+                candidate = str(entry or "").strip()
+                if not candidate:
+                    continue
+                try:
+                    candidate_path = Path(candidate).expanduser().resolve()
+                except Exception:
+                    candidate_path = None
+                if candidate_path == root_source:
+                    continue
+                if candidate_path is not None and is_core_slot_path(candidate_path, base_dir=base_dir):
+                    continue
+                pythonpath_entries.append(candidate)
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath_entries))
     env.setdefault("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     env.setdefault("ADAOS_SUPERVISOR_PORT", "8776")
     resolved_token = str(token or _default_control_token() or "").strip()
@@ -328,6 +342,38 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _write_executable_text_atomically(path: Path, text: str, *, validate_bash: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(temporary.stat().st_mode | 0o111)
+        if validate_bash and os.name != "nt":
+            bash = shutil_which("bash")
+            if bash:
+                validation = _run([bash, "-n", str(temporary)])
+                if validation.returncode != 0:
+                    detail = str(validation.stderr or validation.stdout or "bash syntax validation failed").strip()
+                    raise RuntimeError(detail)
+        os.replace(temporary, path)
+        try:
+            flags = os.O_RDONLY | int(getattr(os, "O_DIRECTORY", 0))
+            directory_fd = os.open(path.parent, flags)
+        except Exception:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _sh_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
@@ -366,43 +412,66 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
         )
     for k, v in env.items():
         lines.append(f"export {k}={_sh_quote(str(v))}")
-    lines.extend(
-        [
-            f"repair_python={_sh_quote(str(argv[0]))}",
-            'root_repo="${ADAOS_ROOT_REPO_ROOT:-}"',
-            'base_dir="${ADAOS_BASE_DIR:-$HOME/.adaos}"',
-            'if [ -n "${root_repo}" ] && [ -d "${root_repo}/src/adaos" ]; then',
-            '  active_slot=""',
-            '  if [ -f "${base_dir}/state/core_slots/active" ]; then',
-            '    active_slot="$(tr -d \'[:space:]\' < "${base_dir}/state/core_slots/active" || true)"',
-            "  fi",
-            '  for slot in "${active_slot}" A B; do',
-            '    if [ "${slot}" != "A" ] && [ "${slot}" != "B" ]; then',
-            "      continue",
-            "    fi",
-            '    slot_repo="${base_dir}/state/core_slots/slots/${slot}/repo"',
-            '    if [ ! -f "${root_repo}/src/adaos/services/bounded_io.py" ] && [ -f "${slot_repo}/src/adaos/services/bounded_io.py" ]; then',
-            '      install -m 0644 "${slot_repo}/src/adaos/services/bounded_io.py" "${root_repo}/src/adaos/services/bounded_io.py" 2>/dev/null || true',
-            "    fi",
-            "  done",
-            '  supervisor_py="${root_repo}/src/adaos/apps/supervisor.py"',
-            '  if [ -f "${supervisor_py}" ] && [ -f "${root_repo}/src/adaos/services/bounded_io.py" ]; then',
-            '    if grep -q "bounded_jsonl_tail" "${supervisor_py}" 2>/dev/null && ! grep -q "from adaos.services.bounded_io import" "${supervisor_py}" 2>/dev/null; then',
-            '      "${repair_python}" - "${supervisor_py}" <<\'PY\' 2>/dev/null || true',
-            "from pathlib import Path",
-            "import sys",
-            "path = Path(sys.argv[1])",
-            "text = path.read_text()",
-            "line = 'from adaos.services.bounded_io import bounded_jsonl_tail, bounded_text_tail_lines, path_size_snapshot\\n'",
-            "anchor = 'from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS\\n'",
-            "if line not in text and anchor in text:",
-            "    path.write_text(text.replace(anchor, anchor + line, 1))",
-            "PY",
-            "    fi",
-            "  fi",
-            "fi",
-        ]
-    )
+    if "adaos.apps.supervisor" in {str(item) for item in argv}:
+        fallback_argv = " ".join(_sh_quote(str(x)) for x in argv[1:])
+        import_smoke = (
+            "import adaos.apps.supervisor,adaos.apps.cli.app,"
+            "adaos.apps.autostart_runner"
+        )
+        lines.extend(
+            [
+                f"root_python={_sh_quote(str(argv[0]))}",
+                'root_repo="${ADAOS_ROOT_REPO_ROOT:-}"',
+                'base_dir="${ADAOS_BASE_DIR:-$HOME/.adaos}"',
+                "root_ready=0",
+                'if [ -x "${root_python}" ] && [ -d "${root_repo}/src/adaos" ]; then',
+                f'  if env PYTHONPATH="${{root_repo}}/src" "${{root_python}}" -c {_sh_quote(import_smoke)} >/dev/null 2>&1; then',
+                "    root_ready=1",
+                "  fi",
+                "fi",
+                'if [ "${root_ready}" != "1" ]; then',
+                '  active_slot=""',
+                '  previous_slot=""',
+                '  if [ -f "${base_dir}/state/core_slots/active" ]; then',
+                '    active_slot="$(tr -d \'[:space:]\' < "${base_dir}/state/core_slots/active" || true)"',
+                "  fi",
+                '  if [ -f "${base_dir}/state/core_slots/previous" ]; then',
+                '    previous_slot="$(tr -d \'[:space:]\' < "${base_dir}/state/core_slots/previous" || true)"',
+                "  fi",
+                '  for slot in "${active_slot}" "${previous_slot}" A B; do',
+                '    if [ "${slot}" != "A" ] && [ "${slot}" != "B" ]; then',
+                "      continue",
+                "    fi",
+                '    slot_repo="${base_dir}/state/core_slots/slots/${slot}/repo"',
+                '    slot_python="${base_dir}/state/core_slots/slots/${slot}/venv/bin/python"',
+                '    if [ ! -x "${slot_python}" ]; then',
+                '      slot_python="${base_dir}/state/core_slots/slots/${slot}/venv/bin/python3"',
+                "    fi",
+                '    if [ ! -x "${slot_python}" ] || [ ! -d "${slot_repo}/src/adaos" ]; then',
+                "      continue",
+                "    fi",
+                f'    if ! env PYTHONPATH="${{slot_repo}}/src" "${{slot_python}}" -c {_sh_quote(import_smoke)} >/dev/null 2>&1; then',
+                "      continue",
+                "    fi",
+                '    recovery_dir="${base_dir}/state/root_recovery"',
+                '    mkdir -p "${recovery_dir}"',
+                '    recovery_tmp="${recovery_dir}/latest.$$"',
+                "    {",
+                "      printf 'state=slot_fallback\\n'",
+                "      printf 'reason=root_import_preflight_failed\\n'",
+                "      printf 'slot=%s\\n' \"${slot}\"",
+                "      printf 'root_repo=%s\\n' \"${root_repo}\"",
+                "      printf 'slot_repo=%s\\n' \"${slot_repo}\"",
+                "      printf 'started_at=%s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
+                '    } > "${recovery_tmp}"',
+                '    mv -f "${recovery_tmp}" "${recovery_dir}/latest.env"',
+                '    export ADAOS_ROOT_RECOVERY_FALLBACK=1',
+                '    export ADAOS_ROOT_RECOVERY_SLOT="${slot}"',
+                '    exec env PYTHONPATH="${slot_repo}/src" "${slot_python}" ' + fallback_argv,
+                "  done",
+                "fi",
+            ]
+        )
     lines.extend(
         [
             "max_nofile=$(ulimit -H -n 2>/dev/null || true)",
@@ -412,12 +481,11 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
         ]
     )
     quoted = " ".join(_sh_quote(str(x)) for x in argv)
-    lines.append(f"exec {quoted}")
-    _write_text(path, "\n".join(lines) + "\n")
-    try:
-        path.chmod(path.stat().st_mode | 0o111)
-    except Exception:
-        pass
+    if "adaos.apps.supervisor" in {str(item) for item in argv}:
+        lines.append('exec env PYTHONPATH="${root_repo}/src" ' + quoted)
+    else:
+        lines.append(f"exec {quoted}")
+    _write_executable_text_atomically(path, "\n".join(lines) + "\n", validate_bash=True)
 
 
 def _linux_cli_shim_path() -> Path:
@@ -475,7 +543,7 @@ def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
             '    export ADAOS_ACTIVE_CORE_SLOT_DIR="$SLOT_DIR"',
             '    export ADAOS_SLOT_REPO_ROOT="$REPO_DIR"',
             '    if [ -d "$REPO_DIR/src" ]; then',
-            '      export PYTHONPATH="$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"',
+            '      export PYTHONPATH="$REPO_DIR/src"',
             "    fi",
             '    exec "$VENV_DIR/bin/python" -m adaos.apps.cli.app "$@"',
             "  fi",
@@ -485,11 +553,7 @@ def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
     if "PYTHONPATH" in spec.env:
         lines.append(f"export PYTHONPATH={_sh_quote(str(spec.env['PYTHONPATH']))}")
     lines.append(f"exec {_sh_quote(python)} -m adaos.apps.cli.app \"$@\"")
-    _write_text(path, "\n".join(lines) + "\n")
-    try:
-        path.chmod(path.stat().st_mode | 0o111)
-    except Exception:
-        pass
+    _write_executable_text_atomically(path, "\n".join(lines) + "\n", validate_bash=True)
 
 
 def _linux_cli_shim_status(*, base_dir: Path | str | None = None) -> dict[str, object]:
@@ -1520,6 +1584,8 @@ def _linux_write_service_file(
         "Description=AdaOS",
         "After=network-online.target",
         "Wants=network-online.target",
+        "StartLimitIntervalSec=300",
+        "StartLimitBurst=10",
         "",
         "[Service]",
         "Type=simple",

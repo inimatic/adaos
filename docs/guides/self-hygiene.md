@@ -48,6 +48,11 @@ files:
 /etc/systemd/system/adaos-hygiene.timer
 ```
 
+The timer invokes the managed `/usr/local/bin/adaos` CLI shim, which resolves
+the current verified A/B slot before importing AdaOS. It does not pin the raw
+Python executable that happened to install the timer; hygiene therefore remains
+available when the stable root checkout is temporarily unimportable.
+
 On Windows, the command does not try to write Linux-specific policy files. It
 records the policy state and leaves local cleanup available through
 `adaos maintenance run`.

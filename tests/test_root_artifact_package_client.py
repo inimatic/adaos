@@ -39,6 +39,22 @@ def test_artifact_package_registry_client_contract() -> None:
         expected_release_digest=None,
     )
     client.get_artifact_channel(project_id="recipes")
+    attestation = {"schema": "adaos.artifact.attestation.v1"}
+    attestation_set = {"schema": "adaos.artifact.release_attestation_set.v1"}
+    client.put_artifact_attestation(attestation=attestation)
+    client.list_artifact_attestations(
+        subject_kind="package",
+        subject_digest=digest,
+    )
+    client.put_release_attestation_set(
+        project_id="recipes",
+        release_digest=digest,
+        attestation_set=attestation_set,
+    )
+    client.get_release_attestation_set(
+        project_id="recipes",
+        release_digest=digest,
+    )
 
     assert [(method, path) for method, path, _ in client.calls] == [
         ("POST", "/v1/artifacts/packages"),
@@ -49,6 +65,16 @@ def test_artifact_package_registry_client_contract() -> None:
         ("GET", f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}"),
         ("PUT", "/v1/artifacts/projects/recipes/channels/stable"),
         ("GET", "/v1/artifacts/projects/recipes/channels/stable"),
+        ("POST", "/v1/artifacts/attestations"),
+        ("GET", f"/v1/artifacts/attestations/package/sha256%3A{'a' * 64}"),
+        (
+            "PUT",
+            f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}/attestations",
+        ),
+        (
+            "GET",
+            f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}/attestations",
+        ),
     ]
     assert client.calls[0][2]["cert"] == ("cert", "key")
     assert client.calls[1][2]["data"] == b"package"
@@ -65,3 +91,5 @@ def test_artifact_package_registry_client_contract() -> None:
         "release_digest": digest,
         "expected_release_digest": None,
     }
+    assert client.calls[8][2]["json"] == {"attestation": attestation}
+    assert client.calls[10][2]["json"] == {"attestation_set": attestation_set}

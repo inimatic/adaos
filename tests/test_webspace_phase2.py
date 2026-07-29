@@ -644,6 +644,45 @@ def test_member_snapshot_changed_rebuilds_shared_workspaces_with_rate_limit(monk
     assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
 
 
+def test_member_access_reactivated_forces_rebuild_even_when_material_fingerprint_is_unchanged(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+    key = "member-1\0desktop"
+
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
+    monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_desktop_material_fingerprint", lambda _node_id: "same")
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_STATS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT[key] = time.monotonic()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT[key] = "same"
+
+    async def _fake_seed(**_kwargs):
+        return None
+
+    async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
+        calls.append((webspace_id, action, source_of_truth))
+        return {"accepted": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "_seed_member_snapshot_ydoc_defaults", _fake_seed)
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    async def _exercise() -> None:
+        await webspace_runtime_module._on_subnet_member_access_reactivated({"node_id": "member-1"})
+        await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+    assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
+
+
 def test_member_snapshot_refreshed_rebuilds_when_remote_catalog_projection_is_missing(monkeypatch) -> None:
     calls: list[tuple[str, str, str]] = []
 
@@ -1668,6 +1707,77 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
     assert "nodeId" not in decls[0]["webio"]["receivers"]["infrastate.realtime"]
     assert decls[0]["ydoc_defaults"]["data/nodes/member-1/weather/current"] == {"city": "Moscow"}
     assert decls[0]["ydoc_defaults"]["data/nodes/member-1/media/library"] == {"items": []}
+
+
+def test_collect_remote_skill_decls_overrides_member_catalog_label_with_device_inventory_name(monkeypatch) -> None:
+    directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
+    directory_module.get_directory = lambda: SimpleNamespace(
+        list_known_nodes=lambda: [
+            {
+                "node_id": "member-1",
+                "roles": ["member"],
+                "display_index": 3,
+                "runtime_projection": {
+                    "snapshot": {
+                        "node_id": "member-1",
+                        "desktop_catalog": {
+                            "apps": [
+                                {
+                                    "id": "infrastate_app",
+                                    "title": "Infra State",
+                                    "node_label": "adaos2",
+                                }
+                            ],
+                            "widgets": [
+                                {
+                                    "id": "infrastate_widget",
+                                    "title": "Infra State",
+                                    "node_label": "adaos2",
+                                }
+                            ],
+                            "registry": {
+                                "widgets": {
+                                    "infrastate_widget": {
+                                        "id": "infrastate_widget",
+                                        "node_label": "adaos2",
+                                    }
+                                }
+                            },
+                        }
+                    }
+                },
+            }
+        ]
+    )
+    device_inventory_module = types.ModuleType("adaos.services.device_inventory")
+    device_inventory_module.list_devices = lambda **_kwargs: [
+        {
+            "identity": {"node_id": "member-1"},
+            "policy": {
+                "present": True,
+                "managed_state": "managed",
+                "admission_policy": "allow",
+                "effective_name": "Mediapoint",
+                "display_name": "Mediapoint",
+            },
+        }
+    ]
+    monkeypatch.setitem(sys.modules, "adaos.services.registry.subnet_directory", directory_module)
+    monkeypatch.setitem(sys.modules, "adaos.services.device_inventory", device_inventory_module)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="hub", node_id="hub-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "hub-1")
+
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+    decls = runtime._collect_remote_skill_decls()
+
+    assert len(decls) == 1
+    assert decls[0]["apps"][0]["node_label"] == "Mediapoint"
+    assert decls[0]["widgets"][0]["node_label"] == "Mediapoint"
+    assert decls[0]["registry"]["widgets"]["node:member-1:infrastate_widget"]["node_label"] == "Mediapoint"
 
 
 def test_resolve_webspace_preserves_live_remote_entries_during_projection_gap(monkeypatch) -> None:
@@ -4533,6 +4643,99 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
     assert calls == [("recipes", "workspace")]
     assert source_space == "workspace"
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
+
+
+def test_builder_publication_preview_reads_verified_installed_package_when_slot_is_inactive(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from adaos.domain.artifact_release import (
+        ArtifactSourceRef,
+        ProjectRelease,
+        StableSubscription,
+    )
+    from adaos.services.artifact_pipeline.channels import SubscriptionStore
+    from adaos.services.artifact_pipeline.packages import (
+        ContentAddressedPackageStore,
+        build_artifact_package,
+    )
+
+    scenario_dir = tmp_path / "source" / "recipes"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.2.0\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    publication = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {"pageSchema": {"title": "Installed publication"}}
+            }
+        },
+    }
+    (scenario_dir / "webui.json").write_text(
+        json.dumps(publication),
+        encoding="utf-8",
+    )
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("subnets/dev/nodes/node/scenarios/recipes/",),
+    )
+    built = build_artifact_package(scenario_dir, kind="scenario", source_ref=source)
+    release = ProjectRelease(
+        project_id="recipes",
+        version="0.2.0",
+        source_ref=source,
+        components=(built.ref,),
+    ).seal()
+
+    workspace = tmp_path / "workspace"
+    metadata = workspace / ".adaos"
+    releases = metadata / "releases"
+    releases.mkdir(parents=True)
+    release_digest = release.release_digest or release.computed_digest()
+    (releases / f"{release_digest.split(':', 1)[1]}.json").write_text(
+        json.dumps(release.to_dict()),
+        encoding="utf-8",
+    )
+    SubscriptionStore(metadata / "subscriptions.json").save(
+        StableSubscription(
+            project_id="recipes",
+            installed_release="recipes@0.2.0",
+            installed_digest=release_digest,
+        )
+    )
+    state_dir = tmp_path / "state"
+    ContentAddressedPackageStore(
+        state_dir / "artifact_pipeline" / "packages"
+    ).put(built.archive_bytes, expected_digest=built.ref.digest)
+
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "scenario_root_for_space",
+        lambda scenario_id, space: workspace / "scenarios" / scenario_id,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, *, space: None,
+    )
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="publication",
+        revision="0.2.0",
+        label=None,
+    )
+
+    assert source_space == "workspace"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == (
+        "public:0.2.0 Installed publication"
+    )
 
 
 def test_builder_prototype_preview_synthesizes_an_empty_canvas_for_legacy_default_scenarios(monkeypatch) -> None:

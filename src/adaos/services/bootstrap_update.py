@@ -41,8 +41,10 @@ SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
 )
 
 UPDATE_CONTROL_PATHS: tuple[str, ...] = (
+    "tools/recover-node-update.sh",
     "src/adaos/apps/autostart_runner.py",
     "src/adaos/apps/core_update_apply.py",
+    "src/adaos/apps/core_update_root_promote.py",
     "src/adaos/apps/cli/commands/node.py",
     "src/adaos/services/autostart.py",
     "src/adaos/services/bootstrap_update.py",
@@ -58,6 +60,7 @@ UPDATE_CONTROL_PATHS: tuple[str, ...] = (
 
 RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/domain/__init__.py",
+    "src/adaos/domain/artifact_release.py",
     "src/adaos/domain/conversation.py",
     "src/adaos/domain/event_envelope.py",
     "src/adaos/domain/personalization_access.py",
