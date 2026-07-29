@@ -260,11 +260,30 @@ The first limited-channel slice uses one dialog contract for Web and Telegram:
 - envelope-based NATS delivery and the raw HTTP fallback share the same UTF-8
   normalization and idempotency contract.
 
+Telegram pairing may additionally bind a trusted `webspace_id`. The binding is
+persisted with the bot/chat-to-hub route and is copied into every normalized
+dialog turn. Runtime selection then follows the persisted Webspace manifest:
+
+- a DEV Webspace executes the DEV skill runtime directly;
+- a non-DEV or unbound route executes the installed Workspace runtime;
+- a DEV route never tries the installed skill first and therefore cannot
+  silently accept a stale Workspace implementation;
+- a missing DEV runtime fails explicitly instead of changing runtime authority
+  as a fallback.
+
+`adaos dev telegram --webspace <id>` is the local developer entry point for
+this binding. It is an execution-authority choice, not a Preview command.
+
 This does not make the transport the owner of project focus. An explicit,
 trusted route may carry a Webspace id for diagnostics, but ordinary Telegram
 use follows the same Builder project topic after the user selects or names the
 project. Preview materialization remains local to the relevant Builder host, so
 a Telegram turn cannot silently replace the scenario shown in another host.
+Selecting or naming a project through a limited channel changes the durable
+conversation focus only. The selected Prototype/Implementation/Publication is
+materialized only by a separate `Open in Preview` command on the owning Builder
+host. This keeps text clients useful without letting transport routing mutate a
+browser session as a side effect.
 
 Builder self-hosting also keeps surface and target identity separate.
 `_meta.current_scenario` names the declarative surface currently executing

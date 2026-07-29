@@ -43,6 +43,14 @@ Preview bindings were checked independently in the nested Builder preview
 workspace. Human wide/compact and live Telegram-bot acceptance remain open, so
 this is still a local architecture proof rather than production acceptance.
 
+The 2026-07-29 limited-channel routing slice is `validated-local`: Telegram
+pairing and bindings can carry an explicit Webspace, DEV manifests select the
+DEV skill runtime without a stale Workspace-first fallback, and the same route
+is preserved through the node conversation ledger. A UTF-8 HTTP-fallback
+acceptance turn against `dev1-dev` produced the DEV Builder reply in 3.052 s.
+This proves the local transport/runtime boundary; it does not replace the open
+live bot/backend deployment gate.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
@@ -910,6 +918,11 @@ Commands, projections, and Workbench:
   duplicates, reject idempotency conflicts, and prohibit automatic replay of
   an uncertain state-changing turn. NATS envelope and HTTP fallback inputs use
   the same UTF-8 normalization path.
+- [x] `[must]` Bind limited-channel execution to an explicit trusted Webspace.
+  Pairing persists `webspace_id`; DEV manifests execute the DEV skill runtime
+  directly, while unbound/non-DEV routes remain Workspace-authoritative. A DEV
+  route fails closed when its runtime is absent instead of falling back to a
+  stale installed Builder.
 - [ ] `[should]` Add a declarative rich-view registry with browser
   panel/modal/drawer presentations and compact message/link fallbacks.
 - [ ] `[should]` Render typed deterministic actions as Telegram inline
@@ -919,6 +932,14 @@ Commands, projections, and Workbench:
 - [ ] `[should]` Add an operator-visible transport ingress/recovery inspector
   for claimed-but-not-dispatched turns. Recovery must issue a new explicit
   operation instead of replaying the original mutation.
+- [ ] `[should]` Keep dialog turns independent of compact Yjs projection
+  latency. The durable ledger and dialog registry are already authoritative;
+  finish moving the remaining bounded chat-tail projection off event handlers
+  and add a browser-attached latency/soak budget.
+- [ ] `[should]` Make repository-local `adaos api restart` preserve the active
+  developer checkout. The current managed restart may intentionally relaunch
+  the promoted core slot, so Builder acceptance uses an explicit local
+  `adaos api serve` until a DEV-runtime restart contract exists.
 - [ ] `[should]` Add an explicit Issue split/merge/regroup workbench when
   automatic decomposition is ambiguous.
 
@@ -1085,6 +1106,20 @@ Autonomy, evidence, and acceptance:
   Skill Factory regression set passed after the task-causality change; its
   tests are intentionally run as a longer group because worker cases are not
   sub-second unit tests.
+- [x] DEV `builder_skill 0.3.22` is checkpointed in Forge at
+  `595d690b347eeb1f135ea722c67e76644dc0db1c`; the local control skill declares
+  `0.1.56`. Limited-channel project selection is conversation focus only and
+  does not materialize or replace the owning browser Preview.
+- [x] Commits `d7c5b020` and nested backend `d4a5ab7` carry explicit Telegram
+  Webspace binding and runtime authority. Existing node/backend SQLite tables
+  migrate additively, the backend API build passes, and the focused Router,
+  dialog bridge, pairing, and migration suite passes 57/57.
+- [x] Commit `15dc6e77` makes compact dialog-state projection coalesced and
+  non-blocking. Exceeding the projection latency budget no longer cancels an
+  active native `YDoc`, preventing later skill-worker collection on the wrong
+  thread. The repeated UTF-8 `dev1-dev` acceptance turn returned the canonical
+  Builder answer in 3.052 s with no dialog-state timeout or y_py thread-affinity
+  fault.
 - [ ] Human wide/compact browser comparison and one live Telegram-bot ingress
   and reply remain acceptance gates. UI 058 is not a Workspace publication
   merely because automated and live API checks passed.

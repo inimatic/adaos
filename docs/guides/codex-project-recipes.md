@@ -35,6 +35,24 @@ If the UI shows `????`, treat it as a data-path bug until proven otherwise:
 check the source file bytes, the API payload, stream/Yjs projection, and the
 browser rendering payload separately.
 
+Redirected Windows process logs need the same care. A valid UTF-8 payload can
+look corrupted when a child writes through the active Windows code page and
+`Get-Content -Encoding UTF8` reads that file later. Before diagnosing transport
+damage, inspect the original JSON bytes and decode a small log sample with the
+encoding actually used by the child. For repository-local acceptance runs,
+start Python with `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`, then read the log
+explicitly as UTF-8. Log rendering is evidence about the logger boundary, not
+proof that persisted request bytes were corrupted.
+
+For HTTP acceptance, keep the request as a UTF-8 file and send its bytes rather
+than a PowerShell object/string conversion:
+
+```powershell
+curl.exe -H "Content-Type: application/json; charset=utf-8" `
+  --data-binary '@request.json' `
+  http://127.0.0.1:8777/io/bus/tg.input.<hub-id>
+```
+
 For `adaos dev skill run`, never pass user-authored Unicode as inline JSON on
 Windows. Store the payload as UTF-8 and use `--json-file`; reserve `--json` for
 short ASCII-only payloads:
