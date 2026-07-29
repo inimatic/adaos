@@ -1,6 +1,6 @@
 # Issue Tracker
 
-Snapshot: 2026-07-27.
+Snapshot: 2026-07-29.
 
 This document contains only active AdaOS execution work. Architecture,
 sequencing, and milestone completion are owned by the documents listed in the
@@ -71,6 +71,7 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `NER-006` | open | Migrate remaining client/operator consumers to canonical refs and delete duplicate display-name fallbacks after coverage exists. | [Device Access Roadmap](architecture/device-access-roadmap.md) |
 | `BUILDER-LEGACY` | open | Move the remaining Prompt IDE DEV file lifecycle behind `adaos.sdk.developer.projects` before legacy retirement. | [Builder SDK Boundary](architecture/builder-sdk-boundary.md) |
 | `BUILDER-RELOAD` | in progress | Preserve widget and coarse branch identity on no-op semantic reloads and pass reconnect/reload soak coverage. | [Builder Roadmap](architecture/builder-roadmap.md#phase-8-product-experience), [Webspace Evolution](architecture/webspace-evolution-roadmap.md) |
+| `BUILDER-CHANNEL-ACCEPTANCE` | ready for stand | Complete one human wide/compact Web pass and one live Telegram pairing, addressed Builder turn, canonical project-topic assertion, and bounded reply. Automated neutral ingress/store/runtime coverage passes; hard channel parity remains out of scope. | [Builder Roadmap](architecture/builder-roadmap.md#phase-11-conversational-development-control-plane), [Builder Conversational Development](architecture/builder-conversational-development.md#channel-capability-boundary) |
 | `AP7-14` | in progress | Merge infra `5f9a5b0`, then prove one clean production deploy with candidate warming outside `inimatic_proxy`, admission only after health, strict continuous public samples, and no automatic repeat of the already committed rollout. | [Artifact Pipeline Roadmap](architecture/artifact-source-package-activation-roadmap.md#milestone-ap7-end-to-end-proof-and-legacy-retirement-decision) |
 
 ## Could
@@ -91,7 +92,7 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `CROSS-SKILL-PROJECTION-CLEANUP` | Resume after the three M3 pilot skills pass stand acceptance. | [Projection Subscription Roadmap](architecture/projection-subscription-roadmap.md) |
 | `SIDECAR-YJS-AUTHORITY` | Resume after current transport handoff and MVP SyncChannel recovery are accepted. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
 | `REMOTE-MCP-HUB-BRIDGE` | Resume only when public remote Root MCP access to local hubs becomes a product requirement. | [Root MCP Roadmap](architecture/root-mcp-roadmap.md) |
-| `BUILDER-AUTONOMOUS-REPRODUCTION` | Resume after the conversation-to-release and Pending Actions path is complete. | [Builder Roadmap](architecture/builder-roadmap.md) |
+| `BUILDER-AUTONOMOUS-REPRODUCTION` | Resume only after the non-Builder pipeline has also passed human Web/Telegram acceptance and a separate characterization plan prevents self-hosting regressions. | [Builder Roadmap](architecture/builder-roadmap.md) |
 | `BUILDER-MODULE-DECOMPOSITION` | Resume under a separate characterization-test plan after MVP behavior is stable. | [Builder Roadmap](architecture/builder-roadmap.md) |
 | `UILOG-LLM-DEBUG-WORKFLOW` | Resume when the governed Builder repair loop consumes skill-scoped diagnostics. | [Governed Evolution Roadmap](architecture/governed-evolution-roadmap.md) |
 | `RT-SYMPTOM-REOPEN` / `LRLT-008` | Reopen only if a new run reproduces NATS/route/Yjs/event-loop symptoms with a run id and correlated evidence. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |

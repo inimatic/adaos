@@ -266,6 +266,14 @@ use follows the same Builder project topic after the user selects or names the
 project. Preview materialization remains local to the relevant Builder host, so
 a Telegram turn cannot silently replace the scenario shown in another host.
 
+Builder self-hosting also keeps surface and target identity separate.
+`_meta.current_scenario` names the declarative surface currently executing
+(`builder`), while `scenario_id` / `project_id` name the project selected for
+development. Reusing `scenario_id` for both roles silently redirects compact
+or Telegram-capability calls to Builder itself and is therefore invalid. The
+source Webspace must be restored from trusted conversation routing metadata;
+limited-channel clients do not synthesize DEV suffixes or choose preview hosts.
+
 ## Builder Workbench Projection
 
 The default Web Workbench is conversation-first:

@@ -32,6 +32,17 @@ was `builder-0-2-28-940229ddbf49`, with release digest
 Clean-stand and production-soak repetition remain open, so this is not a
 production-acceptance claim.
 
+The 2026-07-29 non-Builder slice is `validated-local`: `test05_recipes` was
+created from an empty scenario, advanced through one canonical Change and
+three Prototype revisions produced by the built-in LLM, approved for isolated
+Automation, implemented by the local Codex worker, trialed, published, and
+materialized into Workspace. Stable release `test05_recipes@0.1.4` locks the
+companion `test05_recipes_skill@0.1.1`; WorkspaceLock revision `10` completed
+reload and exact health verification. The `proto:` / `active:` / `public:`
+Preview bindings were checked independently in the nested Builder preview
+workspace. Human wide/compact and live Telegram-bot acceptance remain open, so
+this is still a local architecture proof rather than production acceptance.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
@@ -84,8 +95,8 @@ gate easy to read by priority.
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
-| 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Core implementation complete: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, and neutral Web/Telegram text routing. Acceptance pipeline remains open. | Open: richer view registry, evaluator evidence, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
+| 11. Conversational Development | Locally validated: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, neutral Web/Telegram text routing, and one non-Builder request-to-Workspace slice. | Open: live Telegram-bot and human wide/compact acceptance, richer view registry, evaluator evidence, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -800,12 +811,15 @@ Open work:
   `result.json`, test report, changed files, sanitized logs, and commit hash.
 - [ ] `[must]` Add task-scoped MCP and credential leases for isolated dev-node
   work; do not reuse broad runtime or user-subnet credentials.
-- [ ] `[must]` Implement the private developer skill / Codex runner wrapper
+- [x] `[must]` Implement the private developer skill / Codex runner wrapper
   that prepares instruction packets, enforces allowed paths, runs tests,
-  commits, reports, and cleans up.
+  commits, reports, and cleans up. The local worker now consumes one exact
+  submitted task id instead of dequeuing an unrelated older request.
 - [ ] `[must]` Add User Hub result fetch, validation, staging, and Pending
   Action approval before normal skill/scenario activation.
-- [ ] `[should]` Add a local dev-node simulator for tests and operator trials.
+- [x] `[should]` Add a local dev-node simulator for tests and operator trials.
+  The local worker path completed the isolated `test05_recipes` Automation
+  run, retained an older unrelated queue item, and produced Forge/test evidence.
 - [ ] `[should]` Add golden task fixtures for success, test failure, forbidden
   file edit, MCP denial, cancellation, and User Hub validation failure.
 - [ ] `[could]` Add multi-node pools, task placement policy, and parallel tasks
@@ -938,13 +952,17 @@ Autonomy, evidence, and acceptance:
   authorization. `adaos.builder.action_risk.v1` now projects side-effect,
   confirmation, approval, isolation, rollback, and limited-channel admission
   policy into every Interaction Frame action; unknown classes fail closed.
-- [ ] `[must]` Preserve exact base digest, actor, environment, executor,
+- [x] `[must]` Preserve exact base digest, actor, environment, executor,
   allowed paths, semantic/source changes, commits, tests, Trial, Release, and
-  activation evidence across the Change trace.
-- [ ] `[must]` Prove the slice on a non-Builder scenario through request,
+  activation evidence across the Change trace. The `test05_recipes` trace
+  carries one context digest from approved Prototype into its exact Automation
+  task, Forge checkpoints, candidate, Trial, stable Release, WorkspaceLock,
+  reload, and health receipts.
+- [x] `[must]` Prove the slice on a non-Builder scenario through request,
   Change, Prototype or direct Implementation, isolated Run, Trial,
   Publication, and exact DEV evidence. Do not use autonomous Builder
-  self-modification as the first acceptance case.
+  self-modification as the first acceptance case. `test05_recipes@0.1.4` with
+  `test05_recipes_skill@0.1.1` is the accepted local case.
 - [ ] `[must]` Run Builder workflow/SDK/scenario tests, ABI validation,
   functional parity, and wide/compact browser acceptance. Workspace Builder
   remains unchanged until the DEV candidate is explicitly trialed and
@@ -963,10 +981,12 @@ Autonomy, evidence, and acceptance:
   Change/Run/context contracts, risk-aware Interaction Frames, the first
   reversible semantic UI operation, the chat-first Workbench, and hardened
   lineage invalidation.
-- [x] DEV Builder is `0.2.49 / UI 056`; the page metadata, active UI pointer,
+- [x] DEV Builder is `0.2.53 / UI 058`; the page metadata, active UI pointer,
   `scenario.json`, `webui.json`, and canonical `scenario.yaml` version agree.
-  Forge scenario commit `0d8c41fdbdcd1f95fdc6a34e95559f3ca2d5a11a`
-  contains the compact project header and left-panel Change/Preview context.
+  Forge scenario commit `4231be4b3fc3e74cbf6ff11e75ad98bb67ec457b`
+  contains the compact project header, left-panel Change/Preview context, and
+  explicit Builder surface identity without overwriting selected-project
+  identity.
   The supporting DEV control skill is `0.1.52` at Forge commit
   `3f4d01d6c699ea1147d5ea35fe62c48931a1b93e`; it is activated in local
   runtime slot B and bound to AdaOS `0.1.638`.
@@ -1016,15 +1036,15 @@ Autonomy, evidence, and acceptance:
   Change to Prototype review without mutating the UI. Focused core Review,
   workflow, semantic-UI, and ABI tests pass 66/66; the combined DEV Builder and
   control-skill suite passes 191/191.
-- [x] DEV `builder_skill 0.3.18` (Forge
-  `8de96f845b698af7182c82413b1d53894ad72575`) and
+- [x] DEV `builder_skill 0.3.19` (Forge
+  `68139df17dd66c68f26fc73b4299a96f28a80440`) and
   `builder_sdk_control_skill 0.1.55` (Forge
   `38b165d5bcba56f8ec99e54242535fce364903de`) are active in local A/B slots.
   A live context inspection returned the bounded conversation/Pending Action
   fields and digest; a Telegram-capability read resolved the same canonical
   selected project with intact Russian UTF-8.
 - [x] A freshly started API process from the current checkout materializes
-  `prototype:builder:056` into `dev1-dev` and atomically records the independent
+  `prototype:builder:058` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server
   was then restarted from the same checkout and repeated this live call
   successfully.
@@ -1033,20 +1053,41 @@ Autonomy, evidence, and acceptance:
   separate `dev1-dev -> dev1-dev-dev` `builder_project_preview` relation.
   Workbench bindings and runtime logs confirm that `dev1-dev` continues to run
   Builder while `dev1-dev-dev` runs `test05_recipes`.
+- [x] The nested identity contract is explicit: `_meta.current_scenario`
+  identifies the Builder surface, while `scenario_id` / `project_id` identify
+  the selected target. Revision 057 exposed the collision in a
+  Telegram-capability call; revision 058 corrected it and resolved
+  `scenario:test05_recipes` under the canonical project topic.
 - [x] The current persisted Builder source, UI, translations, and workflow
   contain no replacement code point or four-character question-mark run.
   The manifest declares only `en` and `ru`; no Ukrainian-specific locale text
   was found. UTF-8 JSON-file/tool ingress remains mandatory for non-ASCII
   automation.
 - [x] The installed Workspace Builder remains the earlier published
-  `0.2.40 / UI 053`; the new `0.2.48 / UI 055` candidate exists only in DEV.
+  `0.2.40 / UI 053`; the new `0.2.53 / UI 058` candidate exists only in DEV.
   Workspace git differences are accounted for by the installed release package
   relative to its older `0.2.19` repository snapshot and by files intentionally
   omitted from release packages. No Workspace source was edited in this slice.
-- [ ] Human wide/compact browser comparison, a representative non-Builder
-  end-to-end Change, Trial, and Publication remain acceptance gates. UI 056 is
-  not a Workspace publication merely because automated and live API checks
-  passed.
+- [x] `test05_recipes` completed the representative non-Builder path. Its
+  exact Automation task was `task.01KYQDPG1DRRQPN546RSVZZFC9`; candidate
+  `test05_recipes-0-1-4-d73bad2fa5dd` passed isolated Trial and promoted release
+  `test05_recipes@0.1.4`. WorkspaceLock revision 10 activated companion skill
+  `0.1.1`; reload completed and every scenario/skill health check was exact.
+- [x] Explicit `follow_active=false` Preview selection resolves
+  `proto: test05_recipes · UI 003`, `active: test05_recipes · 0.1.4`, and
+  `public: test05_recipes · 0.1.4` in the isolated nested preview workspace.
+- [x] Commit `164a7f43` makes one-shot Automation task-causal and makes Skill
+  Factory state mutation cross-process locked and atomic. A requested task can
+  no longer consume an older queued task, and corrupt authoritative state
+  fails closed.
+- [x] Current Workbench/Preview regressions pass 34/34 and neutral
+  Web/Telegram dialog/store/runtime regressions pass 28/28. The Automation and
+  Skill Factory regression set passed after the task-causality change; its
+  tests are intentionally run as a longer group because worker cases are not
+  sub-second unit tests.
+- [ ] Human wide/compact browser comparison and one live Telegram-bot ingress
+  and reply remain acceptance gates. UI 058 is not a Workspace publication
+  merely because automated and live API checks passed.
 
 ## Cross-Document Anchors
 
