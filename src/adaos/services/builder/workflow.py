@@ -276,6 +276,172 @@ def _stable_digest(value: Mapping[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
+def _bounded_ref(value: Any, *, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key in keys:
+        item = value.get(key)
+        if isinstance(item, str):
+            token = item.strip()
+            if token:
+                result[key] = token[:500]
+        elif isinstance(item, (bool, int, float)):
+            result[key] = item
+        elif isinstance(item, Mapping):
+            nested = _bounded_ref(
+                item,
+                keys=(
+                    "type",
+                    "kind",
+                    "id",
+                    "message_id",
+                    "segment_id",
+                    "memory_id",
+                    "conversation_id",
+                    "thread_id",
+                    "object_type",
+                    "object_id",
+                    "change_id",
+                    "run_id",
+                ),
+            )
+            if nested:
+                result[key] = nested
+    return result or None
+
+
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _finite_float(value: Any) -> float:
+    try:
+        parsed = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed == parsed and parsed not in {float("inf"), float("-inf")} else 0.0
+
+
+def _bounded_conversation_context(value: Any) -> dict[str, Any] | None:
+    if value in (None, {}):
+        return None
+    if not isinstance(value, Mapping) or str(value.get("schema") or "").strip() != "adaos.context.packet.v1":
+        raise BuilderWorkflowError("conversation_context must use adaos.context.packet.v1")
+
+    messages: list[dict[str, Any]] = []
+    for item in list(value.get("messages") or [])[-12:]:
+        if not isinstance(item, Mapping):
+            continue
+        text = str(item.get("text") or "")[:1000]
+        message = {
+            "id": str(item.get("id") or "").strip()[:160],
+            "seq": _nonnegative_int(item.get("seq")),
+            "role": str(item.get("role") or "").strip()[:40],
+            "text": text,
+            "ts": _finite_float(item.get("ts")),
+            "actor_id": str(item.get("actor_id") or "").strip()[:160] or None,
+            "trust_boundary": "retrieved_untrusted_evidence",
+            "source_ref": _bounded_ref(
+                item.get("source_ref"),
+                keys=("type", "kind", "conversation_id", "message_id", "seq"),
+            ),
+        }
+        messages.append({key: nested for key, nested in message.items() if nested not in (None, "")})
+
+    segments: list[dict[str, Any]] = []
+    for item in list(value.get("segments") or [])[-8:]:
+        if not isinstance(item, Mapping):
+            continue
+        segment = {
+            "id": str(item.get("id") or item.get("segment_id") or "").strip()[:160],
+            "thread_id": str(item.get("thread_id") or "").strip()[:300] or None,
+            "summary": str(item.get("summary") or item.get("text") or "")[:1200],
+            "start_seq": _nonnegative_int(item.get("start_seq")),
+            "end_seq": _nonnegative_int(item.get("end_seq")),
+            "trust_boundary": "retrieved_untrusted_evidence",
+            "source_ref": _bounded_ref(
+                item.get("source_ref"),
+                keys=("type", "segment_id", "conversation_id", "thread_id", "start_seq", "end_seq"),
+            ),
+        }
+        segments.append({key: nested for key, nested in segment.items() if nested not in (None, "")})
+
+    memory: list[dict[str, Any]] = []
+    for item in list(value.get("memory") or [])[-12:]:
+        if not isinstance(item, Mapping):
+            continue
+        memory_item = {
+            "id": str(item.get("id") or "").strip()[:160],
+            "scope": str(item.get("scope") or "").strip()[:80],
+            "owner": str(item.get("owner") or "").strip()[:160],
+            "key": str(item.get("key") or "").strip()[:160] or None,
+            "text": str(item.get("text") or "")[:1000],
+            "confidence": item.get("confidence") if isinstance(item.get("confidence"), (int, float)) else None,
+            "consent_state": str(item.get("consent_state") or "").strip()[:80] or None,
+            "visibility": str(item.get("visibility") or "").strip()[:80] or None,
+            "trust_boundary": "retrieved_untrusted_evidence",
+            "source_ref": _bounded_ref(
+                item.get("source_ref"),
+                keys=("type", "memory_id", "scope", "owner", "source_ref"),
+            ),
+        }
+        memory.append({key: nested for key, nested in memory_item.items() if nested not in (None, "")})
+
+    diagnostics = value.get("diagnostics") if isinstance(value.get("diagnostics"), Mapping) else {}
+    fallback_refs = [str(item).strip()[:160] for item in diagnostics.get("fallbacks") or [] if str(item).strip()][:20]
+    return {
+        "schema": "adaos.context.packet.v1",
+        "conversation_id": str(value.get("conversation_id") or "").strip()[:300] or None,
+        "thread_id": str(value.get("thread_id") or "").strip()[:300] or None,
+        "topic_id": str(value.get("topic_id") or "").strip()[:300] or None,
+        "channel_id": str(value.get("channel_id") or "").strip()[:80] or None,
+        "requester_owner": str(value.get("requester_owner") or "").strip()[:160] or None,
+        "messages": messages,
+        "segments": segments,
+        "memory": memory,
+        "diagnostics": {
+            "fallbacks": fallback_refs,
+            "selected_message_count": len(messages),
+            "selected_segment_count": len(segments),
+            "selected_memory_count": len(memory),
+        },
+    }
+
+
+def _bounded_pending_action_refs(values: Any) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in list(values or [])[-30:]:
+        if not isinstance(item, Mapping):
+            continue
+        action_id = str(item.get("id") or item.get("action_id") or "").strip()[:160]
+        if not action_id or action_id in seen:
+            continue
+        seen.add(action_id)
+        ref = {
+            "id": action_id,
+            "kind": str(item.get("kind") or "").strip()[:160] or None,
+            "status": str(item.get("status") or "").strip()[:80] or None,
+            "webspace_id": str(item.get("webspace_id") or "").strip()[:160] or None,
+            "domain_ref": _bounded_ref(
+                item.get("domain_ref"),
+                keys=("type", "kind", "id", "object_type", "object_id", "change_id", "run_id"),
+            ),
+            "allowed_actions": [
+                str(value).strip()[:80]
+                for value in item.get("allowed_actions") or item.get("actions") or []
+                if isinstance(value, str) and str(value).strip()
+            ][:20],
+            "expires_at": str(item.get("expires_at") or "").strip()[:80] or None,
+        }
+        refs.append({key: value for key, value in ref.items() if value not in (None, "", [])})
+    return refs
+
+
 def _legacy_phase(value: Any) -> str:
     token = str(value or "").strip().lower()
     return "automation" if token in {"automation", "publication"} else "prototype"
@@ -935,6 +1101,8 @@ class BuilderWorkflowService:
         *,
         allowed_paths: list[str] | tuple[str, ...] | None = None,
         instruction_refs: list[str] | tuple[str, ...] | None = None,
+        conversation_context: Mapping[str, Any] | None = None,
+        pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
         persist: bool = False,
     ) -> dict[str, Any]:
         """Build a bounded, stable-digested execution context for one Change."""
@@ -977,6 +1145,8 @@ class BuilderWorkflowService:
             previous_run = None
             if change.get("runs"):
                 previous_run = copy.deepcopy(change["runs"][-1])
+            bounded_conversation = _bounded_conversation_context(conversation_context)
+            bounded_pending_actions = _bounded_pending_action_refs(pending_action_refs)
             packet_body: dict[str, Any] = {
                 "schema": BUILDER_CONTEXT_PACKET_SCHEMA,
                 "project": {
@@ -1012,11 +1182,17 @@ class BuilderWorkflowService:
                 "allowed_paths": selected_paths,
                 "instruction_refs": [str(item).strip() for item in instruction_refs or [] if str(item).strip()][:100],
                 "previous_run": previous_run,
+                "conversation": bounded_conversation,
+                "pending_actions": bounded_pending_actions,
                 "budget": {
                     "max_state_bytes": _MAX_STATE_BYTES,
                     "issue_count": len(change.get("issues") or []),
                     "run_count": len(change.get("runs") or []),
                     "source_message_ref_count": len(change.get("source_message_ids") or []),
+                    "conversation_message_count": len((bounded_conversation or {}).get("messages") or []),
+                    "conversation_segment_count": len((bounded_conversation or {}).get("segments") or []),
+                    "memory_item_count": len((bounded_conversation or {}).get("memory") or []),
+                    "pending_action_ref_count": len(bounded_pending_actions),
                 },
             }
             packet = {

@@ -49,6 +49,8 @@ def build_context_packet(
     *,
     allowed_paths: list[str] | tuple[str, ...] | None = None,
     instruction_refs: list[str] | tuple[str, ...] | None = None,
+    conversation_context: Mapping[str, Any] | None = None,
+    pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
     persist: bool = False,
 ) -> dict[str, Any]:
     return dict(
@@ -57,6 +59,8 @@ def build_context_packet(
             object_id,
             allowed_paths=allowed_paths,
             instruction_refs=instruction_refs,
+            conversation_context=conversation_context,
+            pending_action_refs=pending_action_refs,
             persist=persist,
         )
     )

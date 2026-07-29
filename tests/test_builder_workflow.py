@@ -179,6 +179,82 @@ def test_interaction_context_rejects_stale_generation_without_mutation(
     assert current["interaction"]["preview_target"] is None
 
 
+def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-context",
+            "request": "Refine the recipe card.",
+            "issues": [
+                {
+                    "issue_id": "card",
+                    "title": "Refine the recipe card",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The card is easier to scan."],
+                }
+            ],
+        },
+    )
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        conversation_context={
+            "schema": "adaos.context.packet.v1",
+            "conversation_id": "conv.builder.recipes",
+            "thread_id": "thread.recipes",
+            "messages": [
+                {
+                    "id": "message-1",
+                    "seq": 1,
+                    "role": "user",
+                    "text": "Keep the card compact.",
+                    "source_ref": {"type": "conversation_message", "message_id": "message-1"},
+                    "secret_transport_field": "must not cross the Builder boundary",
+                }
+            ],
+            "segments": [],
+            "memory": [
+                {
+                    "id": "memory-1",
+                    "scope": "conversation",
+                    "owner": "skill:builder_skill",
+                    "text": "The user prefers compact cards.",
+                    "visibility": "owner_only",
+                }
+            ],
+            "diagnostics": {"fallbacks": ["fts_unavailable"], "raw_debug": "omit me"},
+            "raw_transcript": "must not cross the Builder boundary",
+        },
+        pending_action_refs=[
+            {
+                "id": "pending-1",
+                "kind": "builder.prototype.review",
+                "status": "pending",
+                "domain_ref": {"object_type": "scenario", "object_id": "recipes"},
+                "payload": {"secret": "omit me"},
+                "allowed_actions": ["approve", "reject"],
+            }
+        ],
+        persist=True,
+    )
+
+    assert packet["conversation"]["messages"][0]["text"] == "Keep the card compact."
+    assert "secret_transport_field" not in packet["conversation"]["messages"][0]
+    assert "raw_transcript" not in packet["conversation"]
+    assert packet["conversation"]["memory"][0]["id"] == "memory-1"
+    assert packet["pending_actions"][0]["id"] == "pending-1"
+    assert "payload" not in packet["pending_actions"][0]
+    assert packet["budget"]["conversation_message_count"] == 1
+    assert packet["budget"]["pending_action_ref_count"] == 1
+    assert service.describe("scenario", "recipes")["context_packet"]["digest"] == packet["digest"]
+
+
 def test_change_set_routes_interface_work_through_prototype_first(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

@@ -14,6 +14,8 @@
     "allowed_paths": { "$ref": "#/$defs/refs" },
     "instruction_refs": { "$ref": "#/$defs/refs" },
     "previous_run": { "type": ["object", "null"] },
+    "conversation": { "type": ["object", "null"], "additionalProperties": true },
+    "pending_actions": { "type": "array", "maxItems": 30, "items": { "type": "object", "required": ["id"], "additionalProperties": true } },
     "budget": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "built_at": { "type": "string", "format": "date-time" }

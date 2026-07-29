@@ -85,7 +85,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Architecture fixed; implementation open: canonical Change/Run compatibility projection, context packet, risk-aware interaction actions, semantic UI operation, on-demand Process view, and chat-first Workbench parity. | Open: richer view registry, evaluator evidence, issue split/merge, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Core implementation complete: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, and neutral Web/Telegram text routing. Acceptance pipeline remains open. | Open: richer view registry, evaluator evidence, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -648,9 +648,11 @@ Open work:
   follow-up `change_view_representation` patch in the same Builder topic.
 - [x] `[must]` Treat `builder_skill` as the semantic owner of Builder
   conversations across browser, Voice/global dialog, Telegram, and Prompt IDE.
-- [ ] `[must]` Make `builder_skill` consume conversation context packets,
-  retrieved evidence refs, scoped memory, and Pending Actions instead of raw
-  UI chat state.
+- [x] `[must]` Make `builder_skill` consume conversation context packets,
+  retrieved evidence refs, scoped memory, and project-scoped Pending Action
+  refs instead of raw UI chat state. Prototype LLM execution now receives the
+  same persisted Change-bound capsule as Automation and fails closed when it
+  cannot be built.
 - [x] `[must]` Complete the browser/Voice/Prompt IDE ownership slice:
   `builder_skill` returns canonical dialog/topic refs, emits chat with the same
   thread metadata, owns revision/review-note history, and `attach_dialog_widget`
@@ -849,7 +851,10 @@ Canonical model and context:
   Automation builds a fresh bounded packet for each isolated Run; direct legacy
   entry first creates an `automation_direct` Change. Session, realize request,
   workflow Run, checkpoint, candidate validation, and Publication metadata use
-  the same canonical Change id and packet digest.
+  the same canonical Change id and packet digest. Interactive Prototype work
+  receives Router conversation/memory evidence and project Pending Action refs
+  through that packet; transport payloads and raw transcripts do not cross the
+  boundary.
 - [x] `[should]` Add a context-packet inspector that shows included refs,
   omitted categories, budgets, digest, and construction diagnostics without
   exposing secrets or copying full transcripts.
@@ -987,6 +992,13 @@ Autonomy, evidence, and acceptance:
   generation-guarded reversible DEV commands, confirmed isolated/Trial work,
   and Web-reviewed Workspace/Publication/destructive operations. Contract and
   workflow regressions pass 35/35.
+- [x] The interactive Prototype lane now consumes the canonical bounded
+  development capsule. Router conversation/memory context and only the
+  selected project's Pending Action refs are filtered by core, persisted under
+  the Change, marked as untrusted evidence, and passed to the Prototype LLM.
+  Missing context fails closed before model submission. Core workflow,
+  Automation, and ABI regressions pass 104/104; DEV `builder_skill` regressions
+  pass 145/145.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server

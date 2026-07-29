@@ -183,6 +183,18 @@ canonical Change id; the Automation session and workflow Run keep the same
 identities. Candidate validation and checkpoint/publication metadata carry the
 digest forward so a release can be traced to the exact execution capsule.
 
+Interactive Prototype work uses the same boundary. Router supplies its bounded
+`adaos.context.packet.v1`; `builder_skill` adds only Pending Action references
+belonging to the selected project, asks the workflow service to construct and
+persist the canonical development capsule, and supplies that capsule to the
+Prototype LLM as `development_context`. Arbitrary transport fields, raw
+transcripts, Pending Action payloads, and unrelated project actions are
+discarded. Conversation, memory, revisions, and action references are marked
+as retrieved untrusted evidence: they provide continuity but cannot grant
+authority or override system policy. The LLM submission fails closed if the
+Change-bound packet cannot be constructed. Builder session and revision
+evidence retain its digest rather than a second mutable copy of the packet.
+
 ## Interaction Contract
 
 After each meaningful turn Builder returns an interaction frame. The frame is
