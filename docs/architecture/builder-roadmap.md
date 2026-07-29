@@ -923,7 +923,8 @@ Autonomy, evidence, and acceptance:
   `scenario.json`, `webui.json`, and canonical `scenario.yaml` version agree.
   Forge scenario commit `c51a5810bd8b0145e8c0459e92c3b8c32124ae93`
   contains the corrected deterministic workbench. The supporting DEV control
-  skill is `0.1.49`.
+  skill is `0.1.50` at Forge commit
+  `5adde98fc9d6543bc6771fc7ea65fb6a7c7309fe`.
 - [x] The selected core Builder regression set passes 139/139 tests. DEV
   control-skill and scenario tests pass 56/56, functional-parity reports no
   missing/forbidden contracts, and scenario plus strict probed skill
