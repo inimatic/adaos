@@ -74,6 +74,16 @@ grandchild. When the outer host switches from Builder to an ordinary scenario,
 the child relation is detached; its workspace is retained for explicit
 cleanup or diagnostics.
 
+The runtime may promote an existing outer `builder_project_preview` relation
+to `builder_self_host` only when the scenario actually running in its target
+is the configured Builder scenario. This explicit scenario claim is required:
+neither a `-dev` suffix nor the current browser route is sufficient evidence.
+For the self-hosted local development case, the terminal child uses the
+deterministic `<builder-preview>-dev` identifier (for example,
+`dev1-dev-dev`) so the operator can inspect it directly. The persisted
+relation remains authoritative; the suffix still has no general identity
+semantics and ordinary previews remain opaque.
+
 Deleting a source or preview workspace removes every incident relation in the
 same SQLite transaction as the catalog row. Catalog reset clears relations as
 well. Content-change fanout ignores relation targets that no longer have a

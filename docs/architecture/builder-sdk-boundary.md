@@ -394,10 +394,12 @@ This also covers the later Builder-service change that classifies paired
 verified pair is `builder-sdk-control` / `builder-sdk-control-dev`, with the
 Builder scenario selected as its DEV runtime home.
 
-The active control fixture is `builder_sdk_control_skill 0.1.13`; the
-functional Builder scenario archive is `0.2.9`. Runtime verification used the
-existing `dev1` / `dev1-dev` pair and confirmed that the obsolete
-`dev1-dev-dev` store was not touched.
+The historical control fixture was `builder_sdk_control_skill 0.1.13`; the
+corresponding functional Builder scenario archive was `0.2.9`. At that point
+runtime verification used only the existing `dev1` / `dev1-dev` pair. The
+current self-hosting contract intentionally permits one terminal
+`dev1-dev-dev` project preview when `dev1-dev` is explicitly claimed by the
+Builder scenario; ordinary projects still cannot create nested previews.
 
 The isolated pipeline fixture is
 `builder_pipeline_smoke_1784408500` / `_skill`. Ordinary
