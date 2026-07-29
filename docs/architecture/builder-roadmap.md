@@ -929,8 +929,9 @@ Autonomy, evidence, and acceptance:
   `scenario.json`, `webui.json`, and canonical `scenario.yaml` version agree.
   Forge scenario commit `0d8c41fdbdcd1f95fdc6a34e95559f3ca2d5a11a`
   contains the compact project header and left-panel Change/Preview context.
-  The supporting DEV control skill is `0.1.51` at Forge commit
-  `36dde4dd5304d406aa23193752f7ed19d180c4d3`.
+  The supporting DEV control skill is `0.1.52` at Forge commit
+  `3f4d01d6c699ea1147d5ea35fe62c48931a1b93e`; it is activated in local
+  runtime slot B and bound to AdaOS `0.1.638`.
 - [x] The current focused core Builder regression set passes 120/120 tests.
   DEV control-skill and scenario tests pass 58/58, functional-parity reports no
   missing/forbidden contracts, and scenario plus strict probed skill
