@@ -172,6 +172,30 @@ class WebspaceRelationshipRegistry:
             return current
         return incoming.source_webspace_id
 
+    def claim_builder_self_host(self, webspace_id: Any, *, scenario_id: Any) -> str:
+        """Promote the current Builder preview into the single allowed host level.
+
+        A Builder rendered inside an ordinary preview owns its own child Preview.
+        The browser supplies the current scenario explicitly; ids are never parsed
+        to infer that the current surface is Builder.
+        """
+
+        current = _workspace_id(webspace_id)
+        scenario = str(scenario_id or "").strip()
+        if scenario not in _builder_scenario_ids():
+            raise ValueError("builder self-host claim requires a Builder scenario")
+        incoming = self.get_incoming(current)
+        if incoming is None or incoming.purpose == BUILDER_SELF_HOST:
+            return current
+        self.ensure(
+            incoming.source_webspace_id,
+            purpose=BUILDER_SELF_HOST,
+            scenario_id=scenario,
+            legacy_target_webspace_id=current,
+            metadata={"claimed_by": "builder_active_surface"},
+        )
+        return current
+
     def allocate_preview_webspace_id(self) -> str:
         for _ in range(32):
             candidate = f"preview-{secrets.token_hex(6)}"
@@ -208,6 +232,8 @@ class WebspaceRelationshipRegistry:
             if existing is not None
             else _workspace_id(legacy_target_webspace_id)
             if str(legacy_target_webspace_id or "").strip()
+            else _workspace_id(f"{source}-dev")
+            if incoming is not None and incoming.purpose == BUILDER_SELF_HOST
             else self.allocate_preview_webspace_id()
         )
         if target == source:

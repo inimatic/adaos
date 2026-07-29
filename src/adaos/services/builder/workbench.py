@@ -262,6 +262,22 @@ class BuilderWorkbenchService:
             return token if relation.purpose == BUILDER_SELF_HOST else source
         return self.relationships.resolve_builder_host(token)
 
+    def resolve_action_source_webspace_id(
+        self,
+        value: Any,
+        *,
+        current_scenario_id: Any = None,
+    ) -> str:
+        """Resolve an action host, claiming the bounded self-host level for Builder."""
+
+        token = safe_source_webspace_id(value)
+        if relation_purpose_for_scenario(current_scenario_id) == BUILDER_SELF_HOST:
+            return self.relationships.claim_builder_self_host(
+                token,
+                scenario_id=current_scenario_id,
+            )
+        return self.resolve_source_webspace_id(token)
+
     def _ensure_preview_relation(
         self,
         source_webspace_id: str,

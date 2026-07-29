@@ -61,6 +61,7 @@ def test_builder_preview_topology_allows_only_one_self_host_level(tmp_path: Path
         scenario_id="target-scenario",
     )
     assert child.source_webspace_id == self_host.target_webspace_id
+    assert child.target_webspace_id == f"{self_host.target_webspace_id}-dev"
     assert registry.resolve_builder_host(child.target_webspace_id) == self_host.target_webspace_id
 
     with pytest.raises(ValueError, match="cannot own"):
@@ -95,6 +96,39 @@ def test_builder_preview_topology_adopts_legacy_binding_without_parsing_it(tmp_p
     assert relation.target_webspace_id == "dev1-dev"
     assert registry.resolve_builder_host("dev1-dev") == "dev1"
     assert registry.resolve_builder_host("unrelated-dev") == "unrelated-dev"
+
+
+def test_active_builder_claims_legacy_preview_and_owns_one_named_child(tmp_path: Path) -> None:
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    original, _created = registry.ensure(
+        "dev1",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="previous-project",
+        legacy_target_webspace_id="dev1-dev",
+    )
+    assert original.purpose == BUILDER_PROJECT_PREVIEW
+
+    claimed = registry.claim_builder_self_host("dev1-dev", scenario_id="builder")
+    assert claimed == "dev1-dev"
+    promoted = registry.get_outgoing("dev1")
+    assert promoted is not None
+    assert promoted.purpose == BUILDER_SELF_HOST
+    assert promoted.target_webspace_id == "dev1-dev"
+
+    child, _created = registry.ensure(
+        claimed,
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="test05_recipes",
+    )
+    assert child.source_webspace_id == "dev1-dev"
+    assert child.target_webspace_id == "dev1-dev-dev"
+
+    with pytest.raises(ValueError, match="cannot own"):
+        registry.ensure(
+            child.target_webspace_id,
+            purpose=BUILDER_PROJECT_PREVIEW,
+            scenario_id="forbidden-grandchild",
+        )
 
 
 @pytest.mark.asyncio

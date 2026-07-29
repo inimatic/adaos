@@ -58,6 +58,25 @@ def canonical_source_webspace_id(webspace_id: str | None = None) -> str:
     return str(webspace_id or "desktop").strip() or "desktop"
 
 
+def action_source_webspace_id(
+    webspace_id: str | None = None,
+    *,
+    current_scenario_id: str | None = None,
+) -> str:
+    """Resolve the host for a UI action, including bounded Builder self-hosting."""
+
+    service = _service()
+    resolve = getattr(service, "resolve_action_source_webspace_id", None)
+    if callable(resolve):
+        return str(
+            resolve(
+                webspace_id,
+                current_scenario_id=current_scenario_id,
+            )
+        ).strip()
+    return canonical_source_webspace_id(webspace_id)
+
+
 def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
     return _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
 
@@ -580,4 +599,5 @@ __all__ = [
     "set_active_draft",
     "snapshot",
     "canonical_source_webspace_id",
+    "action_source_webspace_id",
 ]
