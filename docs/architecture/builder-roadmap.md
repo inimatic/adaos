@@ -808,7 +808,8 @@ Open work:
 
 Goal: make Builder conversation-first without using chat history as the source
 of truth, while simplifying the product model to `Issue -> Change -> Run ->
-Revision -> Release` and preserving the recovered functional control plane.
+Revision -> Trial/Release` and preserving the recovered functional control
+plane.
 
 Architecture:
 
@@ -843,26 +844,26 @@ Canonical model and context:
   relevant refs, and prior-Run evidence.
 - [ ] `[must]` Carry context-packet identity through Prototype/Implementation
   execution, Forge evidence, candidate preparation, Trial, and Publication.
-- [ ] `[should]` Add a context-packet inspector that shows included refs,
+- [x] `[should]` Add a context-packet inspector that shows included refs,
   omitted categories, budgets, digest, and construction diagnostics without
   exposing secrets or copying full transcripts.
 
 Commands, projections, and Workbench:
 
-- [ ] `[must]` Emit typed interaction actions with command, risk class,
+- [x] `[must]` Emit typed interaction actions with command, risk class,
   expected workflow generation, target refs, presentation hint, and fallback.
   Stale actions fail without mutation and return the current projection.
 - [x] `[must]` Introduce explicit conversation focus, inspected ref, and
   Preview target fields. Selecting a Process item must not implicitly
   materialize it in Preview.
-- [ ] `[must]` Replace the permanent Lifecycle navigation surface with an
+- [x] `[must]` Replace the permanent Lifecycle navigation surface with an
   on-demand Process projection derived from Change/Run/Revision/Trial/Release
   provenance. Retain the old Lifecycle data tool as a compatibility adapter.
-- [ ] `[must]` Refactor the recovered Builder Workbench around the canonical
+- [x] `[must]` Refactor the recovered Builder Workbench around the canonical
   conversation, dynamic action row, exact context/Preview header, adjacent
   Preview, and contextual Process/Overview/Specification/Artifacts/Run detail
   views while retaining the functional-parity gate.
-- [ ] `[must]` Preserve rich Web project/file search, artifact browsing, diff,
+- [x] `[must]` Preserve rich Web project/file search, artifact browsing, diff,
   and spatial Preview behavior. Limited channels receive compact status,
   deterministic actions, and context-preserving deep links.
 - [ ] `[should]` Add a declarative rich-view registry with browser
@@ -910,6 +911,42 @@ Autonomy, evidence, and acceptance:
 - [ ] `[could]` Add optional planner/generator/evaluator Run topologies for
   long or high-risk Changes after single-executor latency, quality, and cost
   baselines exist.
+
+### Phase 11 implementation evidence (2026-07-29)
+
+- [x] The core compatibility slice is committed as `7308fe5d`, `a65ecd92`,
+  `a5c29719`, `05ba3671`, and `313fc53b`: target architecture, canonical
+  Change/Run/context contracts, risk-aware Interaction Frames, the first
+  reversible semantic UI operation, the chat-first Workbench, and hardened
+  lineage invalidation.
+- [x] DEV Builder is `0.2.48 / UI 055`; the page metadata, active UI pointer,
+  `scenario.json`, `webui.json`, and canonical `scenario.yaml` version agree.
+  Forge scenario commit `c51a5810bd8b0145e8c0459e92c3b8c32124ae93`
+  contains the corrected deterministic workbench. The supporting DEV control
+  skill is `0.1.49`.
+- [x] The selected core Builder regression set passes 139/139 tests. DEV
+  control-skill and scenario tests pass 56/56, functional-parity reports no
+  missing/forbidden contracts, and scenario plus strict probed skill
+  validation report no issues.
+- [x] A freshly started API process from the current checkout materializes
+  `prototype:builder:055` into `dev1-dev` and atomically records the independent
+  Preview context (`interaction_updated=true`). The normal local DEV server
+  was then restarted from the same checkout and repeated this live call
+  successfully.
+- [x] The current persisted Builder source, UI, translations, and workflow
+  contain no replacement code point or four-character question-mark run.
+  The manifest declares only `en` and `ru`; no Ukrainian-specific locale text
+  was found. UTF-8 JSON-file/tool ingress remains mandatory for non-ASCII
+  automation.
+- [x] The installed Workspace Builder remains the earlier published
+  `0.2.40 / UI 053`; the new `0.2.48 / UI 055` candidate exists only in DEV.
+  Workspace git differences are accounted for by the installed release package
+  relative to its older `0.2.19` repository snapshot and by files intentionally
+  omitted from release packages. No Workspace source was edited in this slice.
+- [ ] Human wide/compact browser comparison, a representative non-Builder
+  end-to-end Change, Trial, and Publication remain acceptance gates. UI 055 is
+  not a Workspace publication merely because automated and live API checks
+  passed.
 
 ## Cross-Document Anchors
 

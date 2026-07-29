@@ -312,6 +312,10 @@ def _process_modal() -> dict[str, Any]:
 def transform(base: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(base)
     page = result["ui"]["application"]["desktop"]["pageSchema"]
+    builder_meta = page.setdefault("meta", {}).setdefault("builder", {})
+    builder_meta["ui_revision"] = REVISION
+    builder_meta["previous_revision"] = BASE_REVISION
+    builder_meta["proto"] = f"proto:{REVISION}"
     state = page.setdefault("initialState", {})
     state.update(
         {
@@ -445,7 +449,9 @@ def build() -> None:
     after = transform(before)
     manifest = yaml.safe_load(SCENARIO_YAML.read_text(encoding="utf-8-sig")) or {}
     scenario = _read(SCENARIO_JSON)
-    scenario["version"] = str(manifest.get("version") or scenario.get("version") or "")
+    source_version = str(manifest.get("version") or scenario.get("version") or "")
+    after["ui"]["version"] = source_version
+    scenario["version"] = source_version
     scenario["updated_at"] = str(manifest.get("updated_at") or scenario.get("updated_at") or "")
     scenario["ui"] = copy.deepcopy(after["ui"])
     scenario["ui"]["manifest"] = "webui.json"
