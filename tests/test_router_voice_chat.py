@@ -1162,7 +1162,7 @@ async def test_voice_chat_requested_builder_channel_refreshes_stale_active_tool(
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_when_source_exists(monkeypatch, tmp_path) -> None:
+async def test_voice_chat_requested_builder_channel_uses_authoritative_dev_runtime(monkeypatch, tmp_path) -> None:
     from adaos.services import dialog_runtime
 
     bus = LocalEventBus()
@@ -1195,11 +1195,11 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_wh
     monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(router_service_module, "_dialog_runtime_uses_dev_webspace", lambda value: value == webspace_id)
 
     class _Mgr:
         def run_tool(self, skill, tool, payload, **_opts):
-            calls.append((skill, tool, dict(payload), "workspace"))
-            raise RuntimeError("no installed workspace runtime")
+            raise AssertionError("Workspace runtime must not handle a DEV-webspace dialog")
 
         def run_dev_tool(self, skill, tool, payload):
             calls.append((skill, tool, dict(payload), "dev"))
@@ -1242,9 +1242,9 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_wh
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
-    assert [call[3] for call in calls] == ["workspace", "dev"]
-    assert calls[1][0:2] == ("builder_skill", "chat")
-    assert calls[1][2]["text"] == "создадим приложение список покупок"
+    assert [call[3] for call in calls] == ["dev"]
+    assert calls[0][0:2] == ("builder_skill", "chat")
+    assert calls[0][2]["text"] == "создадим приложение список покупок"
     messages = doc.get_map("data")["voice_chat"]["messages"]
     assert any(item["text"] == "dev builder handled" for item in messages)
     dialog_runtime.reset_all()

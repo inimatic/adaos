@@ -553,6 +553,23 @@ def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> b
     )
 
 
+def _dialog_runtime_uses_dev_webspace(webspace_id: Any) -> bool:
+    """Resolve dialog runtime authority from persisted webspace metadata."""
+
+    token = str(webspace_id or "").strip()
+    if not token:
+        return False
+    try:
+        from adaos.services.workspaces import index as workspace_index
+
+        manifest = workspace_index.get_workspace(token)
+    except Exception:
+        # Never infer DEV from untrusted text or a naming convention here.  A
+        # missing manifest keeps the normal Workspace runtime authoritative.
+        return False
+    return bool(manifest and manifest.is_dev)
+
+
 def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) -> dict[str, Any]:
     token = str(channel_id or "").strip() or "general"
     if token == "general":
@@ -5447,6 +5464,37 @@ class RouterService:
                     tool_payload.setdefault("target_node_id", target_node_id)
                 with io_meta(route_meta):
                     run_started = time.perf_counter()
+                    if _dialog_runtime_uses_dev_webspace(webspace_id):
+                        if not hasattr(mgr, "run_dev_tool"):
+                            raise RuntimeError(
+                                f"DEV dialog runtime is unavailable for webspace '{webspace_id}'"
+                            )
+                        try:
+                            result = mgr.run_dev_tool(skill, tool, tool_payload)
+                        except Exception:
+                            log.warning(
+                                "dialog runtime tool run failed skill=%s tool=%s webspace=%s runtime=dev_authoritative manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                                skill,
+                                tool,
+                                webspace_id,
+                                manager_ms,
+                                (time.perf_counter() - run_started) * 1000.0,
+                                (time.perf_counter() - worker_started) * 1000.0,
+                            )
+                            raise
+                        run_ms = (time.perf_counter() - run_started) * 1000.0
+                        total_ms = (time.perf_counter() - worker_started) * 1000.0
+                        log.log(
+                            _dialog_timing_level(total_ms),
+                            "dialog runtime tool run completed skill=%s tool=%s webspace=%s runtime=dev_authoritative manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                            skill,
+                            tool,
+                            webspace_id,
+                            manager_ms,
+                            run_ms,
+                            total_ms,
+                        )
+                        return result
                     try:
                         result = mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
                         run_ms = (time.perf_counter() - run_started) * 1000.0

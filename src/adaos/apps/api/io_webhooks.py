@@ -31,6 +31,7 @@ class TelegramPairCreateRequest(BaseModel):
     ttl: Optional[int] = None
     bot_id: Optional[str] = None
     bot: Optional[str] = None
+    webspace_id: Optional[str] = None
 
 
 @router.post("/io/tg/pair/create")
@@ -48,6 +49,7 @@ async def tg_pair_create(
         bot_id=bot_id,
         hub_id=hub_id,
         ttl_sec=ttl_sec,
+        webspace_id=str(body.webspace_id or "").strip() or None,
     )
     return {"ok": True, "hub_id": hub_id, "bot_id": bot_id, **res}
 

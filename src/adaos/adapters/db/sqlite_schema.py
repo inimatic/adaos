@@ -96,6 +96,7 @@ _SCHEMA = (
         code TEXT PRIMARY KEY,
         bot_id TEXT,
         hub_id TEXT,
+        webspace_id TEXT,
         expires_at INT,
         state TEXT,
         created_at INT,
@@ -109,6 +110,7 @@ _SCHEMA = (
         bot_id TEXT,
         ada_user_id TEXT,
         hub_id TEXT,
+        webspace_id TEXT,
         created_at INT,
         last_seen INT,
         PRIMARY KEY(platform, user_id, bot_id)
@@ -131,4 +133,8 @@ def ensure_schema(sql) -> None:
         cur = con.cursor()
         for stmt in _SCHEMA:
             cur.execute(stmt)
+        for table in ("pair_codes", "chat_bindings"):
+            columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})").fetchall()}
+            if "webspace_id" not in columns:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN webspace_id TEXT")
         con.commit()
