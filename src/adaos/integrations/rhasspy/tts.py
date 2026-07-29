@@ -65,6 +65,9 @@ class RhasspyTTSAdapter:
             path = tmp.name
         _play_wav_fallback(path)
 
+    def synthesize(self, text: str) -> bytes:
+        return self._synthesize(text)
+
     def _synthesize(self, text: str) -> bytes:
         params: dict[str, str] = {}
         if self.voice:
