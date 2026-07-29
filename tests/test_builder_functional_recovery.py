@@ -33,6 +33,9 @@ def test_rebind_reference_isolates_project_and_conversation_identity() -> None:
     assert state["selectedProjectRef"] == "scenario:builder_reference_042"
     assert state["builderTopicId"] == "prompt-project:scenario:builder_reference_042"
     assert state["project"]["title"] == "Builder reference — UI 042"
+    assert webui["ui"]["application"]["desktop"]["pageSchema"]["meta"][
+        "builder"
+    ]["reference_revision"] == "042"
 
 
 def test_parity_inspector_accepts_complete_recovered_contract() -> None:

@@ -76,6 +76,13 @@ def rebind_reference(webui: dict[str, Any], target: str, revision: str) -> None:
             "type": "scenario",
         }
     )
+    page.setdefault("meta", {}).setdefault("builder", {}).update(
+        {
+            "ui_revision": revision,
+            "reference_revision": revision,
+            "reference_only": True,
+        }
+    )
     summary = webui["ui"].setdefault("user_summary", {})
     summary.setdefault("expected_behavior", []).append(
         f"This temporary scenario renders the functional Builder UI revision {revision}."
@@ -109,6 +116,7 @@ def synchronize_target(
         }
     )
     manifest.setdefault("supported_locales", ["en", "ru"])
+    webui["ui"]["version"] = str(manifest.get("version") or "")
     yaml_path.write_text(
         yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -128,6 +136,7 @@ def synchronize_target(
             "ui": copy.deepcopy(webui["ui"]),
         }
     )
+    scenario["ui"]["manifest"] = "webui.json"
     _write_json(webui_path, webui)
     _write_json(scenario_json_path, scenario)
 

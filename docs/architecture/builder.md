@@ -397,6 +397,25 @@ replace them. For `ui.list`, `inputs.buttons` are per-item/card commands. The
 single list-level Add command next to card search uses `inputs.addButton`,
 `inputs.addButtonLabel`, and an `add` or `click:add` widget action.
 
+Visual freedom does not make the functional control plane disposable. A
+schema-valid prototype may replace layout, copy, and bounded mock presentation,
+but every existing skill data source, stream, mutation action, Lifecycle
+command, project kind, and governed confirmation remains a compatibility
+contract unless an accepted issue explicitly removes it. Builder carries the
+machine-readable `adaos.builder.functional_parity.v1` contract with the
+scenario and rejects Prototype or Automation results that lose required
+bindings, even when the resulting UI still renders successfully.
+
+Builder self-development always uses a shadow scenario and an executable
+reference revision. The active Builder is never used simultaneously as the
+experimental prototype, the functional baseline, and the recovery tool. A
+self-hosted change must pass deterministic parity, scenario validation, SDK
+tests, and A/B browser rendering before it can replace `dev:builder`; Workspace
+and stable Publication remain unchanged until the recovered DEV revision passes
+Trial. Static/mock-only experiments may inform a later implementation, but they
+cannot become the Automation source for a functional replacement without an
+explicit binding migration plan.
+
 Every promoted revision stamps the actual revision and scenario into
 `pageSchema.meta.builder`. Review Apply messages carry a localized semantic
 origin (`Review notes` / `Замечания`) instead of being indistinguishable from a

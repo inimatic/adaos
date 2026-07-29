@@ -32,6 +32,7 @@ WEBUI = SCENARIO / "webui.json"
 SCENARIO_JSON = SCENARIO / "scenario.json"
 SCENARIO_YAML = SCENARIO / "scenario.yaml"
 CURRENT = SCENARIO / "ui_revisions" / "current.txt"
+PARITY_CONTRACT = ROOT / "docs" / "architecture" / "builder-functional-parity.json"
 REVISION = "054"
 BASE_REVISION = "042"
 
@@ -205,6 +206,7 @@ def build() -> None:
     )
     _write(WEBUI, after)
     _write(SCENARIO_JSON, scenario)
+    _write(SCENARIO / "assets" / "builder_functional_parity.json", _read(PARITY_CONTRACT))
     revision = {
         "schema": "adaos.builder.ui_revision.v1",
         "revision": REVISION,

@@ -962,6 +962,22 @@ observed projection matches the latest desired generation.
   initialized before `list_projects` runs; browser acceptance on Builder
   `0.2.42` resolves two live groups and 22 project cards without a static
   fallback.
+- [x] `[must]` Recover Builder after the mock-only self-hosting regression.
+  UI revision `042` is preserved as the executable DEV scenario
+  `builder_reference_042`; recovery UI `054` rebases the active DEV Builder on
+  its complete control plane and forward-ports bounded Yjs project selection,
+  live `list_projects`, search, archived filtering, and Scenario/Skill template
+  selection. The embedded `adaos.builder.functional_parity.v1` gate requires
+  all widgets, modals, bindings, Lifecycle commands, and project kinds.
+- [x] `[must]` Complete local recovery evidence: reference and recovered
+  scenarios validate, parity reports no missing or forbidden contracts,
+  scenario tests pass 13/13, SDK tests pass 40/40, core Automation tests pass
+  43/43, and browser A/B rendering resolves `proto: builder_reference_042`
+  versus `proto: builder · UI 054`. Both revisions are checkpointed in Forge;
+  Workspace remains unchanged.
+- [ ] `[must]` Complete human comparison and isolated Trial of recovery UI 054
+  before Publication. Remove the temporary reference scenario only after the
+  recovered Workspace release is accepted.
 - [ ] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.
