@@ -110,6 +110,7 @@ class BuilderWorkflowTransitionRequest(BaseModel):
     actor: str = "builder.api"
     reason: str | None = None
     metadata: dict[str, Any] | None = None
+    expected_generation: int | None = Field(default=None, ge=0)
 
 
 @router.get("/approval-profiles")
@@ -247,6 +248,7 @@ def transition_workflow(
             actor=body.actor,
             reason=body.reason,
             metadata=body.metadata,
+            expected_generation=body.expected_generation,
         )
     except (FileNotFoundError, BuilderWorkflowError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -16,6 +16,10 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def get_interaction_frame(object_type: str, object_id: str) -> dict[str, Any]:
+    return dict(_service().interaction_frame(object_type, object_id))
+
+
 def transition(
     object_type: str,
     object_id: str,
@@ -58,4 +62,27 @@ def build_context_packet(
     )
 
 
-__all__ = ["build_context_packet", "get_state", "transition"]
+def update_interaction_context(
+    object_type: str,
+    object_id: str,
+    updates: Mapping[str, Any],
+    *,
+    expected_generation: int,
+) -> dict[str, Any]:
+    return dict(
+        _service().update_interaction_context(
+            object_type,
+            object_id,
+            updates,
+            expected_generation=expected_generation,
+        )
+    )
+
+
+__all__ = [
+    "build_context_packet",
+    "get_interaction_frame",
+    "get_state",
+    "transition",
+    "update_interaction_context",
+]

@@ -828,16 +828,16 @@ Architecture:
 
 Canonical model and context:
 
-- [ ] `[must]` Publish versioned `Issue`, `Change`, `Run`, context-packet,
+- [x] `[must]` Publish versioned `Issue`, `Change`, `Run`, context-packet,
   interaction-frame, semantic-UI-change, and Review-anchor ABI contracts.
-- [ ] `[must]` Migrate the existing persisted `change_set` to one canonical
+- [x] `[must]` Migrate the existing persisted `change_set` to one canonical
   `change` projection. `change_set_id` remains a compatibility alias of
   `change_id`; divergent identities are rejected.
 - [ ] `[must]` Reclassify per-turn
   `adaos.conversation.development_change.v1` evidence as Runs linked to one
   Change. A follow-up turn extends the Change and creates a new Run, not a
   second product-level Change.
-- [ ] `[must]` Construct a bounded, stable-digested
+- [x] `[must]` Construct a bounded, stable-digested
   `adaos.builder.context_packet.v1` from Change, acceptance, exact base,
   selected Prototype, retained Implementation, dependencies, permissions,
   relevant refs, and prior-Run evidence.
@@ -852,7 +852,7 @@ Commands, projections, and Workbench:
 - [ ] `[must]` Emit typed interaction actions with command, risk class,
   expected workflow generation, target refs, presentation hint, and fallback.
   Stale actions fail without mutation and return the current projection.
-- [ ] `[must]` Introduce explicit conversation focus, inspected ref, and
+- [x] `[must]` Introduce explicit conversation focus, inspected ref, and
   Preview target fields. Selecting a Process item must not implicitly
   materialize it in Preview.
 - [ ] `[must]` Replace the permanent Lifecycle navigation surface with an
@@ -872,7 +872,7 @@ Commands, projections, and Workbench:
 
 Semantic changes and Review:
 
-- [ ] `[must]` Implement at least one reversible
+- [x] `[must]` Implement at least one reversible
   `adaos.builder.semantic_ui_change.v1` operation against stable widget/field
   refs, with source-revision precondition, ABI validation, Revision output,
   provenance, and deterministic undo data.

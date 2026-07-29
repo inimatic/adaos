@@ -4,8 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService, _replace_path
+
+
+ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
 
 
 @pytest.fixture
@@ -102,6 +106,73 @@ def test_invalid_ui_revision_pointer_is_not_treated_as_a_revision(
 
     assert service.current_prototype_revision("scenario", "recipes") is None
     assert workflow["prototype"]["head_revision"] is None
+
+
+def test_interaction_frame_projects_risk_actions_and_independent_context(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-recipes-layout",
+            "request": "Rename the recipe heading.",
+            "issues": [
+                {
+                    "issue_id": "heading-label",
+                    "title": "Rename the recipe heading",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The heading uses the approved label."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    updated = service.update_interaction_context(
+        "scenario",
+        "recipes",
+        {
+            "inspected_ref": "run:RUN-layout",
+            "preview_target": "prototype:recipes:001",
+        },
+        expected_generation=planned["generation"],
+    )
+    frame = updated["interaction_frame"]
+
+    schema = json.loads((ABI_ROOT / "builder.interaction_frame.v1.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(frame)
+    assert frame["context"]["conversation_focus"] == "change:CH-recipes-layout"
+    assert frame["context"]["inspected_ref"] == "run:RUN-layout"
+    assert frame["context"]["preview_target"] == "prototype:recipes:001"
+    assert all(item["expected_generation"] == frame["generation"] for item in frame["actions"])
+    assert {item["risk"] for item in frame["actions"]} >= {"read", "local_reversible", "isolated_write"}
+
+
+def test_interaction_context_rejects_stale_generation_without_mutation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    generation = service.describe("scenario", "recipes")["generation"]
+    service.update_interaction_context(
+        "scenario",
+        "recipes",
+        {"inspected_ref": "issue:first"},
+        expected_generation=generation,
+    )
+
+    with pytest.raises(BuilderWorkflowError, match="stale Builder action generation"):
+        service.update_interaction_context(
+            "scenario",
+            "recipes",
+            {"preview_target": "prototype:recipes:001"},
+            expected_generation=generation,
+        )
+
+    current = service.describe("scenario", "recipes")
+    assert current["interaction"]["inspected_ref"] == "issue:first"
+    assert current["interaction"]["preview_target"] is None
 
 
 def test_change_set_routes_interface_work_through_prototype_first(

@@ -22,6 +22,7 @@ BUILDER_CHANGE_SET_SCHEMA = "adaos.builder.change_set.v1"
 BUILDER_CHANGE_SCHEMA = "adaos.builder.change.v1"
 BUILDER_RUN_SCHEMA = "adaos.builder.run.v1"
 BUILDER_CONTEXT_PACKET_SCHEMA = "adaos.builder.context_packet.v1"
+BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
@@ -445,6 +446,20 @@ class BuilderWorkflowService:
             "change": change,
             "change_set": change_set,
             "context_packet": _mapping(raw.get("context_packet")) or None,
+            "interaction": {
+                "conversation_focus": str(
+                    _mapping(raw.get("interaction")).get("conversation_focus")
+                    or (f"change:{change['change_id']}" if change else f"{_kind(object_type)}:{_project_id(object_id)}")
+                ).strip(),
+                "inspected_ref": str(
+                    _mapping(raw.get("interaction")).get("inspected_ref") or ""
+                ).strip()
+                or None,
+                "preview_target": str(
+                    _mapping(raw.get("interaction")).get("preview_target") or ""
+                ).strip()
+                or None,
+            },
             "pending_transition": _mapping(raw.get("pending_transition")) or None,
             "history": [
                 dict(item)
@@ -506,6 +521,224 @@ class BuilderWorkflowService:
             "archived": bool(state.get("archived")),
             "capabilities": self._capabilities(workflow, archived=bool(state.get("archived")), object_type=kind),
         }
+
+    def interaction_frame(self, object_type: str, object_id: str) -> dict[str, Any]:
+        """Project the current workflow into channel-neutral deterministic actions."""
+
+        projection = self.describe(object_type, object_id)
+        generation = int(projection.get("generation") or 0)
+        project_ref = f"{projection['object_type']}:{projection['object_id']}"
+        interaction = _mapping(projection.get("interaction"))
+        change = _normalize_change(projection.get("change") or projection.get("change_set"))
+        capabilities = _mapping(projection.get("capabilities"))
+        active_phase = str(projection.get("active_phase") or "prototype")
+        delivery_status = str(_mapping(projection.get("delivery")).get("status") or "idle")
+        automation_status = str(
+            _mapping(projection.get("automation")).get("status") or "not_started"
+        )
+
+        actions: list[dict[str, Any]] = []
+
+        def add_action(
+            command: str,
+            label: str,
+            risk: str,
+            *,
+            target_ref: str | None = None,
+            presentation: str = "button",
+            fallback: str = "compact_action",
+        ) -> None:
+            actions.append(
+                {
+                    "command": command,
+                    "label": label,
+                    "risk": risk,
+                    "expected_generation": generation,
+                    "target_ref": target_ref,
+                    "presentation": presentation,
+                    "fallback": fallback,
+                }
+            )
+
+        add_action(
+            "builder.process.inspect",
+            "Show process",
+            "read",
+            target_ref=change and f"change:{change['change_id']}" or project_ref,
+            presentation="panel",
+            fallback="compact_status",
+        )
+        if change is None:
+            add_action("builder.change.plan", "Plan change", "local_reversible", target_ref=project_ref)
+            message = "Describe the requested change to begin."
+        else:
+            change_ref = f"change:{change['change_id']}"
+            gate = str(change.get("gate") or active_phase)
+            status = str(change.get("status") or "planned")
+            message = f"Change {change['change_id']} is {status}; next gate: {gate}."
+            if capabilities.get("can_update_change_set"):
+                add_action("builder.change.extend", "Add to change", "local_reversible", target_ref=change_ref)
+            if capabilities.get("can_edit_prototype") and gate == "prototype":
+                add_action(
+                    "builder.prototype.edit",
+                    "Refine prototype",
+                    "local_reversible",
+                    target_ref=change_ref,
+                )
+                add_action(
+                    "builder.prototype.approve",
+                    "Approve prototype",
+                    "isolated_write",
+                    target_ref=change_ref,
+                )
+            if active_phase == "prototype" and gate == "automation":
+                add_action(
+                    "builder.implementation.start",
+                    "Start implementation",
+                    "isolated_write",
+                    target_ref=change_ref,
+                )
+            if active_phase == "automation" and automation_status in {"completed", "failed"}:
+                add_action(
+                    "builder.implementation.iterate",
+                    "Continue implementation",
+                    "isolated_write",
+                    target_ref=change_ref,
+                )
+            if capabilities.get("can_return_to_prototype"):
+                add_action(
+                    "builder.prototype.derive",
+                    "Return result to prototype",
+                    "isolated_write",
+                    target_ref=change_ref,
+                )
+            if capabilities.get("can_prepare_candidate"):
+                add_action(
+                    "builder.trial.prepare",
+                    "Prepare trial",
+                    "trial_activation",
+                    target_ref=change_ref,
+                )
+            if capabilities.get("can_decide_candidate"):
+                candidate_id = str(_mapping(projection.get("delivery")).get("candidate_id") or "").strip()
+                candidate_ref = f"candidate:{candidate_id}" if candidate_id else change_ref
+                add_action(
+                    "builder.trial.accept",
+                    "Accept trial",
+                    "workspace_activation",
+                    target_ref=candidate_ref,
+                )
+                add_action(
+                    "builder.trial.reject",
+                    "Request changes",
+                    "local_reversible",
+                    target_ref=candidate_ref,
+                )
+            if capabilities.get("can_publish"):
+                add_action(
+                    "builder.publication.publish",
+                    "Publish",
+                    "publication",
+                    target_ref=change_ref,
+                )
+
+        if capabilities.get("can_preview_prototype"):
+            add_action(
+                "builder.preview.prototype",
+                "Preview prototype",
+                "read",
+                target_ref=f"prototype:{projection['object_id']}:{_mapping(projection.get('prototype')).get('head_revision') or 'current'}",
+            )
+        if capabilities.get("can_preview_automation"):
+            add_action(
+                "builder.preview.active",
+                "Preview implementation",
+                "read",
+                target_ref=f"implementation:{projection['object_id']}:active",
+            )
+        if capabilities.get("can_preview_publication"):
+            add_action(
+                "builder.preview.publication",
+                "Preview publication",
+                "read",
+                target_ref=f"publication:{projection['object_id']}:{_mapping(projection.get('publication')).get('current_version') or 'current'}",
+            )
+
+        views = [
+            {"kind": "conversation", "presentation": "primary", "fallback": "messages"},
+            {"kind": "process", "presentation": "panel", "fallback": "compact_status"},
+            {"kind": "overview", "presentation": "panel", "fallback": "deep_link"},
+            {"kind": "artifacts", "presentation": "panel", "fallback": "deep_link"},
+            {"kind": "preview", "presentation": "adjacent", "fallback": "deep_link"},
+        ]
+        return {
+            "schema": BUILDER_INTERACTION_FRAME_SCHEMA,
+            "message": message,
+            "context": {
+                "project_ref": project_ref,
+                "change_ref": f"change:{change['change_id']}" if change else None,
+                "conversation_focus": interaction.get("conversation_focus"),
+                "inspected_ref": interaction.get("inspected_ref"),
+                "preview_target": interaction.get("preview_target"),
+            },
+            "status": {
+                "phase": active_phase,
+                "change": change.get("status") if change else None,
+                "gate": change.get("gate") if change else None,
+                "implementation": automation_status,
+                "delivery": delivery_status,
+            },
+            "actions": actions,
+            "views": views,
+            "generation": generation,
+        }
+
+    def update_interaction_context(
+        self,
+        object_type: str,
+        object_id: str,
+        updates: Mapping[str, Any],
+        *,
+        expected_generation: int,
+    ) -> dict[str, Any]:
+        """Update focus, inspection, or Preview independently with optimistic locking."""
+
+        allowed = {"conversation_focus", "inspected_ref", "preview_target"}
+        unknown = set(updates) - allowed
+        if unknown:
+            raise BuilderWorkflowError(
+                f"unsupported Builder interaction fields: {', '.join(sorted(unknown))}"
+            )
+        if not updates:
+            raise BuilderWorkflowError("at least one Builder interaction field is required")
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            current_generation = int(workflow.get("generation") or 0)
+            if current_generation != int(expected_generation):
+                raise BuilderWorkflowError(
+                    f"stale Builder action generation: expected {expected_generation}, current {current_generation}"
+                )
+            interaction = _mapping(workflow.get("interaction"))
+            for key, value in updates.items():
+                token = str(value or "").strip()
+                if len(token) > 300:
+                    raise BuilderWorkflowError(f"{key} exceeds 300 characters")
+                interaction[key] = token or None
+            if not interaction.get("conversation_focus"):
+                interaction["conversation_focus"] = f"{kind}:{project_id}"
+            workflow["interaction"] = interaction
+            workflow["generation"] = current_generation + 1
+            workflow["updated_at"] = _now()
+            state["workflow"] = workflow
+            state["updated_at"] = workflow["updated_at"]
+            self._write_state(kind, project_id, state)
+        projection = self.describe(kind, project_id)
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {"ok": True, "workflow": projection, "interaction_frame": self.interaction_frame(kind, project_id)}
 
     def transition(
         self,
@@ -894,6 +1127,9 @@ class BuilderWorkflowService:
                 "created_at": changed_at,
                 "updated_at": changed_at,
             }
+            interaction = _mapping(workflow.get("interaction"))
+            interaction["conversation_focus"] = f"change:{change_set_id}"
+            workflow["interaction"] = interaction
             return
         if action == "change_issues_added":
             current = require_change_set(metadata.get("change_set_id"))
@@ -1407,6 +1643,7 @@ __all__ = [
     "BUILDER_CHANGE_SCHEMA",
     "BUILDER_CHANGE_SET_SCHEMA",
     "BUILDER_CONTEXT_PACKET_SCHEMA",
+    "BUILDER_INTERACTION_FRAME_SCHEMA",
     "BUILDER_RUN_SCHEMA",
     "BUILDER_WORKFLOW_EVENT",
     "BUILDER_WORKFLOW_SCHEMA",
