@@ -844,8 +844,12 @@ Canonical model and context:
   `adaos.builder.context_packet.v1` from Change, acceptance, exact base,
   selected Prototype, retained Implementation, dependencies, permissions,
   relevant refs, and prior-Run evidence.
-- [ ] `[must]` Carry context-packet identity through Prototype/Implementation
+- [x] `[must]` Carry context-packet identity through Prototype/Implementation
   execution, Forge evidence, candidate preparation, Trial, and Publication.
+  Automation builds a fresh bounded packet for each isolated Run; direct legacy
+  entry first creates an `automation_direct` Change. Session, realize request,
+  workflow Run, checkpoint, candidate validation, and Publication metadata use
+  the same canonical Change id and packet digest.
 - [x] `[should]` Add a context-packet inspector that shows included refs,
   omitted categories, budgets, digest, and construction diagnostics without
   exposing secrets or copying full transcripts.
@@ -969,6 +973,13 @@ Autonomy, evidence, and acceptance:
   checkpoint/publication evidence into the Run ledger and is checkpointed in
   Forge at `46d504eb514c976193df0f3df8d7128b2486a78e`; focused workflow/store and
   control-skill regressions pass 51/51 and 44/44 respectively.
+- [x] Core Automation now refuses context-free execution: each initial or
+  follow-up Codex request contains `adaos.builder.context_packet.v1`, while a
+  legacy direct call is projected into one minimal canonical Change. Automation
+  regressions pass 43/43. DEV control skill `0.1.54` carries the same identity
+  through Forge checkpoint, candidate evidence, Trial decisions, and
+  Publication transitions; it passes 44/44 tests and is checkpointed at
+  `3733639fe5fcd259627f5efe72d7bf102883dad4`.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server

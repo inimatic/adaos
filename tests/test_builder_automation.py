@@ -153,13 +153,30 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     )
     request = task["realize_request"]
     assert request["links"]["change_set_id"] == "CS-recipes-store-sync"
+    assert request["links"]["canonical_change_id"] == "CS-recipes-store-sync"
+    assert request["links"]["context_packet_digest"].startswith("sha256:")
     assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "store-sync"
+    packet = request["artifacts"]["context_packet"]
+    assert packet["schema"] == "adaos.builder.context_packet.v1"
+    assert packet["digest"] == request["links"]["context_packet_digest"]
+    assert packet["change"]["change_id"] == "CS-recipes-store-sync"
+    assert started["session"]["canonical_change_id"] == "CS-recipes-store-sync"
+    assert started["session"]["context_packet_digest"] == packet["digest"]
+    serialized_packet = json.dumps(packet, ensure_ascii=False).lower()
+    assert "raw_transcript" not in serialized_packet
+    assert "secret" not in serialized_packet
     assert (
         "A failed remote request leaves the local shopping list unchanged."
         in request["acceptance"]["checks"]
     )
     workflow = service._workflow().describe("scenario", "recipes")
     assert started["session"]["change_id"] in workflow["change_set"]["member_change_ids"]
+    automation_run = next(
+        item
+        for item in workflow["change"]["runs"]
+        if item["run_id"] == started["session"]["change_id"]
+    )
+    assert automation_run["context_packet_digest"] == packet["digest"]
 
 
 def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path) -> None:

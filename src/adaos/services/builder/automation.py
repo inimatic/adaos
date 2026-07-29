@@ -241,6 +241,54 @@ class BuilderAutomationService:
             if isinstance(workflow_before.get("change_set"), Mapping)
             else {}
         )
+        if not active_change_set or str(active_change_set.get("status") or "").strip().lower() in {
+            "published",
+            "rejected",
+            "superseded",
+        }:
+            # Compatibility callers may still enter Automation directly. They
+            # no longer bypass the target model: project one bounded
+            # automation_direct Change before constructing the execution
+            # capsule. The normal Builder control path already supplies a
+            # richer Change and therefore never uses this fallback.
+            planned_at = _now_iso()
+            request_digest = hashlib.sha256(
+                f"{kind}:{project_id}:{brief}:{planned_at}".encode("utf-8")
+            ).hexdigest()[:20]
+            planned = self._workflow().transition(
+                kind,
+                project_id,
+                "plan_change_set",
+                actor="builder.automation.compat",
+                reason="direct Automation entry projected into canonical Change",
+                metadata={
+                    "change_set_id": f"CH-automation-{request_digest}",
+                    "run_id": f"RUN-plan-{request_digest}",
+                    "request": brief,
+                    "issues": [
+                        {
+                            "issue_id": f"automation-{request_digest}",
+                            "title": " ".join(brief.split())[:240],
+                            "lane": "automation",
+                            "status": "open",
+                            "acceptance_criteria": [
+                                f"The implementation and its tests satisfy: {' '.join(brief.split())}"[:500]
+                            ],
+                        }
+                    ],
+                    "source_message_ids": [],
+                },
+            )
+            workflow_before = (
+                planned.get("workflow")
+                if isinstance(planned.get("workflow"), Mapping)
+                else self._workflow().describe(kind, project_id)
+            )
+            active_change_set = (
+                workflow_before.get("change_set")
+                if isinstance(workflow_before.get("change_set"), Mapping)
+                else {}
+            )
         active_change_set_id = str(active_change_set.get("change_set_id") or "").strip()
         requested_change_set_id = str(change_set_id or active_change_set_id).strip() or None
         if change_set_id and active_change_set_id and str(change_set_id).strip() != active_change_set_id:
@@ -263,6 +311,16 @@ class BuilderAutomationService:
                     current["updated_at"] = _now_iso()
                     self._save_session(current)
                 current_change_set_id = str(current.get("change_set_id") or "").strip() or None
+                if requested_change_set_id and not current_change_set_id:
+                    # One-time migration for pre-Change queued sessions. The
+                    # already queued task is retained and linked to the Change
+                    # just projected from the same implementation brief; no
+                    # second Codex task is submitted.
+                    current["change_set_id"] = requested_change_set_id
+                    current["canonical_change_id"] = requested_change_set_id
+                    current["updated_at"] = _now_iso()
+                    self._save_session(current)
+                    current_change_set_id = requested_change_set_id
                 if requested_change_set_id and current_change_set_id != requested_change_set_id:
                     raise ValueError("another Builder change set already owns the active Automation session")
                 refreshed = self.refresh_session(current)
@@ -305,6 +363,7 @@ class BuilderAutomationService:
                 "implementation_brief": brief,
                 "brief_path": str(brief_path or "").strip() or None,
                 "change_set_id": requested_change_set_id,
+                "canonical_change_id": requested_change_set_id,
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
@@ -340,6 +399,8 @@ class BuilderAutomationService:
                     ),
                     "task_id": session.get("current_task_id"),
                     "change_id": session.get("change_id"),
+                    "run_id": session.get("change_id"),
+                    "context_packet_digest": session.get("context_packet_digest"),
                 },
             )
         self._launch_worker(session["session_id"])
@@ -633,6 +694,8 @@ class BuilderAutomationService:
                     metadata={
                         "task_id": session.get("current_task_id"),
                         "change_id": session.get("change_id"),
+                        "run_id": session.get("change_id"),
+                        "context_packet_digest": session.get("context_packet_digest"),
                     },
                 )
             else:
@@ -645,6 +708,8 @@ class BuilderAutomationService:
                     metadata={
                         "task_id": session.get("current_task_id"),
                         "change_id": session.get("change_id"),
+                        "run_id": session.get("change_id"),
+                        "context_packet_digest": session.get("context_packet_digest"),
                     },
                 )
         self._launch_worker(session["session_id"])
@@ -1336,12 +1401,38 @@ class BuilderAutomationService:
             attachments=attachments,
             created_at=_now_iso(),
         )
-        workflow_state = self._workflow().describe(kind, project_id)
+        workflow_service = self._workflow()
+        workflow_state = workflow_service.describe(kind, project_id)
         change_set = (
             workflow_state.get("change_set")
             if isinstance(workflow_state.get("change_set"), Mapping)
             else {}
         )
+        context_packet = workflow_service.build_context_packet(
+            kind,
+            project_id,
+            allowed_paths=[
+                *sparse_paths,
+                "prompt_state.json",
+            ],
+            instruction_refs=[
+                str(session.get("brief_path") or "").strip(),
+                str(session.get("topic_id") or "").strip(),
+            ],
+            persist=True,
+        )
+        packet_change = (
+            context_packet.get("change")
+            if isinstance(context_packet.get("change"), Mapping)
+            else {}
+        )
+        canonical_change_id = str(packet_change.get("change_id") or "").strip()
+        session_change_set_id = str(session.get("change_set_id") or "").strip()
+        if not canonical_change_id or canonical_change_id != session_change_set_id:
+            raise ValueError("Automation context packet does not match the active Builder Change")
+        if isinstance(session, dict):
+            session["canonical_change_id"] = canonical_change_id
+            session["context_packet_digest"] = context_packet.get("digest")
         acceptance_checks = [
             str(criterion).strip()
             for issue in change_set.get("issues") or []
@@ -1371,6 +1462,7 @@ class BuilderAutomationService:
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "change_set": dict(change_set) if change_set else None,
+                "context_packet": context_packet,
             },
             "repo": {
                 "sparse_paths": sparse_paths,
@@ -1399,6 +1491,8 @@ class BuilderAutomationService:
                 "webspace_id": session.get("webspace_id"),
                 "iteration": session.get("iteration"),
                 "change_set_id": session.get("change_set_id"),
+                "canonical_change_id": canonical_change_id,
+                "context_packet_digest": context_packet.get("digest"),
             },
         }
         return self.factory.submit_realize_request(request)

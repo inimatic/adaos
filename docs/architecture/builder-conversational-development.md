@@ -175,6 +175,14 @@ high-signal summaries and stable refs; an executor uses governed tools to load
 additional source or evidence only when needed. Raw chat, logs, and unrelated
 files must not be copied into every Run.
 
+Automation now builds and persists this packet before every isolated Codex
+submission. A direct legacy Automation call first projects a minimal
+`automation_direct` Change instead of bypassing the model. The normalized
+realize request carries the complete bounded packet plus its digest and
+canonical Change id; the Automation session and workflow Run keep the same
+identities. Candidate validation and checkpoint/publication metadata carry the
+digest forward so a release can be traced to the exact execution capsule.
+
 ## Interaction Contract
 
 After each meaningful turn Builder returns an interaction frame. The frame is
