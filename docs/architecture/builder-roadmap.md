@@ -35,6 +35,9 @@ production-acceptance claim.
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
+- [Builder Conversational Development Architecture](builder-conversational-development.md)
+  defines the chat-first product model, canonical Issue/Change/Run terms,
+  context packets, semantic UI changes, and future collaboration seams.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
 - Checked items mean an implementation slice exists, not necessarily full
@@ -82,6 +85,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics and a render-safe Automation projection exist; dev-node simulator and failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
+| 11. Conversational Development | Architecture fixed; implementation open: canonical Change/Run compatibility projection, context packet, risk-aware interaction actions, semantic UI operation, on-demand Process view, and chat-first Workbench parity. | Open: richer view registry, evaluator evidence, issue split/merge, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -800,6 +804,113 @@ Open work:
 - [ ] `[could]` Add multi-node pools, task placement policy, and parallel tasks
   after one-task-per-node isolation is proven.
 
+## Phase 11. Conversational Development Control Plane
+
+Goal: make Builder conversation-first without using chat history as the source
+of truth, while simplifying the product model to `Issue -> Change -> Run ->
+Revision -> Release` and preserving the recovered functional control plane.
+
+Architecture:
+
+- [x] `[must]` Define the chat-first, state-backed target architecture,
+  channel capability boundary, canonical development model, context packet,
+  semantic UI Change IR, risk-aware actions, Process view, evidence trace, and
+  multi-user extension seams in
+  [Builder Conversational Development Architecture](builder-conversational-development.md).
+- [x] `[must]` Keep Telegram and similar transports as limited control
+  channels rather than a lowest-common-denominator product requirement. Rich
+  search, selection, diff, artifact, and spatial Review surfaces remain Web
+  capabilities with compact/deep-link fallbacks.
+- [x] `[deferred]` Reserve, but do not implement in this refactoring slice,
+  miniapp rendering, hard cross-channel feature parity, trusted groups,
+  proposal exchange, WorkLog extraction, public candidate discovery, and
+  cross-deployment evidence aggregation.
+
+Canonical model and context:
+
+- [ ] `[must]` Publish versioned `Issue`, `Change`, `Run`, context-packet,
+  interaction-frame, semantic-UI-change, and Review-anchor ABI contracts.
+- [ ] `[must]` Migrate the existing persisted `change_set` to one canonical
+  `change` projection. `change_set_id` remains a compatibility alias of
+  `change_id`; divergent identities are rejected.
+- [ ] `[must]` Reclassify per-turn
+  `adaos.conversation.development_change.v1` evidence as Runs linked to one
+  Change. A follow-up turn extends the Change and creates a new Run, not a
+  second product-level Change.
+- [ ] `[must]` Construct a bounded, stable-digested
+  `adaos.builder.context_packet.v1` from Change, acceptance, exact base,
+  selected Prototype, retained Implementation, dependencies, permissions,
+  relevant refs, and prior-Run evidence.
+- [ ] `[must]` Carry context-packet identity through Prototype/Implementation
+  execution, Forge evidence, candidate preparation, Trial, and Publication.
+- [ ] `[should]` Add a context-packet inspector that shows included refs,
+  omitted categories, budgets, digest, and construction diagnostics without
+  exposing secrets or copying full transcripts.
+
+Commands, projections, and Workbench:
+
+- [ ] `[must]` Emit typed interaction actions with command, risk class,
+  expected workflow generation, target refs, presentation hint, and fallback.
+  Stale actions fail without mutation and return the current projection.
+- [ ] `[must]` Introduce explicit conversation focus, inspected ref, and
+  Preview target fields. Selecting a Process item must not implicitly
+  materialize it in Preview.
+- [ ] `[must]` Replace the permanent Lifecycle navigation surface with an
+  on-demand Process projection derived from Change/Run/Revision/Trial/Release
+  provenance. Retain the old Lifecycle data tool as a compatibility adapter.
+- [ ] `[must]` Refactor the recovered Builder Workbench around the canonical
+  conversation, dynamic action row, exact context/Preview header, adjacent
+  Preview, and contextual Process/Overview/Specification/Artifacts/Run detail
+  views while retaining the functional-parity gate.
+- [ ] `[must]` Preserve rich Web project/file search, artifact browsing, diff,
+  and spatial Preview behavior. Limited channels receive compact status,
+  deterministic actions, and context-preserving deep links.
+- [ ] `[should]` Add a declarative rich-view registry with browser
+  panel/modal/drawer presentations and compact message/link fallbacks.
+- [ ] `[should]` Add an explicit Issue split/merge/regroup workbench when
+  automatic decomposition is ambiguous.
+
+Semantic changes and Review:
+
+- [ ] `[must]` Implement at least one reversible
+  `adaos.builder.semantic_ui_change.v1` operation against stable widget/field
+  refs, with source-revision precondition, ABI validation, Revision output,
+  provenance, and deterministic undo data.
+- [ ] `[must]` Translate supported Review feedback into typed semantic
+  acceptance constraints and verify them against later UI revisions.
+- [ ] `[should]` Extend semantic operations from move/rename/show/hide to
+  bounded field/widget add/remove and mock/real binding changes after the
+  first operation is proven.
+- [ ] `[deferred]` Move added Review records from browser local storage into a
+  durable backend Change store, including reload/Preview-switch survival,
+  disposition, resolution, and author identity. The previously diagnosed
+  local-storage loss remains tracked but is intentionally not mixed into the
+  first core refactoring commit.
+
+Autonomy, evidence, and acceptance:
+
+- [ ] `[must]` Apply a common risk vocabulary to inspect, reversible local
+  edit, isolated DEV write, Trial activation, Workspace activation,
+  Publication, and destructive commands. Model confidence is rationale, not
+  authorization.
+- [ ] `[must]` Preserve exact base digest, actor, environment, executor,
+  allowed paths, semantic/source changes, commits, tests, Trial, Release, and
+  activation evidence across the Change trace.
+- [ ] `[must]` Prove the slice on a non-Builder scenario through request,
+  Change, Prototype or direct Implementation, isolated Run, Trial,
+  Publication, and exact DEV evidence. Do not use autonomous Builder
+  self-modification as the first acceptance case.
+- [ ] `[must]` Run Builder workflow/SDK/scenario tests, ABI validation,
+  functional parity, and wide/compact browser acceptance. Workspace Builder
+  remains unchanged until the DEV candidate is explicitly trialed and
+  accepted.
+- [ ] `[should]` Add evaluator evidence for semantic UI constraints,
+  functional tests, usability probes, and source/dependency impact without
+  requiring a separate model agent for every low-risk change.
+- [ ] `[could]` Add optional planner/generator/evaluator Run topologies for
+  long or high-risk Changes after single-executor latency, quality, and cost
+  baselines exist.
+
 ## Cross-Document Anchors
 
 Builder is intentionally cross-cutting. Detailed work remains in:
@@ -809,6 +920,9 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE2 Personal
   Builder proof gate and its dependencies on managed deployment and repair
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
+- [Builder Conversational Development Architecture](builder-conversational-development.md):
+  chat-first product model, canonical Change/Run terminology, interaction
+  frames, semantic UI operations, and future proposal collaboration
 - [Builder SDK Boundary](builder-sdk-boundary.md): SDK ownership, functional
   Builder control architecture, migration checklist, and local proof record
 - [Skill Factory and Isolated Dev Nodes](skill-factory.md): target remote

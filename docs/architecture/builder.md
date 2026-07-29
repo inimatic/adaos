@@ -16,6 +16,14 @@ state-changing phase. See the
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
 and its [local evidence](artifact-pipeline-local-evidence-2026-07-24.md).
 
+The chat-first product model, canonical `Issue -> Change -> Run -> Revision ->
+Release` terminology, semantic UI changes, context packets, channel capability
+boundary, and future collaboration seams are defined in
+[Builder Conversational Development Architecture](builder-conversational-development.md).
+That document refines the current `change_set` and per-turn Builder Change
+compatibility terminology; this page continues to own the active implementation
+pipeline until migration is complete.
+
 AdaOS Builder is the role and workflow that turns an idea into governed AdaOS
 artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests, and
 runtime-ready changes.
