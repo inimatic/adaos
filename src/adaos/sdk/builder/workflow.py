@@ -24,6 +24,7 @@ def transition(
     actor: str = "builder",
     reason: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    expected_generation: int | None = None,
 ) -> dict[str, Any]:
     return dict(
         _service().transition(
@@ -33,8 +34,28 @@ def transition(
             actor=actor,
             reason=reason,
             metadata=metadata,
+            expected_generation=expected_generation,
         )
     )
 
 
-__all__ = ["get_state", "transition"]
+def build_context_packet(
+    object_type: str,
+    object_id: str,
+    *,
+    allowed_paths: list[str] | tuple[str, ...] | None = None,
+    instruction_refs: list[str] | tuple[str, ...] | None = None,
+    persist: bool = False,
+) -> dict[str, Any]:
+    return dict(
+        _service().build_context_packet(
+            object_type,
+            object_id,
+            allowed_paths=allowed_paths,
+            instruction_refs=instruction_refs,
+            persist=persist,
+        )
+    )
+
+
+__all__ = ["build_context_packet", "get_state", "transition"]

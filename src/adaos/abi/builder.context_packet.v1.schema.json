@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.context_packet.v1",
+  "title": "AdaOS Builder Context Packet",
+  "type": "object",
+  "required": ["schema", "project", "change", "base", "artifacts", "dependencies", "allowed_paths", "instruction_refs", "budget", "digest", "built_at"],
+  "properties": {
+    "schema": { "const": "adaos.builder.context_packet.v1" },
+    "project": { "type": "object", "required": ["ref", "object_type", "object_id", "manifest_ref", "manifest_digest"], "additionalProperties": true },
+    "change": { "type": "object", "required": ["change_id", "intent", "issues"], "additionalProperties": true },
+    "base": { "type": "object", "additionalProperties": true },
+    "artifacts": { "type": "object", "additionalProperties": true },
+    "dependencies": { "$ref": "#/$defs/refs" },
+    "allowed_paths": { "$ref": "#/$defs/refs" },
+    "instruction_refs": { "$ref": "#/$defs/refs" },
+    "previous_run": { "type": ["object", "null"] },
+    "budget": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "built_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "refs": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+  },
+  "additionalProperties": false
+}

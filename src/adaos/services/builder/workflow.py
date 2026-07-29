@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import shutil
 import threading
@@ -18,11 +19,15 @@ from adaos.services.runtime_paths import current_state_dir
 
 BUILDER_WORKFLOW_SCHEMA = "adaos.builder.workflow.v1"
 BUILDER_CHANGE_SET_SCHEMA = "adaos.builder.change_set.v1"
+BUILDER_CHANGE_SCHEMA = "adaos.builder.change.v1"
+BUILDER_RUN_SCHEMA = "adaos.builder.run.v1"
+BUILDER_CONTEXT_PACKET_SCHEMA = "adaos.builder.context_packet.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
 _MAX_HISTORY = 50
 _MAX_CHANGE_ISSUES = 50
+_MAX_CHANGE_RUNS = 100
 _CHANGE_SET_TERMINAL_STATES = {"published", "rejected", "superseded"}
 _ISSUE_STATES = {"open", "in_progress", "resolved", "deferred"}
 _ISSUE_LANES = {"prototype", "automation"}
@@ -182,6 +187,87 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise BuilderWorkflowError("change runs must be objects")
+    run_id = str(value.get("run_id") or value.get("id") or "").strip()
+    if not run_id or len(run_id) > 160:
+        raise BuilderWorkflowError("run_id is required and must be at most 160 characters")
+    linked_change_id = str(value.get("change_id") or change_id).strip()
+    if linked_change_id != change_id:
+        raise BuilderWorkflowError("run change_id does not match its Change")
+    status = str(value.get("status") or "succeeded").strip().lower()
+    if status not in {"queued", "running", "succeeded", "failed", "cancelled", "superseded"}:
+        raise BuilderWorkflowError("invalid Builder Run status")
+    return {
+        "schema": BUILDER_RUN_SCHEMA,
+        "run_id": run_id,
+        "change_id": change_id,
+        "activity": str(value.get("activity") or "workflow").strip() or "workflow",
+        "executor": str(value.get("executor") or "builder.workflow").strip() or "builder.workflow",
+        "status": status,
+        "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
+        "environment_ref": str(value.get("environment_ref") or "").strip() or None,
+        "input_refs": [str(item).strip() for item in value.get("input_refs") or [] if str(item).strip()][-100:],
+        "output_refs": [str(item).strip() for item in value.get("output_refs") or [] if str(item).strip()][-100:],
+        "evidence_refs": [str(item).strip() for item in value.get("evidence_refs") or [] if str(item).strip()][-100:],
+        "started_at": str(value.get("started_at") or "").strip() or None,
+        "completed_at": str(value.get("completed_at") or "").strip() or None,
+        "error": str(value.get("error") or "").strip() or None,
+    }
+
+
+def _normalize_change(value: Any) -> dict[str, Any] | None:
+    legacy = _normalize_change_set(value)
+    if legacy is None:
+        return None
+    change_id = str(value.get("change_id") or legacy["change_set_id"]).strip()
+    if change_id != legacy["change_set_id"]:
+        raise BuilderWorkflowError("change_id and change_set_id must identify the same Change")
+    runs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value.get("runs") or []:
+        run = _normalize_run(item, change_id=change_id)
+        if run["run_id"] in seen:
+            raise BuilderWorkflowError(f"duplicate Builder Run id: {run['run_id']}")
+        seen.add(run["run_id"])
+        runs.append(run)
+    return {
+        **legacy,
+        "schema": BUILDER_CHANGE_SCHEMA,
+        "change_id": change_id,
+        "change_set_id": change_id,
+        "project_ref": str(value.get("project_ref") or "").strip() or None,
+        "base_ref": copy.deepcopy(value.get("base_ref")) if isinstance(value.get("base_ref"), Mapping) else None,
+        "runs": runs[-_MAX_CHANGE_RUNS:],
+        "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
+        "supersedes_change_id": str(
+            value.get("supersedes_change_id") or value.get("supersedes_change_set_id") or ""
+        ).strip()
+        or None,
+    }
+
+
+def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(change, Mapping):
+        return None
+    value = copy.deepcopy(dict(change))
+    value["schema"] = BUILDER_CHANGE_SET_SCHEMA
+    value["change_set_id"] = str(value.get("change_id") or value.get("change_set_id") or "").strip()
+    value.pop("change_id", None)
+    value.pop("runs", None)
+    value.pop("context_packet_digest", None)
+    value.pop("project_ref", None)
+    value.pop("base_ref", None)
+    value.pop("supersedes_change_id", None)
+    return value
+
+
+def _stable_digest(value: Mapping[str, Any]) -> str:
+    raw = json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
 def _legacy_phase(value: Any) -> str:
     token = str(value or "").strip().lower()
     return "automation" if token in {"automation", "publication"} else "prototype"
@@ -291,7 +377,17 @@ class BuilderWorkflowService:
         automation = _mapping(raw.get("automation"))
         publication = _mapping(raw.get("publication"))
         delivery = _mapping(raw.get("delivery"))
-        change_set = _normalize_change_set(raw.get("change_set"))
+        raw_change = raw.get("change")
+        raw_change_set = raw.get("change_set")
+        if isinstance(raw_change, Mapping) and isinstance(raw_change_set, Mapping):
+            change_id = str(raw_change.get("change_id") or raw_change.get("change_set_id") or "").strip()
+            change_set_id = str(raw_change_set.get("change_set_id") or raw_change_set.get("change_id") or "").strip()
+            if change_id and change_set_id and change_id != change_set_id:
+                raise BuilderWorkflowError("workflow change and change_set identities diverge")
+        change = _normalize_change(raw_change if isinstance(raw_change, Mapping) else raw_change_set)
+        if change:
+            change["project_ref"] = change.get("project_ref") or f"{_kind(object_type)}:{_project_id(object_id)}"
+        change_set = _change_set_compatibility(change)
         current_revision = self.current_prototype_revision(object_type, object_id)
         prototype.setdefault("head_revision", current_revision)
         if _kind(object_type) == "scenario" and active_phase == "prototype":
@@ -346,7 +442,9 @@ class BuilderWorkflowService:
             "automation": automation,
             "delivery": delivery,
             "publication": publication,
+            "change": change,
             "change_set": change_set,
+            "context_packet": _mapping(raw.get("context_packet")) or None,
             "pending_transition": _mapping(raw.get("pending_transition")) or None,
             "history": [
                 dict(item)
@@ -363,8 +461,8 @@ class BuilderWorkflowService:
         automation_status = str(automation.get("status") or "not_started")
         delivery_status = str(_mapping(workflow.get("delivery")).get("status") or "idle")
         retained_automation = bool(str(automation.get("snapshot_path") or "").strip())
-        change_set = _normalize_change_set(workflow.get("change_set"))
-        change_set_status = str((change_set or {}).get("status") or "")
+        change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+        change_set_status = str((change or {}).get("status") or "")
         automation_previewable = automation_status == "completed" or (
             retained_automation and automation_status in {"adapting", "failed", "frozen"}
         )
@@ -389,9 +487,9 @@ class BuilderWorkflowService:
             "can_preview_publication": object_type == "scenario"
             and str(_mapping(workflow.get("publication")).get("status") or "") == "published",
             "can_plan_change_set": mutable
-            and (not change_set or change_set_status in _CHANGE_SET_TERMINAL_STATES),
+            and (not change or change_set_status in _CHANGE_SET_TERMINAL_STATES),
             "can_update_change_set": mutable
-            and bool(change_set)
+            and bool(change)
             and change_set_status not in _CHANGE_SET_TERMINAL_STATES,
         }
 
@@ -418,6 +516,7 @@ class BuilderWorkflowService:
         actor: str = "builder",
         reason: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        expected_generation: int | None = None,
     ) -> dict[str, Any]:
         kind = _kind(object_type)
         project_id = _project_id(object_id)
@@ -429,6 +528,11 @@ class BuilderWorkflowService:
             if bool(state.get("archived")):
                 raise BuilderWorkflowError("archived projects cannot change workflow")
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            if expected_generation is not None and int(workflow.get("generation") or 0) != int(expected_generation):
+                raise BuilderWorkflowError(
+                    f"stale Builder action generation: expected {expected_generation}, "
+                    f"current {int(workflow.get('generation') or 0)}"
+                )
             before = {
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
@@ -441,6 +545,14 @@ class BuilderWorkflowService:
             self._apply_transition(workflow, action_token, details, changed_at=changed_at)
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
             workflow["updated_at"] = changed_at
+            self._record_transition_run(
+                workflow,
+                action=action_token,
+                actor=str(actor or "builder"),
+                metadata=details,
+                changed_at=changed_at,
+                project_ref=f"{kind}:{project_id}",
+            )
             after = {
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
@@ -479,6 +591,200 @@ class BuilderWorkflowService:
         if callable(self.event_sink):
             self.event_sink(projection)
         return {"ok": True, "action": action_token, "workflow": projection}
+
+    @staticmethod
+    def _record_transition_run(
+        workflow: dict[str, Any],
+        *,
+        action: str,
+        actor: str,
+        metadata: Mapping[str, Any],
+        changed_at: str,
+        project_ref: str,
+    ) -> None:
+        legacy = _normalize_change_set(workflow.get("change_set"))
+        if legacy is None:
+            workflow["change"] = None
+            return
+        previous = _normalize_change(workflow.get("change"))
+        change_id = str(legacy.get("change_set_id") or "").strip()
+        if previous and str(previous.get("change_id") or "") != change_id:
+            previous = None
+        change = {
+            **(previous or {}),
+            **legacy,
+            "schema": BUILDER_CHANGE_SCHEMA,
+            "change_id": change_id,
+            "change_set_id": change_id,
+            "project_ref": str((previous or {}).get("project_ref") or project_ref),
+        }
+        runs = [
+            _normalize_run(item, change_id=change_id)
+            for item in (previous or {}).get("runs") or []
+            if isinstance(item, Mapping)
+        ]
+        run_id = str(metadata.get("run_id") or metadata.get("task_id") or "").strip()
+        if not run_id:
+            run_id = f"{change_id}:run:{int(workflow.get('generation') or 0):04d}"
+        failure = action.endswith("_failed") or action in {"candidate_rejected"}
+        running = action.endswith("_started") or action in {"request_return_to_prototype"}
+        status = "failed" if failure else ("running" if running else "succeeded")
+        context_packet = workflow.get("context_packet") if isinstance(workflow.get("context_packet"), Mapping) else {}
+        run = {
+            "schema": BUILDER_RUN_SCHEMA,
+            "run_id": run_id,
+            "change_id": change_id,
+            "activity": action,
+            "executor": str(metadata.get("executor") or actor or "builder.workflow"),
+            "status": status,
+            "context_packet_digest": str(
+                metadata.get("context_packet_digest") or context_packet.get("digest") or ""
+            ).strip()
+            or None,
+            "environment_ref": str(metadata.get("environment_ref") or "").strip() or None,
+            "input_refs": [
+                str(item).strip()
+                for item in metadata.get("input_refs")
+                or metadata.get("source_message_ids")
+                or []
+                if str(item).strip()
+            ][-100:],
+            "output_refs": [
+                str(item).strip()
+                for item in metadata.get("output_refs") or []
+                if str(item).strip()
+            ][-100:],
+            "evidence_refs": [
+                str(item).strip()
+                for item in metadata.get("evidence_refs") or []
+                if str(item).strip()
+            ][-100:],
+            "started_at": changed_at,
+            "completed_at": None if status == "running" else changed_at,
+            "error": str(metadata.get("error") or "").strip() or None,
+        }
+        existing = next((item for item in runs if item.get("run_id") == run_id), None)
+        if existing is None:
+            runs.append(run)
+        else:
+            original_started_at = existing.get("started_at")
+            existing.update(run)
+            existing["started_at"] = original_started_at or changed_at
+        change["runs"] = runs[-_MAX_CHANGE_RUNS:]
+        change["context_packet_digest"] = str(
+            context_packet.get("digest") or change.get("context_packet_digest") or ""
+        ).strip() or None
+        workflow["change"] = _normalize_change(change)
+        workflow["change_set"] = _change_set_compatibility(workflow["change"])
+
+    def build_context_packet(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        allowed_paths: list[str] | tuple[str, ...] | None = None,
+        instruction_refs: list[str] | tuple[str, ...] | None = None,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        """Build a bounded, stable-digested execution context for one Change."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            if change is None:
+                raise BuilderWorkflowError("an active Change is required to build a context packet")
+            root = self.project_root(kind, project_id)
+            manifest_name = "scenario.yaml" if kind == "scenario" else "skill.yaml"
+            manifest_path = root / manifest_name
+            manifest_raw = manifest_path.read_bytes()
+            try:
+                manifest = yaml.safe_load(manifest_raw.decode("utf-8-sig")) or {}
+            except (UnicodeDecodeError, yaml.YAMLError) as exc:
+                raise BuilderWorkflowError(f"cannot build context from {manifest_name}: {exc}") from exc
+            if not isinstance(manifest, Mapping):
+                manifest = {}
+            dependencies: list[str] = []
+            for item in manifest.get("depends") or manifest.get("dependencies") or []:
+                token = str(item).strip()
+                if token and token not in dependencies:
+                    dependencies.append(token)
+            runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
+            skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+            for item in skills.get("required") or []:
+                token = str(item).strip()
+                if token and token not in dependencies:
+                    dependencies.append(token)
+            selected_paths = [
+                str(item).replace("\\", "/").strip().lstrip("/")
+                for item in allowed_paths or [manifest_name, "prompt_state.json", "webui.json"]
+                if str(item).strip()
+            ]
+            selected_paths = list(dict.fromkeys(selected_paths))[:200]
+            previous_run = None
+            if change.get("runs"):
+                previous_run = copy.deepcopy(change["runs"][-1])
+            packet_body: dict[str, Any] = {
+                "schema": BUILDER_CONTEXT_PACKET_SCHEMA,
+                "project": {
+                    "ref": f"{kind}:{project_id}",
+                    "object_type": kind,
+                    "object_id": project_id,
+                    "manifest_ref": manifest_name,
+                    "manifest_version": str(manifest.get("version") or "").strip() or None,
+                    "manifest_digest": f"sha256:{hashlib.sha256(manifest_raw).hexdigest()}",
+                },
+                "change": {
+                    "change_id": change["change_id"],
+                    "intent": change.get("request"),
+                    "request_addenda": copy.deepcopy(change.get("request_addenda") or []),
+                    "route": change.get("route"),
+                    "gate": change.get("gate"),
+                    "status": change.get("status"),
+                    "issues": copy.deepcopy(change.get("issues") or []),
+                    "source_message_ids": copy.deepcopy(change.get("source_message_ids") or []),
+                },
+                "base": {
+                    "source": copy.deepcopy(change.get("base_ref")),
+                    "release": copy.deepcopy(_mapping(workflow.get("delivery")).get("base_release")),
+                    "release_digest": _mapping(workflow.get("delivery")).get("base_release_digest"),
+                },
+                "artifacts": {
+                    "prototype": copy.deepcopy(_mapping(workflow.get("prototype"))),
+                    "implementation": copy.deepcopy(_mapping(workflow.get("automation"))),
+                    "trial": copy.deepcopy(_mapping(workflow.get("delivery"))),
+                    "publication": copy.deepcopy(_mapping(workflow.get("publication"))),
+                },
+                "dependencies": dependencies[:200],
+                "allowed_paths": selected_paths,
+                "instruction_refs": [str(item).strip() for item in instruction_refs or [] if str(item).strip()][:100],
+                "previous_run": previous_run,
+                "budget": {
+                    "max_state_bytes": _MAX_STATE_BYTES,
+                    "issue_count": len(change.get("issues") or []),
+                    "run_count": len(change.get("runs") or []),
+                    "source_message_ref_count": len(change.get("source_message_ids") or []),
+                },
+            }
+            packet = {
+                **packet_body,
+                "digest": _stable_digest(packet_body),
+                "built_at": _now(),
+            }
+            if persist:
+                workflow["context_packet"] = copy.deepcopy(packet)
+                change["context_packet_digest"] = packet["digest"]
+                workflow["change"] = _normalize_change(change)
+                workflow["change_set"] = _change_set_compatibility(workflow["change"])
+                state["workflow"] = workflow
+                state["updated_at"] = packet["built_at"]
+                self._write_state(kind, project_id, state)
+
+        if persist and callable(self.event_sink):
+            self.event_sink(self.describe(kind, project_id))
+        return copy.deepcopy(packet)
 
     @staticmethod
     def _require_active(workflow: Mapping[str, Any], phase: str, action: str) -> None:
@@ -1098,7 +1404,10 @@ class BuilderWorkflowService:
 
 
 __all__ = [
+    "BUILDER_CHANGE_SCHEMA",
     "BUILDER_CHANGE_SET_SCHEMA",
+    "BUILDER_CONTEXT_PACKET_SCHEMA",
+    "BUILDER_RUN_SCHEMA",
     "BUILDER_WORKFLOW_EVENT",
     "BUILDER_WORKFLOW_SCHEMA",
     "BuilderWorkflowError",

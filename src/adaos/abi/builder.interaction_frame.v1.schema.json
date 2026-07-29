@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.interaction_frame.v1",
+  "title": "AdaOS Builder Interaction Frame",
+  "type": "object",
+  "required": ["schema", "message", "context", "status", "actions", "views", "generation"],
+  "properties": {
+    "schema": { "const": "adaos.builder.interaction_frame.v1" },
+    "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "context": { "type": "object", "required": ["project_ref"], "additionalProperties": true },
+    "status": { "type": "object", "required": ["phase"], "additionalProperties": true },
+    "actions": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "required": ["command", "label", "risk", "expected_generation"],
+        "properties": {
+          "command": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "risk": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+          "expected_generation": { "type": "integer", "minimum": 0 },
+          "target_ref": { "type": ["string", "null"], "maxLength": 300 },
+          "presentation": { "type": ["string", "null"], "maxLength": 80 },
+          "fallback": { "type": ["string", "null"], "maxLength": 80 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "views": { "type": "array", "maxItems": 30, "items": { "type": "object", "required": ["kind"], "additionalProperties": true } },
+    "generation": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

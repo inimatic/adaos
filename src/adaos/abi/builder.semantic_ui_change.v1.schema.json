@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.semantic_ui_change.v1",
+  "title": "AdaOS Builder Semantic UI Change",
+  "type": "object",
+  "required": ["schema", "operation_id", "change_id", "operation", "target_ref", "source_revision", "value", "risk"],
+  "properties": {
+    "schema": { "const": "adaos.builder.semantic_ui_change.v1" },
+    "operation_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "review_id": { "type": ["string", "null"], "maxLength": 160 },
+    "operation": { "enum": ["rename", "move", "show", "hide", "set_property", "add", "remove", "set_data_mode"] },
+    "target_ref": { "type": "string", "pattern": "^(widget|field):" },
+    "source_revision": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "value": {},
+    "preconditions": { "type": "array", "maxItems": 20, "items": { "type": "object" } },
+    "risk": { "const": "local_reversible" },
+    "acceptance": { "type": ["object", "null"] }
+  },
+  "additionalProperties": false
+}

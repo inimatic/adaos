@@ -153,6 +153,186 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
+def test_change_set_projects_one_canonical_change_and_transition_runs(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        actor="builder.chat",
+        metadata={
+            "change_set_id": "CH-recipes-search",
+            "run_id": "RUN-plan-search",
+            "request": "Add fast recipe search.",
+            "source_message_ids": ["message-search"],
+            "issues": [
+                {
+                    "issue_id": "recipe-search",
+                    "title": "Add fast recipe search",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Typing filters recipes immediately."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    assert planned["change"]["schema"] == "adaos.builder.change.v1"
+    assert planned["change"]["change_id"] == "CH-recipes-search"
+    assert planned["change"]["change_set_id"] == "CH-recipes-search"
+    assert planned["change"]["project_ref"] == "scenario:recipes"
+    assert planned["change_set"]["change_set_id"] == "CH-recipes-search"
+    assert "change_id" not in planned["change_set"]
+    assert len(planned["change"]["runs"]) == 1
+    plan_run = planned["change"]["runs"][0]
+    assert plan_run["schema"] == "adaos.builder.run.v1"
+    assert plan_run["run_id"] == "RUN-plan-search"
+    assert plan_run["change_id"] == "CH-recipes-search"
+    assert plan_run["activity"] == "plan_change_set"
+    assert plan_run["executor"] == "builder.chat"
+    assert plan_run["status"] == "succeeded"
+
+    approved = service.transition(
+        "scenario",
+        "recipes",
+        "stabilize_prototype",
+        actor="builder.ui",
+        metadata={"revision": "001", "run_id": "RUN-approve-search"},
+        expected_generation=planned["generation"],
+    )["workflow"]
+
+    assert approved["change"]["change_id"] == "CH-recipes-search"
+    assert [item["run_id"] for item in approved["change"]["runs"]] == [
+        "RUN-plan-search",
+        "RUN-approve-search",
+    ]
+    assert approved["change_set"]["status"] == "approved"
+
+
+def test_builder_transition_rejects_stale_generation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-stale",
+            "request": "Change the recipe title.",
+            "issues": [
+                {
+                    "issue_id": "title",
+                    "title": "Change the recipe title",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The new title is visible."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    with pytest.raises(BuilderWorkflowError, match="stale Builder action generation"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "stabilize_prototype",
+            metadata={"revision": "001"},
+            expected_generation=planned["generation"] - 1,
+        )
+
+    assert service.describe("scenario", "recipes")["change"]["status"] == "planned"
+
+
+def test_context_packet_is_bounded_stable_and_persistable(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\ndepends:\n- recipe_store_skill\n",
+        encoding="utf-8",
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-context",
+            "request": "Add a favorites filter.",
+            "source_message_ids": ["message-context"],
+            "issues": [
+                {
+                    "issue_id": "favorites-filter",
+                    "title": "Add a favorites filter",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Only favorite recipes remain visible."],
+                }
+            ],
+        },
+    )
+
+    first = service.build_context_packet(
+        "scenario",
+        "recipes",
+        allowed_paths=["scenario.yaml", "webui.json"],
+        instruction_refs=["docs/architecture/builder.md"],
+    )
+    second = service.build_context_packet(
+        "scenario",
+        "recipes",
+        allowed_paths=["scenario.yaml", "webui.json"],
+        instruction_refs=["docs/architecture/builder.md"],
+        persist=True,
+    )
+
+    assert first["schema"] == "adaos.builder.context_packet.v1"
+    assert first["digest"] == second["digest"]
+    assert first["change"]["change_id"] == "CH-context"
+    assert first["change"]["source_message_ids"] == ["message-context"]
+    assert "transcript" not in first
+    assert first["dependencies"] == ["recipe_store_skill"]
+    assert first["allowed_paths"] == ["scenario.yaml", "webui.json"]
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    assert persisted["workflow"]["context_packet"]["digest"] == first["digest"]
+    assert persisted["workflow"]["change"]["context_packet_digest"] == first["digest"]
+
+
+def test_workflow_rejects_divergent_change_compatibility_identities(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    legacy = {
+        "request": "Keep ids consistent.",
+        "route": "automation_direct",
+        "gate": "automation",
+        "status": "planned",
+        "issues": [
+            {
+                "issue_id": "ids",
+                "title": "Keep ids consistent",
+                "lane": "automation",
+                "status": "open",
+                "acceptance_criteria": ["Divergent identities are rejected."],
+            }
+        ],
+    }
+    (root / "prompt_state.json").write_text(
+        json.dumps(
+            {
+                "workflow": {
+                    "change": {**legacy, "change_id": "CH-new", "change_set_id": "CH-new"},
+                    "change_set": {**legacy, "change_set_id": "CH-old"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BuilderWorkflowError, match="identities diverge"):
+        service.describe("scenario", "recipes")
+
+
 def test_prototype_revision_is_recorded_without_approving_issues(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
