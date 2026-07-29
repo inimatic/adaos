@@ -957,6 +957,11 @@ observed projection matches the latest desired generation.
   submitted. On completion, advance it to the current `active:` result only
   when the binding is still unchanged or already follows the active result;
   preserve a Lifecycle choice made by the user while Codex was running.
+- [x] `[must]` Validate Choose Project through the complete declarative
+  initial-state/data-source contract. Every referenced selection field is
+  initialized before `list_projects` runs; browser acceptance on Builder
+  `0.2.42` resolves two live groups and 22 project cards without a static
+  fallback.
 - [ ] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.
