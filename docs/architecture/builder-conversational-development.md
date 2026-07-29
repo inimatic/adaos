@@ -349,8 +349,21 @@ semantic acceptance constraint such as order, presence, visibility, label,
 alignment, data mode, or interaction outcome. The constraint is checked on
 later revisions so accepted feedback does not have to be repeatedly explained.
 
+The first executable slice publishes
+`adaos.builder.acceptance_constraint.v1`. It deliberately compiles only
+structured Review intent supplied by a trusted UI action; narrative text is
+never guessed into an operation. Presence, label/property equality,
+visibility, sibling order, and declared data mode are evaluated against stable
+widget/field refs. Constraints live under the canonical Change, enter every
+later development capsule, and are re-evaluated after each Prototype revision.
+A violation returns the Change to `changes_requested`; an evaluator never
+silently repairs the interface or grants approval.
+
 Client memory or local storage may cache an unsent text draft only. Added
 Review records, decisions, and dispositions are backend-owned durable state.
+The compatibility browser overlay may still hold unstructured annotations
+locally until its store migration; only annotations explicitly compiled through
+the typed Review command have durable acceptance semantics in this slice.
 
 ## Risk-Aware Deterministic Actions
 

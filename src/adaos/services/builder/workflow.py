@@ -30,6 +30,7 @@ _MAX_STATE_BYTES = 512 * 1024
 _MAX_HISTORY = 50
 _MAX_CHANGE_ISSUES = 50
 _MAX_CHANGE_RUNS = 100
+_MAX_ACCEPTANCE_CONSTRAINTS = 100
 _CHANGE_SET_TERMINAL_STATES = {"published", "rejected", "superseded"}
 _ISSUE_STATES = {"open", "in_progress", "resolved", "deferred"}
 _ISSUE_LANES = {"prototype", "automation"}
@@ -223,6 +224,55 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
     }
 
 
+def _normalize_acceptance_constraint(value: Any, *, change_id: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise BuilderWorkflowError("acceptance constraints must be objects")
+    constraint_id = str(value.get("constraint_id") or "").strip()
+    if not constraint_id or len(constraint_id) > 160:
+        raise BuilderWorkflowError("acceptance constraint_id is required and must be at most 160 characters")
+    linked_change_id = str(value.get("change_id") or "").strip()
+    if linked_change_id != change_id:
+        raise BuilderWorkflowError("acceptance constraint change_id does not match its Change")
+    review_id = str(value.get("review_id") or "").strip()
+    project_ref = str(value.get("project_ref") or "").strip()
+    artifact_ref = str(value.get("artifact_ref") or "").strip()
+    target_ref = str(value.get("target_ref") or "").strip()
+    kind = str(value.get("kind") or "").strip().lower()
+    status = str(value.get("status") or "active").strip().lower()
+    source_revision = str(value.get("source_revision") or "").strip()
+    created_at = str(value.get("created_at") or "").strip()
+    if not review_id or len(review_id) > 160:
+        raise BuilderWorkflowError("acceptance constraint review_id is required")
+    if not project_ref.startswith("scenario:") or len(project_ref) > 300:
+        raise BuilderWorkflowError("acceptance constraint project_ref must identify a scenario")
+    if not artifact_ref or len(artifact_ref) > 300:
+        raise BuilderWorkflowError("acceptance constraint artifact_ref is required")
+    if not target_ref.startswith(("widget:", "field:")) or len(target_ref) > 300:
+        raise BuilderWorkflowError("acceptance constraint target_ref must identify a widget or field")
+    if kind not in {"present", "label_equals", "property_equals", "visible", "order_before", "data_mode"}:
+        raise BuilderWorkflowError("invalid acceptance constraint kind")
+    if status not in {"active", "satisfied", "violated", "unverifiable", "superseded"}:
+        raise BuilderWorkflowError("invalid acceptance constraint status")
+    if not source_revision or len(source_revision) > 80 or not created_at:
+        raise BuilderWorkflowError("acceptance constraint source revision and created_at are required")
+    return {
+        "schema": "adaos.builder.acceptance_constraint.v1",
+        "constraint_id": constraint_id,
+        "change_id": change_id,
+        "review_id": review_id,
+        "project_ref": project_ref,
+        "artifact_ref": artifact_ref,
+        "target_ref": target_ref,
+        "kind": kind,
+        "expected": copy.deepcopy(value.get("expected")),
+        "source_revision": source_revision,
+        "status": status,
+        "last_evaluation": copy.deepcopy(value.get("last_evaluation")) if isinstance(value.get("last_evaluation"), Mapping) else None,
+        "created_at": created_at,
+        "updated_at": str(value.get("updated_at") or "").strip() or None,
+    }
+
+
 def _normalize_change(value: Any) -> dict[str, Any] | None:
     legacy = _normalize_change_set(value)
     if legacy is None:
@@ -238,6 +288,19 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
             raise BuilderWorkflowError(f"duplicate Builder Run id: {run['run_id']}")
         seen.add(run["run_id"])
         runs.append(run)
+    constraints: list[dict[str, Any]] = []
+    seen_constraints: set[str] = set()
+    for item in value.get("acceptance_constraints") or []:
+        constraint = _normalize_acceptance_constraint(item, change_id=change_id)
+        constraint_id = constraint["constraint_id"]
+        if constraint_id in seen_constraints:
+            raise BuilderWorkflowError(f"duplicate acceptance constraint id: {constraint_id}")
+        seen_constraints.add(constraint_id)
+        constraints.append(constraint)
+    if len(constraints) > _MAX_ACCEPTANCE_CONSTRAINTS:
+        raise BuilderWorkflowError(
+            f"a Change supports at most {_MAX_ACCEPTANCE_CONSTRAINTS} acceptance constraints"
+        )
     return {
         **legacy,
         "schema": BUILDER_CHANGE_SCHEMA,
@@ -246,6 +309,7 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         "project_ref": str(value.get("project_ref") or "").strip() or None,
         "base_ref": copy.deepcopy(value.get("base_ref")) if isinstance(value.get("base_ref"), Mapping) else None,
         "runs": runs[-_MAX_CHANGE_RUNS:],
+        "acceptance_constraints": constraints,
         "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
         "supersedes_change_id": str(
             value.get("supersedes_change_id") or value.get("supersedes_change_set_id") or ""
@@ -262,6 +326,7 @@ def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any
     value["change_set_id"] = str(value.get("change_id") or value.get("change_set_id") or "").strip()
     value.pop("change_id", None)
     value.pop("runs", None)
+    value.pop("acceptance_constraints", None)
     value.pop("context_packet_digest", None)
     value.pop("project_ref", None)
     value.pop("base_ref", None)
@@ -1165,6 +1230,7 @@ class BuilderWorkflowService:
                     "gate": change.get("gate"),
                     "status": change.get("status"),
                     "issues": copy.deepcopy(change.get("issues") or []),
+                    "acceptance_constraints": copy.deepcopy(change.get("acceptance_constraints") or []),
                     "source_message_ids": copy.deepcopy(change.get("source_message_ids") or []),
                 },
                 "base": {
@@ -1187,6 +1253,7 @@ class BuilderWorkflowService:
                 "budget": {
                     "max_state_bytes": _MAX_STATE_BYTES,
                     "issue_count": len(change.get("issues") or []),
+                    "acceptance_constraint_count": len(change.get("acceptance_constraints") or []),
                     "run_count": len(change.get("runs") or []),
                     "source_message_ref_count": len(change.get("source_message_ids") or []),
                     "conversation_message_count": len((bounded_conversation or {}).get("messages") or []),
@@ -1269,6 +1336,27 @@ class BuilderWorkflowService:
                 members.append(token)
             current["member_change_ids"] = members[-100:]
             current["updated_at"] = changed_at
+
+        def canonical_change() -> dict[str, Any]:
+            current = require_change_set(metadata.get("change_id") or metadata.get("change_set_id"))
+            existing = _normalize_change(workflow.get("change"))
+            if existing is not None:
+                return existing
+            created = _normalize_change(
+                {
+                    **current,
+                    "change_id": current["change_set_id"],
+                    "project_ref": str(
+                        _mapping(metadata.get("constraint")).get("project_ref") or ""
+                    ).strip()
+                    or None,
+                    "runs": [],
+                    "acceptance_constraints": [],
+                }
+            )
+            if created is None:
+                raise BuilderWorkflowError("an active Change is required")
+            return created
 
         def invalidate_delivery(reason: str) -> None:
             if str(delivery.get("status") or "idle") in {"checkpoint", "trial", "accepted"}:
@@ -1413,6 +1501,61 @@ class BuilderWorkflowService:
             if not change_id:
                 raise BuilderWorkflowError("change evidence requires change_id")
             add_change_evidence(change_id)
+            return
+        if action == "review_constraint_added":
+            current_change = canonical_change()
+            constraint = _normalize_acceptance_constraint(
+                metadata.get("constraint"),
+                change_id=current_change["change_id"],
+            )
+            constraints = list(current_change.get("acceptance_constraints") or [])
+            if any(item.get("constraint_id") == constraint["constraint_id"] for item in constraints):
+                raise BuilderWorkflowError(
+                    f"acceptance constraint already exists: {constraint['constraint_id']}"
+                )
+            if len(constraints) >= _MAX_ACCEPTANCE_CONSTRAINTS:
+                raise BuilderWorkflowError(
+                    f"a Change supports at most {_MAX_ACCEPTANCE_CONSTRAINTS} acceptance constraints"
+                )
+            constraints.append(constraint)
+            current_change["acceptance_constraints"] = constraints
+            workflow["change"] = current_change
+            update_change_set(status="changes_requested", gate="prototype")
+            invalidate_delivery("review_constraint_added")
+            return
+        if action == "review_constraints_evaluated":
+            current_change = canonical_change()
+            evaluations = metadata.get("evaluations")
+            if not isinstance(evaluations, (list, tuple)) or not evaluations:
+                raise BuilderWorkflowError("Review constraint evaluation requires results")
+            by_id = {
+                str(item.get("constraint_id") or "").strip(): dict(item)
+                for item in evaluations
+                if isinstance(item, Mapping) and str(item.get("constraint_id") or "").strip()
+            }
+            if not by_id:
+                raise BuilderWorkflowError("Review constraint evaluation requires identified results")
+            constraints = list(current_change.get("acceptance_constraints") or [])
+            known = {str(item.get("constraint_id") or "") for item in constraints}
+            unknown = sorted(set(by_id) - known)
+            if unknown:
+                raise BuilderWorkflowError(f"unknown acceptance constraint: {unknown[0]}")
+            any_violation = False
+            for constraint in constraints:
+                evaluation = by_id.get(str(constraint.get("constraint_id") or ""))
+                if evaluation is None:
+                    continue
+                status = str(evaluation.get("status") or "").strip().lower()
+                if status not in {"satisfied", "violated", "unverifiable"}:
+                    raise BuilderWorkflowError("invalid acceptance constraint evaluation status")
+                constraint["status"] = status
+                constraint["last_evaluation"] = copy.deepcopy(evaluation)
+                constraint["updated_at"] = changed_at
+                any_violation = any_violation or status != "satisfied"
+            current_change["acceptance_constraints"] = constraints
+            workflow["change"] = current_change
+            if any_violation:
+                update_change_set(status="changes_requested", gate="prototype")
             return
         if action == "prototype_revision_recorded":
             self._require_active(workflow, "prototype", action)

@@ -909,16 +909,21 @@ Semantic changes and Review:
   `adaos.builder.semantic_ui_change.v1` operation against stable widget/field
   refs, with source-revision precondition, ABI validation, Revision output,
   provenance, and deterministic undo data.
-- [ ] `[must]` Translate supported Review feedback into typed semantic
-  acceptance constraints and verify them against later UI revisions.
+- [x] `[must]` Translate supported Review feedback into typed semantic
+  acceptance constraints and verify them against later UI revisions. The first
+  deterministic set covers presence, label/property equality, visibility,
+  sibling order, and declared data mode on stable widget/field refs. The
+  constraints persist under Change, enter later context packets, and are
+  re-evaluated after every Builder Prototype revision without automatic repair.
 - [ ] `[should]` Extend semantic operations from move/rename/show/hide to
   bounded field/widget add/remove and mock/real binding changes after the
   first operation is proven.
 - [ ] `[deferred]` Move added Review records from browser local storage into a
   durable backend Change store, including reload/Preview-switch survival,
   disposition, resolution, and author identity. The previously diagnosed
-  local-storage loss remains tracked but is intentionally not mixed into the
-  first core refactoring commit.
+  local-storage loss remains tracked. Structured annotations explicitly
+  compiled into `adaos.builder.acceptance_constraint.v1` are already durable;
+  migration of all free-form overlay drafts remains deferred.
 
 Autonomy, evidence, and acceptance:
 
@@ -999,6 +1004,13 @@ Autonomy, evidence, and acceptance:
   Missing context fails closed before model submission. Core workflow,
   Automation, and ABI regressions pass 104/104; DEV `builder_skill` regressions
   pass 145/145.
+- [x] Structured Review feedback now compiles into the versioned
+  `adaos.builder.acceptance_constraint.v1` contract and persists under the
+  canonical Change. The evaluator checks each later `webui.json` revision and
+  records satisfied, violated, or unverifiable evidence; violations return the
+  Change to Prototype review without mutating the UI. Focused core Review,
+  workflow, semantic-UI, and ABI tests pass 66/66; the combined DEV Builder and
+  control-skill suite passes 191/191.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server
