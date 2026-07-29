@@ -55,6 +55,7 @@ GENERAL_DIALOG_CHANNEL_ID = "general"
 CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
 BUILDER_DIALOG_CHANNEL_ID = "builder"
 BUILDER_SKILL_ID = "builder_skill"
+CONVERSATION_COMPANIONS_SKILL_ID = "conversation_companions"
 DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
 VOICE_CHAT_USER_EVENT = "voice.chat.user"
 VOICE_CHAT_STREAM_RECEIVER = "voice_chat.messages"
@@ -446,6 +447,28 @@ def _dialog_channel_label(channel_id: Any) -> str:
     if token == "builder":
         return "Builder"
     return token.replace("_", " ").replace("-", " ").title() if token else "Dialog"
+
+
+def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> bool:
+    token = str(skill_id or "").strip()
+    if token == BUILDER_SKILL_ID:
+        return True
+    if token != CONVERSATION_COMPANIONS_SKILL_ID:
+        return False
+    detail = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        marker in detail
+        for marker in (
+            "not activated",
+            "not prepared",
+            "not found",
+            "unavailable",
+            "deactivated",
+            "no default tool",
+            "resolved_manifest",
+            "manifest",
+        )
+    )
 
 
 def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) -> dict[str, Any]:
@@ -5339,7 +5362,7 @@ class RouterService:
                         )
                         return result
                     except Exception as workspace_exc:
-                        if skill != BUILDER_SKILL_ID or not hasattr(mgr, "run_dev_tool"):
+                        if not _dialog_runtime_dev_fallback_allowed(skill, workspace_exc) or not hasattr(mgr, "run_dev_tool"):
                             log.warning(
                                 "dialog runtime tool run failed skill=%s tool=%s webspace=%s fallback=none manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
                                 skill,
@@ -5365,7 +5388,8 @@ class RouterService:
                             )
                             raise workspace_exc
                         logging.getLogger("adaos.router.voice_chat").info(
-                            "workspace builder skill unavailable; trying dev runtime tool=%s",
+                            "workspace dialog skill unavailable; trying dev runtime skill=%s tool=%s",
+                            skill,
                             tool,
                             exc_info=True,
                         )
