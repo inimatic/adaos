@@ -395,6 +395,11 @@ Open work:
 - [ ] `[must]` Make Builder apply create a release record linking draft, validation,
   approval, runtime slot, and rollback target.
 - [ ] `[should]` Add durable operation recovery for long Builder install/test/apply flows.
+- [ ] `[must]` Reject a DEV skill checkpoint whose semantic version already
+  identifies different bytes, or invalidate/refetch every local A/B cache by
+  content digest. A same-version `builder_skill 0.3.16` checkpoint was accepted
+  by Forge while local activation retained the older cached bytes; current
+  Builder acceptance therefore always advances to a unique version.
 - [ ] `[should]` Define rollback UX for Builder-authored changes across skill,
   scenario, NLU overlay, and entity alias surfaces.
 - [ ] `[must]` Add post-activation checks that can route failures back to Builder repair
@@ -1011,6 +1016,13 @@ Autonomy, evidence, and acceptance:
   Change to Prototype review without mutating the UI. Focused core Review,
   workflow, semantic-UI, and ABI tests pass 66/66; the combined DEV Builder and
   control-skill suite passes 191/191.
+- [x] DEV `builder_skill 0.3.18` (Forge
+  `8de96f845b698af7182c82413b1d53894ad72575`) and
+  `builder_sdk_control_skill 0.1.55` (Forge
+  `38b165d5bcba56f8ec99e54242535fce364903de`) are active in local A/B slots.
+  A live context inspection returned the bounded conversation/Pending Action
+  fields and digest; a Telegram-capability read resolved the same canonical
+  selected project with intact Russian UTF-8.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server
