@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
+import hashlib
 import json
 import re
 import sqlite3
@@ -127,6 +128,18 @@ _SCHEMA = (
         created_at REAL NOT NULL,
         UNIQUE (conversation_id, seq),
         UNIQUE (conversation_id, idempotency_key)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_transport_ingress (
+        idempotency_key TEXT PRIMARY KEY,
+        transport TEXT NOT NULL,
+        event_id TEXT,
+        payload_digest TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'claimed',
+        claimed_at REAL NOT NULL,
+        dispatched_at REAL,
+        meta_json TEXT NOT NULL DEFAULT '{}'
     );
     """,
     """
@@ -413,10 +426,19 @@ def ensure_schema(sql: Any | None = None) -> bool:
     if token in _ENSURED_SQL_IDS:
         try:
             with sql.connect() as con:
-                exists = con.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_segment_summary_jobs'"
-                ).fetchone()
-            if exists:
+                rows = con.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name IN (
+                        'conversation_segment_summary_jobs',
+                        'conversation_transport_ingress'
+                    )
+                    """
+                ).fetchall()
+            if {str(row[0]) for row in rows} == {
+                "conversation_segment_summary_jobs",
+                "conversation_transport_ingress",
+            }:
                 return True
         except sqlite3.Error:
             pass
@@ -442,6 +464,118 @@ def _normalize_id(value: Any, fallback_prefix: str) -> str:
     if token:
         return token
     return f"{fallback_prefix}.{uuid.uuid4().hex}"
+
+
+def claim_transport_ingress(
+    *,
+    idempotency_key: str,
+    transport: str,
+    payload: Mapping[str, Any],
+    event_id: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Claim one transport update exactly once before it can mutate dialog state.
+
+    A claimed update is never replayed automatically, including after a process
+    interruption. The sender can submit a new transport message to request a
+    deliberate retry. A reused key with different content is rejected as a
+    conflict instead of being rebound to another command.
+    """
+
+    key = str(idempotency_key or "").strip()
+    if not key:
+        raise ValueError("idempotency_key is required")
+    channel = str(transport or "").strip().lower()
+    if not channel:
+        raise ValueError("transport is required")
+    normalized = json.dumps(
+        dict(payload or {}),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    if not ensure_schema():
+        return {
+            "ok": True,
+            "claimed": True,
+            "durable": False,
+            "idempotency_key": key,
+            "payload_digest": digest,
+        }
+    now = time.time()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT * FROM conversation_transport_ingress WHERE idempotency_key=?",
+            (key,),
+        ).fetchone()
+        if existing:
+            con.rollback()
+            row = dict(existing)
+            conflict = str(row.get("payload_digest") or "") != digest
+            return {
+                "ok": not conflict,
+                "claimed": False,
+                "duplicate": not conflict,
+                "conflict": conflict,
+                "durable": True,
+                **row,
+            }
+        con.execute(
+            """
+            INSERT INTO conversation_transport_ingress(
+                idempotency_key, transport, event_id, payload_digest, status,
+                claimed_at, dispatched_at, meta_json
+            ) VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                key,
+                channel,
+                str(event_id or "").strip() or None,
+                digest,
+                "claimed",
+                now,
+                None,
+                _json_dump(dict(meta or {})),
+            ),
+        )
+        con.commit()
+    return {
+        "ok": True,
+        "claimed": True,
+        "durable": True,
+        "idempotency_key": key,
+        "transport": channel,
+        "event_id": str(event_id or "").strip() or None,
+        "payload_digest": digest,
+        "status": "claimed",
+        "claimed_at": now,
+    }
+
+
+def mark_transport_ingress_dispatched(idempotency_key: str) -> dict[str, Any] | None:
+    key = str(idempotency_key or "").strip()
+    if not key or not ensure_schema():
+        return None
+    now = time.time()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute(
+            """
+            UPDATE conversation_transport_ingress
+            SET status='dispatched', dispatched_at=?
+            WHERE idempotency_key=?
+            """,
+            (now, key),
+        )
+        row = con.execute(
+            "SELECT * FROM conversation_transport_ingress WHERE idempotency_key=?",
+            (key,),
+        ).fetchone()
+        con.commit()
+    return dict(row) if row else None
 
 
 def _fts_query(query: str) -> str:

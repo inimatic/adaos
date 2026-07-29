@@ -7,6 +7,38 @@ from adaos.services.agent_context import get_ctx
 from adaos.services import conversation_context, conversation_store
 
 
+def test_conversation_store_claims_transport_ingress_without_automatic_replay() -> None:
+    key = f"transport:test:{uuid4().hex}"
+    first = conversation_store.claim_transport_ingress(
+        idempotency_key=key,
+        transport="telegram",
+        event_id="event-1",
+        payload={"text": "Добавь раздел избранного"},
+        meta={"policy": "no_automatic_retry"},
+    )
+    duplicate = conversation_store.claim_transport_ingress(
+        idempotency_key=key,
+        transport="telegram",
+        event_id="event-1",
+        payload={"text": "Добавь раздел избранного"},
+    )
+    conflict = conversation_store.claim_transport_ingress(
+        idempotency_key=key,
+        transport="telegram",
+        event_id="event-2",
+        payload={"text": "Удалить проект"},
+    )
+    dispatched = conversation_store.mark_transport_ingress_dispatched(key)
+
+    assert first["claimed"] is True
+    assert first["durable"] is True
+    assert duplicate["claimed"] is False
+    assert duplicate["duplicate"] is True
+    assert conflict["claimed"] is False
+    assert conflict["conflict"] is True
+    assert dispatched and dispatched["status"] == "dispatched"
+
+
 def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

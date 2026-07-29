@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 """
-Chat IO -> NLU bridge.
+Chat IO -> canonical dialog bridge.
 
 This helper subscribes to generic io.input envelopes (e.g. from Telegram)
-and, for text messages, publishes ``nlp.intent.detect.request`` so that the
-interpreter runtime (Rasa) can resolve intents and the NLU dispatcher can
-map them to scenario/skill actions.
+and publishes neutral ``dialog.user_message`` events. RouterService then owns
+conversation selection, Builder/channel dispatch, NLU fallback, and response
+projection. Transports never invoke Builder or NLU directly.
 """
 
 import logging
@@ -15,15 +15,22 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import LocalEventBus
+from adaos.services import conversation_store
 from adaos.domain import Event
 
 _log = logging.getLogger("adaos.chat_io.nlu_bridge")
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
     """
-    Extract (text, webspace_id, meta) from a tg.input/io.input envelope.
-    For now we map Telegram chats to the default webspace; this can be
-    extended later via bindings.
+    Extract (text, explicitly routed webspace_id, transport meta).
+
+    Telegram normally targets the hub's default dialog webspace. A trusted
+    bridge may include an explicit ``route.webspace_id``; arbitrary message
+    text is never parsed as a webspace identifier.
     """
     payload = env.get("payload") or {}
     if not isinstance(payload, Mapping):
@@ -40,58 +47,86 @@ def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optio
     # Preserve chat routing context so responses can be sent back to the same chat.
     # Envelope schema (from Root/Telegram): payload has bot_id/chat_id/user_id/hub_id,
     # plus optional meta/route blocks.
-    meta: Dict[str, Any] = {}
+    source = _text(payload.get("source"))
+    bot_id = _text(payload.get("bot_id"))
+    hub_id = _text(payload.get("hub_id"))
+    chat_id = _text(payload.get("chat_id"))
+    user_id = _text(payload.get("user_id"))
+    update_id = _text(payload.get("update_id"))
+    meta: Dict[str, Any] = {
+        key: value
+        for key, value in {
+            "io_type": source,
+            "bot_id": bot_id,
+            "hub_id": hub_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "update_id": update_id,
+        }.items()
+        if value
+    }
+    if source == "telegram" and chat_id:
+        meta.update(
+            {
+                "route_id": "telegram",
+                "channel_capability_profile": "limited_chat",
+                "channel_capabilities": {
+                    "text": True,
+                    "compact_status": True,
+                    "deterministic_actions": True,
+                    "rich_views": False,
+                    "deep_links": True,
+                },
+            }
+        )
+
+    env_meta = env.get("meta") if isinstance(env.get("meta"), Mapping) else {}
+    trace_id = _text(env_meta.get("trace_id"))
+    if trace_id:
+        meta["trace_id"] = trace_id
+    event_id = _text(env.get("event_id"))
+    if event_id:
+        meta["transport_event_id"] = event_id
+    dedup_key = _text(env.get("dedup_key")) or ":".join(
+        value for value in ("telegram", bot_id, chat_id, update_id) if value
+    )
+    if dedup_key:
+        meta["dedup_key"] = dedup_key
+        meta["idempotency_key"] = f"transport:{dedup_key}"
+    request_id = update_id or event_id
+    if request_id:
+        meta["request_id"] = f"telegram:{bot_id or 'bot'}:{chat_id or 'chat'}:{request_id}"
+
+    msg_meta = inner.get("meta") if isinstance(inner.get("meta"), Mapping) else {}
+    msg_id = msg_meta.get("msg_id")
     try:
-        source = payload.get("source")
-        if isinstance(source, str) and source:
-            meta["io_type"] = source
-        bot_id = payload.get("bot_id")
-        if isinstance(bot_id, str) and bot_id:
-            meta["bot_id"] = bot_id
-        hub_id = payload.get("hub_id")
-        if isinstance(hub_id, str) and hub_id:
-            meta["hub_id"] = hub_id
-        chat_id = payload.get("chat_id")
-        if isinstance(chat_id, str) and chat_id:
-            meta["chat_id"] = chat_id
-        user_id = payload.get("user_id")
-        if isinstance(user_id, str) and user_id:
-            meta["user_id"] = user_id
-        update_id = payload.get("update_id")
-        if isinstance(update_id, str) and update_id:
-            meta["update_id"] = update_id
+        if msg_id is not None and str(msg_id).strip():
+            meta["reply_to"] = int(msg_id)
+    except (TypeError, ValueError):
+        pass
+    lang = _text(msg_meta.get("lang"))
+    if lang:
+        meta["lang"] = lang
 
-        # Prefer replying to the same IO route when possible.
-        if meta.get("io_type") == "telegram" and meta.get("chat_id"):
-            meta["route_id"] = "telegram"
-
-        # Trace id / dedup info for correlation.
-        env_meta = env.get("meta")
-        if isinstance(env_meta, Mapping):
-            trace_id = env_meta.get("trace_id")
-            if isinstance(trace_id, str) and trace_id:
-                meta["trace_id"] = trace_id
-        dedup_key = env.get("dedup_key")
-        if isinstance(dedup_key, str) and dedup_key:
-            meta["dedup_key"] = dedup_key
-        msg_meta = inner.get("meta")
-        if isinstance(msg_meta, Mapping):
-            msg_id = msg_meta.get("msg_id")
-            if isinstance(msg_id, (int, str)) and str(msg_id):
-                meta["reply_to"] = int(msg_id)
-    except Exception:
-        meta = {}
-
-    # For MVP, Telegram text is routed to default webspace; later we can
-    # map chats to specific workspaces.
-    webspace_id = None
+    route = payload.get("route") if isinstance(payload.get("route"), Mapping) else {}
+    if not route and isinstance(env_meta.get("route"), Mapping):
+        route = env_meta.get("route")
+    if route:
+        meta["transport_route"] = {
+            key: route.get(key)
+            for key in ("via", "alias", "session_id", "webspace_id", "dialog_channel_id")
+            if route.get(key) is not None
+        }
+    webspace_id = _text(route.get("webspace_id")) or _text(env_meta.get("webspace_id")) or None
+    dialog_channel_id = _text(route.get("dialog_channel_id")) or _text(env_meta.get("dialog_channel_id"))
+    if dialog_channel_id:
+        meta["dialog_channel_id"] = dialog_channel_id
     return text.strip(), webspace_id, meta
 
 
 def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
     """
-    Attach a handler to io.input.* subjects on the local event bus and
-    dispatch NLU detection commands for text messages.
+    Attach a handler to Telegram input and dispatch canonical dialog messages.
     """
     ctx = get_ctx()
     bus = bus or ctx.bus
@@ -104,6 +139,21 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
             text, webspace_id, meta = _extract_text_io_input(env)
             if not text:
                 return
+            idempotency_key = _text(meta.get("idempotency_key"))
+            if idempotency_key:
+                receipt = conversation_store.claim_transport_ingress(
+                    idempotency_key=idempotency_key,
+                    transport=_text(meta.get("io_type")) or "chat",
+                    event_id=_text(env.get("event_id")) or None,
+                    payload={"text": text, "webspace_id": webspace_id, "meta": meta},
+                    meta={"source": "chat_io", "policy": "no_automatic_retry"},
+                )
+                if not receipt.get("claimed"):
+                    if receipt.get("conflict"):
+                        _log.error("transport idempotency conflict key=%s", idempotency_key)
+                    else:
+                        _log.info("duplicate transport update suppressed key=%s", idempotency_key)
+                    return
             try:
                 if os.getenv("HUB_TG_DEBUG", "0") == "1" and isinstance(meta, dict) and meta.get("io_type") == "telegram":
                     _log.info(
@@ -121,12 +171,14 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
                 payload["_meta"] = meta
             bus.publish(
                 Event(
-                    type="nlp.intent.detect.request",
-                    source="chat_io",
+                    type="dialog.user_message",
+                    source="chat_io.telegram",
                     ts=evt.ts,
                     payload=payload,
                 )
             )
+            if idempotency_key:
+                conversation_store.mark_transport_ingress_dispatched(idempotency_key)
         except Exception:
             # Best-effort bridge; do not crash on malformed envelopes.
             return

@@ -2157,6 +2157,106 @@ async def test_voice_chat_user_active_dialog_tool_failure_shows_unavailable_with
     dialog_runtime.reset_all()
 
 
+async def test_telegram_addressed_builder_uses_same_dialog_and_projects_reply(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    outputs: list[Event] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "builder-telegram-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                subnet_id="sn-test",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "Builder: выбран проект test05_recipes.",
+            "dialog": {
+                "dialog_channel_id": "builder",
+                "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                "owner": "skill:builder_skill",
+                "default_tool": "builder_skill.chat",
+                "active_agent_id": "agent:builder_skill:builder",
+                "active_agent_label": "Строитель",
+            },
+        }
+
+    monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: SimpleNamespace(run_tool=_run_tool))
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda event: seen_nlu.append(event))
+    bus.subscribe("tg.output.", lambda event: outputs.append(event))
+
+    bus.publish(
+        Event(
+            type="dialog.user_message",
+            source="chat_io.telegram",
+            ts=1.0,
+            payload={
+                "text": "Строитель, покажи текущий проект",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "telegram",
+                    "io_type": "telegram",
+                    "bot_id": "main-bot",
+                    "hub_id": "sn-test",
+                    "chat_id": "42",
+                    "update_id": "100",
+                    "reply_to": 55,
+                    "idempotency_key": "transport:tg:main-bot:42:100",
+                },
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=5.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls and calls[0][0:2] == ("builder_skill", "chat")
+    assert calls[0][2]["text"] == "покажи текущий проект"
+    assert calls[0][2]["_meta"]["route_id"] == "telegram"
+    assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
+    assert len(outputs) == 1
+    assert outputs[0].type == "tg.output.main-bot.chat.42"
+    assert outputs[0].payload["messages"] == [
+        {"type": "text", "text": "Builder: выбран проект test05_recipes."}
+    ]
+    assert outputs[0].payload["options"] == {"reply_to": 55}
+    assert outputs[0].payload["_protocol"]["operation_key"].startswith(
+        "tg-dialog:sn-test:main-bot:42:"
+    )
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None and state.channel_id == "builder"
+    assert state.route_id == "telegram"
+    dialog_runtime.reset_all()
+
+
 async def test_voice_chat_user_active_companion_uses_dev_fallback_when_runtime_tool_missing(
     monkeypatch,
     tmp_path,

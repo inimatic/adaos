@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 from pathlib import Path
 import asyncio
+import hashlib
 import json
 import threading
 import time
@@ -67,6 +68,87 @@ VOICE_CHAT_HISTORY_LIMIT = 200
 VOICE_CHAT_STREAM_TEXT_MAX_CHARS = 1200
 VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = 4096
 VOICE_CHAT_STREAM_ACTIONS_MAX = 6
+
+
+def _dialog_ingress_route_id(meta: Mapping[str, Any] | None, event_kind: str) -> str:
+    metadata = meta if isinstance(meta, Mapping) else {}
+    requested = str(metadata.get("route_id") or metadata.get("route") or "").strip()
+    if str(event_kind or "").strip() == DIALOG_USER_MESSAGE_EVENT and requested:
+        return requested
+    return "voice_chat"
+
+
+def _telegram_text_chunks(text: str, *, limit: int = 3500) -> list[str]:
+    remaining = str(text or "").strip()
+    if not remaining:
+        return []
+    chunks: list[str] = []
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at < limit // 2:
+            split_at = remaining.rfind(" ", 0, limit + 1)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _telegram_output_projection(
+    payload: Mapping[str, Any],
+    meta: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    if str(meta.get("io_type") or "").strip().lower() != "telegram":
+        return None
+    if bool(meta.get("telegram_delivery_handled")):
+        return None
+    if str(payload.get("from") or "hub").strip().lower() in {"user", "human"}:
+        return None
+    chat_id = str(meta.get("chat_id") or "").strip()
+    text = str(payload.get("text") or "").strip()
+    if not chat_id or not text:
+        return None
+    bot_id = str(meta.get("bot_id") or "main-bot").strip() or "main-bot"
+    hub_id = str(meta.get("hub_id") or "").strip()
+    if not hub_id:
+        try:
+            hub_id = str(get_ctx().config.subnet_id or "").strip()
+        except Exception:
+            hub_id = ""
+    messages = [{"type": "text", "text": item} for item in _telegram_text_chunks(text)]
+    options = {"reply_to": meta.get("reply_to")} if meta.get("reply_to") else None
+    correlation = str(
+        payload.get("id")
+        or meta.get("message_id")
+        or meta.get("turn_trace_id")
+        or meta.get("request_id")
+        or meta.get("update_id")
+        or ""
+    ).strip()
+    if not correlation:
+        correlation = hashlib.sha256(
+            f"{chat_id}:{text}:{payload.get('ts') or ''}".encode("utf-8")
+        ).hexdigest()[:24]
+    operation_key = f"tg-dialog:{hub_id or 'hub'}:{bot_id}:{chat_id}:{correlation}"
+    out = {
+        "target": {"bot_id": bot_id, "hub_id": hub_id, "chat_id": chat_id},
+        "messages": messages,
+        "options": options,
+        "_protocol": {
+            "flow_id": "hub_root.integration.telegram",
+            "message_type": "command",
+            "delivery_class": "must_not_lose",
+            "stream_id": f"hub-integration:telegram:{hub_id or 'hub'}:{bot_id}:{chat_id}",
+            "message_id": f"tgmsg:{hashlib.sha256(operation_key.encode('utf-8')).hexdigest()[:24]}",
+            "operation_key": operation_key,
+            "authority_epoch": f"hub:{hub_id or 'unknown'}",
+            "issued_at": time.time(),
+            "ttl_ms": 600_000,
+        },
+    }
+    return f"tg.output.{bot_id}.chat.{chat_id}", out
 
 
 def _builder_transport_integrity_error(
@@ -1714,30 +1796,27 @@ class RouterService:
         is_tg = str(meta.get("io_type") or "").lower() == "telegram"
         chat_id = meta.get("chat_id") if is_tg else None
         is_tg_chat = isinstance(chat_id, str) and bool(chat_id.strip())
+        telegram_delivery_handled = False
 
         # If this came from a chat platform (telegram), reply back into that chat via tg.output.*.
         # This path does not depend on route rules and is meant to be "request/response" style.
         try:
             if is_tg and is_tg_chat and not self._tg_reply_via_root_http:
-                bot_id = meta.get("bot_id")
-                if not isinstance(bot_id, str) or not bot_id.strip():
-                    bot_id = "main-bot"
-                hub_id = meta.get("hub_id")
-                if not isinstance(hub_id, str) or not hub_id.strip():
-                    hub_id = get_ctx().config.subnet_id
-                out_payload = {
-                    "target": {"bot_id": bot_id, "hub_id": hub_id, "chat_id": chat_id.strip()},
-                    "messages": [{"type": "text", "text": text}],
-                    "options": {"reply_to": meta.get("reply_to")} if meta.get("reply_to") else None,
-                }
-                self.bus.publish(
-                    Event(
-                        type=f"tg.output.{bot_id}.chat.{chat_id.strip()}",
-                        source="router",
-                        ts=time.time(),
-                        payload=out_payload,
-                    )
+                projection = _telegram_output_projection(
+                    {"id": payload.get("id"), "from": "hub", "text": text, "ts": payload.get("ts")},
+                    meta,
                 )
+                if projection is not None:
+                    subject, out_payload = projection
+                    self.bus.publish(
+                        Event(
+                            type=subject,
+                            source="router",
+                            ts=time.time(),
+                            payload=out_payload,
+                        )
+                    )
+                    telegram_delivery_handled = True
         except Exception:
             pass
 
@@ -1757,7 +1836,11 @@ class RouterService:
                             "from": "hub",
                             "text": text,
                             "ts": time.time(),
-                            "_meta": {**meta, "route_id": route_id.strip()},
+                            "_meta": {
+                                **meta,
+                                "route_id": route_id.strip(),
+                                "telegram_delivery_handled": telegram_delivery_handled,
+                            },
                         },
                     )
                 )
@@ -4902,6 +4985,24 @@ class RouterService:
             except Exception:
                 pass
 
+            try:
+                projection = _telegram_output_projection(payload, meta)
+                if projection is not None:
+                    subject, out_payload = projection
+                    self.bus.publish(
+                        Event(
+                            type=subject,
+                            source="router.dialog.transport",
+                            ts=time.time(),
+                            payload=out_payload,
+                        )
+                    )
+            except Exception:
+                logging.getLogger("adaos.router").warning(
+                    "router: telegram dialog projection failed",
+                    exc_info=True,
+                )
+
             msg = {
                 "id": str(payload.get("id") or _make_id("m")),
                 "from": str(payload.get("from") or "hub"),
@@ -6304,19 +6405,28 @@ class RouterService:
                 )
             else:
                 text = f"{label} channel selected, but its runtime tool is not available yet."
-            await _append_voice_chat_message(
-                webspace_id,
-                {
-                    "id": _make_id("m"),
-                    "from": "hub",
-                    "text": text,
-                    "ts": time.time(),
-                    "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
-                    "active_agent_label": label or None,
-                    "_meta": dict(meta),
-                },
-                target_node_id,
-            )
+            response = {
+                "id": _make_id("m"),
+                "from": "hub",
+                "text": text,
+                "ts": time.time(),
+                "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
+                "active_agent_label": label or None,
+                "_meta": dict(meta),
+            }
+            await _append_voice_chat_message(webspace_id, response, target_node_id)
+            if str(meta.get("io_type") or "").strip().lower() == "telegram":
+                self.bus.publish(
+                    Event(
+                        type="io.out.chat.append",
+                        source="router.dialog",
+                        ts=time.time(),
+                        payload={
+                            **response,
+                            "_meta": {**dict(meta), "skip_voice_chat": True},
+                        },
+                    )
+                )
 
         async def _on_voice_user(ev: Event) -> None:
             voice_started = time.perf_counter()
@@ -6372,6 +6482,8 @@ class RouterService:
                 meta.setdefault("dialog_event_kind", DIALOG_USER_MESSAGE_EVENT)
                 meta.setdefault("canonical_event_kind", DIALOG_USER_MESSAGE_EVENT)
                 meta.setdefault("input_event_kind", DIALOG_USER_MESSAGE_EVENT)
+            turn_route_id = _dialog_ingress_route_id(meta, event_kind)
+            meta["route_id"] = turn_route_id
             if len(target_webspaces) > 1:
                 meta["webspace_ids"] = list(target_webspaces)
             if target_node_id:
@@ -6420,7 +6532,7 @@ class RouterService:
                     "ts": time.time(),
                     "_meta": {
                         **meta,
-                        "route_id": "voice_chat",
+                        "route_id": turn_route_id,
                         "transport_integrity": "rejected",
                         "transport_integrity_reason": transport_integrity_error,
                     },
@@ -6504,7 +6616,7 @@ class RouterService:
                             "from": msg["from"],
                             "text": msg["text"],
                             "ts": msg["ts"],
-                            "_meta": {**meta, "route_id": "voice_chat", "skip_voice_chat": True},
+                            "_meta": {**meta, "route_id": turn_route_id, "skip_voice_chat": True},
                           },
                       )
                   )
@@ -6592,7 +6704,7 @@ class RouterService:
                                 ts=time.time(),
                                 payload={
                                     **transition_msg,
-                                    "_meta": {**dict(meta), "route_id": "voice_chat"},
+                                    "_meta": {**dict(meta), "route_id": turn_route_id},
                                 },
                             )
                         )
@@ -6672,7 +6784,7 @@ class RouterService:
                     action_meta = {
                         **meta,
                         "webspace_id": ws,
-                        "route_id": "voice_chat",
+                        "route_id": turn_route_id,
                         "dialog_policy_reason": "addressed_agent",
                         "addressed_agent_id": str(agent.get("id") or "").strip(),
                         "dialog_channel_id": channel_id,
@@ -6704,7 +6816,7 @@ class RouterService:
                             active_agent_voice=str(agent.get("voice") or "").strip(),
                             active_agent_icon=str(agent.get("icon") or "").strip(),
                             active_agent_avatar_ref=str(agent.get("avatar_ref") or "").strip() or None,
-                            route_id="voice_chat",
+                            route_id=turn_route_id,
                             bus=self.bus,
                             source="router.voice.addressed_agent",
                         )
@@ -6747,7 +6859,7 @@ class RouterService:
                         dialog_action=dialog_action,
                         webspace_id=ws,
                         meta=action_meta,
-                        route_id="voice_chat",
+                        route_id=turn_route_id,
                         mark_request=False,
                     ):
                         _log_voice_phase(
@@ -6812,8 +6924,8 @@ class RouterService:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,
                     text=text,
-                    route_id="voice_chat",
-                    meta={**meta, "route_id": "voice_chat", "dialog_policy_reason": "active_dialog_followup"},
+                    route_id=turn_route_id,
+                    meta={**meta, "route_id": turn_route_id, "dialog_policy_reason": "active_dialog_followup"},
                 )
             except Exception:
                 dialog_action = None
@@ -6821,8 +6933,8 @@ class RouterService:
             if isinstance(dialog_action, dict) and await _handle_dialog_action(
                 dialog_action=dialog_action,
                 webspace_id=ws,
-                meta={**meta, "route_id": "voice_chat", "dialog_policy_reason": "active_dialog_followup"},
-                route_id="voice_chat",
+                meta={**meta, "route_id": turn_route_id, "dialog_policy_reason": "active_dialog_followup"},
+                route_id=turn_route_id,
                 mark_request=False,
             ):
                 _log_voice_phase("followup_action_handled")
@@ -6880,7 +6992,7 @@ class RouterService:
                             "text": text,
                             "webspace_id": ws,
                             "request_id": meta.get("message_id") or meta.get("id") or _make_id("nlu"),
-                            "_meta": {**meta, "route_id": "voice_chat"},
+                            "_meta": {**meta, "route_id": turn_route_id},
                         },
                     )
                 )
