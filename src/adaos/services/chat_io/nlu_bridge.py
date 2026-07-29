@@ -32,7 +32,12 @@ def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optio
     bridge may include an explicit ``route.webspace_id``; arbitrary message
     text is never parsed as a webspace identifier.
     """
-    payload = env.get("payload") or {}
+    # The primary NATS path wraps ChatInputEvent in an IO envelope. The
+    # fallback HTTP webhook forwards ChatInputEvent directly. Normalize both
+    # representations here so transport failover cannot change dialog
+    # semantics or Unicode handling.
+    direct_input = _text(env.get("type")) == "text" and bool(_text(env.get("source")))
+    payload = env if direct_input else (env.get("payload") or {})
     if not isinstance(payload, Mapping):
         return None, None, {}
     if (payload.get("type") or "").strip() != "text":
@@ -80,14 +85,18 @@ def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optio
             }
         )
 
-    env_meta = env.get("meta") if isinstance(env.get("meta"), Mapping) else {}
+    env_meta = (
+        env.get("meta")
+        if not direct_input and isinstance(env.get("meta"), Mapping)
+        else {}
+    )
     trace_id = _text(env_meta.get("trace_id"))
     if trace_id:
         meta["trace_id"] = trace_id
-    event_id = _text(env.get("event_id"))
+    event_id = _text(env.get("event_id")) or _text(payload.get("event_id"))
     if event_id:
         meta["transport_event_id"] = event_id
-    dedup_key = _text(env.get("dedup_key")) or ":".join(
+    dedup_key = _text(env.get("dedup_key")) or _text(payload.get("dedup_key")) or ":".join(
         value for value in ("telegram", bot_id, chat_id, update_id) if value
     )
     if dedup_key:

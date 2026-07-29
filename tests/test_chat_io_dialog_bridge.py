@@ -126,3 +126,44 @@ async def test_duplicate_telegram_update_is_not_dispatched_again(monkeypatch) ->
 
     assert attempts == 2
     assert len(dialog_events) == 1
+
+
+async def test_raw_http_fallback_input_uses_same_dialog_contract(monkeypatch) -> None:
+    bus = LocalEventBus()
+    dialog_events: list[Event] = []
+    claims: list[dict] = []
+
+    monkeypatch.setattr(
+        nlu_bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(subnet_id="sn-test"), bus=bus),
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "claim_transport_ingress",
+        lambda **kwargs: claims.append(dict(kwargs)) or {"ok": True, "claimed": True},
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "mark_transport_ingress_dispatched",
+        lambda _key: {"status": "dispatched"},
+    )
+    bus.subscribe("dialog.user_message", lambda event: dialog_events.append(event))
+    nlu_bridge.register_chat_nlu_bridge(bus)
+
+    # HTTP /io/bus/tg.input receives ChatInputEvent without an outer envelope.
+    raw_input = _telegram_envelope()["payload"]
+    bus.publish(
+        Event(
+            type="tg.input.sn-test",
+            source="test.http_fallback",
+            ts=2.0,
+            payload=raw_input,
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert len(dialog_events) == 1
+    assert dialog_events[0].payload["text"] == "Строитель, покажи текущий проект"
+    assert dialog_events[0].payload["webspace_id"] == "dev1-dev"
+    assert claims[0]["idempotency_key"] == "transport:telegram:main-bot:42:100"

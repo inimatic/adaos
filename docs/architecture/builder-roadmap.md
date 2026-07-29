@@ -872,8 +872,23 @@ Commands, projections, and Workbench:
 - [x] `[must]` Preserve rich Web project/file search, artifact browsing, diff,
   and spatial Preview behavior. Limited channels receive compact status,
   deterministic actions, and context-preserving deep links.
+- [x] `[must]` Route Telegram text through the same neutral
+  `dialog.user_message` and Builder dialog contract as Web instead of invoking
+  NLU directly. Preserve transport reply metadata and project topic context,
+  then project Builder assistant text back to `tg.output.*`.
+- [x] `[must]` Claim Telegram updates durably before dispatch, suppress exact
+  duplicates, reject idempotency conflicts, and prohibit automatic replay of
+  an uncertain state-changing turn. NATS envelope and HTTP fallback inputs use
+  the same UTF-8 normalization path.
 - [ ] `[should]` Add a declarative rich-view registry with browser
   panel/modal/drawer presentations and compact message/link fallbacks.
+- [ ] `[should]` Render typed deterministic actions as Telegram inline
+  callbacks with generation/precondition checks, and persist per-attempt
+  delivery receipts. Until then Telegram is a text/compact-status control
+  channel and Web owns rich review surfaces.
+- [ ] `[should]` Add an operator-visible transport ingress/recovery inspector
+  for claimed-but-not-dispatched turns. Recovery must issue a new explicit
+  operation instead of replaying the original mutation.
 - [ ] `[should]` Add an explicit Issue split/merge/regroup workbench when
   automatic decomposition is ambiguous.
 
@@ -936,6 +951,15 @@ Autonomy, evidence, and acceptance:
   DEV control-skill and scenario tests pass 58/58, functional-parity reports no
   missing/forbidden contracts, and scenario plus strict probed skill
   validation report no issues.
+- [x] Commit `916b02c6` adds the first transport-independent Telegram Builder
+  slice: neutral dialog ingress, durable no-replay claims, addressed Builder
+  dispatch, and bounded Telegram output projection. A follow-up compatibility
+  patch accepts both NATS envelopes and raw HTTP fallback events. The focused
+  ingress/store/router set passes 70/70 tests; the expanded conversation and
+  Builder regression set passes 166/166. A live read-only DEV
+  `builder_skill:chat` call with the Telegram capability profile resolves the
+  current canonical project without mutating it or delivering an external
+  message.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server

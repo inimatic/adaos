@@ -117,8 +117,11 @@ Implemented today:
   `data.dialog` projection rules. Runtime tables and compatibility bridges may
   still lag the full contract, but generated/runtime code has a stable import
   target.
-- Telegram input is normalized enough to preserve transport reply metadata and
-  enter the NLU pipeline.
+- Telegram text enters the neutral `dialog.user_message` path with preserved
+  reply, bot/chat, language, trace, route, and idempotency metadata. Router
+  resolves the active/addressed conversation before Builder dispatch or NLU
+  fallback, and assistant `io.out.chat.append` output is projected back to the
+  originating Telegram chat.
 
 Important gaps:
 
@@ -1864,8 +1867,9 @@ depth across several phases.
 - [x] `[should]` Keep the browser agent chip sourced from
   `data.dialog.active_agent` and the active channel projection, including
   `builder` and dynamically declared skill-owned channels.
-- [ ] `[should]` Make Telegram inbound messages resolve to conversations before
-  NLU or skill dispatch.
+- [x] `[should]` Make Telegram inbound text resolve to conversations before NLU
+  or skill dispatch. The first slice supports limited text/compact-status
+  projection; rich action keyboards and delivery receipts remain open.
 - [ ] `[should]` Make endpoint audio dialog mode resolve to conversations
   before NLU or skill dispatch.
 - [ ] `[should]` Record delivery status per transport attempt.

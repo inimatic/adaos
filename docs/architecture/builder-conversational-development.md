@@ -221,6 +221,27 @@ same project, Change, and focus.
 Future miniapps can render selected rich views without changing the command or
 Change contracts.
 
+The first limited-channel slice uses one dialog contract for Web and Telegram:
+
+- Telegram text is normalized to `dialog.user_message`; the transport does not
+  call Builder or NLU directly;
+- Router resolves the active/addressed dialog and passes transport metadata in
+  `_meta` while the project topic remains the canonical development context;
+- Builder replies use `io.out.chat.append`; Router projects assistant text back
+  to the originating Telegram bot/chat and preserves `reply_to`;
+- each inbound Telegram update is claimed in the node conversation store before
+  dispatch. A duplicate is suppressed and a reused key with different content
+  is rejected. An uncertain interrupted turn is never replayed automatically;
+  the user deliberately sends a new message;
+- envelope-based NATS delivery and the raw HTTP fallback share the same UTF-8
+  normalization and idempotency contract.
+
+This does not make the transport the owner of project focus. An explicit,
+trusted route may carry a Webspace id for diagnostics, but ordinary Telegram
+use follows the same Builder project topic after the user selects or names the
+project. Preview materialization remains local to the relevant Builder host, so
+a Telegram turn cannot silently replace the scenario shown in another host.
+
 ## Builder Workbench Projection
 
 The default Web Workbench is conversation-first:
