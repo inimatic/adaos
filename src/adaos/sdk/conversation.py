@@ -300,6 +300,70 @@ def list_development_changes(
     )
 
 
+def upsert_development_run(
+    *,
+    run_id: str,
+    change_id: str,
+    conversation_id: str,
+    activity: str,
+    executor: str,
+    status: str = "queued",
+    thread_id: str | None = None,
+    topic_id: str | None = None,
+    context_packet_digest: str | None = None,
+    environment_ref: str | None = None,
+    input_refs: Sequence[str] | None = None,
+    output_refs: Sequence[str] | None = None,
+    evidence_refs: Sequence[str] | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any] | None:
+    """Create or advance one Builder Run linked to a canonical Change."""
+
+    return conversation_store.upsert_development_run(
+        run_id=run_id,
+        change_id=change_id,
+        conversation_id=conversation_id,
+        activity=activity,
+        executor=executor,
+        status=status,
+        thread_id=thread_id,
+        topic_id=topic_id,
+        context_packet_digest=context_packet_digest,
+        environment_ref=environment_ref,
+        input_refs=input_refs,
+        output_refs=output_refs,
+        evidence_refs=evidence_refs,
+        started_at=started_at,
+        completed_at=completed_at,
+        error=error,
+    )
+
+
+def get_development_run(run_id: str) -> dict[str, Any] | None:
+    """Return one strict `adaos.builder.run.v1` projection."""
+
+    return conversation_store.get_development_run(run_id)
+
+
+def list_development_runs(
+    *,
+    change_id: str | None = None,
+    conversation_id: str | None = None,
+    topic_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List bounded Builder Runs without synthesizing extra Changes."""
+
+    return conversation_store.list_development_runs(
+        change_id=change_id,
+        conversation_id=conversation_id,
+        topic_id=topic_id,
+        limit=limit,
+    )
+
+
 def classify_action_risk(action: Mapping[str, Any] | str | None) -> dict[str, Any]:
     """Classify one proposed action through the conversation safety policy."""
 
@@ -318,9 +382,12 @@ __all__ = [
     "export",
     "get",
     "get_development_change",
+    "get_development_run",
     "list_development_changes",
+    "list_development_runs",
     "open",
     "redact",
     "start_thread",
     "upsert_development_change",
+    "upsert_development_run",
 ]

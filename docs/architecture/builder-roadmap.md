@@ -834,10 +834,12 @@ Canonical model and context:
 - [x] `[must]` Migrate the existing persisted `change_set` to one canonical
   `change` projection. `change_set_id` remains a compatibility alias of
   `change_id`; divergent identities are rejected.
-- [ ] `[must]` Reclassify per-turn
+- [x] `[must]` Reclassify per-turn
   `adaos.conversation.development_change.v1` evidence as Runs linked to one
   Change. A follow-up turn extends the Change and creates a new Run, not a
-  second product-level Change.
+  second product-level Change. The node ledger persists strict Builder Runs;
+  release-pipeline evidence ids remain an explicitly labelled compatibility
+  projection until all candidate consumers migrate.
 - [x] `[must]` Construct a bounded, stable-digested
   `adaos.builder.context_packet.v1` from Change, acceptance, exact base,
   selected Prototype, retained Implementation, dependencies, permissions,
@@ -960,6 +962,13 @@ Autonomy, evidence, and acceptance:
   `builder_skill:chat` call with the Telegram capability profile resolves the
   current canonical project without mutating it or delivering an external
   message.
+- [x] The canonical execution ledger now persists strict
+  `adaos.builder.run.v1` records with immutable `run_id -> change_id` binding,
+  terminal-state protection, context digest, environment, input/output, and
+  evidence refs. DEV control skill `0.1.53` mirrors successful compatibility
+  checkpoint/publication evidence into the Run ledger and is checkpointed in
+  Forge at `46d504eb514c976193df0f3df8d7128b2486a78e`; focused workflow/store and
+  control-skill regressions pass 51/51 and 44/44 respectively.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server

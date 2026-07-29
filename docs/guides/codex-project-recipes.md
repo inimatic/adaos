@@ -128,6 +128,19 @@ npm run build
 
 ## Workspace Skills
 
+First identify the source plane. A project under
+`.adaos/dev/<node>/skills/<name>` is a DEV/Forge artifact and must be
+checkpointed with:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev skill push <name> -m "message"
+```
+
+Do not substitute `adaos skill push`: that command writes the stable
+`.adaos/workspace` registry checkout and can create an unintended Publication
+commit. The corresponding distinction for scenarios is `adaos dev scenario
+push` versus `adaos scenario push`.
+
 Workspace skills are runtime artifacts, not plain source folders. Do not rely on
 `git push` alone to make a workspace skill available to the local runtime.
 

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from uuid import uuid4
+
+import pytest
+from jsonschema import Draft202012Validator
 
 from adaos.services.agent_context import get_ctx
 from adaos.services import conversation_context, conversation_store
@@ -134,6 +139,79 @@ def test_conversation_store_merges_legacy_builder_conversation_and_tracks_change
         artifact_kind="scenario",
         artifact_id=suffix,
     )[0]["commit_refs"] == [{"commit": "abc123"}]
+
+
+def test_conversation_store_links_runs_to_one_canonical_change() -> None:
+    suffix = uuid4().hex[:10]
+    conversation_id = f"conv.builder.runs.{suffix}"
+    change_id = f"CH-{suffix}"
+    run_id = f"RUN-{suffix}"
+    topic_id = f"prompt-project:scenario:{suffix}"
+    conversation_store.upsert_development_change(
+        change_id=change_id,
+        conversation_id=conversation_id,
+        thread_id=topic_id,
+        topic_id=topic_id,
+        status="active",
+        artifact_refs=[{"kind": "scenario", "id": suffix}],
+        summary="Add recipe search",
+    )
+
+    queued = conversation_store.upsert_development_run(
+        run_id=run_id,
+        change_id=change_id,
+        conversation_id=conversation_id,
+        thread_id=topic_id,
+        topic_id=topic_id,
+        activity="prototype.generate",
+        executor="builder.llm",
+        status="queued",
+        context_packet_digest=f"sha256:{'a' * 64}",
+        input_refs=["message:1"],
+        started_at="2026-07-29T12:00:00+00:00",
+    )
+    completed = conversation_store.upsert_development_run(
+        run_id=run_id,
+        change_id=change_id,
+        conversation_id=conversation_id,
+        activity="prototype.generate",
+        executor="builder.llm",
+        status="succeeded",
+        output_refs=["prototype:001"],
+        evidence_refs=["evaluation:layout"],
+        completed_at="2026-07-29T12:01:00+00:00",
+    )
+
+    assert queued and queued["schema"] == "adaos.builder.run.v1"
+    assert completed and completed["change_id"] == change_id
+    assert completed["run_id"] == run_id
+    assert completed["status"] == "succeeded"
+    assert completed["input_refs"] == ["message:1"]
+    assert completed["output_refs"] == ["prototype:001"]
+    assert completed["evidence_refs"] == ["evaluation:layout"]
+    assert conversation_store.get_development_run(run_id) == completed
+    assert conversation_store.list_development_runs(change_id=change_id) == [completed]
+    assert len(conversation_store.list_development_changes(topic_id=topic_id)) == 1
+    run_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "adaos"
+            / "abi"
+            / "builder.run.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    Draft202012Validator(run_schema).validate(completed)
+
+    with pytest.raises(ValueError, match="terminal Builder Run"):
+        conversation_store.upsert_development_run(
+            run_id=run_id,
+            change_id=change_id,
+            conversation_id=conversation_id,
+            activity="prototype.generate",
+            executor="builder.llm",
+            status="running",
+        )
 
 
 def test_conversation_store_keeps_agent_registry_and_memory() -> None:

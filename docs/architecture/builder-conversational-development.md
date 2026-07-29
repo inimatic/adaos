@@ -119,9 +119,13 @@ A `Run` is one attempt by an LLM, Codex, deterministic transformer, evaluator,
 or recovery operation. It answers **who or what attempted the work, with which
 inputs, and what happened**.
 
-The current per-turn `adaos.conversation.development_change.v1` aggregate is a
-compatibility predecessor of Run. It must be linked to one canonical Change
-instead of being presented as another Change.
+The per-turn `adaos.conversation.development_change.v1` aggregate is a
+compatibility predecessor of Run. The node ledger now stores strict
+`adaos.builder.run.v1` records under one existing canonical Change. During the
+release-pipeline migration, an old checkpoint/publication evidence id may
+remain as a compatibility record, but it is explicitly labelled with
+`canonical_change_id`, `run_id`, and `evidence_role=builder_run_compatibility`;
+the Process projection must not present it as another product Change.
 
 Minimum fields:
 

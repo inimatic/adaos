@@ -305,6 +305,36 @@ _SCHEMA = (
     CREATE INDEX IF NOT EXISTS idx_conversation_development_changes_conversation
     ON conversation_development_changes(conversation_id, thread_id, updated_at);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_development_runs (
+        run_id TEXT PRIMARY KEY,
+        change_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        thread_id TEXT,
+        topic_id TEXT,
+        activity TEXT NOT NULL,
+        executor TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        context_packet_digest TEXT,
+        environment_ref TEXT,
+        input_refs_json TEXT NOT NULL DEFAULT '[]',
+        output_refs_json TEXT NOT NULL DEFAULT '[]',
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        started_at TEXT,
+        completed_at TEXT,
+        error TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_development_runs_change
+    ON conversation_development_runs(change_id, updated_at);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_development_runs_topic
+    ON conversation_development_runs(conversation_id, topic_id, updated_at);
+    """,
 )
 
 
@@ -431,13 +461,15 @@ def ensure_schema(sql: Any | None = None) -> bool:
                     SELECT name FROM sqlite_master
                     WHERE type='table' AND name IN (
                         'conversation_segment_summary_jobs',
-                        'conversation_transport_ingress'
+                        'conversation_transport_ingress',
+                        'conversation_development_runs'
                     )
                     """
                 ).fetchall()
             if {str(row[0]) for row in rows} == {
                 "conversation_segment_summary_jobs",
                 "conversation_transport_ingress",
+                "conversation_development_runs",
             }:
                 return True
         except sqlite3.Error:
@@ -1399,6 +1431,7 @@ def merge_conversations(*, source_conversation_id: str, target_conversation_id: 
             con.execute("UPDATE conversation_segment_summary_jobs SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
             con.execute("UPDATE conversation_audit_events SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
             con.execute("UPDATE conversation_development_changes SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
+            con.execute("UPDATE conversation_development_runs SET conversation_id=? WHERE conversation_id=?", (target_id, source_id))
             source_meta = _json_load(source["meta_json"], {})
             source_meta = dict(source_meta) if isinstance(source_meta, Mapping) else {}
             source_meta.update({"merged_into": target_id, "merged_at": time.time()})
@@ -1734,6 +1767,214 @@ def list_development_changes(
             )
         ]
     return changes
+
+
+_DEVELOPMENT_RUN_STATES = {
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "superseded",
+}
+
+
+def _row_to_development_run(row: sqlite3.Row) -> dict[str, Any]:
+    """Project the durable record through the strict Builder Run ABI."""
+
+    return {
+        "schema": "adaos.builder.run.v1",
+        "run_id": row["run_id"],
+        "change_id": row["change_id"],
+        "activity": row["activity"],
+        "executor": row["executor"],
+        "status": row["status"],
+        "context_packet_digest": row["context_packet_digest"],
+        "environment_ref": row["environment_ref"],
+        "input_refs": _json_load(row["input_refs_json"], []),
+        "output_refs": _json_load(row["output_refs_json"], []),
+        "evidence_refs": _json_load(row["evidence_refs_json"], []),
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+        "error": row["error"],
+    }
+
+
+def upsert_development_run(
+    *,
+    run_id: str,
+    change_id: str,
+    conversation_id: str,
+    activity: str,
+    executor: str,
+    status: str = "queued",
+    thread_id: str | None = None,
+    topic_id: str | None = None,
+    context_packet_digest: str | None = None,
+    environment_ref: str | None = None,
+    input_refs: Sequence[str] | None = None,
+    output_refs: Sequence[str] | None = None,
+    evidence_refs: Sequence[str] | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    error: str | None = None,
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    """Create or advance one execution Run linked to a stable product Change.
+
+    A repeated ``run_id`` updates the same Run. It can never be rebound to a
+    different Change or conversation, which prevents a retry/reconnect from
+    manufacturing a second product-level Change.
+    """
+
+    if not ensure_schema():
+        return None
+    rid = str(run_id or "").strip()
+    cid = str(change_id or "").strip()
+    conversation = str(conversation_id or "").strip()
+    selected_activity = str(activity or "").strip()
+    selected_executor = str(executor or "").strip()
+    selected_status = str(status or "queued").strip().lower()
+    if not rid or not cid or not conversation or not selected_activity or not selected_executor:
+        raise ValueError("run_id, change_id, conversation_id, activity, and executor are required")
+    if selected_status not in _DEVELOPMENT_RUN_STATES:
+        raise ValueError(f"invalid Builder Run status: {selected_status}")
+    digest = str(context_packet_digest or "").strip() or None
+    if digest and (
+        not digest.startswith("sha256:")
+        or len(digest) != 71
+        or any(char not in "0123456789abcdef" for char in digest[7:])
+    ):
+        raise ValueError("context_packet_digest must use sha256:<64 hex> format")
+    now = float(ts or time.time())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        parent = con.execute(
+            "SELECT conversation_id FROM conversation_development_changes WHERE change_id=?",
+            (cid,),
+        ).fetchone()
+        if parent is None:
+            raise ValueError("Builder Run requires an existing canonical Change")
+        if str(parent["conversation_id"]) != conversation:
+            raise ValueError("Builder Run conversation does not match its canonical Change")
+        existing = con.execute(
+            "SELECT * FROM conversation_development_runs WHERE run_id=?",
+            (rid,),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["change_id"]) != cid:
+                raise ValueError("run_id is already linked to a different Change")
+            if str(existing["conversation_id"]) != conversation:
+                raise ValueError("run_id is already linked to a different conversation")
+            prior_status = str(existing["status"] or "queued").strip().lower()
+            if prior_status in {"succeeded", "failed", "cancelled", "superseded"} and selected_status != prior_status:
+                raise ValueError("a terminal Builder Run cannot transition to a different status")
+
+        def _refs(column: str, incoming: Sequence[str] | None) -> list[str]:
+            if incoming is None and existing is not None:
+                return [
+                    str(item).strip()
+                    for item in _json_load(existing[column], [])
+                    if str(item).strip()
+                ][-100:]
+            return list(dict.fromkeys(str(item).strip() for item in incoming or [] if str(item).strip()))[-100:]
+
+        con.execute(
+            """
+            INSERT INTO conversation_development_runs(
+                run_id, change_id, conversation_id, thread_id, topic_id,
+                activity, executor, status, context_packet_digest,
+                environment_ref, input_refs_json, output_refs_json,
+                evidence_refs_json, started_at, completed_at, error,
+                created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                thread_id=COALESCE(excluded.thread_id, conversation_development_runs.thread_id),
+                topic_id=COALESCE(excluded.topic_id, conversation_development_runs.topic_id),
+                activity=excluded.activity,
+                executor=excluded.executor,
+                status=excluded.status,
+                context_packet_digest=COALESCE(excluded.context_packet_digest, conversation_development_runs.context_packet_digest),
+                environment_ref=COALESCE(excluded.environment_ref, conversation_development_runs.environment_ref),
+                input_refs_json=excluded.input_refs_json,
+                output_refs_json=excluded.output_refs_json,
+                evidence_refs_json=excluded.evidence_refs_json,
+                started_at=COALESCE(conversation_development_runs.started_at, excluded.started_at),
+                completed_at=COALESCE(excluded.completed_at, conversation_development_runs.completed_at),
+                error=COALESCE(excluded.error, conversation_development_runs.error),
+                updated_at=excluded.updated_at
+            """,
+            (
+                rid,
+                cid,
+                conversation,
+                str(thread_id or "").strip() or None,
+                str(topic_id or "").strip() or None,
+                selected_activity,
+                selected_executor,
+                selected_status,
+                digest,
+                str(environment_ref or "").strip() or None,
+                _json_dump(_refs("input_refs_json", input_refs)),
+                _json_dump(_refs("output_refs_json", output_refs)),
+                _json_dump(_refs("evidence_refs_json", evidence_refs)),
+                str(started_at or "").strip() or None,
+                str(completed_at or "").strip() or None,
+                str(error or "").strip() or None,
+                float(existing["created_at"]) if existing is not None else now,
+                now,
+            ),
+        )
+        con.commit()
+        row = con.execute(
+            "SELECT * FROM conversation_development_runs WHERE run_id=?",
+            (rid,),
+        ).fetchone()
+    return _row_to_development_run(row) if row else None
+
+
+def get_development_run(run_id: str) -> dict[str, Any] | None:
+    token = str(run_id or "").strip()
+    if not token or not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM conversation_development_runs WHERE run_id=?",
+            (token,),
+        ).fetchone()
+    return _row_to_development_run(row) if row else None
+
+
+def list_development_runs(
+    *,
+    change_id: str | None = None,
+    conversation_id: str | None = None,
+    topic_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    where: list[str] = []
+    params: list[Any] = []
+    for column, value in (
+        ("change_id", change_id),
+        ("conversation_id", conversation_id),
+        ("topic_id", topic_id),
+    ):
+        token = str(value or "").strip()
+        if token:
+            where.append(f"{column}=?")
+            params.append(token)
+    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"SELECT * FROM conversation_development_runs {sql_where} ORDER BY updated_at DESC LIMIT ?",
+            [*params, safe_limit],
+        ).fetchall()
+    return [_row_to_development_run(row) for row in rows]
 
 
 def upsert_dialog_channel(
