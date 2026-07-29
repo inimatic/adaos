@@ -33,7 +33,10 @@
     "technical-spec-editor",
     "technical-spec-actions",
     "technical-spec-addenda",
-    "context-side-state"
+    "context-side-state",
+    "interaction-status",
+    "context-actions",
+    "change-summary"
   ],
   "required_modal_ids": [
     "automation",
@@ -46,7 +49,8 @@
     "preview-qr",
     "project-picker",
     "publication",
-    "technical-addendum"
+    "technical-addendum",
+    "process"
   ],
   "required_bindings": [
     "builder_sdk_control_skill.append_prompt_addendum",
@@ -82,7 +86,11 @@
     "stream:voice_chat.messages"
   ],
   "forward_required_bindings": [
-    "builder_sdk_control_skill.list_projects"
+    "builder_sdk_control_skill.list_projects",
+    "builder_sdk_control_skill.get_interaction_frame",
+    "builder_sdk_control_skill.get_change_set",
+    "builder_sdk_control_skill.get_process_tree",
+    "builder_sdk_control_skill.inspect_process_ref"
   ],
   "required_lifecycle_buttons": [
     "show-preview",
