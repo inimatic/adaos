@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import yaml
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.builder.action_contracts import build_builder_action
 from adaos.services.runtime_paths import current_state_dir
 
 
@@ -566,15 +567,15 @@ class BuilderWorkflowService:
             fallback: str = "compact_action",
         ) -> None:
             actions.append(
-                {
-                    "command": command,
-                    "label": label,
-                    "risk": risk,
-                    "expected_generation": generation,
-                    "target_ref": target_ref,
-                    "presentation": presentation,
-                    "fallback": fallback,
-                }
+                build_builder_action(
+                    command,
+                    label,
+                    risk,
+                    expected_generation=generation,
+                    target_ref=target_ref,
+                    presentation=presentation,
+                    fallback=fallback,
+                )
             )
 
         add_action(

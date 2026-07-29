@@ -358,6 +358,15 @@ Risk is computed by deterministic policy from the command, target, permissions,
 data mode, and environment. Model confidence may contribute rationale but is
 not authorization or verification.
 
+Every projected action embeds `adaos.builder.action_risk.v1`. The policy turns
+the risk class into explicit side-effect scope and confirmation, approval,
+isolation, rollback, and limited-channel admission requirements. `read` may be
+an immediate callback; `local_reversible` additionally requires a fresh
+generation/precondition; isolated writes and Trial require confirmation; and
+Workspace activation, Publication, and destructive operations require the rich
+review path. Web and Telegram therefore consume one decision contract instead
+of maintaining separate button allowlists.
+
 ## Execution, Evidence, And Provenance
 
 The orchestration brain and execution hands are separate:

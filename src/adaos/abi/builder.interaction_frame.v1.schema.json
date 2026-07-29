@@ -19,6 +19,7 @@
           "command": { "type": "string", "minLength": 1, "maxLength": 160 },
           "label": { "type": "string", "minLength": 1, "maxLength": 160 },
           "risk": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+          "risk_policy": { "$ref": "#/$defs/actionRisk" },
           "expected_generation": { "type": "integer", "minimum": 0 },
           "target_ref": { "type": ["string", "null"], "maxLength": 300 },
           "presentation": { "type": ["string", "null"], "maxLength": 80 },
@@ -29,6 +30,32 @@
     },
     "views": { "type": "array", "maxItems": 30, "items": { "type": "object", "required": ["kind"], "additionalProperties": true } },
     "generation": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "actionRisk": {
+      "type": "object",
+      "required": [
+        "schema",
+        "risk_class",
+        "side_effect_scope",
+        "confirmation_required",
+        "approval_required",
+        "isolation_required",
+        "rollback_required",
+        "inline_callback"
+      ],
+      "properties": {
+        "schema": { "const": "adaos.builder.action_risk.v1" },
+        "risk_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+        "side_effect_scope": { "enum": ["none", "dev_local", "dev_isolated", "trial", "workspace", "registry", "destructive"] },
+        "confirmation_required": { "type": "boolean" },
+        "approval_required": { "type": "boolean" },
+        "isolation_required": { "type": "boolean" },
+        "rollback_required": { "type": "boolean" },
+        "inline_callback": { "enum": ["allowed", "allowed_with_precondition", "confirm", "rich_review_required"] }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

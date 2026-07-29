@@ -917,10 +917,12 @@ Semantic changes and Review:
 
 Autonomy, evidence, and acceptance:
 
-- [ ] `[must]` Apply a common risk vocabulary to inspect, reversible local
+- [x] `[must]` Apply a common risk vocabulary to inspect, reversible local
   edit, isolated DEV write, Trial activation, Workspace activation,
   Publication, and destructive commands. Model confidence is rationale, not
-  authorization.
+  authorization. `adaos.builder.action_risk.v1` now projects side-effect,
+  confirmation, approval, isolation, rollback, and limited-channel admission
+  policy into every Interaction Frame action; unknown classes fail closed.
 - [ ] `[must]` Preserve exact base digest, actor, environment, executor,
   allowed paths, semantic/source changes, commits, tests, Trial, Release, and
   activation evidence across the Change trace.
@@ -980,6 +982,11 @@ Autonomy, evidence, and acceptance:
   through Forge checkpoint, candidate evidence, Trial decisions, and
   Publication transitions; it passes 44/44 tests and is checkpointed at
   `3733639fe5fcd259627f5efe72d7bf102883dad4`.
+- [x] Builder Interaction Frames now carry the shared versioned
+  `adaos.builder.action_risk.v1` policy. It separates immediate read callbacks,
+  generation-guarded reversible DEV commands, confirmed isolated/Trial work,
+  and Web-reviewed Workspace/Publication/destructive operations. Contract and
+  workflow regressions pass 35/35.
 - [x] A freshly started API process from the current checkout materializes
   `prototype:builder:056` into `dev1-dev` and atomically records the independent
   Preview context (`interaction_updated=true`). The normal local DEV server

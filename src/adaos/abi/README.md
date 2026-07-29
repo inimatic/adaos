@@ -21,6 +21,9 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   evaluator, or recovery attempt linked to a Change
 - `builder.context_packet.v1.schema.json` - bounded, stable-digested execution
   context assembled from refs instead of an unbounded transcript
+- `builder.action_risk.v1.schema.json` - deterministic side-effect,
+  confirmation, approval, isolation, rollback, and limited-channel policy for
+  one Builder command risk class
 - `builder.interaction_frame.v1.schema.json` - chat-first message, context,
   risk-aware actions, and rich-view projection
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation

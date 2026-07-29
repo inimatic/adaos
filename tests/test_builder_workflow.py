@@ -148,6 +148,10 @@ def test_interaction_frame_projects_risk_actions_and_independent_context(
     assert frame["context"]["preview_target"] == "prototype:recipes:001"
     assert all(item["expected_generation"] == frame["generation"] for item in frame["actions"])
     assert {item["risk"] for item in frame["actions"]} >= {"read", "local_reversible", "isolated_write"}
+    assert all(item["risk_policy"]["risk_class"] == item["risk"] for item in frame["actions"])
+    assert next(
+        item for item in frame["actions"] if item["command"] == "builder.prototype.approve"
+    )["risk_policy"]["inline_callback"] == "confirm"
 
 
 def test_interaction_context_rejects_stale_generation_without_mutation(
