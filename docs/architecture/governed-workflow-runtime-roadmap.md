@@ -400,21 +400,29 @@ tests cover all legal and representative illegal paths.
   is generation-guarded, leaves UI Revision unchanged, requires confirmation
   for sandbox/live-readonly, forbids live mutation in Prototype, and blocks
   Automation handoff for declared missing mappings.
-- [ ] `[must]` `GWR4-16` Complete the Review lifecycle with submit, withdraw,
+- [x] `[must]` `GWR4-16` Complete the Review lifecycle with submit, withdraw,
   dismiss, convert-to-Issue, accept-as-constraint, supersede, and resolve
-  commands; hard deletion remains limited to unsent local drafts.
-- [ ] `[must]` `GWR4-17` Define context-facet requirements and a packet coverage
+  commands; hard deletion remains limited to unsent local drafts. Withdrawn
+  records retain a minimal tombstone but leave future model context; accepted
+  constraints require an explicit reason plus replacement or waiver to be
+  superseded.
+- [x] `[must]` `GWR4-17` Define context-facet requirements and a packet coverage
   report that fails before LLM/Codex submission when target structure, ABI,
   constraints, data policy, or execution authority is missing or ambiguous.
+  Automation now enforces the declared facet set; spatial work is resolved by
+  stable semantic refs with parent/sibling/order/responsive fragments and
+  fails before executor submission when a target is missing or ambiguous.
 - [x] `[must]` `GWR4-18` Publish `adaos.builder.project.v1` as a portfolio and
   coordination aggregate with source/stable/installed/DEV/candidate refs,
   project policy, component boundary, open Changes, conflict/dependency index,
   scoped focus, workflow versions, and archive state. The aggregate contains
   reference-only Change summaries while a bounded compatibility portfolio
   preserves old single-Change projections during migration.
-- [ ] `[must]` `GWR4-19` Derive project summary and commands from its linked
+- [x] `[must]` `GWR4-19` Derive project summary and commands from its linked
   planes; never infer one global project stage from the focused Change or most
-  recent Run.
+  recent Run. The summary reports portfolio counts, active/unknown mutations,
+  conflict/stale sets, scoped focus, and Project commands without a synthetic
+  project lifecycle stage.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 

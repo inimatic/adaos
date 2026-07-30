@@ -113,6 +113,10 @@ def test_conflict_index_and_mutation_admission_fail_closed(service: BuilderWorkf
             "kind": "direct",
         }
     ]
+    summary = second["project_summary"]
+    assert summary["open_change_count"] == 2
+    assert summary["conflict_count"] == 1
+    assert "stage" not in summary
     active = begin_mutation(
         project,
         "CH-label",

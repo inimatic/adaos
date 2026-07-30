@@ -131,3 +131,84 @@ def test_review_constraint_requires_structured_supported_intent() -> None:
             expected=True,
             source_revision="001",
         )
+
+
+def test_submitted_review_withdrawal_keeps_tombstone_but_leaves_model_context(
+    review_project: tuple[BuilderReviewService, BuilderWorkflowService, Path],
+) -> None:
+    service, workflow, _root = review_project
+    submitted = service.submit(_review_anchor())
+    assert submitted["review"]["status"] == "submitted"
+    packet = workflow.build_context_packet("scenario", "recipes")
+    assert packet["budget"]["active_review_count"] == 1
+
+    withdrawn = service.withdraw(
+        "scenario", "recipes", "review.recipe-name", reason="The comment targeted the wrong field."
+    )
+    assert withdrawn["review"]["status"] == "withdrawn"
+    assert withdrawn["review"]["tombstone"] is True
+    assert withdrawn["review"]["comment"] == "[withdrawn]"
+    packet = workflow.build_context_packet("scenario", "recipes")
+    assert packet["change"]["reviews"] == []
+    assert packet["budget"]["active_review_count"] == 0
+    with pytest.raises(BuilderWorkflowError, match="cannot be deleted"):
+        service.delete("scenario", "recipes", "review.recipe-name")
+
+
+def test_review_acceptance_and_supersession_are_explicit_and_auditable(
+    review_project: tuple[BuilderReviewService, BuilderWorkflowService, Path],
+) -> None:
+    service, workflow, _root = review_project
+    service.submit(_review_anchor())
+    accepted = service.accept_as_constraint(
+        "scenario",
+        "recipes",
+        "review.recipe-name",
+        kind="label_equals",
+        expected="Recipe name",
+        source_revision="001",
+    )
+    assert accepted["review"]["status"] == "accepted_as_constraint"
+    constraint_id = accepted["constraint"]["constraint_id"]
+
+    with pytest.raises(BuilderWorkflowError, match="reason and replacement or waiver"):
+        service.supersede(
+            "scenario", "recipes", "review.recipe-name", reason="No longer required."
+        )
+    superseded = service.supersede(
+        "scenario",
+        "recipes",
+        "review.recipe-name",
+        reason="The field was replaced by a unified selector.",
+        waiver=True,
+    )
+    assert superseded["review"]["status"] == "superseded"
+    constraint = next(
+        item
+        for item in workflow.describe("scenario", "recipes")["change"]["acceptance_constraints"]
+        if item["constraint_id"] == constraint_id
+    )
+    assert constraint["status"] == "superseded"
+    assert constraint["superseded_reason"] == "The field was replaced by a unified selector."
+
+
+def test_submitted_review_can_be_converted_to_issue(
+    review_project: tuple[BuilderReviewService, BuilderWorkflowService, Path],
+) -> None:
+    service, workflow, _root = review_project
+    service.submit(_review_anchor())
+    converted = service.convert_to_issue(
+        "scenario",
+        "recipes",
+        "review.recipe-name",
+        issue={
+            "issue_id": "review-label-followup",
+            "title": "Clarify the recipe label",
+            "lane": "prototype",
+            "semantic_refs": ["field:recipe-form:recipe-name"],
+            "acceptance_criteria": ["The label is unambiguous."],
+        },
+    )
+    assert converted["review"]["status"] == "converted_to_issue"
+    change = workflow.describe("scenario", "recipes")["change"]
+    assert any(item["issue_id"] == "review-label-followup" for item in change["issues"])

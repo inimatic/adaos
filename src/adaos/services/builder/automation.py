@@ -1408,6 +1408,21 @@ class BuilderAutomationService:
             if isinstance(workflow_state.get("change_set"), Mapping)
             else {}
         )
+        semantic_refs = [
+            str(ref).strip()
+            for issue in change_set.get("issues") or []
+            if isinstance(issue, Mapping)
+            for ref in issue.get("semantic_refs") or []
+            if str(ref).strip()
+        ]
+        required_context_facets = ["data_policy", "execution_authority"]
+        if semantic_refs:
+            required_context_facets = [
+                "target_structure",
+                "abi",
+                "constraints",
+                *required_context_facets,
+            ]
         context_packet = workflow_service.build_context_packet(
             kind,
             project_id,
@@ -1419,6 +1434,9 @@ class BuilderAutomationService:
                 str(session.get("brief_path") or "").strip(),
                 str(session.get("topic_id") or "").strip(),
             ],
+            run_purpose=str(session.get("run_purpose") or "iteration"),
+            required_facets=required_context_facets,
+            enforce_context_coverage=True,
             persist=True,
         )
         packet_change = (

@@ -19,6 +19,7 @@ _PORTFOLIO_FIELDS = (
     "context_packet",
     "governed",
     "pending_transition",
+    "reviews",
 )
 
 

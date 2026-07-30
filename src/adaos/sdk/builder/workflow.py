@@ -51,6 +51,9 @@ def build_context_packet(
     instruction_refs: list[str] | tuple[str, ...] | None = None,
     conversation_context: Mapping[str, Any] | None = None,
     pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+    run_purpose: str = "iteration",
+    required_facets: list[str] | tuple[str, ...] | None = None,
+    enforce_context_coverage: bool = False,
     persist: bool = False,
 ) -> dict[str, Any]:
     return dict(
@@ -61,6 +64,9 @@ def build_context_packet(
             instruction_refs=instruction_refs,
             conversation_context=conversation_context,
             pending_action_refs=pending_action_refs,
+            run_purpose=run_purpose,
+            required_facets=required_facets,
+            enforce_context_coverage=enforce_context_coverage,
             persist=persist,
         )
     )

@@ -16,6 +16,20 @@
     "previous_run": { "type": ["object", "null"] },
     "conversation": { "type": ["object", "null"], "additionalProperties": true },
     "pending_actions": { "type": "array", "maxItems": 30, "items": { "type": "object", "required": ["id"], "additionalProperties": true } },
+    "run": { "type": "object", "required": ["purpose"], "additionalProperties": true },
+    "facets": { "type": "object", "additionalProperties": true },
+    "coverage": {
+      "type": "object",
+      "required": ["required", "present", "missing", "ambiguous", "ready"],
+      "properties": {
+        "required": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "present": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "missing": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "ambiguous": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "ready": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "budget": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "built_at": { "type": "string", "format": "date-time" }

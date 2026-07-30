@@ -913,11 +913,13 @@ Canonical model and context:
 - [x] `[should]` Add a context-packet inspector that shows included refs,
   omitted categories, budgets, digest, and construction diagnostics without
   exposing secrets or copying full transcripts.
-- [ ] `[must]` Add per-Run required context facets and a machine-readable
+- [x] `[must]` Add per-Run required context facets and a machine-readable
   coverage report. For spatial UI work include target parent/siblings/order,
   responsive constraints, complete referenced ABI definitions, current data
   bindings, and active acceptance constraints; fail before model submission
-  when a required facet is absent or ambiguous.
+  when a required facet is absent or ambiguous. Context packets now retain Run
+  purpose, semantic target structure, ABI digest/retrieval ref, constraints,
+  data policy, execution authority, and an enforceable coverage report.
 - [x] `[must]` Permit several open Changes per project while binding one focused
   Change to each conversation/Webspace command context. Admit modifying Runs by
   exact base generation and affected-ref conflict keys rather than a global
@@ -935,9 +937,10 @@ Canonical model and context:
   scoped focus, workflow versions, and archive state. Known source, DEV,
   candidate, and stable refs are projected without inventing absent installed
   identity.
-- [ ] `[must]` Derive project summary and project-level commands without
+- [x] `[must]` Derive project summary and project-level commands without
   inventing one current stage from the focused Change, latest Run, selected
-  Process node, or Preview target.
+  Process node, or Preview target. The projection reports portfolio facts and
+  plan/focus/rebase/archive or restore controls without a synthetic stage.
 
 Commands, projections, and Workbench:
 
@@ -1030,10 +1033,11 @@ Semantic changes and Review:
   Prototype data contract requires an explicit Automation mapping. The first
   implementation makes mode visible in Process/chat status and fails closed on
   live Prototype writes or declared missing mappings.
-- [ ] `[must]` Implement submit/withdraw/dismiss/convert-to-Issue,
+- [x] `[must]` Implement submit/withdraw/dismiss/convert-to-Issue,
   accept-as-constraint/supersede/resolve for durable submitted Reviews. Only an
   unsent local draft may be hard-deleted; withdrawn Reviews are omitted from
-  future model context but retain a minimal audit tombstone.
+  future model context but retain a minimal audit tombstone. Submitted records
+  are persisted under the focused Change and cannot use the delete path.
 - [ ] `[deferred]` Migrate legacy free-form browser-overlay annotations and
   drafts into the submitted Review workflow. The previously diagnosed
   local-storage loss remains tracked. New typed submitted Reviews and

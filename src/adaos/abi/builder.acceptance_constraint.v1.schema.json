@@ -18,7 +18,9 @@
     "status": { "enum": ["active", "satisfied", "violated", "unverifiable", "superseded"] },
     "last_evaluation": { "type": ["object", "null"] },
     "created_at": { "type": "string", "format": "date-time" },
-    "updated_at": { "type": ["string", "null"], "format": "date-time" }
+    "updated_at": { "type": ["string", "null"], "format": "date-time" },
+    "superseded_reason": { "type": ["string", "null"], "maxLength": 2000 },
+    "superseded_by_ref": { "type": ["string", "null"], "maxLength": 300 }
   },
   "additionalProperties": false
 }

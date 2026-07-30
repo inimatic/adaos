@@ -333,6 +333,8 @@ def _normalize_acceptance_constraint(value: Any, *, change_id: str) -> dict[str,
         "last_evaluation": copy.deepcopy(value.get("last_evaluation")) if isinstance(value.get("last_evaluation"), Mapping) else None,
         "created_at": created_at,
         "updated_at": str(value.get("updated_at") or "").strip() or None,
+        "superseded_reason": str(value.get("superseded_reason") or "").strip() or None,
+        "superseded_by_ref": str(value.get("superseded_by_ref") or "").strip() or None,
     }
 
 
@@ -580,6 +582,95 @@ def _bounded_pending_action_refs(values: Any) -> list[dict[str, Any]]:
     return refs
 
 
+def _semantic_target_context(webui: Mapping[str, Any], refs: list[str]) -> dict[str, Any]:
+    """Resolve stable UI refs with parent/sibling/order evidence, without text guessing."""
+
+    matches: dict[str, list[dict[str, Any]]] = {ref: [] for ref in refs}
+
+    def visit(value: Any, *, parent_ref: str | None = None, siblings: list[Any] | None = None) -> None:
+        if isinstance(value, list):
+            sibling_ids = [
+                str(item.get("id") or "").strip()
+                for item in value
+                if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+            ]
+            for item in value:
+                visit(item, parent_ref=parent_ref, siblings=sibling_ids)
+            return
+        if not isinstance(value, Mapping):
+            return
+        item_id = str(value.get("id") or "").strip()
+        candidate_refs = {f"widget:{item_id}", f"surface:{item_id}"} if item_id else set()
+        for ref in refs:
+            parts = ref.split(":")
+            if ref in candidate_refs or (
+                parts[0] == "field" and item_id and parts[-1] == item_id
+            ):
+                fragment = {
+                    key: copy.deepcopy(value.get(key))
+                    for key in (
+                        "id",
+                        "type",
+                        "title",
+                        "label",
+                        "area",
+                        "hidden",
+                        "visibleIf",
+                        "layout",
+                        "responsive",
+                        "dataSource",
+                        "actions",
+                    )
+                    if key in value
+                }
+                matches[ref].append(
+                    {
+                        "target_ref": ref,
+                        "parent_ref": parent_ref,
+                        "siblings": list(siblings or []),
+                        "order": (siblings or []).index(item_id) if item_id in (siblings or []) else None,
+                        "fragment": fragment,
+                    }
+                )
+        next_parent = f"widget:{item_id}" if item_id else parent_ref
+        for child in value.values():
+            visit(child, parent_ref=next_parent, siblings=None)
+
+    visit(webui)
+    resolved = [items[0] for items in matches.values() if len(items) == 1]
+    missing = [ref for ref, items in matches.items() if not items]
+    ambiguous = [ref for ref, items in matches.items() if len(items) > 1]
+    return {
+        "requested_refs": refs,
+        "resolved": resolved,
+        "missing_refs": missing,
+        "ambiguous_refs": ambiguous,
+        "status": "ambiguous" if ambiguous else "missing" if missing or not refs else "present",
+    }
+
+
+def _facet_coverage(facets: Mapping[str, Any], required: list[str]) -> dict[str, Any]:
+    present: list[str] = []
+    missing: list[str] = []
+    ambiguous: list[str] = []
+    for facet in required:
+        value = facets.get(facet)
+        status = str(value.get("status") or "") if isinstance(value, Mapping) else ""
+        if status == "ambiguous":
+            ambiguous.append(facet)
+        elif value in (None, "", [], {}) or status == "missing":
+            missing.append(facet)
+        else:
+            present.append(facet)
+    return {
+        "required": required,
+        "present": present,
+        "missing": missing,
+        "ambiguous": ambiguous,
+        "ready": not missing and not ambiguous,
+    }
+
+
 def _legacy_phase(value: Any) -> str:
     token = str(value or "").strip().lower()
     return "automation" if token in {"automation", "publication"} else "prototype"
@@ -768,6 +859,11 @@ class BuilderWorkflowService:
             "change": change,
             "change_set": change_set,
             "context_packet": _mapping(raw.get("context_packet")) or None,
+            "reviews": [
+                copy.deepcopy(dict(item))
+                for item in raw.get("reviews") or []
+                if isinstance(item, Mapping)
+            ][-200:],
             "interaction": {
                 "conversation_focus": str(
                     _mapping(raw.get("interaction")).get("conversation_focus")
@@ -868,7 +964,64 @@ class BuilderWorkflowService:
             project_ref=f"{kind}:{project_id}",
         )
         projection["process"] = self._process_projection(projection)
+        projection["project_summary"] = self._project_summary(projection)
         return projection
+
+    @staticmethod
+    def _project_summary(workflow: Mapping[str, Any]) -> dict[str, Any]:
+        project = _mapping(workflow.get("project"))
+        changes = [dict(item) for item in project.get("changes") or [] if isinstance(item, Mapping)]
+        open_changes = [
+            item
+            for item in changes
+            if str(item.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES
+        ]
+        artifact_generation = int(project.get("artifact_generation") or 0)
+        stale = [
+            item["change_id"]
+            for item in open_changes
+            if int(item.get("base_generation") or 0) != artifact_generation
+        ]
+        commands: list[dict[str, Any]] = []
+        if bool(project.get("archived")):
+            commands.append({"command": "builder.project.restore", "risk": "local_reversible"})
+        else:
+            commands.append({"command": "builder.change.plan", "risk": "local_reversible"})
+            if changes:
+                commands.append(
+                    {
+                        "command": "builder.change.focus",
+                        "risk": "read",
+                        "change_ids": [item["change_id"] for item in changes],
+                    }
+                )
+            if stale:
+                commands.append(
+                    {
+                        "command": "builder.change.rebase",
+                        "risk": "isolated_write",
+                        "change_ids": stale,
+                    }
+                )
+            commands.append({"command": "builder.project.archive", "risk": "destructive"})
+        return {
+            "schema": "adaos.builder.project_summary.v1",
+            "project_ref": project.get("project_ref"),
+            "open_change_count": len(open_changes),
+            "terminal_change_count": len(changes) - len(open_changes),
+            "active_mutation_count": sum(
+                1 for item in open_changes if item.get("mutation_status") == "active"
+            ),
+            "unknown_outcome_count": sum(
+                1 for item in open_changes if item.get("mutation_status") == "outcome_unknown"
+            ),
+            "conflict_count": len(project.get("conflicts") or []),
+            "stale_change_ids": stale,
+            "commands": commands,
+            "focused_change_ids": copy.deepcopy(project.get("focus_by_context") or {}),
+            "generation": int(project.get("generation") or 0),
+            "artifact_generation": artifact_generation,
+        }
 
     def focus_change(
         self,
@@ -1683,6 +1836,7 @@ class BuilderWorkflowService:
             project_ref=f"{kind}:{project_id}",
         )
         projection["process"] = self._process_projection(projection)
+        projection["project_summary"] = self._project_summary(projection)
         if callable(self.event_sink):
             self.event_sink(projection)
         return {"ok": True, "action": action_token, "workflow": projection}
@@ -1822,6 +1976,9 @@ class BuilderWorkflowService:
         instruction_refs: list[str] | tuple[str, ...] | None = None,
         conversation_context: Mapping[str, Any] | None = None,
         pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+        run_purpose: str = "iteration",
+        required_facets: list[str] | tuple[str, ...] | None = None,
+        enforce_context_coverage: bool = False,
         persist: bool = False,
     ) -> dict[str, Any]:
         """Build a bounded, stable-digested execution context for one Change."""
@@ -1861,11 +2018,114 @@ class BuilderWorkflowService:
                 if str(item).strip()
             ]
             selected_paths = list(dict.fromkeys(selected_paths))[:200]
+            purpose = str(run_purpose or "iteration").strip().lower()
+            if purpose not in {"iteration", "experiment", "evaluation", "recovery"}:
+                raise BuilderWorkflowError("invalid Builder Run purpose")
             previous_run = None
             if change.get("runs"):
                 previous_run = copy.deepcopy(change["runs"][-1])
             bounded_conversation = _bounded_conversation_context(conversation_context)
             bounded_pending_actions = _bounded_pending_action_refs(pending_action_refs)
+            active_reviews = [
+                copy.deepcopy(dict(item))
+                for item in workflow.get("reviews") or []
+                if isinstance(item, Mapping)
+                and str(item.get("status") or "")
+                not in {"withdrawn", "dismissed", "resolved", "superseded", "rejected"}
+            ][:100]
+            semantic_refs = list(
+                dict.fromkeys(
+                    str(ref).strip()
+                    for issue in change.get("issues") or []
+                    if isinstance(issue, Mapping)
+                    for ref in issue.get("semantic_refs") or []
+                    if str(ref).strip()
+                )
+            )
+            for constraint in change.get("acceptance_constraints") or []:
+                if isinstance(constraint, Mapping) and str(constraint.get("status") or "") != "superseded":
+                    ref = str(constraint.get("target_ref") or "").strip()
+                    if ref and ref not in semantic_refs:
+                        semantic_refs.append(ref)
+            for review in active_reviews:
+                ref = str(review.get("target_ref") or "").strip()
+                if ref and ref not in semantic_refs:
+                    semantic_refs.append(ref)
+            webui: dict[str, Any] = {}
+            webui_digest = None
+            webui_path = root / "webui.json"
+            if webui_path.is_file():
+                try:
+                    webui_raw = webui_path.read_bytes()
+                    webui_value = json.loads(webui_raw.decode("utf-8-sig"))
+                    webui = dict(webui_value) if isinstance(webui_value, Mapping) else {}
+                    webui_digest = f"sha256:{hashlib.sha256(webui_raw).hexdigest()}"
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    webui = {}
+            target_structure = _semantic_target_context(webui, semantic_refs)
+            constraints = {
+                "status": "present",
+                "issue_acceptance": [
+                    {
+                        "issue_id": item.get("issue_id"),
+                        "criteria": copy.deepcopy(item.get("acceptance_criteria") or []),
+                    }
+                    for item in change.get("issues") or []
+                    if isinstance(item, Mapping)
+                ],
+                "acceptance_constraints": copy.deepcopy(
+                    change.get("acceptance_constraints") or []
+                ),
+                "active_review_refs": [f"review:{item['review_id']}" for item in active_reviews],
+            }
+            data_binding = copy.deepcopy(_mapping(workflow.get("data_binding")))
+            data_policy = {
+                "status": "present" if data_binding else "missing",
+                "selected_profile_id": data_binding.get("selected_profile_id"),
+                "selected_mode": data_binding.get("selected_mode"),
+                "profiles": data_binding.get("profiles") or [],
+                "implementation_mapping": implementation_mapping_report(data_binding),
+            }
+            facets: dict[str, Any] = {
+                "target_structure": target_structure,
+                "abi": {
+                    "status": "present" if webui_digest else "missing",
+                    "schema": webui.get("schema"),
+                    "definition_ref": "abi:webui.v1.schema.json",
+                    "artifact_ref": "webui.json",
+                    "artifact_digest": webui_digest,
+                },
+                "constraints": constraints,
+                "data_policy": data_policy,
+                "execution_authority": {
+                    "status": "present" if selected_paths else "missing",
+                    "allowed_paths": selected_paths,
+                    "actor": "builder",
+                    "phase": str(workflow.get("active_phase") or "prototype"),
+                },
+            }
+            required = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in required_facets or []
+                    if str(item).strip()
+                )
+            )
+            unknown_facets = sorted(set(required) - set(facets))
+            if unknown_facets:
+                raise BuilderWorkflowError(
+                    f"unknown required context facet: {unknown_facets[0]}"
+                )
+            coverage = _facet_coverage(facets, required)
+            if enforce_context_coverage and not coverage["ready"]:
+                details = [
+                    *(f"missing:{item}" for item in coverage["missing"]),
+                    *(f"ambiguous:{item}" for item in coverage["ambiguous"]),
+                ]
+                raise BuilderWorkflowError(
+                    "Builder context is insufficient before model submission: "
+                    + ", ".join(details)
+                )
             packet_body: dict[str, Any] = {
                 "schema": BUILDER_CONTEXT_PACKET_SCHEMA,
                 "project": {
@@ -1885,6 +2145,7 @@ class BuilderWorkflowService:
                     "status": change.get("status"),
                     "issues": copy.deepcopy(change.get("issues") or []),
                     "acceptance_constraints": copy.deepcopy(change.get("acceptance_constraints") or []),
+                    "reviews": active_reviews,
                     "source_message_ids": copy.deepcopy(change.get("source_message_ids") or []),
                 },
                 "base": {
@@ -1904,6 +2165,9 @@ class BuilderWorkflowService:
                 "previous_run": previous_run,
                 "conversation": bounded_conversation,
                 "pending_actions": bounded_pending_actions,
+                "run": {"purpose": purpose},
+                "facets": facets,
+                "coverage": coverage,
                 "budget": {
                     "max_state_bytes": _MAX_STATE_BYTES,
                     "issue_count": len(change.get("issues") or []),
@@ -1914,6 +2178,10 @@ class BuilderWorkflowService:
                     "conversation_segment_count": len((bounded_conversation or {}).get("segments") or []),
                     "memory_item_count": len((bounded_conversation or {}).get("memory") or []),
                     "pending_action_ref_count": len(bounded_pending_actions),
+                    "active_review_count": len(active_reviews),
+                    "required_facet_count": len(required),
+                    "missing_facet_count": len(coverage["missing"]),
+                    "ambiguous_facet_count": len(coverage["ambiguous"]),
                 },
             }
             packet = {
@@ -2210,6 +2478,32 @@ class BuilderWorkflowService:
             workflow["change"] = current_change
             if any_violation:
                 update_change_set(status="changes_requested", gate="prototype")
+            return
+        if action == "review_constraint_superseded":
+            current_change = canonical_change()
+            constraint_id = str(metadata.get("constraint_id") or "").strip()
+            reason = _bounded_text(
+                metadata.get("reason"), field="constraint supersede reason", max_length=2000
+            )
+            constraint = next(
+                (
+                    item
+                    for item in current_change.get("acceptance_constraints") or []
+                    if item.get("constraint_id") == constraint_id
+                ),
+                None,
+            )
+            if not isinstance(constraint, dict):
+                raise BuilderWorkflowError(f"unknown acceptance constraint: {constraint_id}")
+            if str(constraint.get("status") or "") == "superseded":
+                raise BuilderWorkflowError("acceptance constraint is already superseded")
+            constraint["status"] = "superseded"
+            constraint["updated_at"] = changed_at
+            constraint["superseded_reason"] = reason
+            constraint["superseded_by_ref"] = str(
+                metadata.get("superseded_by_ref") or ""
+            ).strip() or None
+            workflow["change"] = current_change
             return
         if action == "prototype_revision_recorded":
             self._require_active(workflow, "prototype", action)
