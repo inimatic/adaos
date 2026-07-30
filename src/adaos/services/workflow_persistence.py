@@ -253,11 +253,11 @@ def commit_decision(
         updated = con.execute(
             """
             UPDATE governed_workflow_instances
-            SET state=?, generation=?, snapshot_digest=?, snapshot_json=?, updated_at=?
+            SET definition_version=?, state=?, generation=?, snapshot_digest=?, snapshot_json=?, updated_at=?
             WHERE instance_id=? AND generation=? AND snapshot_digest=?
             """,
             (
-                after["state"], after["generation"], _digest(after), after_payload,
+                after["definition_version"], after["state"], after["generation"], _digest(after), after_payload,
                 after.get("updated_at") or timestamp, after["instance_id"],
                 before["generation"], before_digest,
             ),
@@ -278,7 +278,7 @@ def commit_decision(
             """,
             (
                 outbox_id, after["instance_id"], after["generation"],
-                "workflow.transition.applied", _dump(event), timestamp,
+                str(event["type"]), _dump(event), timestamp,
             ),
         )
         if activity_name:

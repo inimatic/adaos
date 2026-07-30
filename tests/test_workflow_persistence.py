@@ -6,7 +6,11 @@ import pytest
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.governed import compiled_builder_change_definition
-from adaos.services.governed_workflow import WorkflowResolver, new_instance
+from adaos.services.governed_workflow import (
+    WorkflowResolver,
+    migrate_workflow_instance,
+    new_instance,
+)
 from adaos.services import workflow_persistence
 
 
@@ -236,3 +240,50 @@ def test_stale_snapshot_cannot_overwrite_committed_generation() -> None:
             idempotency_key="commit:stale:other",
             permission_granted=True,
         )
+
+
+def test_definition_migration_updates_durable_index_and_snapshot_atomically() -> None:
+    source = compiled_builder_change_definition()
+    target_value = copy.deepcopy(source.source)
+    target_value["definition_version"] = "1.1.0"
+    instance = new_instance(source, "change:persistence:migration")
+    workflow_persistence.create_instance(instance)
+    migration = {
+        "schema": "adaos.workflow.definition_migration.v1",
+        "migration_id": "builder_change_storage_1_1",
+        "workflow_type": source.workflow_type,
+        "from_definition_version": source.definition_version,
+        "to_definition_version": "1.1.0",
+        "allowed_source_states": [source.initial_state],
+        "state_map": {source.initial_state: source.initial_state},
+        "context_set": {"definition_migrated": True},
+        "context_remove": [],
+        "authority": {
+            "actors": ["user"],
+            "permissions": ["workflow.definition.migrate"],
+        },
+        "explanation": "Upgrade the pinned Builder workflow definition.",
+    }
+    decision = migrate_workflow_instance(
+        source,
+        target_value,
+        instance,
+        migration,
+        actor="user:local",
+        permissions=("workflow.definition.migrate",),
+        expected_generation=0,
+        idempotency_key="migration:persistence:1.1.0",
+    )
+
+    workflow_persistence.commit_decision(
+        decision,
+        idempotency_key="migration:persistence:1.1.0",
+        permission_granted=True,
+    )
+
+    stored = workflow_persistence.get_instance(instance["instance_id"])
+    assert stored is not None
+    assert stored["definition_version"] == "1.1.0"
+    assert stored["context"]["definition_migrated"] is True
+    event = workflow_persistence.list_events(instance["instance_id"])[0]
+    assert event["type"] == "workflow.definition.migrated"

@@ -17,6 +17,8 @@ WORKFLOW_INSTANCE_SCHEMA = "adaos.workflow.instance.v1"
 WORKFLOW_REF_SCHEMA = "adaos.workflow.ref.v1"
 WORKFLOW_COMMAND_SCHEMA = "adaos.workflow.command.v1"
 WORKFLOW_EVENT_SCHEMA = "adaos.workflow.event.v1"
+WORKFLOW_DEFINITION_MIGRATION_SCHEMA = "adaos.workflow.definition_migration.v1"
+WORKFLOW_COMPOSITION_SCHEMA = "adaos.workflow.composition.v1"
 WORKFLOW_DECISION_SCHEMA = "adaos.workflow.decision.v1"
 _MAX_LEDGER = 200
 
@@ -708,6 +710,255 @@ def apply_workflow_command(
     )
 
 
+def migrate_workflow_instance(
+    source_definition: CompiledWorkflowDefinition | Mapping[str, Any],
+    target_definition: CompiledWorkflowDefinition | Mapping[str, Any],
+    instance: Mapping[str, Any],
+    migration: Mapping[str, Any],
+    *,
+    actor: str,
+    permissions: tuple[str, ...] | list[str] = (),
+    expected_generation: int,
+    idempotency_key: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Create a pure, generation-guarded definition migration decision."""
+
+    source = source_definition if isinstance(source_definition, CompiledWorkflowDefinition) else compile_definition(source_definition)
+    target = target_definition if isinstance(target_definition, CompiledWorkflowDefinition) else compile_definition(target_definition)
+    record = validate_workflow_record(WORKFLOW_DEFINITION_MIGRATION_SCHEMA, migration)
+    current = WorkflowResolver._instance(source, instance)
+    timestamp = now or _now()
+    key = str(idempotency_key or "").strip()
+    if not key:
+        raise WorkflowResolutionError("definition migration requires idempotency_key")
+    if int(expected_generation) != int(current["generation"]):
+        raise WorkflowResolutionError("stale generation for definition migration")
+    if source.workflow_type != target.workflow_type or record["workflow_type"] != source.workflow_type:
+        raise WorkflowResolutionError("definition migration workflow_type mismatch")
+    if record["from_definition_version"] != source.definition_version:
+        raise WorkflowResolutionError("definition migration source version mismatch")
+    if record["to_definition_version"] != target.definition_version:
+        raise WorkflowResolutionError("definition migration target version mismatch")
+    if source.definition_version == target.definition_version:
+        raise WorkflowResolutionError("definition migration must advance to a different version")
+    allowed_states = set(record["allowed_source_states"])
+    if not allowed_states.issubset(source.states):
+        raise WorkflowDefinitionError("definition migration names an unknown source state")
+    if current["state"] not in allowed_states:
+        raise WorkflowResolutionError("current state is not admitted by definition migration")
+    state_map = dict(record["state_map"])
+    missing_mappings = sorted(allowed_states - set(state_map))
+    if missing_mappings:
+        raise WorkflowDefinitionError(
+            "definition migration does not map admitted states: " + ", ".join(missing_mappings)
+        )
+    unknown_targets = sorted(set(state_map.values()) - set(target.states))
+    if unknown_targets:
+        raise WorkflowDefinitionError(
+            "definition migration maps to unknown target states: " + ", ".join(unknown_targets)
+        )
+    authority = dict(record["authority"])
+    if not _actor_matches(tuple(authority["actors"]), actor):
+        raise WorkflowResolutionError("actor_not_authorized")
+    missing_permissions = sorted(set(authority["permissions"]) - set(permissions))
+    if missing_permissions:
+        raise WorkflowResolutionError(f"missing_permission:{missing_permissions[0]}")
+
+    updated = copy.deepcopy(current)
+    updated["definition_version"] = target.definition_version
+    updated["state"] = str(state_map[current["state"]])
+    updated["generation"] = int(current["generation"]) + 1
+    updated["updated_at"] = timestamp
+    migrated_context = copy.deepcopy(dict(updated.get("context") or {}))
+    for field in record["context_remove"]:
+        migrated_context.pop(str(field), None)
+    migrated_context.update(copy.deepcopy(dict(record["context_set"])))
+    updated["context"] = migrated_context
+    transition_id = f"definition_migration:{record['migration_id']}"
+    input_value = {
+        "migration_id": record["migration_id"],
+        "from_definition_version": source.definition_version,
+        "to_definition_version": target.definition_version,
+    }
+    payload_digest = _digest({"command": "migrate_definition", "input": input_value})
+    history_entry = {
+        "generation": updated["generation"],
+        "command": "migrate_definition",
+        "transition_id": transition_id,
+        "actor": actor,
+        "from": current["state"],
+        "to": updated["state"],
+        "input_digest": _digest(input_value),
+        "at": timestamp,
+    }
+    updated["history"] = [*updated["history"], history_entry][-_MAX_LEDGER:]
+    updated["idempotency"] = [
+        *updated["idempotency"],
+        {
+            "key": key,
+            "payload_digest": payload_digest,
+            "transition_id": transition_id,
+            "generation": updated["generation"],
+            "async_reply": {"mode": "terminal", "reply_route": "origin"},
+            "explanation": record["explanation"],
+            "at": timestamp,
+        },
+    ][-_MAX_LEDGER:]
+    event_record = {
+        "schema": WORKFLOW_EVENT_SCHEMA,
+        "event_id": "evt:" + _digest(
+            [updated["instance_id"], updated["generation"], transition_id]
+        ).removeprefix("sha256:"),
+        "type": "workflow.definition.migrated",
+        "instance_ref": workflow_ref(
+            "workflow",
+            str(updated["instance_id"]),
+            version=target.definition_version,
+            generation=int(updated["generation"]),
+        ),
+        "definition_version": target.definition_version,
+        "generation": int(updated["generation"]),
+        "transition_id": transition_id,
+        "command_id": "migrate_definition",
+        "actor_ref": workflow_ref("principal", actor),
+        "before_state": str(current["state"]),
+        "after_state": str(updated["state"]),
+        "idempotency_key": key,
+        "payload_digest": payload_digest,
+        "input_digest": _digest(input_value),
+        "evidence_refs": [],
+        "data": {
+            "migration_id": record["migration_id"],
+            "from_definition_version": source.definition_version,
+            "to_definition_version": target.definition_version,
+            "context_set": copy.deepcopy(record["context_set"]),
+            "context_remove": list(record["context_remove"]),
+        },
+        "created_at": timestamp,
+    }
+    _validate(WORKFLOW_INSTANCE_SCHEMA, updated)
+    _validate(WORKFLOW_EVENT_SCHEMA, event_record)
+    return {
+        "schema": WORKFLOW_DECISION_SCHEMA,
+        "accepted": True,
+        "status": "accepted",
+        "reason_code": None,
+        "command": "migrate_definition",
+        "transition_id": transition_id,
+        "before": current,
+        "after": updated,
+        "activity": None,
+        "events": ["workflow.definition.migrated"],
+        "event_records": [event_record],
+        "async_reply": {"mode": "terminal", "reply_route": "origin"},
+        "explanation": record["explanation"],
+        "decided_at": timestamp,
+    }
+
+
+def validate_workflow_composition(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a bounded parent/child workflow composition contract."""
+
+    record = validate_workflow_record(WORKFLOW_COMPOSITION_SCHEMA, value)
+    children = list(record["children"])
+    child_ids = [str(item["child_id"]) for item in children]
+    if len(child_ids) != len(set(child_ids)):
+        raise WorkflowDefinitionError("workflow composition child_id values must be unique")
+    correlations = [str(item["correlation_key"]) for item in children]
+    if len(correlations) != len(set(correlations)):
+        raise WorkflowDefinitionError("workflow composition correlation keys must be unique")
+    parent_permissions = set(record["parent_authority"]["permissions"])
+    for child in children:
+        delegated = set(child["delegated_authority"]["permissions"])
+        if not delegated.issubset(parent_permissions):
+            raise WorkflowDefinitionError(
+                f"child {child['child_id']} delegates authority outside the parent scope"
+            )
+    join = dict(record["join"])
+    required_count = sum(1 for child in children if child["required"])
+    participant_count = required_count or len(children)
+    if join["mode"] == "quorum":
+        quorum = join.get("quorum")
+        if quorum is None or int(quorum) > participant_count:
+            raise WorkflowDefinitionError("workflow composition quorum exceeds participating children")
+    elif join.get("quorum") is not None:
+        raise WorkflowDefinitionError("workflow composition quorum is only valid for quorum joins")
+    return record
+
+
+def resolve_workflow_join(
+    composition: Mapping[str, Any],
+    child_results: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Resolve child outcomes without mutating the parent workflow."""
+
+    record = validate_workflow_composition(composition)
+    declared = {str(item["child_id"]): item for item in record["children"]}
+    results: dict[str, dict[str, Any]] = {}
+    late_results: list[str] = []
+    for raw in child_results:
+        result = copy.deepcopy(dict(raw))
+        child_id = str(result.get("child_id") or "")
+        if child_id not in declared:
+            raise WorkflowResolutionError(f"undeclared workflow child result: {child_id}")
+        if child_id in results:
+            raise WorkflowResolutionError(f"duplicate workflow child result: {child_id}")
+        status = str(result.get("status") or "")
+        if status not in {"running", "waiting", "succeeded", "failed", "cancelled", "unknown"}:
+            raise WorkflowResolutionError(f"invalid workflow child status: {status}")
+        if bool(result.get("late")):
+            if record["late_result"] == "reject":
+                raise WorkflowResolutionError(f"late workflow child result rejected: {child_id}")
+            late_results.append(child_id)
+        results[child_id] = result
+
+    participants = [item for item in record["children"] if item["required"]]
+    if not participants:
+        participants = list(record["children"])
+    statuses = {str(item["child_id"]): str(results.get(str(item["child_id"]), {}).get("status") or "waiting") for item in participants}
+    succeeded = sorted(child_id for child_id, status in statuses.items() if status == "succeeded")
+    failed = sorted(child_id for child_id, status in statuses.items() if status in {"failed", "cancelled", "unknown"})
+    pending = sorted(child_id for child_id, status in statuses.items() if status in {"running", "waiting"})
+    mode = record["join"]["mode"]
+    needed = len(participants) if mode == "all" else 1
+    if mode == "quorum":
+        needed = int(record["join"]["quorum"])
+    possible = len(succeeded) + len(pending)
+    if len(succeeded) >= needed:
+        outcome = "partial_succeeded" if failed and record["partial_outcome"] == "continue_partial" else "succeeded"
+        complete = True
+    elif possible < needed:
+        outcome = "partial_failed" if succeeded else "failed"
+        complete = record["partial_outcome"] != "wait"
+    else:
+        outcome = "waiting"
+        complete = False
+
+    evidence: list[Any] = []
+    if record["evidence_aggregation"] != "none":
+        for child_id in sorted(results):
+            result = results[child_id]
+            if record["evidence_aggregation"] == "successful_only" and result["status"] != "succeeded":
+                continue
+            evidence.extend(copy.deepcopy(list(result.get("evidence_refs") or [])))
+    return {
+        "schema": "adaos.workflow.join_result.v1",
+        "composition_id": record["composition_id"],
+        "outcome": outcome,
+        "complete": complete,
+        "promotable": outcome in {"succeeded", "partial_succeeded"},
+        "succeeded_children": succeeded,
+        "failed_children": failed,
+        "pending_children": pending,
+        "evidence_refs": evidence,
+        "late_results": sorted(late_results),
+        "late_result_policy": record["late_result"],
+        "cancellation": record["cancellation"],
+        "compensation": record["compensation"],
+    }
+
+
 def rebuild_instance(
     definition: CompiledWorkflowDefinition | Mapping[str, Any],
     instance_id: str,
@@ -764,6 +1015,104 @@ def rebuild_instance(
                 "at": str(event["created_at"]),
             },
         ][-_MAX_LEDGER:]
+    return snapshot
+
+
+def rebuild_versioned_instance(
+    definitions: Mapping[str, CompiledWorkflowDefinition | Mapping[str, Any]],
+    instance_id: str,
+    events: Sequence[Mapping[str, Any]],
+    *,
+    context: Mapping[str, Any] | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Replay an instance across explicit definition-migration events."""
+
+    compiled_by_version = {
+        str(version): value if isinstance(value, CompiledWorkflowDefinition) else compile_definition(value)
+        for version, value in definitions.items()
+    }
+    if not compiled_by_version:
+        raise WorkflowResolutionError("versioned replay requires at least one definition")
+    ordered = sorted((copy.deepcopy(dict(item)) for item in events), key=lambda item: int(item.get("generation") or 0))
+    if not ordered:
+        if len(compiled_by_version) != 1:
+            raise WorkflowResolutionError("empty versioned replay requires exactly one definition")
+        return new_instance(next(iter(compiled_by_version.values())), instance_id, context=context, now=created_at)
+    first = ordered[0]
+    validate_workflow_record(WORKFLOW_EVENT_SCHEMA, first)
+    initial_version = (
+        str(dict(first.get("data") or {}).get("from_definition_version") or "")
+        if first.get("type") == "workflow.definition.migrated"
+        else str(first["definition_version"])
+    )
+    if initial_version not in compiled_by_version:
+        raise WorkflowResolutionError(f"workflow definition is unavailable for replay: {initial_version}")
+    current_definition = compiled_by_version[initial_version]
+    snapshot = new_instance(current_definition, instance_id, context=context, now=created_at)
+    for event in ordered:
+        validate_workflow_record(WORKFLOW_EVENT_SCHEMA, event)
+        if event["instance_ref"]["id"] != instance_id:
+            raise WorkflowResolutionError("workflow event instance_ref does not match replay target")
+        expected = int(snapshot["generation"]) + 1
+        if int(event["generation"]) != expected:
+            raise WorkflowResolutionError(
+                f"workflow event generation gap: expected {expected}, got {event['generation']}"
+            )
+        if event["before_state"] != snapshot["state"]:
+            raise WorkflowResolutionError("workflow event before_state does not match replay state")
+        if event["type"] == "workflow.definition.migrated":
+            data = dict(event["data"])
+            if data.get("from_definition_version") != snapshot["definition_version"]:
+                raise WorkflowResolutionError("migration event source version does not match replay snapshot")
+            target_version = str(data.get("to_definition_version") or "")
+            if target_version != event["definition_version"] or target_version not in compiled_by_version:
+                raise WorkflowResolutionError("migration event target definition is unavailable")
+            current_definition = compiled_by_version[target_version]
+            if event["after_state"] not in current_definition.states:
+                raise WorkflowResolutionError("migration event target state is not in target definition")
+            migrated_context = copy.deepcopy(dict(snapshot.get("context") or {}))
+            for field in data.get("context_remove") or []:
+                migrated_context.pop(str(field), None)
+            migrated_context.update(copy.deepcopy(dict(data.get("context_set") or {})))
+            snapshot["context"] = migrated_context
+            snapshot["definition_version"] = target_version
+        else:
+            if event["definition_version"] != snapshot["definition_version"]:
+                raise WorkflowResolutionError("workflow event definition version does not match replay snapshot")
+            transition = next(
+                (item for item in current_definition.transitions if item.transition_id == event["transition_id"]),
+                None,
+            )
+            if transition is None or transition.target != event["after_state"]:
+                raise WorkflowResolutionError("workflow event transition does not match definition")
+        snapshot["state"] = str(event["after_state"])
+        snapshot["generation"] = int(event["generation"])
+        snapshot["updated_at"] = str(event["created_at"])
+        snapshot["history"] = [
+            *snapshot["history"],
+            {
+                "generation": int(event["generation"]),
+                "command": str(event["command_id"]),
+                "transition_id": str(event["transition_id"]),
+                "actor": str(event["actor_ref"]["id"]),
+                "from": str(event["before_state"]),
+                "to": str(event["after_state"]),
+                "input_digest": str(event["input_digest"]),
+                "at": str(event["created_at"]),
+            },
+        ][-_MAX_LEDGER:]
+        snapshot["idempotency"] = [
+            *snapshot["idempotency"],
+            {
+                "key": str(event["idempotency_key"]),
+                "payload_digest": str(event["payload_digest"]),
+                "transition_id": str(event["transition_id"]),
+                "generation": int(event["generation"]),
+                "at": str(event["created_at"]),
+            },
+        ][-_MAX_LEDGER:]
+    _validate(WORKFLOW_INSTANCE_SCHEMA, snapshot)
     return snapshot
 
 
@@ -895,6 +1244,8 @@ def workflow_contract_snapshot() -> dict[str, Any]:
             "WorkflowRef": WORKFLOW_REF_SCHEMA,
             "WorkflowCommand": WORKFLOW_COMMAND_SCHEMA,
             "WorkflowEvent": WORKFLOW_EVENT_SCHEMA,
+            "WorkflowDefinitionMigration": WORKFLOW_DEFINITION_MIGRATION_SCHEMA,
+            "WorkflowComposition": WORKFLOW_COMPOSITION_SCHEMA,
             "WorkflowDecision": WORKFLOW_DECISION_SCHEMA,
         },
         "invariants": {
@@ -903,5 +1254,7 @@ def workflow_contract_snapshot() -> dict[str, Any]:
             "definition_version": "pinned_per_instance",
             "concurrency": "generation_guarded",
             "idempotency": "payload_bound",
+            "definition_migration": "explicit_event",
+            "composition": "reference_only_parent_child",
         },
     }

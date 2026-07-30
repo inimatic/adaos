@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
@@ -12,8 +14,12 @@ from adaos.services.governed_workflow import (
     definition_review_report,
     export_statechart,
     generate_conformance_cases,
+    migrate_workflow_instance,
     new_instance,
     rebuild_instance,
+    rebuild_versioned_instance,
+    resolve_workflow_join,
+    validate_workflow_composition,
     workflow_command,
     workflow_contract_snapshot,
     workflow_ref,
@@ -343,3 +349,150 @@ def test_definition_review_and_statechart_are_non_authoritative_projections() ->
     cases = generate_conformance_cases(compiled)
     assert {item["kind"] for item in cases} == {"state_explanation", "transition_admission"}
     assert len(cases) == len(compiled.states) + len(compiled.transitions)
+
+
+def test_definition_migration_is_explicit_generation_guarded_and_replayable() -> None:
+    source = _definition()
+    target = copy.deepcopy(source)
+    target["definition_version"] = "1.1.0"
+    target["states"][1]["id"] = "implementation"
+    target["states"][1]["label"] = "Implementation"
+    target["transitions"][0]["target"] = "implementation"
+    target["transitions"][1]["source"] = "implementation"
+    migration = json.loads(
+        (Path(__file__).parent / "fixtures" / "workflow_definition_migration.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    original = new_instance(
+        source,
+        "change:recipes:migrated",
+        context={"legacy_phase": True},
+        now="2026-07-30T12:00:00+00:00",
+    )
+    approved = WorkflowResolver().apply(
+        source,
+        original,
+        "approve",
+        actor="user:local",
+        permissions=("builder.change",),
+        expected_generation=0,
+        idempotency_key="request:approve-before-migration",
+        now="2026-07-30T12:01:00+00:00",
+    )
+
+    decision = migrate_workflow_instance(
+        source,
+        target,
+        approved["after"],
+        migration,
+        actor="user:local",
+        permissions=("workflow.definition.migrate",),
+        expected_generation=1,
+        idempotency_key="migration:builder-change:1.1.0",
+        now="2026-07-30T12:02:00+00:00",
+    )
+
+    assert decision["after"]["definition_version"] == "1.1.0"
+    assert decision["after"]["state"] == "implementation"
+    assert decision["after"]["generation"] == 2
+    assert "legacy_phase" not in decision["after"]["context"]
+    assert decision["event_records"][0]["type"] == "workflow.definition.migrated"
+    rebuilt = rebuild_versioned_instance(
+        {"1.0.0": source, "1.1.0": target},
+        original["instance_id"],
+        [*approved["event_records"], *decision["event_records"]],
+        context={"legacy_phase": True},
+        created_at=original["created_at"],
+    )
+    assert rebuilt["definition_version"] == decision["after"]["definition_version"]
+    assert rebuilt["state"] == decision["after"]["state"]
+    assert rebuilt["generation"] == decision["after"]["generation"]
+    assert rebuilt["context"] == decision["after"]["context"]
+    assert rebuilt["history"] == decision["after"]["history"]
+
+    with pytest.raises(Exception, match="stale generation"):
+        migrate_workflow_instance(
+            source,
+            target,
+            approved["after"],
+            migration,
+            actor="user:local",
+            permissions=("workflow.definition.migrate",),
+            expected_generation=0,
+            idempotency_key="migration:stale",
+        )
+
+
+def test_parent_child_composition_never_promotes_a_partial_required_join() -> None:
+    composition = {
+        "schema": "adaos.workflow.composition.v1",
+        "composition_id": "builder_multi_component_change",
+        "parent_ref": workflow_ref("workflow", "change:recipes:multi", version="1.0.0", generation=2),
+        "parent_authority": {
+            "actors": ["user", "builder"],
+            "permissions": ["builder.change", "scenario.write", "skill.write"],
+        },
+        "children": [
+            {
+                "child_id": "scenario",
+                "workflow_type": "builder.component",
+                "definition_version": "1.0.0",
+                "correlation_key": "change:recipes:multi:scenario",
+                "required": True,
+                "delegated_authority": {
+                    "actors": ["builder"],
+                    "permissions": ["scenario.write"],
+                },
+            },
+            {
+                "child_id": "skill",
+                "workflow_type": "builder.component",
+                "definition_version": "1.0.0",
+                "correlation_key": "change:recipes:multi:skill",
+                "required": True,
+                "delegated_authority": {
+                    "actors": ["builder"],
+                    "permissions": ["skill.write"],
+                },
+            },
+        ],
+        "join": {"mode": "all", "quorum": None},
+        "partial_outcome": "fail",
+        "cancellation": "propagate",
+        "compensation": "reverse_completed",
+        "evidence_aggregation": "successful_only",
+        "late_result": "reconcile",
+    }
+    validate_workflow_composition(composition)
+
+    waiting = resolve_workflow_join(
+        composition,
+        [{"child_id": "scenario", "status": "succeeded", "evidence_refs": ["evidence:scenario"]}],
+    )
+    assert waiting["outcome"] == "waiting"
+    assert waiting["promotable"] is False
+    failed = resolve_workflow_join(
+        composition,
+        [
+            {"child_id": "scenario", "status": "succeeded", "evidence_refs": ["evidence:scenario"]},
+            {"child_id": "skill", "status": "failed", "evidence_refs": ["evidence:failure"]},
+        ],
+    )
+    assert failed["outcome"] == "partial_failed"
+    assert failed["promotable"] is False
+    completed = resolve_workflow_join(
+        composition,
+        [
+            {"child_id": "scenario", "status": "succeeded", "evidence_refs": ["evidence:scenario"]},
+            {"child_id": "skill", "status": "succeeded", "evidence_refs": ["evidence:skill"]},
+        ],
+    )
+    assert completed["outcome"] == "succeeded"
+    assert completed["promotable"] is True
+    assert completed["evidence_refs"] == ["evidence:scenario", "evidence:skill"]
+
+    invalid = copy.deepcopy(composition)
+    invalid["children"][1]["delegated_authority"]["permissions"] = ["root.admin"]
+    with pytest.raises(WorkflowDefinitionError, match="outside the parent scope"):
+        validate_workflow_composition(invalid)
