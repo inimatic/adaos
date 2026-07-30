@@ -691,6 +691,16 @@ def test_change_set_advances_through_automation_trial_and_publication(
     assert completed["change_set"]["status"] == "implemented"
     assert completed["change_set"]["gate"] == "trial"
     assert completed["change_set"]["issues"][0]["status"] == "resolved"
+    task_runs = [
+        item for item in completed["change"]["runs"] if item["run_id"] == "task.sync"
+    ]
+    assert len(task_runs) == 1
+    assert task_runs[0]["status"] == "succeeded"
+    assert task_runs[0]["activity"] == "automation_completed"
+    assert not any(
+        item["activity"] == "automation_started" and item["status"] == "running"
+        for item in completed["change"]["runs"]
+    )
 
     checkpointed = service.transition(
         "scenario",

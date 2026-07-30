@@ -202,9 +202,11 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     automation_run = next(
         item
         for item in workflow["change"]["runs"]
-        if item["run_id"] == started["session"]["change_id"]
+        if item["run_id"] == started["session"]["current_task_id"]
     )
     assert automation_run["context_packet_digest"] == packet["digest"]
+    assert automation_run["status"] == "running"
+    assert automation_run["activity"] == "automation_started"
 
 
 def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path) -> None:

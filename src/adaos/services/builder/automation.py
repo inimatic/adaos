@@ -399,7 +399,10 @@ class BuilderAutomationService:
                     ),
                     "task_id": session.get("current_task_id"),
                     "change_id": session.get("change_id"),
-                    "run_id": session.get("change_id"),
+                    # The Run is the exact executor task. The development
+                    # change id remains lineage evidence, not execution
+                    # identity; completion must close this same Run.
+                    "run_id": session.get("current_task_id"),
                     "context_packet_digest": session.get("context_packet_digest"),
                 },
             )
