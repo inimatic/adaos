@@ -154,3 +154,23 @@ def test_builder_actions_and_shared_interaction_are_bound_to_canonical_generatio
     assert "accept_prototype" in by_command
     assert by_command["accept_prototype"]["expected_generation"] == workflow["governed"]["generation"]
     assert by_command["accept_prototype"]["command_context_ref"]["id"] == "webspace:dev1-dev"
+
+
+def test_compact_explanation_answers_state_reason_and_next_from_canonical_snapshot(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    workflow = _plan(service)
+
+    explanation = service.compact_explanation("scenario", "recipes")
+    frame = service.interaction_frame("scenario", "recipes")
+
+    assert explanation["state"] == "prototype_editing"
+    assert explanation["generation"] == workflow["governed"]["generation"]
+    assert explanation["change_ref"] == "change:CH-recipes"
+    assert "accept_prototype" in explanation["next_commands"]
+    assert "Why:" in explanation["text"]
+    assert "Next:" in explanation["text"]
+    assert frame["message"] == explanation["text"]
+    assert frame["status"]["workflow_state"] == explanation["state"]
+    assert frame["status"]["next_commands"] == explanation["next_commands"]

@@ -970,6 +970,62 @@ class BuilderWorkflowService:
         return projection
 
     @staticmethod
+    def _compact_explanation(projection: Mapping[str, Any]) -> dict[str, Any]:
+        description = _mapping(projection.get("workflow_description"))
+        change = _normalize_change(projection.get("change") or projection.get("change_set"))
+        process = _mapping(projection.get("process"))
+        state = str(description.get("state") or "ready")
+        blockers = [
+            {
+                "command": str(item.get("command") or ""),
+                "reason_code": str(item.get("reason_code") or "blocked"),
+            }
+            for item in description.get("blockers") or []
+            if isinstance(item, Mapping)
+        ]
+        next_commands = [
+            str(item.get("command") or "")
+            for item in description.get("allowed_commands") or []
+            if isinstance(item, Mapping) and str(item.get("command") or "").strip()
+        ]
+        progress = _mapping(description.get("progress"))
+        if change is None:
+            summary = "No active Change. Describe the requested change to begin."
+        else:
+            summary = f"Change {change['change_id']} is in {state}."
+        if progress.get("waiting") and progress.get("wait_explanation"):
+            reason = str(progress["wait_explanation"])
+        elif blockers:
+            reason = "; ".join(item["reason_code"] for item in blockers[:3])
+        else:
+            reason = "No active blocker."
+        next_text = ", ".join(next_commands[:4]) if next_commands else "wait for input or inspect the process"
+        return {
+            "schema": "adaos.builder.compact_workflow_explanation.v1",
+            "project_ref": f"{projection.get('object_type')}:{projection.get('object_id')}",
+            "change_ref": f"change:{change['change_id']}" if change else None,
+            "state": state,
+            "generation": int(description.get("generation") or 0),
+            "target": copy.deepcopy(description.get("target")),
+            "summary": summary,
+            "reason": reason,
+            "blockers": blockers,
+            "evidence_refs": copy.deepcopy(description.get("evidence_refs") or []),
+            "next_commands": next_commands,
+            "process_node_refs": [
+                str(item.get("ref") or "")
+                for item in process.get("nodes") or []
+                if isinstance(item, Mapping) and str(item.get("ref") or "").strip()
+            ],
+            "text": f"{summary} Why: {reason} Next: {next_text}.",
+        }
+
+    def compact_explanation(self, object_type: str, object_id: str) -> dict[str, Any]:
+        """Return one channel-neutral answer to what, why, and what next."""
+
+        return self._compact_explanation(self.describe(object_type, object_id))
+
+    @staticmethod
     def _project_summary(workflow: Mapping[str, Any]) -> dict[str, Any]:
         project = _mapping(workflow.get("project"))
         changes = [dict(item) for item in project.get("changes") or [] if isinstance(item, Mapping)]
@@ -1342,6 +1398,7 @@ class BuilderWorkflowService:
             _mapping(projection.get("automation")).get("status") or "not_started"
         )
         workflow_explanation = _mapping(projection.get("workflow_description"))
+        compact_explanation = self._compact_explanation(projection)
         canonical_generation = int(workflow_explanation.get("generation") or 0)
         canonical_actions = {
             str(item.get("command") or ""): dict(item)
@@ -1389,12 +1446,12 @@ class BuilderWorkflowService:
         )
         if change is None:
             add_action("builder.change.plan", "Plan change", "local_reversible", target_ref=project_ref)
-            message = "Describe the requested change to begin."
+            message = str(compact_explanation["text"])
         else:
             change_ref = f"change:{change['change_id']}"
             gate = str(change.get("gate") or active_phase)
             status = str(change.get("status") or "planned")
-            message = f"Change {change['change_id']} is {status}; next gate: {gate}."
+            message = str(compact_explanation["text"])
             if capabilities.get("can_update_change_set"):
                 add_action("builder.change.extend", "Add to change", "local_reversible", target_ref=change_ref)
             if capabilities.get("can_edit_prototype") and gate == "prototype":
@@ -1536,6 +1593,9 @@ class BuilderWorkflowService:
                 "implementation": automation_status,
                 "delivery": delivery_status,
                 "data_mode": str(_mapping(projection.get("data_binding")).get("selected_mode") or "mock"),
+                "workflow_state": compact_explanation["state"],
+                "reason": compact_explanation["reason"],
+                "next_commands": compact_explanation["next_commands"],
             },
             "actions": actions,
             "views": views,
