@@ -107,7 +107,33 @@ def _change_summary(
     }
 
 
-def _conflicts(changes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _dependency_footprint(
+    refs: Sequence[Any],
+    dependencies: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    footprint = set(_refs(refs))
+    adjacency: dict[str, set[str]] = {}
+    for edge in dependencies:
+        if str(edge.get("kind") or "") not in {"requires", "derives"}:
+            continue
+        source = str(edge.get("from_ref") or "").strip()
+        target = str(edge.get("to_ref") or "").strip()
+        if source and target:
+            adjacency.setdefault(source, set()).add(target)
+    pending = list(footprint)
+    while pending:
+        current = pending.pop()
+        for target in adjacency.get(current, ()):
+            if target not in footprint:
+                footprint.add(target)
+                pending.append(target)
+    return footprint
+
+
+def _conflicts(
+    changes: Sequence[Mapping[str, Any]],
+    dependencies: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
     open_changes = [
         dict(item)
         for item in changes
@@ -116,7 +142,9 @@ def _conflicts(changes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
     for index, left in enumerate(open_changes):
         for right in open_changes[index + 1 :]:
-            overlap = sorted(set(left.get("affected_refs") or []) & set(right.get("affected_refs") or []))
+            left_direct = set(left.get("affected_refs") or [])
+            right_direct = set(right.get("affected_refs") or [])
+            overlap = sorted(left_direct & right_direct)
             if overlap:
                 conflicts.append(
                     {
@@ -124,6 +152,20 @@ def _conflicts(changes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                         "right_change_id": str(right["change_id"]),
                         "affected_refs": overlap,
                         "kind": "direct",
+                    }
+                )
+                continue
+            indirect = sorted(
+                _dependency_footprint(list(left_direct), dependencies)
+                & _dependency_footprint(list(right_direct), dependencies)
+            )
+            if indirect:
+                conflicts.append(
+                    {
+                        "left_change_id": str(left["change_id"]),
+                        "right_change_id": str(right["change_id"]),
+                        "affected_refs": indirect,
+                        "kind": "component_dependency",
                     }
                 )
     return conflicts
@@ -164,6 +206,9 @@ def normalize_project(
     if current_id:
         focus.setdefault("default", current_id)
     normalized_changes = list(by_id.values())[-100:]
+    dependencies = [
+        copy.deepcopy(dict(item)) for item in raw.get("dependencies") or [] if isinstance(item, Mapping)
+    ][:1000]
     timestamp = str(raw.get("updated_at") or now or _now())
     return {
         "schema": BUILDER_PROJECT_SCHEMA,
@@ -218,10 +263,8 @@ def normalize_project(
         },
         "component_refs": _refs(raw.get("component_refs") or [project_ref]),
         "changes": normalized_changes,
-        "conflicts": _conflicts(normalized_changes),
-        "dependencies": [
-            copy.deepcopy(dict(item)) for item in raw.get("dependencies") or [] if isinstance(item, Mapping)
-        ][:1000],
+        "conflicts": _conflicts(normalized_changes, dependencies),
+        "dependencies": dependencies,
         "focus_by_context": focus,
         "workflow_versions": {"project": BUILDER_PROJECT_VERSION, "change": "1.0.0"},
         "archived": bool(archived),
@@ -240,6 +283,31 @@ def set_focus(project: Mapping[str, Any], context_ref: str, change_id: str, *, n
     context = str(context_ref or "default").strip() or "default"
     result.setdefault("focus_by_context", {})[context] = change_id
     result["view_generation"] = int(result.get("view_generation") or 0) + 1
+    result["updated_at"] = now or _now()
+    return result
+
+
+def set_dependencies(
+    project: Mapping[str, Any],
+    dependencies: Sequence[Mapping[str, Any]],
+    *,
+    expected_project_generation: int,
+    now: str | None = None,
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(project))
+    if int(result.get("generation") or 0) != int(expected_project_generation):
+        raise BuilderProjectError("stale project generation")
+    normalized: list[dict[str, str]] = []
+    for edge in dependencies:
+        source = str(edge.get("from_ref") or "").strip()
+        target = str(edge.get("to_ref") or "").strip()
+        kind = str(edge.get("kind") or "").strip()
+        if not source or not target or kind not in {"requires", "conflicts", "derives", "promotes"}:
+            raise BuilderProjectError("project dependency requires valid from_ref, to_ref, and kind")
+        normalized.append({"from_ref": source, "to_ref": target, "kind": kind})
+    result["dependencies"] = normalized[:1000]
+    result["conflicts"] = _conflicts(result.get("changes") or [], result["dependencies"])
+    result["generation"] = int(result.get("generation") or 0) + 1
     result["updated_at"] = now or _now()
     return result
 
@@ -277,7 +345,7 @@ def begin_mutation(
     result["changes"] = changes
     result["generation"] = int(result.get("generation") or 0) + 1
     result["updated_at"] = now or _now()
-    result["conflicts"] = _conflicts(changes)
+    result["conflicts"] = _conflicts(changes, result.get("dependencies") or [])
     return result
 
 
@@ -302,7 +370,7 @@ def finish_mutation(
     result["changes"] = changes
     result["generation"] = int(result.get("generation") or 0) + 1
     result["updated_at"] = now or _now()
-    result["conflicts"] = _conflicts(changes)
+    result["conflicts"] = _conflicts(changes, result.get("dependencies") or [])
     return result
 
 

@@ -721,13 +721,20 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "scenario",
         "recipes",
         "candidate_accepted",
-        metadata={"candidate_id": "candidate-sync"},
+        metadata={
+            "candidate_id": "candidate-sync",
+            "candidate_digest": "sha256:" + "3" * 64,
+        },
     )
     published = service.transition(
         "scenario",
         "recipes",
         "publish",
-        metadata={"candidate_id": "candidate-sync", "version": "0.2.0"},
+        metadata={
+            "candidate_id": "candidate-sync",
+            "candidate_digest": "sha256:" + "3" * 64,
+            "version": "0.2.0",
+        },
     )["workflow"]
     assert published["change_set"]["status"] == "published"
     assert published["change_set"]["gate"] == "complete"
@@ -884,7 +891,10 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
         "scenario",
         "recipes",
         "candidate_accepted",
-        metadata={"candidate_id": "recipes-0-1-1-abc"},
+        metadata={
+            "candidate_id": "recipes-0-1-1-abc",
+            "candidate_digest": "sha256:" + "2" * 64,
+        },
     )["workflow"]
     assert accepted["delivery"]["status"] == "accepted"
     assert accepted["capabilities"]["can_publish"] is True
@@ -897,6 +907,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
             "version": "0.1.1",
             "task_id": "task.1",
             "candidate_id": "recipes-0-1-1-abc",
+            "candidate_digest": "sha256:" + "2" * 64,
         },
     )["workflow"]
     assert published["active_phase"] == "automation"
@@ -1176,7 +1187,10 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "scenario",
         "recipes",
         "candidate_accepted",
-        metadata={"candidate_id": "candidate-stale"},
+        metadata={
+            "candidate_id": "candidate-stale",
+            "candidate_digest": "sha256:" + "2" * 64,
+        },
     )
     stale = service.transition(
         "scenario",

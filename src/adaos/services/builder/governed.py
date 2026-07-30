@@ -317,6 +317,32 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
     return mapping.get(action)
 
 
+def legacy_action_for_command(command: str) -> str | None:
+    """Return the bounded compatibility adapter for a canonical Builder command."""
+
+    mapping = {
+        "record_prototype_revision": "prototype_revision_recorded",
+        "record_prototype_experiment": "prototype_experiment_recorded",
+        "adopt_prototype_experiment": "adopt_experiment",
+        "discard_prototype_experiment": "discard_experiment",
+        "accept_prototype": "stabilize_prototype",
+        "start_automation": "automation_started",
+        "retry_automation": "automation_iteration_started",
+        "record_automation_success": "automation_completed",
+        "record_automation_failure": "automation_failed",
+        "request_prototype_derivation": "request_return_to_prototype",
+        "record_prototype_derivation_success": "return_to_prototype",
+        "record_prototype_derivation_failure": "return_to_prototype_failed",
+        "accept_verification": "checkpoint_recorded",
+        "prepare_trial_compatibility": "candidate_prepared",
+        "accept_trial": "candidate_accepted",
+        "reject_trial": "candidate_rejected",
+        "invalidate_candidate": "candidate_stale",
+        "publish_compatibility": "publish",
+    }
+    return mapping.get(str(command or "").strip())
+
+
 def admit_legacy_transition(
     workflow: Mapping[str, Any],
     action: str,

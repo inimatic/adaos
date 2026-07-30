@@ -18,6 +18,7 @@ from adaos.services.builder.action_contracts import build_builder_action
 from adaos.services.builder.governed import (
     admit_legacy_transition,
     governed_instance,
+    legacy_action_for_command,
     workflow_description,
 )
 from adaos.services.builder.data_modes import (
@@ -36,6 +37,7 @@ from adaos.services.builder.project_aggregate import (
     normalize_project,
     rebase_change as rebase_project_change,
     restore_compatibility_record,
+    set_dependencies,
     set_focus,
 )
 from adaos.services.conversation_interactions import interaction_from_workflow_description
@@ -1120,6 +1122,40 @@ class BuilderWorkflowService:
             self.event_sink(projection)
         return {"ok": True, "workflow": projection, "project": copy.deepcopy(project)}
 
+    def configure_project_dependencies(
+        self,
+        object_type: str,
+        object_id: str,
+        dependencies: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+        *,
+        expected_project_generation: int,
+    ) -> dict[str, Any]:
+        """Replace the bounded component graph and recompute indirect conflicts."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            try:
+                project = set_dependencies(
+                    _mapping(workflow.get("project")),
+                    dependencies,
+                    expected_project_generation=expected_project_generation,
+                )
+            except BuilderProjectError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            workflow["project"] = project
+            workflow["generation"] = int(workflow.get("generation") or 0) + 1
+            workflow["updated_at"] = project["updated_at"]
+            state["workflow"] = workflow
+            state["updated_at"] = project["updated_at"]
+            self._write_state(kind, project_id, state)
+        projection = self.describe(kind, project_id)
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {"ok": True, "workflow": projection, "project": copy.deepcopy(project)}
+
     def configure_binding_profile(
         self,
         object_type: str,
@@ -1410,7 +1446,18 @@ class BuilderWorkflowService:
                 )
             if capabilities.get("can_decide_candidate"):
                 candidate_id = str(_mapping(projection.get("delivery")).get("candidate_id") or "").strip()
-                candidate_ref = f"candidate:{candidate_id}" if candidate_id else change_ref
+                candidate_digest = str(
+                    _mapping(projection.get("delivery")).get("package_digest")
+                    or _mapping(projection.get("delivery")).get("release_digest")
+                    or ""
+                ).strip()
+                candidate_ref = (
+                    f"candidate:{candidate_id}@{candidate_digest}"
+                    if candidate_id and candidate_digest
+                    else f"candidate:{candidate_id}"
+                    if candidate_id
+                    else change_ref
+                )
                 add_action(
                     "builder.trial.accept",
                     "Accept trial",
@@ -1426,11 +1473,20 @@ class BuilderWorkflowService:
                     workflow_command="reject_trial",
                 )
             if capabilities.get("can_publish"):
+                candidate = _mapping(projection.get("delivery"))
+                candidate_id = str(candidate.get("candidate_id") or "").strip()
+                candidate_digest = str(
+                    candidate.get("package_digest") or candidate.get("release_digest") or ""
+                ).strip()
                 add_action(
                     "builder.publication.publish",
                     "Publish",
                     "publication",
-                    target_ref=change_ref,
+                    target_ref=(
+                        f"candidate:{candidate_id}@{candidate_digest}"
+                        if candidate_id and candidate_digest
+                        else change_ref
+                    ),
                     workflow_command="publish_compatibility",
                 )
 
@@ -1525,6 +1581,46 @@ class BuilderWorkflowService:
         }
         return interaction
 
+    def invoke_interaction_response(
+        self,
+        object_type: str,
+        object_id: str,
+        response: Mapping[str, Any],
+        *,
+        actor: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Admit one validated InteractionResponse through the canonical Builder ingress."""
+
+        consumed = _mapping(response.get("consumed_command"))
+        if str(response.get("status") or "") not in {"answered", "accepted"} or not consumed:
+            raise BuilderWorkflowError("Builder requires an accepted Interaction response")
+        command = str(consumed.get("command") or "").strip()
+        action = legacy_action_for_command(command)
+        if action is None:
+            raise BuilderWorkflowError(f"Builder command has no compatibility activity adapter: {command}")
+        current = self.describe(object_type, object_id)
+        canonical = _mapping(current.get("governed"))
+        expected = int(consumed.get("expected_generation") or 0)
+        if int(canonical.get("generation") or 0) != expected:
+            raise BuilderWorkflowError(
+                f"stale Builder interaction command: expected {expected}, "
+                f"current {int(canonical.get('generation') or 0)}"
+            )
+        details = {
+            **dict(metadata or {}),
+            "idempotency_key": str(response.get("idempotency_key") or "").strip()
+            or f"interaction:{response.get('response_id')}",
+            "interaction_response_id": response.get("response_id"),
+        }
+        return self.transition(
+            object_type,
+            object_id,
+            action,
+            actor=actor,
+            metadata=details,
+        )
+
     def update_interaction_context(
         self,
         object_type: str,
@@ -1610,6 +1706,21 @@ class BuilderWorkflowService:
             if bool(state.get("archived")):
                 raise BuilderWorkflowError("archived projects cannot change workflow")
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            originating_change_id = str(details.get("originating_change_id") or "").strip()
+            scoped_original_record: dict[str, Any] | None = None
+            if originating_change_id and action_token != "plan_change_set":
+                current = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+                current_id = str((current or {}).get("change_id") or "")
+                if current_id != originating_change_id:
+                    portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                    target_record = portfolio.get(originating_change_id)
+                    if not isinstance(target_record, Mapping):
+                        raise BuilderWorkflowError(
+                            f"originating Builder Change is unavailable: {originating_change_id}"
+                        )
+                    scoped_original_record = capture_compatibility_record(workflow)
+                    restore_compatibility_record(workflow, target_record)
+                    workflow["change_portfolio"] = portfolio
             parallel_plan = bool(details.get("parallel")) and action_token == "plan_change_set"
             current_change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
             if (
@@ -1819,6 +1930,14 @@ class BuilderWorkflowService:
                 }
             )
             workflow["history"] = history[-_MAX_HISTORY:]
+            if scoped_original_record is not None:
+                portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                restore_compatibility_record(workflow, scoped_original_record)
+                workflow["change_portfolio"] = portfolio
+                focus = _mapping(project.get("focus_by_context"))
+                focus["default"] = scoped_original_record["change_id"]
+                project["focus_by_context"] = focus
+                workflow["project"] = project
             state["workflow"] = workflow
             state["workflow_state"] = workflow["active_phase"]
             state["updated_at"] = changed_at
@@ -1839,7 +1958,12 @@ class BuilderWorkflowService:
         projection["project_summary"] = self._project_summary(projection)
         if callable(self.event_sink):
             self.event_sink(projection)
-        return {"ok": True, "action": action_token, "workflow": projection}
+        return {
+            "ok": True,
+            "action": action_token,
+            "updated_change_id": originating_change_id or mutation_change_id or None,
+            "workflow": projection,
+        }
 
     @staticmethod
     def _record_transition_run(
@@ -2823,6 +2947,14 @@ class BuilderWorkflowService:
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             if candidate_id != str(delivery.get("candidate_id") or ""):
                 raise BuilderWorkflowError("candidate decision does not match the active trial")
+            candidate_digest = str(metadata.get("candidate_digest") or "").strip()
+            expected_digest = str(
+                delivery.get("package_digest") or delivery.get("release_digest") or ""
+            ).strip()
+            if not candidate_digest or candidate_digest != expected_digest:
+                raise BuilderWorkflowError(
+                    "candidate decision requires the exact immutable candidate digest"
+                )
             delivery.update(
                 {
                     "status": "accepted" if action == "candidate_accepted" else "rejected",
@@ -2862,6 +2994,14 @@ class BuilderWorkflowService:
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             if candidate_id != str(delivery.get("candidate_id") or ""):
                 raise BuilderWorkflowError("publication candidate does not match the accepted trial")
+            candidate_digest = str(metadata.get("candidate_digest") or "").strip()
+            expected_digest = str(
+                delivery.get("package_digest") or delivery.get("release_digest") or ""
+            ).strip()
+            if not candidate_digest or candidate_digest != expected_digest:
+                raise BuilderWorkflowError(
+                    "publication requires the exact immutable candidate digest"
+                )
             version = str(metadata.get("version") or "").strip()
             if not version:
                 raise BuilderWorkflowError("publication version is required")
