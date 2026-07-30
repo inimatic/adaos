@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.relationship_edge.v1",
+  "title": "AdaOS Governed Relationship Plane Edge",
+  "type": "object",
+  "required": ["schema", "edge_id", "plane", "source", "target", "relation", "ownership"],
+  "properties": {
+    "schema": { "const": "adaos.workflow.relationship_edge.v1" },
+    "edge_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "plane": {
+      "enum": [
+        "demand",
+        "delivery",
+        "workflow",
+        "artifact_lineage",
+        "component_dependency",
+        "execution",
+        "conversation_interaction",
+        "release_deployment",
+        "authority_trust",
+        "view_context"
+      ]
+    },
+    "source": { "$ref": "#/$defs/ref" },
+    "target": { "$ref": "#/$defs/ref" },
+    "relation": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,79}$" },
+    "ownership": { "const": "reference" },
+    "metadata": { "type": "object" }
+  },
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "required": ["schema", "kind", "id"],
+      "properties": {
+        "schema": { "const": "adaos.workflow.ref.v1" },
+        "kind": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": ["string", "null"] },
+        "generation": { "type": ["integer", "null"], "minimum": 0 },
+        "digest": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

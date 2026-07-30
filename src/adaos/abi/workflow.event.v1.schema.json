@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.event.v1",
+  "title": "AdaOS Governed Workflow Event",
+  "type": "object",
+  "required": [
+    "schema",
+    "event_id",
+    "type",
+    "instance_ref",
+    "definition_version",
+    "generation",
+    "transition_id",
+    "command_id",
+    "actor_ref",
+    "before_state",
+    "after_state",
+    "idempotency_key",
+    "payload_digest",
+    "input_digest",
+    "evidence_refs",
+    "data",
+    "created_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.event.v1" },
+    "event_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "type": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "instance_ref": { "$ref": "#/$defs/ref" },
+    "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "generation": { "type": "integer", "minimum": 1 },
+    "transition_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "command_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "actor_ref": { "$ref": "#/$defs/ref" },
+    "before_state": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "after_state": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "payload_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "input_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "evidence_refs": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/ref" } },
+    "data": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "required": ["schema", "kind", "id"],
+      "properties": {
+        "schema": { "const": "adaos.workflow.ref.v1" },
+        "kind": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": ["string", "null"] },
+        "generation": { "type": ["integer", "null"], "minimum": 0 },
+        "digest": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

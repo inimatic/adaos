@@ -9,16 +9,22 @@
     "source",
     "target",
     "trigger",
+    "context",
     "authority",
     "guards",
     "concurrency",
     "risk",
     "effect",
+    "recovery",
     "outcomes",
+    "evidence",
+    "approval",
     "async_reply",
     "capability_requirements",
     "explanations",
-    "events"
+    "events",
+    "observability",
+    "migration"
   ],
   "properties": {
     "schema": { "const": "adaos.workflow.transition.v1" },
@@ -42,6 +48,15 @@
         "kind": { "enum": ["command", "activity_result", "timeout", "recovery", "automatic"] },
         "command": { "$ref": "#/$defs/id" },
         "input_schema": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "required": ["target_resolution", "command_context_required"],
+      "properties": {
+        "target_resolution": { "enum": ["instance", "explicit_ref", "interaction_binding"] },
+        "command_context_required": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -109,6 +124,17 @@
       },
       "additionalProperties": false
     },
+    "recovery": {
+      "type": "object",
+      "required": ["timeout_seconds", "heartbeat_seconds", "cancellation", "reconciliation"],
+      "properties": {
+        "timeout_seconds": { "type": ["integer", "null"], "minimum": 1 },
+        "heartbeat_seconds": { "type": ["integer", "null"], "minimum": 1 },
+        "cancellation": { "enum": ["not_applicable", "cooperative", "abandon", "compensate"] },
+        "reconciliation": { "enum": ["not_applicable", "required_on_unknown", "always"] }
+      },
+      "additionalProperties": false
+    },
     "outcomes": {
       "type": "object",
       "required": ["success", "failure", "input_required", "cancelled", "unknown"],
@@ -127,6 +153,15 @@
       "properties": {
         "required": { "type": "boolean" },
         "minimum": { "type": "integer", "minimum": 0, "maximum": 100 }
+      },
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": "object",
+      "required": ["required", "policy_refs"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
       },
       "additionalProperties": false
     },
@@ -160,9 +195,33 @@
       "additionalProperties": false
     },
     "events": {
-      "type": "array",
-      "maxItems": 20,
-      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+      "type": "object",
+      "required": ["emitted", "outbox"],
+      "properties": {
+        "emitted": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "outbox": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "observability": {
+      "type": "object",
+      "required": ["audit_event", "redaction", "metrics", "trace"],
+      "properties": {
+        "audit_event": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "redaction": { "enum": ["none", "input", "evidence", "policy"] },
+        "metrics": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "trace": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "migration": {
+      "type": "object",
+      "required": ["introduced_in", "aliases"],
+      "properties": {
+        "introduced_in": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "aliases": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } }
+      },
+      "additionalProperties": false
     }
   },
   "$defs": {

@@ -141,53 +141,69 @@ external execution engine.
 reject invalid definitions, exercise every legal/illegal transition, and
 produce stable fresh interaction descriptors from the resulting state.
 
-- [ ] `[must]` `GWR1-01` Add versioned schemas and typed models for
+- [x] `[must]` `GWR1-01` Add versioned schemas and typed models for
   `WorkflowDefinition`, `WorkflowInstance`, `WorkflowCommand`, and
-  `WorkflowEvent`.
-- [ ] `[must]` `GWR1-02` Add typed refs for principal, aggregate, task,
-  artifact, evidence, interaction, command context, and reply route.
+  `WorkflowEvent`. The ABI package now publishes all four schemas, typed
+  construction helpers, and a contract snapshot.
+- [x] `[must]` `GWR1-02` Add typed refs for principal, aggregate, task,
+  artifact, evidence, interaction, command context, and reply route. The
+  shared `adaos.workflow.ref.v1` also covers workflow, component, release, and
+  view refs without copying referenced state.
 - [x] `[must]` `GWR1-03` Implement a pure transition resolver that consumes a
   definition, snapshot, and command and returns an accepted transition or a
   typed rejection without side effects. `governed_workflow.WorkflowResolver`
   now returns immutable before/after snapshots plus activity/event intents;
   it performs no persistence, projection, or activity execution.
-- [ ] `[must]` `GWR1-04` Implement definition validation for reachability,
+- [x] `[must]` `GWR1-04` Implement definition validation for reachability,
   terminals, registered guards/activities, competing transitions, risk,
-  retries, failure outcomes, and waiting-state explanation.
+  retries, failure outcomes, and waiting-state explanation. Compilation now
+  fails closed for unreachable states, ambiguous source/command edges,
+  outgoing terminal edges, unexplained waits, and unknown registered code.
 - [x] `[must]` `GWR1-05` Require monotonic generation and
   `expected_generation` for state-changing commands. The first resolver slice
   rejects missing/stale generations and binds duplicate detection to command
   input through a payload digest.
-- [ ] `[must]` `GWR1-06` Define pure guards and invariants with typed reason
-  codes instead of boolean-only results.
-- [ ] `[must]` `GWR1-07` Define effect/activity metadata for idempotency,
+- [x] `[must]` `GWR1-06` Define pure guards and invariants with typed reason
+  codes instead of boolean-only results. Registered guards return an admission
+  result plus a stable reason code and unknown guards fail closed.
+- [x] `[must]` `GWR1-07` Define effect/activity metadata for idempotency,
   side-effect class, timeout, heartbeat, cancellation, compensation, and
-  unknown outcome.
+  unknown outcome. These are required fields of the transition ABI rather
+  than executor-local defaults.
 - [x] `[must]` `GWR1-08` Generate `allowed_actions` and rejection explanations
   from the same guards used to admit commands. `describe(...)` and `apply(...)`
   share the same authority and registered-guard evaluation paths.
-- [ ] `[should]` `GWR1-09` Add model-based tests proving state snapshots and
-  projections can be rebuilt from canonical workflow events.
+- [x] `[should]` `GWR1-09` Add model-based tests proving state snapshots and
+  projections can be rebuilt from canonical workflow events. The canonical
+  transition event reducer verifies pinned definition, contiguous generation,
+  state continuity, and idempotency records.
 - [ ] `[should]` `GWR1-10` Add schema compatibility tests and a definition
   version/migration fixture.
-- [ ] `[should]` `GWR1-11` Define the stable persistence/execution adapter port
-  without making it necessary for the pure resolver.
-- [ ] `[could]` `GWR1-12` Export a statechart representation for visualization
-  and review without making the visualization format authoritative.
-- [ ] `[deferred]` `GWR1-13` Defer arbitrary end-user workflow authoring and
+- [x] `[should]` `GWR1-11` Define the stable persistence/execution adapter port
+  without making it necessary for the pure resolver. `WorkflowInstanceStore`
+  and `WorkflowActivityDispatcher` are narrow Protocol ports; the resolver has
+  no dependency on either.
+- [x] `[could]` `GWR1-12` Export a statechart representation for visualization
+  and review without making the visualization format authoritative. The
+  projection carries `authoritative=false` and only compiled state/edge facts.
+- [x] `[deferred]` `GWR1-13` Defer arbitrary end-user workflow authoring and
   executable expressions; definitions reference only registered code.
-- [ ] `[should]` `GWR1-14` Emit a definition-review report covering reachable
+- [x] `[should]` `GWR1-14` Emit a definition-review report covering reachable
   states, transition and cycle counts, competing guards, waiting/outcome
   coverage, concurrency scopes, projection coverage, and generated tests.
-- [ ] `[must]` `GWR1-15` Publish and compile the complete
+  The first report exposes reachability, terminals, waits, cycle edges, unused
+  commands, and conflict scopes; conformance coverage remains in GWR5.
+- [x] `[must]` `GWR1-15` Publish and compile the complete
   `adaos.workflow.transition.v1` descriptor: trigger/input, authority, guards,
   concurrency, risk, effect, every outcome, retry/cancel/reconciliation,
   evidence, events/outbox, async reply, capability requirements, explanation,
-  observability, and migration.
-- [ ] `[must]` `GWR1-16` Add typed refs and cycle/ownership validators for
+  observability, and migration. Every category is explicit and schema
+  validated; executors cannot silently inject defaults.
+- [x] `[must]` `GWR1-16` Add typed refs and cycle/ownership validators for
   Issue, Change, workflow, artifact, component dependency, execution,
   conversation/interaction, release/deployment, authority, and view/context
-  planes; prohibit copying mutable state between them.
+  planes; prohibit copying mutable state between them. The relationship-edge
+  ABI is reference-only and validates each plane's independent cycle policy.
 - [ ] `[should]` `GWR1-17` Define typed parent/child workflow composition,
   authority delegation, join policies, partial outcomes, cancellation,
   compensation, evidence aggregation, and late-result behavior.

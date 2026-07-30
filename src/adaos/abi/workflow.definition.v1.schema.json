@@ -29,7 +29,9 @@
           "id": { "$ref": "#/$defs/id" },
           "label": { "type": "string", "minLength": 1, "maxLength": 200 },
           "terminal": { "type": "boolean" },
-          "description": { "type": ["string", "null"], "maxLength": 1000 }
+          "description": { "type": ["string", "null"], "maxLength": 1000 },
+          "waiting": { "type": "boolean", "default": false },
+          "wait_explanation": { "type": ["string", "null"], "maxLength": 1000 }
         },
         "additionalProperties": false
       }
