@@ -69,6 +69,52 @@ Project
        -> Release
 ```
 
+### Project Aggregate
+
+`adaos.builder.project.v1` is the stable coordination boundary for one skill,
+scenario, or atomic multi-component capability. It is not itself one workflow
+instance and has no single mutable "stage".
+
+Minimum fields:
+
+- canonical project ref, kind, title, description, owner/trust scope, and
+  archive state;
+- authoritative manifest/source identity and exact current public/stable
+  SourceRef and ProjectRelease when they exist;
+- installed WorkspaceLock/component bindings and current DEV base refs;
+- accepted Prototype and retained Implementation refs plus active candidate,
+  Trial, and Publication refs where applicable;
+- open/terminal Issue and Change refs, Change dependency/conflict summary, and
+  focused Change refs by scoped command context;
+- component boundary, declared contracts, resolved dependency-lock refs, and
+  affected-ref index used for conflict detection;
+- project policy refs for routing, risk, approvals, executors, data modes,
+  retention, localization, and publication channels;
+- workflow-definition type/version used for each live Change;
+- created/updated/archive metadata and a projection generation.
+
+The project owns a portfolio, not a global current Change. Its summary is a
+derived projection answering:
+
+- which stable/installed/DEV/candidate identities are current;
+- which Changes are open, focused, blocked, conflicting, or awaiting input;
+- which shared components and contracts they affect;
+- what can safely start, continue, trial, publish, archive, or restore;
+- why a project-level command is unavailable.
+
+Project policy may serialize overlapping mutations while allowing independent
+Changes and read/evaluation Runs concurrently. Change dependencies use typed
+`depends_on`, `blocks`, `alternative_to`, `supersedes`, and `split_from`
+edges. Dependency cycles fail validation; symmetric `related` links belong to
+Issues, not the execution order.
+
+Cross-component delivery remains one Change only when its scenario/skills must
+be accepted and promoted as one ProjectRelease dependency lock. Otherwise the
+work is split into linked Changes with explicit contract and join evidence.
+The Project aggregate links the separate relationship planes defined by the
+[Explainable Workflow Model](governed-workflow-runtime.md#related-models-that-must-stay-separate)
+without copying their mutable state.
+
 ### Issue
 
 An `Issue` is one independently understandable requirement, defect, risk, or
@@ -364,6 +410,14 @@ views:
 An action includes a command, an expected generation or precondition, a risk
 class, and a presentation hint. A stale action fails safely and returns the
 fresh frame; the client never infers the next workflow state.
+
+`adaos.builder.interaction_frame.v1` is the Builder domain snapshot and
+compatibility projection. Human input is requested through the shared
+`adaos.conversation.interaction.v1`; its response, capability negotiation,
+presentation plan, ReplyRoute, ResponseEnvelope, and DeliveryAttempts follow
+the [shared workflow interaction protocol](governed-workflow-runtime.md#conversationinteraction).
+Builder must not invent a second action-token, fallback, acknowledgement, or
+delivery lifecycle inside the frame.
 
 ### Channel Capability Boundary
 
@@ -665,7 +719,10 @@ remain discoverable from one map:
 | Decision | Owning contract | Delivery/evidence owner |
 | --- | --- | --- |
 | One validated state/transition model drives commands and explanations | [Explainable Workflow Model](governed-workflow-runtime.md) | GWR1-GWR5 in the [workflow roadmap](governed-workflow-runtime-roadmap.md) |
+| Project is a portfolio/coordination aggregate, not one global stage | [Project Aggregate](#project-aggregate) | Builder Phase 11 and GWR4 project/concurrency proof |
 | Conversation is primary; rich views are contextual | [Interaction Contract](#interaction-contract) and [Workbench Projection](#builder-workbench-projection) | Phase 11 in the [Builder Roadmap](builder-roadmap.md) |
+| Channel capabilities select presentation but never change command legality | [Channel Capability Boundary](#channel-capability-boundary) and the shared interaction protocol | GWR2 negotiation/conformance evidence |
+| Async completion, conversation materialization, and delivery are independent | Shared ReplyRoute/DeliveryAttempt protocol | GWR6 recovery and delivery evidence |
 | A message does not automatically equal a Change | [Issue/Change/Run model](#canonical-development-model) | Builder Phase 11 plus GWR4 |
 | Multiple open Changes are allowed; focus and write admission are scoped | [Change Concurrency And Focus](#change-concurrency-and-focus) | GWR4/GWR5 conflict and focus evidence |
 | Prototype -> Automation -> Trial -> Publication is one governed path | [Builder Change Statechart](#builder-change-statechart) | GWR4 definition and GWR5 end-to-end proof |
@@ -680,8 +737,8 @@ remain discoverable from one map:
 ## Source Of Truth And Projection Rules
 
 - `scenario.yaml` / `skill.yaml` remain canonical artifact manifests.
-- Change/Issue/Run records live in backend-owned durable storage or a versioned
-  project contract during migration.
+- Project/Change/Issue/Run records live in backend-owned durable storage or a
+  versioned project contract during migration.
 - `webui.json` is the active declarative UI source; UI revisions are immutable
   snapshots.
 - ProjectRelease, PackageRef, and WorkspaceLock own delivery and activation.
@@ -700,11 +757,15 @@ The refactoring is additive and compatibility-preserving:
 3. link per-turn development-change evidence as `run` records;
 4. construct and digest a bounded context packet for Prototype and
    Implementation execution;
-5. expose typed interaction actions with risk and generation preconditions;
-6. add semantic Review and UI-operation contracts;
-7. project the current Lifecycle as on-demand Process view;
-8. make the Workbench conversation-first while retaining feature-parity gates;
-9. migrate durable state before removing compatibility fields or tools.
+5. expose a Project portfolio projection over existing manifest, selection,
+   Change, dependency, release, and archive records;
+6. adapt Builder Interaction Frames to the shared Interaction/Response,
+   capability-negotiation, async envelope, and delivery contracts;
+7. expose typed interaction actions with risk and generation preconditions;
+8. add semantic Review and UI-operation contracts;
+9. project the current Lifecycle as on-demand Process view;
+10. make the Workbench conversation-first while retaining feature-parity gates;
+11. migrate durable state before removing compatibility fields or tools.
 
 The old functional Builder revision remains an acceptance reference during the
 migration. Self-hosting is allowed only after deterministic parity, contract,
@@ -722,12 +783,18 @@ The first refactoring slice is accepted only when:
 3. the context packet is bounded, stable-digested, and reconstructable by refs;
 4. context actions reject stale generations and publish their risk class;
 5. one semantic UI operation produces a reversible validated Revision;
-6. the Review anchor contract is versioned and the current client-only cache is
-   explicitly treated as a compatibility draft; durable backend migration is a
-   separate scheduled slice;
+6. typed submitted Reviews are durable and withdrawable; the current
+   client-only free-form cache is explicitly treated as an unsent compatibility
+   draft with a separate migration;
 7. Process selection does not implicitly switch Preview;
 8. Prototype, Implementation, Trial, Publication, and Workspace activation
    retain exact provenance;
 9. a representative non-Builder scenario completes request -> Change ->
    Prototype or Implementation -> Trial -> Publication in DEV;
-10. the recovered Builder retains the complete functional-parity contract.
+10. one semantic interaction negotiates equivalent Web, Telegram/text, and
+    handoff presentations without changing its commands or confirmation;
+11. an accepted long Run survives restart and failed first delivery, then
+    returns its terminal result without repeated mutation;
+12. a Project exposes multiple independent Changes and an indirect
+    shared-component conflict without inventing one global project stage;
+13. the recovered Builder retains the complete functional-parity contract.

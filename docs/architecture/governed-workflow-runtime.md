@@ -134,6 +134,12 @@ The architecture must:
 11. remain local-first and useful while Root is unreachable;
 12. provide evidence and traces suitable for debugging, evaluation, and future
     multi-user governance.
+13. negotiate channel/client/surface capabilities without changing command
+    legality, risk, confirmation, or target identity;
+14. separate task outcome, conversation materialization, transport delivery,
+    and acknowledgement so delivery recovery never repeats work;
+15. keep Issue, Change, workflow, artifact, dependency, execution,
+    conversation, release, authority, and view relationship planes distinct.
 
 ## Non-Goals
 
@@ -193,8 +199,29 @@ instance snapshot and transition ledger is sufficient for the initial model.
 
 ## Related Models That Must Stay Separate
 
-One large graph or state enum would create state explosion. AdaOS therefore
-keeps four related models separate.
+One large graph or state enum would create state explosion and unclear
+authority. AdaOS therefore keeps the following relationship planes separate:
+
+| Plane | Nodes and edges | Cycle rule | Source of truth |
+| --- | --- | --- | --- |
+| Demand / Issue | Issues with `related`, `duplicate`, `depends_on`, and `blocks` | `related` may cycle; dependency/blocking cycles are rejected or explicitly diagnosed | Issue/project store |
+| Delivery / Change | Changes containing Issues and linked by `depends_on`, `alternative_to`, `supersedes`, and `split_from` | dependency and supersession edges are acyclic | Builder/project store |
+| Workflow | Named business states connected by command transitions | deliberate review/revision loops are allowed | versioned WorkflowDefinition plus instance snapshot |
+| Artifact lineage | Revisions, candidates, and releases connected by `derived_from`, `implements`, and `published_as` | immutable DAG | artifact and release stores |
+| Component dependency | Scenarios, skills, packages, and contracts connected by declared requirements and resolved bindings | source constraints may be recursive; an activated lock must resolve without a dependency cycle | manifests and ProjectRelease/WorkspaceLock |
+| Execution | Tasks, Runs, attempts, child work, retries, and recovery | attempt/causation graph is append-only and acyclic | task/Run journal |
+| Conversation / interaction | Conversations, threads, messages, interactions, responses, tasks, and ReplyRoutes connected by correlation and causation | message order is monotonic per conversation; correlation is not business state | conversation ledger and interaction registry |
+| Release / deployment | SourceRefs, packages, releases, candidates, channels, activation locks, and receipts | releases are immutable; channel/slot pointer history is append-only | registry and WorkspaceLock |
+| Authority / trust | Principals, roles, scopes, approvals, delegations, and policy witnesses | policy-defined; never inferred from another plane | identity, policy, and audit stores |
+| View / command context | Focused project/Change, inspected ref, Preview target, and channel surface | not an authoritative graph and freely replaceable | scoped context projection |
+
+Each plane has typed refs into other planes, but may not copy another plane's
+mutable state or reinterpret its edges. For example, an Issue `blocks` edge
+does not create a workflow transition, a completed Run does not imply an
+accepted Change, and selecting an artifact does not promote it.
+
+The four planes most frequently confused in the current Builder are described
+in more detail below.
 
 ### Workflow Statechart
 
@@ -270,6 +297,35 @@ guards, effects, evidence requirements, and explanation metadata. An internal
 automatic transition is still named and observable; hidden state mutation is
 not allowed.
 
+### TransitionDescriptor
+
+`adaos.workflow.transition.v1` is the normative edge contract. A transition is
+incomplete unless it declares or explicitly marks as not applicable:
+
+- stable transition id, definition version, source selector, and target state;
+- user/system/activity-result/timeout/recovery trigger and typed input schema;
+- actor, authority, target-resolution, and command-context requirements;
+- pure guards, invariant checks, policy refs, and typed rejection reasons;
+- expected generation, concurrency scope, conflict key, and idempotency
+  contract;
+- risk and side-effect class plus the transactional commit boundary;
+- registered effect or activity and typed success result;
+- mappings for known failure, `input_required`, timeout, cancellation, and
+  `outcome_unknown`;
+- retry eligibility, attempt policy, compensation, and reconciliation path;
+- required approval/evidence gates and immutable input/output refs;
+- emitted domain/workflow events and transactional outbox work;
+- asynchronous reply policy, progress policy, and ReplyRoute requirements;
+- interaction capability requirements and secure/rich fallback policy;
+- localized available, blocked, running, completed, and failed explanations;
+- audit, correlation, causation, redaction, metrics, and trace requirements;
+- definition migration and in-flight compatibility behavior.
+
+Defaults may reduce repetition, but the compiled descriptor contains the
+effective value of every field. A UI hint, model prompt, activity function, or
+transport adapter cannot add a guard, retry rule, or outcome absent from the
+compiled descriptor.
+
 ### Guard and Invariant
 
 A guard is a pure predicate deciding whether one transition is currently
@@ -335,15 +391,43 @@ states:
 transitions:
   - id: accept_prototype
     from: prototype_review
-    command: builder.accept_prototype
     to: automation_ready
+    trigger:
+      command: builder.accept_prototype
+      input_schema: adaos.builder.prototype_accept.v1
+    authority:
+      actor_policy: builder.prototype_reviewer
+      target_ref: prototype_ref
+    concurrency:
+      expected_generation: required
+      scope: change
+      conflict_key: change_id
+    risk: isolated_write
     guards:
       - builder.prototype_target_is_current
       - builder.review_is_authorized
-    effects:
-      - builder.record_prototype_acceptance
     evidence:
       - prototype_review
+    effect:
+      activity: builder.record_prototype_acceptance
+      transaction: builder_change_store
+      idempotency: command_key
+      outcomes:
+        success: automation_ready
+        known_failure: prototype_review
+        unknown: reconciliation_required
+    async_reply:
+      policy: terminal_result
+      route: originating_conversation
+    interaction:
+      requires: [explicit_confirmation]
+      fallback: secure_deep_link
+    explanation:
+      available: builder.prototype.accept.available
+      blocked: builder.prototype.accept.blocked
+      completed: builder.prototype.accept.completed
+    emits:
+      - builder.prototype.accepted
 ```
 
 From this one edge the compiler/resolver must derive command admission, the
@@ -363,10 +447,11 @@ define the target responsibilities.
 - stable workflow type and definition version;
 - aggregate/domain type;
 - initial, final, nested, and optional parallel states;
-- typed commands and transitions;
+- typed commands and compiled `TransitionDescriptor` records;
 - registered guard, activity, and compensation identifiers;
+- optional typed subworkflow declarations and join policies;
 - risk and confirmation policies;
-- required interaction and explanation templates;
+- interaction capability requirements and explanation templates;
 - schema and migration policy.
 
 Declarative definitions may reference registered code. They may not contain
@@ -427,7 +512,8 @@ contains:
 - workflow, task, target, revision, and generation bindings;
 - typed options or requested form fields;
 - risk, expiry, single-use, and confirmation policy;
-- presentation hints and channel fallbacks;
+- required/optional capabilities, semantic presentation hints, and allowed
+  fallback classes;
 - opaque action tokens rather than raw tool names and arguments;
 - reply-route and status references.
 
@@ -435,6 +521,83 @@ Web may render buttons, selectors, review cards, search, or a rich view.
 Telegram may render an inline keyboard, pagination, a deep link, or a compact
 message. A text-only channel may render numbered choices. All are projections
 of the same interaction.
+
+Interaction lifecycle is independent from message delivery:
+
+```text
+created -> projected -> awaiting_input -> partially_answered
+                                      -> answered -> accepted -> completed
+                                                  -> validation_failed
+awaiting_input | partially_answered -> expired | cancelled | superseded
+```
+
+`projected` means at least one safe presentation plan exists, not that a
+transport delivered it. `answered` means input was captured, not that the
+workflow accepted it. A corrected answer supersedes the prior response through
+a new record; it never rewrites conversation history.
+
+### InteractionResponse
+
+`adaos.conversation.interaction_response.v1` contains:
+
+- interaction, presentation, action-token, and response identity;
+- principal, conversation/thread, channel, and command-context binding;
+- selected option or typed form values plus source message refs;
+- original text and IntentProposal when natural language was interpreted;
+- expected workflow, context, and interaction generations;
+- validation result, correction/supersession refs, and expiry decision;
+- consumed command/event ref or typed rejection reason.
+
+Deterministic controls produce an InteractionResponse without NLU. Free text
+may propose one, but the same schema, generation, guard, and policy checks
+apply before it is consumed.
+
+### Capability Profile And Presentation Negotiation
+
+`adaos.channel.capability_profile.v1` describes the effective capabilities of
+one transport + client + surface combination. It is versioned and includes:
+
+- text, markdown, choices, multi-select, typed forms, file upload/download,
+  rich view, deep link, miniapp, secure input, progress, cancel, message edit,
+  replace/coalesce, delivery receipt, and acknowledgement support;
+- limits such as button count, label/text/payload size, form fields, attachment
+  size, update frequency, and callback-token size;
+- locale, directionality, accessibility, and supported media hints;
+- reconnect/resume and cross-channel handoff support;
+- profile source, freshness, and downgrade reason.
+
+`ConversationInteraction` declares semantic requirements rather than a chosen
+widget: required and optional capabilities, input schema, risk, secure-entry
+requirement, fallback classes, and whether text-only representation preserves
+meaning.
+
+Negotiation produces
+`adaos.conversation.interaction_presentation.v1` containing:
+
+- interaction and capability-profile versions;
+- selected presentation and bounded layout/transport parameters;
+- included semantic actions and input fields;
+- omitted optional features with reason codes;
+- chosen fallback or cross-channel handoff;
+- expiry, refresh, replacement/coalescing, and acknowledgement policy;
+- proof that every required command remains reachable with equivalent risk and
+  confirmation semantics.
+
+Negotiation order is deterministic:
+
+1. intersect interaction requirements with the current effective profile;
+2. apply policy, privacy, accessibility, and risk restrictions;
+3. choose the least complex presentation preserving required semantics;
+4. otherwise select an allowed text/deep-link/Web/miniapp fallback;
+5. if none is safe, return `unsupported` with a reason and keep the workflow in
+   an explainable waiting state.
+
+A capability is not permission, authority, business availability, or consent.
+Negotiation cannot remove a required confirmation, expose a secret as ordinary
+chat text, make a blocked command available, or silently omit the only safe
+way to continue. Reconnect, client change, or channel handoff creates a new
+presentation plan over the same Interaction; it does not create a second
+business request.
 
 ### IntentProposal
 
@@ -472,6 +635,56 @@ materialized -> queued -> sent -> acknowledged
 ```
 
 A local ledger flag named `notified` must not imply transport delivery.
+
+`ResponseEnvelope` is channel-neutral outbound content. It is not an
+Interaction, user answer, task result, or delivery receipt. It contains a
+message class (`accepted`, `progress`, `input_required`, `terminal`, or
+`notification`), conversation/task/workflow refs, content, sensitivity,
+presentation requirements, and optional replacement/coalescing key.
+
+`adaos.conversation.delivery_attempt.v1` records one attempt to materialize or
+deliver one envelope through one presentation/transport. It contains attempt,
+message/envelope, presentation, recipient, external ref, idempotency key,
+status, provider receipt, error, timestamps, and retry disposition. Retrying a
+DeliveryAttempt can never repeat the workflow command or activity.
+
+The asynchronous protocol is:
+
+```text
+command accepted and journaled
+  -> accepted ResponseEnvelope
+  -> Task/Run progress events (optional, monotonic)
+  -> input_required Interaction (optional)
+  -> resumed command/activity
+  -> one canonical terminal outcome
+  -> terminal ResponseEnvelope
+  -> one or more independent DeliveryAttempts
+  -> acknowledged or explicitly undeliverable
+```
+
+Required invariants:
+
+- an HTTP/tool acknowledgement means accepted, not completed;
+- workflow state, task outcome, conversation materialization, and transport
+  delivery have separate statuses and timestamps;
+- one terminal outcome is committed idempotently before notification;
+- restart rebuilds pending envelopes and attempts from the outbox/journal;
+- an original channel failure may use another policy-authorized ReplyRoute, but
+  never another principal, Change, or target;
+- late and out-of-order progress carries a monotonic sequence; clients ignore
+  stale progress without hiding the terminal result;
+- progress may be rate-limited or coalesced by key, while evidence remains
+  available for diagnostics;
+- cancellation and `input_required` are addressable commands/interactions, not
+  special transport messages;
+- expiry or loss of every ReplyRoute leaves the result queryable in its
+  canonical conversation/task and exposes an undeliverable reason.
+
+User-attention policy decides whether an event appends a message, replaces a
+status card, updates only a progress projection, records evidence silently, or
+raises a notification. It considers risk, urgency, user preferences, quiet
+periods, channel limits, and whether input is required. It cannot suppress a
+required approval or make delivery success part of the business transition.
 
 ## Command and Transition Boundary
 
@@ -618,6 +831,37 @@ Every domain roadmap must link a discussion/requirement decision to its owning
 definition element, implementation task, and acceptance evidence. This
 traceability map is navigation, not a duplicate source of transition truth.
 
+## Workflow Composition
+
+A large process is composed through explicit parent/child workflow commands,
+not shared mutable state. A subworkflow declaration contains:
+
+- child workflow type/version and stable parent correlation;
+- typed input refs and result schema;
+- authority delegation and narrower permission scope;
+- start/idempotency key and concurrency/conflict scope;
+- wait mode plus named join policy (`all`, `any`, `quorum`, or domain-specific
+  registered policy);
+- timeout, cancellation propagation, abandonment, and late-result behavior;
+- child success/failure/input-required/unknown mappings into parent commands;
+- compensation/reconciliation responsibility;
+- ReplyRoute and evidence aggregation policy.
+
+The child owns its state and journal. It can only affect the parent by sending
+a typed result command; it cannot mutate the parent snapshot, UI projection,
+or artifact refs directly. The parent records every admitted child identity
+and exact definition version.
+
+Partial success is explicit. A multi-artifact Builder Change may wait for
+several component Runs and still produce no promotable candidate until its
+registered join policy verifies the complete dependency lock. A failed child
+does not silently roll back successful external effects; compensation or
+residual-effect evidence is part of the outcome.
+
+Composition is introduced only when a bounded child has an independent
+lifecycle or executor. Simple deterministic guards/effects remain in the
+parent definition; AdaOS does not turn every function call into a workflow.
+
 ## Persistence and Durable Execution Are Secondary Adapters
 
 The workflow definition, transition resolver, explanation, and conformance
@@ -736,10 +980,12 @@ The workflow boundary enforces:
 
 ## Versioning and Migration
 
-Four versions remain independent:
+The following versions remain independent:
 
 - workflow schema version;
 - workflow definition version;
+- interaction/response/envelope schema versions;
+- capability-profile and presentation-plan versions;
 - executor/provider and worker code version;
 - domain artifact or release version.
 
@@ -747,6 +993,12 @@ New instances use the admitted definition version. In-flight instances either
 remain pinned to compatible worker code, use an explicit deterministic
 migration, or enter a visible operator-required state. Deployment must never
 reinterpret old history with incompatible code silently.
+
+An in-flight Interaction remains pinned to its semantic schema and target
+generation. A channel/client change may negotiate a new presentation against a
+new capability profile, but cannot reinterpret already captured values or
+weaken its confirmation policy. Schema-incompatible responses fail with a
+fresh explanation and replacement Interaction rather than lossy coercion.
 
 Provider changes apply to new instances first. Cross-provider migration of an
 active instance is deferred until a real requirement and a reversible protocol
@@ -762,7 +1014,10 @@ Every describe/projection response should answer:
 - what evidence exists or remains missing;
 - what actions are currently allowed;
 - why a requested action is unavailable or rejected;
-- where a later response will be delivered;
+- which Interaction is awaiting input and how current capabilities present or
+  hand it off;
+- where a later response will be delivered and whether its task outcome,
+  conversation materialization, and transport delivery have succeeded;
 - whether state is fresh, degraded, recovering, or requires reconciliation.
 
 Operational telemetry correlates conversation message, intent proposal,

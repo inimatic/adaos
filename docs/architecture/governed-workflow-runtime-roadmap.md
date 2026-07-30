@@ -46,8 +46,10 @@ record. A successful happy-path UI demonstration does not prove durability.
 4. [Operational Event Model](operational-event-model.md) owns event envelopes
    and projections; this roadmap owns workflow command/event semantics.
 5. [Conversation and Channel Architecture](conversation-and-channel-architecture.md)
-   owns durable threads and message storage; this roadmap owns interactions,
-   action invocation, and workflow reply binding.
+   owns durable threads/messages, capability-profile persistence, routing,
+   materialization, and transport DeliveryAttempts; this roadmap owns semantic
+   Interaction/Response lifecycles, negotiation invariants, action invocation,
+   task/workflow correlation, and reply binding.
 6. [Pending Actions](pending-actions.md) is a compatibility input and may be
    migrated; it is not a second permanent interaction authority.
 7. [Builder Roadmap](builder-roadmap.md) owns Builder product acceptance; this
@@ -67,7 +69,10 @@ The current repository has useful but fragmented foundations:
 | Human decisions | Pending Actions and several domain-specific confirmations | implemented compatibility path; no canonical interaction registry |
 | Web actions | structured chat actions and page action runtime | partial projection; transport and authorization contracts differ |
 | Telegram actions | callback normalization and backend keyboard support | partial plumbing; canonical outbound/inbound bridge incomplete |
+| Capability negotiation | renderer hints and channel-specific limits | no versioned effective profile or auditable presentation plan |
+| Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
 | Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
+| Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing | at-most-once transport path; not a workflow journal |
 | Shared workflow metamodel | none | primary architecture gap |
@@ -79,11 +84,11 @@ The current repository has useful but fragmented foundations:
 | --- | --- | --- | --- |
 | GWR0 | The semantic problem, boundaries, and authority are fixed | `specified` | now |
 | GWR1 | A canonical metamodel, definition compiler, and pure resolver exist | `hypothesis` | now |
-| GWR2 | State explanation and semantic affordances are derived consistently for every channel | `hypothesis` with compatibility fragments | now |
+| GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `hypothesis` with compatibility fragments | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `hypothesis` | next |
 | GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model | `hypothesis` | next |
 | GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `hypothesis` | next |
-| GWR6 | Actual durability gaps and reference persistence requirements are measured | `hypothesis` | later |
+| GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `hypothesis` | later |
 | GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `deferred decision` | later |
 | GWR8 | Root/multi-user and cross-provider extensions are admitted by evidence | `deferred` | long-term |
 
@@ -169,18 +174,32 @@ produce stable fresh interaction descriptors from the resulting state.
 - [ ] `[should]` `GWR1-14` Emit a definition-review report covering reachable
   states, transition and cycle counts, competing guards, waiting/outcome
   coverage, concurrency scopes, projection coverage, and generated tests.
+- [ ] `[must]` `GWR1-15` Publish and compile the complete
+  `adaos.workflow.transition.v1` descriptor: trigger/input, authority, guards,
+  concurrency, risk, effect, every outcome, retry/cancel/reconciliation,
+  evidence, events/outbox, async reply, capability requirements, explanation,
+  observability, and migration.
+- [ ] `[must]` `GWR1-16` Add typed refs and cycle/ownership validators for
+  Issue, Change, workflow, artifact, component dependency, execution,
+  conversation/interaction, release/deployment, authority, and view/context
+  planes; prohibit copying mutable state between them.
+- [ ] `[should]` `GWR1-17` Define typed parent/child workflow composition,
+  authority delegation, join policies, partial outcomes, cancellation,
+  compensation, evidence aggregation, and late-result behavior.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 
-**Outcome:** one snapshot produces one explanation and one semantic set of
-available actions, regardless of whether it is viewed in Builder Lifecycle,
-Web chat, Telegram, CLI, or a test.
+**Outcome:** one snapshot produces one explanation and one semantic Interaction
+set; capability negotiation then selects a safe Web, Telegram, text, CLI, or
+test presentation without changing command legality.
 
 **Admission gate:** GWR1 can compile and resolve a representative definition.
 
 **Exit proof:** generated conformance tests prove that every reachable state is
 explainable, every displayed action is accepted under the same context, every
-blocked action has a reason code, and channels differ only in presentation.
+blocked action has a reason code, channel limits produce an auditable safe
+presentation/fallback, and an unsupported requirement remains explainably
+blocked.
 
 - [ ] `[must]` `GWR2-01` Define `WorkflowSnapshot` and a pure `explain()` result
   containing state, target, progress, blockers, evidence, and allowed commands.
@@ -205,6 +224,22 @@ blocked action has a reason code, and channels differ only in presentation.
 - [ ] `[could]` `GWR2-11` Export a generated graph/timeline for review and docs.
 - [ ] `[deferred]` `GWR2-12` Defer universal Telegram parity for file trees,
   search, and rich Preview; semantic command parity is sufficient.
+- [ ] `[must]` `GWR2-13` Implement the independent ConversationInteraction
+  lifecycle from creation/projection through partial answer, validation,
+  completion, expiry, cancellation, and supersession.
+- [ ] `[must]` `GWR2-14` Add typed `InteractionResponse` records binding actor,
+  values/source message, presentation, target, generations, validation,
+  correction, and consumed command/rejection.
+- [ ] `[must]` `GWR2-15` Add versioned effective transport + client + surface
+  capability profiles with feature limits, locale/accessibility, secure input,
+  progress/update, handoff, acknowledgement, and freshness metadata.
+- [ ] `[must]` `GWR2-16` Implement deterministic capability/policy negotiation
+  that produces an auditable InteractionPresentation, preserves every required
+  command/risk/confirmation, and otherwise returns a typed fallback or
+  `unsupported` wait reason.
+- [ ] `[should]` `GWR2-17` Add presentation conformance fixtures for Web,
+  Telegram, text-only, reconnect/profile change, secure handoff, and a client
+  whose capability limits cannot represent the requested interaction.
 
 ## GWR3. NLU Mediation and Informal Responses
 
@@ -303,6 +338,13 @@ tests cover all legal and representative illegal paths.
 - [ ] `[must]` `GWR4-17` Define context-facet requirements and a packet coverage
   report that fails before LLM/Codex submission when target structure, ABI,
   constraints, data policy, or execution authority is missing or ambiguous.
+- [ ] `[must]` `GWR4-18` Publish `adaos.builder.project.v1` as a portfolio and
+  coordination aggregate with source/stable/installed/DEV/candidate refs,
+  project policy, component boundary, open Changes, conflict/dependency index,
+  scoped focus, workflow versions, and archive state.
+- [ ] `[must]` `GWR4-19` Derive project summary and commands from its linked
+  planes; never infer one global project stage from the focused Change or most
+  recent Run.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -361,18 +403,35 @@ lineage, evidence, and final Publication agree without direct state repair.
 - [ ] `[should]` `GWR5-18` Record definition complexity and context-sufficiency
   metrics alongside cycle time, clarification, repeated-correction, and action
   mismatch rates.
+- [ ] `[must]` `GWR5-19` Prove one Interaction preserves command identity,
+  risk, confirmation, and target when negotiated as a Web form, Telegram
+  choices, numbered text, or a cross-channel deep-link handoff.
+- [ ] `[must]` `GWR5-20` Prove an unsupported required capability leaves the
+  workflow waiting with an explanation rather than hiding controls or
+  weakening confirmation.
+- [ ] `[must]` `GWR5-21` Prove several pending interactions are independently
+  addressable and an unbound free-text answer changes no state until the target
+  is clarified.
+- [ ] `[must]` `GWR5-22` Prove the Project aggregate reports two independent
+  Changes concurrently while detecting an indirect conflict through a shared
+  skill/component dependency.
+- [ ] `[should]` `GWR5-23` Prove one multi-component Change joins exact scenario
+  and skill Runs into one dependency-locked candidate and reports partial
+  success without partial promotion.
 
 ## GWR6. Durability Gap Assessment and Reference Persistence
 
-**Outcome:** AdaOS knows which reliability requirements the semantic model
-actually creates and whether the current local persistence can satisfy them.
+**Outcome:** AdaOS knows which workflow, human-wait, asynchronous result, and
+delivery reliability requirements the semantic model actually creates and
+whether the current local persistence can satisfy them.
 
 **Admission gate:** GWR5 passes semantically; failures can now be attributed to
 execution/recovery rather than an inconsistent transition model.
 
 **Exit proof:** restart and fault tests identify concrete gaps, the minimal
-reference persistence closes the required single-user gaps, and an ADR states
-whether an external engine evaluation is warranted.
+reference persistence closes the required single-user workflow and
+result/delivery gaps, and an ADR states whether an external engine evaluation
+is warranted.
 
 - [ ] `[must]` `GWR6-01` Inventory waits, timers, callbacks, long activities,
   retries, cancellation, unknown outcomes, and reply delivery in the accepted
@@ -399,6 +458,19 @@ whether an external engine evaluation is warranted.
   if delivery durability is one of the measured gaps.
 - [ ] `[deferred]` `GWR6-11` Defer distributed consensus and active-active local
   workflow execution.
+- [ ] `[must]` `GWR6-12` Implement channel-neutral ResponseEnvelopes for
+  accepted, progress, input-required, terminal, and notification messages with
+  workflow/task correlation, monotonic sequence, sensitivity, and coalesce key.
+- [ ] `[must]` `GWR6-13` Persist ReplyRoutes, an outbound envelope outbox, and
+  idempotent per-presentation/transport DeliveryAttempts; redelivery must never
+  reinvoke the originating command or activity.
+- [ ] `[must]` `GWR6-14` Recover pending interactions, terminal envelopes, and
+  delivery attempts after restart; preserve a queryable terminal result when
+  every route expires or is undeliverable.
+- [ ] `[should]` `GWR6-15` Add ordered progress, update coalescing, attention
+  policy, quiet periods/preferences, alternate authorized routes, delivery
+  receipts, and operator inspection without coupling delivery to business
+  completion.
 
 ## GWR7. Optional External Durable Adapter
 
@@ -525,6 +597,31 @@ admitted, the GWR7 adapter:
 24. **Context sufficiency:** a request such as "put checkboxes on the left"
     either receives the target's parent/sibling/order and ABI constraints or
     asks for clarification before LLM/Codex execution.
+25. **Capability downgrade:** one Interaction preserves command, risk,
+    confirmation, and target across Web form, Telegram choices, numbered text,
+    and deep-link handoff; an unsafe downgrade returns `unsupported`.
+26. **Partial and corrected answer:** a multi-field response can be validated,
+    corrected, and consumed once without rewriting the original message or
+    accepting a stale generation.
+27. **Async restart:** a command is acknowledged, the process restarts, and the
+    eventual terminal result materializes in the originating conversation from
+    the persisted task/outbox.
+28. **Delivery independence:** a terminal result is durable while Telegram
+    delivery fails; redelivery succeeds without repeating the skill, LLM,
+    Codex, activity, or workflow transition.
+29. **Progress ordering:** late progress cannot replace a newer progress or
+    terminal projection; coalescing reduces noise without losing evidence.
+30. **Interaction ambiguity:** two pending interactions plus an unbound "yes"
+    produce clarification and no state change.
+31. **Relationship-plane separation:** an Issue dependency, completed Run,
+    selected Preview, and channel delivery receipt cannot independently change
+    the Change state or artifact lineage.
+32. **Project portfolio:** two non-overlapping Changes progress independently;
+    an indirect shared-component conflict is visible and blocks only the
+    conflicting commit/promotion scope.
+33. **Subworkflow partial result:** one child succeeds and one fails; the
+    parent records both, applies its declared join/failure policy, and never
+    promotes a partial dependency lock.
 
 ## Definition of Done for This Roadmap
 
@@ -537,6 +634,11 @@ This roadmap is complete only when:
 - the normative Builder statechart, transition catalogue, concurrency scope,
   Run purposes, data modes, Review lifecycle, and context-sufficiency rules
   map to implementation tasks and repeatable evidence;
+- semantic Interaction, InteractionResponse, capability negotiation,
+  ResponseEnvelope, ReplyRoute, and DeliveryAttempt lifecycles remain distinct
+  and pass cross-channel/restart tests;
+- Project coordination and every relationship plane have explicit owners,
+  edge/cycle rules, typed refs, and no shared mutable truth;
 - Builder and at least one second domain use the shared workflow model;
 - Web and Telegram pass the same semantic interaction cases;
 - NLU cannot bypass allowed transitions or policy;

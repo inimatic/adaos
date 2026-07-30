@@ -17,6 +17,11 @@ Related documents:
   durable Issues and evidence, not the development source of truth
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE3 Support and
   repair gate and GE4 collaboration horizon
+- [Explainable Workflow Model and Interaction Architecture](governed-workflow-runtime.md):
+  semantic interactions, capability negotiation, workflow commands,
+  ReplyRoutes, and asynchronous delivery invariants
+- [Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md):
+  shared interaction and delivery implementation gates
 - [Channel Semantics](channel-semantics.md)
 - [Endpoint Audio Service](endpoint-audio-service.md)
 - [AdaOS Builder](builder.md)
@@ -202,6 +207,61 @@ Implemented companion pilot scenarios:
 12. NLU is not the dialog manager. Rasa, regex, neural, or Teacher stages may
     classify text, but AdaOS owns turn tracking, repair state, forms, response
     planning, memory policy, and action dispatch.
+
+## Interaction, Capability, And Async Reply Boundary
+
+The conversation plane stores and routes dialog; it does not redefine business
+workflow or transport limitations. The clean contract separates:
+
+| Record | Responsibility | Not equivalent to |
+| --- | --- | --- |
+| `ConversationInteraction` | Semantic request for bounded human input/actions | outbound message or UI widget |
+| `InteractionResponse` | Typed user answer bound to interaction and generation | accepted workflow command |
+| `ChannelCapabilityProfile` | Effective transport + client + surface features and limits | permission or business availability |
+| `InteractionPresentation` | Negotiated rendering/fallback for one interaction/profile | durable interaction truth |
+| `ResponseEnvelope` | Channel-neutral outbound content such as accepted/progress/input-required/terminal | task outcome or delivery receipt |
+| `ReplyRoute` | Authorized conversation/thread/recipient routing policy | transport session id |
+| `DeliveryAttempt` | One materialization/delivery attempt and provider receipt | repeated tool/workflow execution |
+| `Task` / domain `Run` | Long-running work and attempts | conversation message |
+
+The semantic schemas and invariants are owned by the
+[shared interaction protocol](governed-workflow-runtime.md#conversationinteraction).
+This document owns conversation persistence, routing policy, transport
+adapters, delivery attempts, and SDK ergonomics. `DialogFrame` may adapt a
+legacy slot/form flow to ConversationInteraction, but it cannot become a
+second interaction registry.
+
+Capability negotiation uses the effective profile of the current transport,
+client, and surface. Policy may remove a technically supported capability. A
+renderer selects a safe presentation or an explicit text/deep-link/Web/miniapp
+fallback and records that decision. It never drops the only required action,
+weakens confirmation, exposes sensitive input as chat text, or changes which
+workflow commands are legal.
+
+Durable waits do not block an ordinary skill process. The target SDK separates:
+
+```python
+# Immediate or process-bounded compatibility call only.
+answer = chat.ask(prompt, timeout="30s")
+
+# Durable human input for a workflow/task.
+handle = chat.request(interaction)
+return task.input_required(handle.interaction_ref)
+
+# A later InteractionResponse resumes through a typed workflow command.
+```
+
+`chat.ask(...)` may remain as bounded convenience, but a timeout longer than
+the owning process lifetime must compile to/persist an Interaction and return a
+handle rather than hold an in-memory waiter.
+
+For asynchronous work, accepting a command, completing a task, appending a
+conversation result, delivering it to Telegram/Web/Voice, and receiving an
+acknowledgement are distinct facts. The canonical terminal result is committed
+once. Delivery may be retried or handed off to another authorized channel
+without invoking the skill, LLM, Codex, or workflow command again. Progress is
+sequenced and may be coalesced; `input_required`, cancellation, expiry, and
+undeliverable results remain queryable after restart.
 
 ## Vocabulary
 
@@ -680,9 +740,41 @@ memory_items(
   confidence, consent, visibility, expires_at, created_at, updated_at
 )
 
+channel_capability_profiles(
+  id, transport, client, surface, schema_version, capabilities_json,
+  limits_json, locale_json, freshness, updated_at
+)
+
+conversation_interactions(
+  id, conversation_id, thread_id, workflow_ref, task_ref, target_ref,
+  generation, requirements_json, state, expires_at, created_at, updated_at
+)
+
+interaction_presentations(
+  id, interaction_id, capability_profile_id, channel, plan_json,
+  fallback_json, state, created_at, updated_at
+)
+
+interaction_responses(
+  id, interaction_id, presentation_id, principal_id, generation,
+  values_json, source_refs_json, validation_json, disposition, created_at
+)
+
+reply_routes(
+  id, conversation_id, thread_id, principal_id, policy_json,
+  external_refs_json, state, created_at, updated_at
+)
+
+response_envelopes(
+  id, conversation_id, thread_id, task_ref, workflow_ref, class,
+  sequence, content_json, presentation_requirements_json,
+  coalesce_key, state, created_at
+)
+
 delivery_attempts(
-  id, message_id, transport, external_ref_json, status,
-  error, created_at, updated_at
+  id, envelope_id, presentation_id, reply_route_id, transport,
+  idempotency_key, external_ref_json, status, provider_receipt_json,
+  error_json, retry_disposition, created_at, updated_at
 )
 
 conversation_idempotency(
@@ -699,6 +791,11 @@ Recommended implementation details:
   and `memory_items.text`
 - build segment summaries and optional embeddings asynchronously
 - keep hot writes independent from LLM calls, summarization, and vector indexing
+- append InteractionResponses and terminal ResponseEnvelopes idempotently;
+  update only derived lifecycle/read-model fields
+- retry DeliveryAttempts from an outbox without reinvoking their source task
+- sequence and coalesce progress envelopes without losing the canonical
+  terminal outcome
 - keep Yjs projection writes bounded and fingerprinted
 - expose all storage through conversation/memory services and SDKs, not direct
   SQL from skills
@@ -1040,10 +1137,16 @@ chat = conversation.open(
     context_policy={"strategy": "isolated", "memory_scope": "skill"},
 )
 
-reply = chat.ask("What should I configure?", timeout="10m")
+# Immediate, process-bounded clarification only.
+reply = chat.ask("What should I configure?", timeout="30s")
 context = chat.context(max_tokens=8000)
 facts = chat.memory.search("user preferences", scope="skill_user", top_k=5)
 ```
+
+If the answer may arrive after the current process lifetime, the skill uses
+`chat.request(interaction, task_ref=...)`, returns `input_required`, and resumes
+from the later typed `InteractionResponse`; it does not increase the
+`chat.ask(...)` timeout.
 
 Builder conversation:
 
@@ -1068,12 +1171,21 @@ Recommended public helpers:
 - `conversation.for_skill(skill_id, ...)`
 - `conversation.for_user(user_id, kind="general")`
 - `chat.send(content, ...)`
-- `chat.ask(prompt, timeout=...)`
+- `chat.ask(prompt, timeout=...)` for process-bounded compatibility waits
+- `chat.request(interaction, task_ref=...)` for durable human input
+- `chat.publish(response_envelope, reply_route=...)`
+- `chat.delivery(envelope_id)` for materialization/delivery status
 - `chat.history(limit=..., thread_id=None)`
 - `chat.context(max_tokens=..., purpose="reply|builder|diagnostics")`
 - `chat.memory.search(query, scope=..., agent_id=None, top_k=...)`
 - `chat.memory.remember(text, scope=..., source_refs=..., consent=...)`
 - `chat.start_thread(title=..., context_policy=None)`
+
+An SDK call must expose whether it returned a final value or an
+`InteractionHandle`. It must not disguise `input_required` as a timeout, keep a
+durable wait only in memory, or report a materialized ledger message as
+transport-acknowledged. Interaction action tokens and responses enter through
+the shared canonical ingress rather than calling skill tools from a renderer.
 
 Transport-specific APIs remain available only for transport features:
 
@@ -1207,6 +1319,16 @@ Target contract:
   and conversation id so a retry does not duplicate the assistant reply.
 - If the skill both emits `io.out.chat.append` and returns `message`, the core
   must dedupe or mark one path as already materialized.
+- A `ResponseEnvelope(class=accepted|progress|input_required|terminal)` retains
+  task/workflow correlation and monotonic sequence; an ordinary `message`
+  remains a compatibility terminal-content shortcut.
+- Materialization appends or updates canonical conversation content and queues
+  DeliveryAttempts. It does not claim Telegram/Web/Voice delivery.
+- Delivery retry consumes the stored envelope and ReplyRoute only. It never
+  redispatches the originating tool action.
+- Capability negotiation precedes rich materialization. A missing required
+  capability yields an explicit fallback/handoff or `unsupported`, never an
+  incomplete control set.
 
 Minimal compatibility rule for the current Voice path:
 
@@ -1630,6 +1752,15 @@ depth across several phases.
   Python contract is `adaos.domain.conversation`.
 - [x] `[must]` Define `DialogTurn`, `DialogAct`, `DialogFrame`,
   `DialogPolicyState`, `ResponseEnvelope`, and `TurnTrace` schemas.
+- [ ] `[must]` Publish the shared `ConversationInteraction`,
+  `InteractionResponse`, `ChannelCapabilityProfile`,
+  `InteractionPresentation`, `ReplyRoute`, and `DeliveryAttempt` schemas and
+  make DialogFrame/ResponseEnvelope explicit adapters rather than duplicate
+  authorities.
+- [ ] `[must]` Define and validate independent Interaction, response,
+  presentation, envelope, and delivery lifecycles, including partial input,
+  correction, expiry, cancellation, supersession, terminal result, and
+  undeliverable outcomes.
 - [x] `[must]` Define actor ids for `core:*`, `skill:*`,
   `agent:<skill_id>:<agent_id>`, users, nodes, endpoints, and transports.
 - [x] `[must]` Define `created_by` / `initiator` shape for conversations,
@@ -1811,6 +1942,10 @@ depth across several phases.
   `chat.context`, and `chat.start_thread`. `adaos.sdk.chat` now wraps the
   canonical ledger, bounded history, context packets, durable threads, and
   visible response materialization.
+- [ ] `[must]` Add `chat.request(...)`, `InteractionHandle`, durable
+  `input_required` resume, `chat.publish(ResponseEnvelope, ReplyRoute)`, and
+  delivery-status inspection. Keep long waits out of process-local
+  `chat.ask(...)` futures.
 - [x] `[must]` Implement structured `ResponseEnvelope` handling so generated
   skills can return user-visible content without directly calling
   `io.out.chat.append`. `conversation_response.materialize_response(...)`
@@ -1870,9 +2005,16 @@ depth across several phases.
 - [x] `[should]` Make Telegram inbound text resolve to conversations before NLU
   or skill dispatch. The first slice supports limited text/compact-status
   projection; rich action keyboards and delivery receipts remain open.
+- [ ] `[must]` Implement effective transport + client + surface capability
+  profiles and deterministic presentation negotiation with safe text/deep-link
+  handoff, limits, reason codes, and required-action preservation.
 - [ ] `[should]` Make endpoint audio dialog mode resolve to conversations
   before NLU or skill dispatch.
-- [ ] `[should]` Record delivery status per transport attempt.
+- [ ] `[must]` Record idempotent materialization and delivery status per
+  ResponseEnvelope/ReplyRoute/transport attempt; retry delivery from the outbox
+  without redispatching the skill or workflow command.
+- [ ] `[should]` Sequence, rate-limit, and coalesce progress updates while
+  keeping input-required and terminal outcomes durable and queryable.
 - [ ] `[could]` Add deep links that open a specific conversation/thread from a
   notification, Pending Action, or Telegram command.
 
@@ -2328,6 +2470,17 @@ The architecture is implemented when:
   canonical memory boundary.
 - Pending Actions link back to conversations and threads for human review
   context.
+- One semantic Interaction can render as a Web form, Telegram choices, or an
+  explicit handoff without changing command identity, risk, or required
+  confirmation.
+- A durable `input_required` interaction survives process restart and can be
+  answered from another policy-authorized channel without losing its workflow,
+  task, principal, target, or generation binding.
+- A terminal task result is committed once; a failed Telegram/Web/Voice
+  DeliveryAttempt can be repeated without repeating the skill, LLM, Codex, or
+  workflow operation.
+- Progress is ordered/coalesced independently from the terminal result, and an
+  undeliverable result remains visible through conversation/task inspection.
 - Low-level `io.out.chat.append` is no longer the recommended SDK surface for
   ordinary skill dialog.
 - Voice can switch between `general`, `conversational`, and `builder` without

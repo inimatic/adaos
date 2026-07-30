@@ -123,7 +123,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated compatibility slice: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, neutral Web/Telegram text routing, and one non-Builder request-to-Workspace slice. The canonical shared statechart/resolver migration is not yet implemented. | Open: scoped multi-Change focus/conflicts, Run purposes, context-sufficiency gate, data modes, submitted Review lifecycle, live Telegram-bot and human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated compatibility slice: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, neutral Web/Telegram text routing, and one non-Builder request-to-Workspace slice. The canonical shared statechart/resolver and interaction protocol migrations are not yet implemented. | Open: Project aggregate/portfolio, scoped multi-Change focus/conflicts, Run purposes, context-sufficiency gate, capability negotiation, async reply/delivery, data modes, submitted Review lifecycle, live Telegram-bot and human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: workflow composition, additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -871,9 +871,9 @@ Architecture:
   search, selection, diff, artifact, and spatial Review surfaces remain Web
   capabilities with compact/deep-link fallbacks.
 - [x] `[must]` Define the normative Builder Change statechart, transition
-  catalogue, scoped Change concurrency/focus, Run purposes, data modes,
-  submitted Review lifecycle, context-sufficiency contract, and decision
-  traceability map in
+  catalogue, Project aggregate, scoped Change concurrency/focus, Run purposes,
+  data modes, submitted Review lifecycle, context-sufficiency contract, and
+  decision traceability map in
   [Builder Conversational Development Architecture](builder-conversational-development.md).
 - [x] `[must]` Link the domain definition to the shared compiler/resolver and
   conformance proof in the
@@ -925,12 +925,27 @@ Canonical model and context:
 - [ ] `[must]` Persist Run purpose as `iteration`, `experiment`, `evaluation`,
   or `recovery`; keep Experiment output off the accepted line until an explicit
   reviewed `adopt_experiment` command.
+- [ ] `[must]` Publish and persist `adaos.builder.project.v1` with exact
+  source/stable/installed/DEV/candidate identities, component/dependency
+  boundary, project policy, open Change portfolio, conflict/dependency index,
+  scoped focus, workflow versions, and archive state.
+- [ ] `[must]` Derive project summary and project-level commands without
+  inventing one current stage from the focused Change, latest Run, selected
+  Process node, or Preview target.
 
 Commands, projections, and Workbench:
 
 - [x] `[must]` Emit typed interaction actions with command, risk class,
   expected workflow generation, target refs, presentation hint, and fallback.
   Stale actions fail without mutation and return the current projection.
+- [ ] `[must]` Adapt Builder Interaction Frames to the shared
+  ConversationInteraction/InteractionResponse registry. Consume negotiated
+  Web/Telegram/text presentations and one canonical action ingress rather than
+  maintaining Builder-specific token, fallback, or response lifecycles.
+- [ ] `[must]` Return accepted/progress/input-required/terminal
+  ResponseEnvelopes for long LLM/Codex/Trial/Publication work. Persist the
+  terminal result once and retry ReplyRoute DeliveryAttempts independently;
+  never repeat a modifying Run to recover a missing chat response.
 - [x] `[must]` Introduce explicit conversation focus, inspected ref, and
   Preview target fields. Selecting a Process item must not implicitly
   materialize it in Preview.
@@ -1036,6 +1051,15 @@ Autonomy, evidence, and acceptance:
   functional parity, and wide/compact browser acceptance. Workspace Builder
   remains unchanged until the DEV candidate is explicitly trialed and
   accepted.
+- [ ] `[must]` Add Builder interaction conformance for Web rich controls,
+  Telegram limits, numbered text, required-capability failure, and deep-link
+  handoff with identical command/risk/confirmation semantics.
+- [ ] `[must]` Add asynchronous restart evidence: accepted command, progress,
+  input-required or terminal result, failed first delivery, and successful
+  redelivery without repeating LLM/Codex/Trial/Publication mutation.
+- [ ] `[must]` Add Project portfolio evidence for concurrent non-overlapping
+  Changes and an indirect shared-skill conflict, including explicit
+  rebase/split/supersede resolution and no partial candidate promotion.
 - [ ] `[should]` Add evaluator evidence for semantic UI constraints,
   functional tests, usability probes, and source/dependency impact without
   requiring a separate model agent for every low-risk change.
