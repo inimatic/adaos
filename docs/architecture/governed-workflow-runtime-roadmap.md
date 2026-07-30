@@ -83,13 +83,13 @@ The current repository has useful but fragmented foundations:
 | Milestone | Outcome | Current maturity | Horizon |
 | --- | --- | --- | --- |
 | GWR0 | The semantic problem, boundaries, and authority are fixed | `specified` | now |
-| GWR1 | A canonical metamodel, definition compiler, and pure resolver exist | `hypothesis` | now |
-| GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `hypothesis` with compatibility fragments | now |
-| GWR3 | Free text is constrained by pending interaction and allowed transitions | `hypothesis` | next |
-| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model | `hypothesis` | next |
-| GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `hypothesis` | next |
-| GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `hypothesis` | later |
-| GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `deferred decision` | later |
+| GWR1 | A canonical metamodel, definition compiler, and pure resolver exist | `validated-local` | now |
+| GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
+| GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model | `validated-local` | next |
+| GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local` | next |
+| GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `validated-local` | later |
+| GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `postponed by evidence` | later |
 | GWR8 | Root/multi-user and cross-provider extensions are admitted by evidence | `deferred` | long-term |
 
 Milestones are cumulative. GWR0-GWR5 solve the workflow fragmentation problem
@@ -177,8 +177,10 @@ produce stable fresh interaction descriptors from the resulting state.
   projections can be rebuilt from canonical workflow events. The canonical
   transition event reducer verifies pinned definition, contiguous generation,
   state continuity, and idempotency records.
-- [ ] `[should]` `GWR1-10` Add schema compatibility tests and a definition
-  version/migration fixture.
+- [x] `[should]` `GWR1-10` Add schema compatibility tests and a definition
+  version/migration fixture. The explicit migration contract validates source
+  and target definitions, authority, admitted state maps, context deltas, and
+  generation; versioned replay crosses the migration event deterministically.
 - [x] `[should]` `GWR1-11` Define the stable persistence/execution adapter port
   without making it necessary for the pure resolver. `WorkflowInstanceStore`
   and `WorkflowActivityDispatcher` are narrow Protocol ports; the resolver has
@@ -204,9 +206,12 @@ produce stable fresh interaction descriptors from the resulting state.
   conversation/interaction, release/deployment, authority, and view/context
   planes; prohibit copying mutable state between them. The relationship-edge
   ABI is reference-only and validates each plane's independent cycle policy.
-- [ ] `[should]` `GWR1-17` Define typed parent/child workflow composition,
+- [x] `[should]` `GWR1-17` Define typed parent/child workflow composition,
   authority delegation, join policies, partial outcomes, cancellation,
-  compensation, evidence aggregation, and late-result behavior.
+  compensation, evidence aggregation, and late-result behavior. The
+  composition ABI enforces unique child/correlation identities and narrower
+  delegated permissions; the pure join resolver cannot promote an incomplete
+  required-child set.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 
@@ -251,8 +256,12 @@ blocked.
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
   target, risk, and confirmation remain in the semantic action.
-- [ ] `[should]` `GWR2-09` Unify Pending Actions with the semantic interaction
+- [x] `[should]` `GWR2-09` Unify Pending Actions with the semantic interaction
   model or document one bounded compatibility adapter and retirement path.
+  Builder's migration map retains Pending Action refs only as compatibility
+  evidence/input, routes new decisions through ConversationInteraction and
+  InteractionResponse, and retires direct Pending Action mutation after all
+  skill callers use the shared registry.
 - [x] `[should]` `GWR2-10` Add a developer inspector showing why a transition is
   available or blocked without exposing provider internals. The pure
   description includes allowed/blocked commands, reason codes/keys, blockers,
@@ -334,7 +343,7 @@ resolver.
 - [x] `[could]` `GWR3-11` Parse common short answers and ordinal choices
   deterministically before invoking a model. Russian/English ordinals,
   numeric choices, and bounded yes/no forms use the deterministic mediator.
-- [ ] `[deferred]` `GWR3-12` Defer autonomous workflow induction from arbitrary
+- [x] `[deferred]` `GWR3-12` Defer autonomous workflow induction from arbitrary
   conversations.
 
 ## GWR4. Builder Domain Workflow Model
@@ -391,13 +400,17 @@ tests cover all legal and representative illegal paths.
   context; neither changes the workflow without an explicit command. Tests
   prove an inspection/Preview update leaves canonical Change state and
   generation unchanged.
-- [ ] `[must]` `GWR4-09` Map current Builder JSON, sessions, Pending Actions,
+- [x] `[must]` `GWR4-09` Map current Builder JSON, sessions, Pending Actions,
   and UI handlers to canonical concepts with retain/adapt/retire disposition.
-- [ ] `[should]` `GWR4-10` Add a compact workflow explanation to the chat so a
-  user can ask what is happening, why, and what can happen next.
+  The Builder architecture migration table names each legacy surface, its
+  canonical owner, bounded adapter, and retirement condition.
+- [x] `[should]` `GWR4-10` Add a compact workflow explanation to the chat so a
+  user can ask what is happening, why, and what can happen next. Builder now
+  derives one channel-neutral state/reason/next-command explanation from the
+  canonical snapshot and uses it as the Interaction Frame prompt.
 - [ ] `[could]` `GWR4-11` Add a generated graph/timeline inspector as a rich
   detail view, not the primary control surface.
-- [ ] `[deferred]` `GWR4-12` Defer simultaneous multi-user approval and artifact
+- [x] `[deferred]` `GWR4-12` Defer simultaneous multi-user approval and artifact
   merging to GWR8.
 - [x] `[must]` `GWR4-13` Implement scoped Change focus and write-conflict keys;
   switching focus is view/command context and never a business transition.
@@ -489,7 +502,7 @@ lineage, evidence, and final Publication agree without direct state repair.
   Builder path.
 - [ ] `[could]` `GWR5-11` Add mutation testing that deliberately removes guards
   or projections and proves conformance tests fail.
-- [ ] `[deferred]` `GWR5-12` Do not block the semantic proof on choosing or
+- [x] `[deferred]` `GWR5-12` Do not block the semantic proof on choosing or
   integrating an external durable engine.
 - [x] `[must]` `GWR5-13` Prove two open Changes can be inspected independently,
   focus changes no business state, non-overlapping work is admitted, and
@@ -523,9 +536,11 @@ lineage, evidence, and final Publication agree without direct state repair.
   skill/component dependency. The Project computes transitive `requires` and
   `derives` footprints and reports `component_dependency` separately from a
   direct affected-ref collision.
-- [ ] `[should]` `GWR5-23` Prove one multi-component Change joins exact scenario
+- [x] `[should]` `GWR5-23` Prove one multi-component Change joins exact scenario
   and skill Runs into one dependency-locked candidate and reports partial
-  success without partial promotion.
+  success without partial promotion. The reference composition proof requires
+  both scenario and skill child results, aggregates successful evidence, and
+  reports one-child failure as non-promotable `partial_failed`.
 
 ## GWR6. Durability Gap Assessment and Reference Persistence
 
@@ -541,38 +556,50 @@ reference persistence closes the required single-user workflow and
 result/delivery gaps, and an ADR states whether an external engine evaluation
 is warranted.
 
-- [ ] `[must]` `GWR6-01` Inventory waits, timers, callbacks, long activities,
+- [x] `[must]` `GWR6-01` Inventory waits, timers, callbacks, long activities,
   retries, cancellation, unknown outcomes, and reply delivery in the accepted
-  Builder definition.
-- [ ] `[must]` `GWR6-02` Define the minimum persistence contract: snapshot
+  Builder definition. The reference-persistence decision records the exact
+  states, four modifying activities, timeout/heartbeat, no-retry, cancellation,
+  reconciliation, human response, and reply-delivery contracts.
+- [x] `[must]` `GWR6-02` Define the minimum persistence contract: snapshot
   generation, transition journal, idempotent inbox, outbox, activity attempts,
-  pending interactions, and ReplyRoute.
-- [ ] `[must]` `GWR6-03` Implement only the missing reference SQLite semantics,
+  pending interactions, and ReplyRoute. The contract and table ownership are
+  documented in the accepted persistence decision.
+- [x] `[must]` `GWR6-03` Implement only the missing reference SQLite semantics,
   reusing current AdaOS stores rather than creating another per-skill state
-  system.
-- [ ] `[must]` `GWR6-04` Inject crashes before and after every modifying effect
-  and distinguish safe retry from `outcome_unknown` reconciliation.
-- [ ] `[must]` `GWR6-05` Cover delayed human input, process restart,
-  cancellation, definition upgrade, backup/restore, and offline Root.
-- [ ] `[must]` `GWR6-06` Add commit-time checks for permission, target digest,
+  system. Workflow and reply tables use the shared AdaOS SQLite provider.
+- [x] `[must]` `GWR6-04` Inject crashes before and after every modifying effect
+  and distinguish safe retry from `outcome_unknown` reconciliation. The matrix
+  covers Codex, Prototype derivation, Trial, and Publication at both boundaries.
+- [x] `[must]` `GWR6-05` Cover delayed human input, process restart,
+  cancellation, definition upgrade, backup/restore, and offline Root. Local
+  tests retain an undeliverable terminal result when Root has no usable route.
+- [x] `[must]` `GWR6-06` Add commit-time checks for permission, target digest,
   approval witness, current generation, and effect binding.
-- [ ] `[must]` `GWR6-07` Record resource use, recovery complexity, defect rate,
-  and operator repair cost for the reference path.
-- [ ] `[must]` `GWR6-08` Write an ADR: reference persistence sufficient, or
+- [x] `[must]` `GWR6-07` Record resource use, recovery complexity, defect rate,
+  and operator repair cost for the reference path. The decision records eight
+  shared-database tables, bounded write shape, two recovery branches, zero
+  unsafe repeats in eight crash cases, and the one-step reconciliation cost.
+- [x] `[must]` `GWR6-08` Write an ADR: reference persistence sufficient, or
   external durable adapter evaluation admitted with named unmet requirements.
-- [ ] `[should]` `GWR6-09` Add bounded retention, compaction, redacted
-  diagnostics, and operator describe/recover/cancel surfaces.
-- [ ] `[could]` `GWR6-10` Use JetStream for a transport/outbox experiment only
-  if delivery durability is one of the measured gaps.
-- [ ] `[deferred]` `GWR6-11` Defer distributed consensus and active-active local
+  The accepted decision keeps SQLite and postpones external adapters behind
+  five measurable admission conditions.
+- [x] `[should]` `GWR6-09` Add bounded retention, compaction, redacted
+  diagnostics, and operator describe/recover/cancel surfaces. Delivered outbox
+  compaction retains the canonical journal; operator views expose only redacted
+  state, metrics, and safe recovery classification.
+- [x] `[could]` `GWR6-10` Use JetStream for a transport/outbox experiment only
+  if delivery durability is one of the measured gaps. It is not admitted: the
+  reference delivery fault suite exposed no such unresolved gap.
+- [x] `[deferred]` `GWR6-11` Defer distributed consensus and active-active local
   workflow execution.
-- [ ] `[must]` `GWR6-12` Implement channel-neutral ResponseEnvelopes for
+- [x] `[must]` `GWR6-12` Implement channel-neutral ResponseEnvelopes for
   accepted, progress, input-required, terminal, and notification messages with
   workflow/task correlation, monotonic sequence, sensitivity, and coalesce key.
-- [ ] `[must]` `GWR6-13` Persist ReplyRoutes, an outbound envelope outbox, and
+- [x] `[must]` `GWR6-13` Persist ReplyRoutes, an outbound envelope outbox, and
   idempotent per-presentation/transport DeliveryAttempts; redelivery must never
   reinvoke the originating command or activity.
-- [ ] `[must]` `GWR6-14` Recover pending interactions, terminal envelopes, and
+- [x] `[must]` `GWR6-14` Recover pending interactions, terminal envelopes, and
   delivery attempts after restart; preserve a queryable terminal result when
   every route expires or is undeliverable.
 - [ ] `[should]` `GWR6-15` Add ordered progress, update coalescing, attention
@@ -598,8 +625,8 @@ Python 3.11, Windows/Linux packaging, SQLite/PostgreSQL topology, signals and
 waits, upgrades, backup, privacy, observability, resource cost, license,
 maturity, and exit cost.
 
-- [ ] `[deferred]` `GWR7-01` Implement no external adapter until GWR6 admits a
-  measured need.
+- [x] `[deferred]` `GWR7-01` Implement no external adapter until GWR6 admits a
+  measured need. The 2026-07-30 decision admitted none.
 - [ ] `[should]` `GWR7-02` If admitted, freeze a provider conformance suite from
   GWR5-GWR6 before choosing a product.
 - [ ] `[could]` `GWR7-03` Evaluate DBOS for an embedded Python/local and
@@ -611,9 +638,11 @@ maturity, and exit cost.
   below the AdaOS SDK and preserve canonical commands, events, and explanation.
 - [ ] `[must]` `GWR7-07` If adopted, package, supervise, update, health-check,
   back up, and roll back the adapter through AdaOS lifecycle rails.
-- [ ] `[must]` `GWR7-08` Record an adoption/postponement/rejection ADR with
-  measured benefit, operational cost, migration, and exit plan.
-- [ ] `[deferred]` `GWR7-09` Do not maintain several production providers in
+- [x] `[must]` `GWR7-08` Record an adoption/postponement/rejection ADR with
+  measured benefit, operational cost, migration, and exit plan. The reference
+  persistence decision records postponement and provider-specific admission
+  conditions without selecting an implementation.
+- [x] `[deferred]` `GWR7-09` Do not maintain several production providers in
   parallel without separate proven deployment classes.
 
 ## GWR8. Root, Multi-User, and Federation Extensions

@@ -898,6 +898,13 @@ The architecture has succeeded even if no external engine is adopted. An
 engine is selected only when measurements show that it removes more reliability
 and operational risk than it introduces.
 
+The first measurement gate is complete. The
+[Workflow Reference Persistence Decision](workflow-reference-persistence-decision.md)
+accepts shared node-local SQLite for the bounded single-user Builder path and
+postpones every external provider until a named distributed, availability,
+scale, timer, or operator-cost requirement is measured. This decision does not
+expand the reference provider's claim to active-active or multi-user work.
+
 ## Local-First and Root Topology
 
 The runtime supports two deployment classes:

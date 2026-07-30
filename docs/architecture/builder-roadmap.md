@@ -1072,12 +1072,18 @@ Autonomy, evidence, and acceptance:
   handoff with identical command/risk/confirmation semantics. Shared
   presentation fixtures plus the governed Builder E2E proof preserve command,
   target, risk, confirmation, and generation across Web, Telegram, and text.
-- [ ] `[must]` Add asynchronous restart evidence: accepted command, progress,
+- [x] `[must]` Add asynchronous restart evidence: accepted command, progress,
   input-required or terminal result, failed first delivery, and successful
-  redelivery without repeating LLM/Codex/Trial/Publication mutation.
-- [ ] `[must]` Add Project portfolio evidence for concurrent non-overlapping
+  redelivery without repeating LLM/Codex/Trial/Publication mutation. The
+  reference fault matrix covers all four modifying activity types at both
+  effect boundaries; ResponseEnvelope redelivery is independent of business
+  execution and an offline terminal result remains queryable.
+- [x] `[must]` Add Project portfolio evidence for concurrent non-overlapping
   Changes and an indirect shared-skill conflict, including explicit
-  rebase/split/supersede resolution and no partial candidate promotion.
+  rebase/split/supersede resolution and no partial candidate promotion. The
+  governed E2E proof covers parallel Changes, indirect dependencies, and
+  rebase; the typed composition join keeps a scenario-plus-skill candidate
+  non-promotable until both required child Runs succeed.
 - [ ] `[should]` Add evaluator evidence for semantic UI constraints,
   functional tests, usability probes, and source/dependency impact without
   requiring a separate model agent for every low-risk change.
@@ -1182,6 +1188,17 @@ Autonomy, evidence, and acceptance:
   inheriting the current UI focus; and detects an indirect shared-skill
   conflict. The focused workflow, Project, Review/context, interaction, and
   intent suites pass 79/79 locally.
+- [x] Commits `b05ed896` and `afcddb0b` close the definition-evolution and
+  composition seams and add a compact chat explanation. Workflow upgrades are
+  explicit generation-guarded events with versioned replay; a required
+  scenario/skill join cannot partially promote; Builder derives its concise
+  current-state, reason, and next-command answer from the canonical snapshot.
+- [x] Commit `66650e02` supplies the reference durable workflow and reply
+  outboxes. The 2026-07-30
+  [persistence decision](workflow-reference-persistence-decision.md) records
+  16 passing durability/delivery cases, two recovery branches, zero automatic
+  uncertain-effect retries, and postpones external engines until a measured
+  distributed, availability, scale, timer, or operator-cost requirement exists.
 - [x] Before the accepted 2026-07-30 Publication, the installed Workspace
   Builder remained the earlier published
   `0.2.40 / UI 053`; the new `0.2.53 / UI 058` candidate exists only in DEV.
