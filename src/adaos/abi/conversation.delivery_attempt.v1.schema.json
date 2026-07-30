@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.delivery_attempt.v1",
+  "title": "AdaOS Response Delivery Attempt",
+  "type": "object",
+  "required": [
+    "schema", "attempt_id", "envelope_id", "route_id", "presentation_id",
+    "transport", "idempotency_key", "attempt_number", "status", "error",
+    "receipt", "claimed_at", "completed_at"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.conversation.delivery_attempt.v1"},
+    "attempt_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "envelope_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "route_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "presentation_id": {"type": ["string", "null"], "maxLength": 240},
+    "transport": {"type": "string", "minLength": 1, "maxLength": 80},
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 300},
+    "attempt_number": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["claimed", "delivered", "failed", "expired", "cancelled"]},
+    "error": {"type": ["string", "null"], "maxLength": 4000},
+    "receipt": {"type": ["object", "null"]},
+    "claimed_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": ["string", "null"], "format": "date-time"}
+  },
+  "additionalProperties": false
+}

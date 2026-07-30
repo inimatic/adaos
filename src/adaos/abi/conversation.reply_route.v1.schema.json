@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.reply_route.v1",
+  "title": "AdaOS Durable Reply Route",
+  "type": "object",
+  "required": [
+    "schema", "route_id", "conversation_id", "transport", "destination_ref",
+    "principal_scope", "capability_profile_ref", "priority", "status",
+    "expires_at", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.conversation.reply_route.v1"},
+    "route_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "conversation_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "transport": {"type": "string", "minLength": 1, "maxLength": 80},
+    "destination_ref": {"type": "object"},
+    "principal_scope": {
+      "type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 160}
+    },
+    "capability_profile_ref": {"type": ["object", "null"]},
+    "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
+    "status": {"enum": ["active", "paused", "expired", "revoked"]},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

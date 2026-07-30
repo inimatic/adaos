@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.response_envelope.v1",
+  "title": "AdaOS Channel-Neutral Response Envelope",
+  "type": "object",
+  "required": [
+    "schema", "envelope_id", "conversation_id", "category", "sequence",
+    "correlation", "payload", "sensitivity", "attention", "coalesce_key",
+    "reply_route_ids", "status", "created_at", "updated_at", "delivered_at"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.conversation.response_envelope.v1"},
+    "envelope_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "conversation_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "category": {"enum": ["accepted", "progress", "input_required", "terminal", "notification"]},
+    "sequence": {"type": "integer", "minimum": 1},
+    "correlation": {
+      "type": "object",
+      "required": ["workflow_ref", "task_ref", "interaction_ref", "command_id"],
+      "properties": {
+        "workflow_ref": {"type": ["object", "null"]},
+        "task_ref": {"type": ["object", "null"]},
+        "interaction_ref": {"type": ["object", "null"]},
+        "command_id": {"type": ["string", "null"], "maxLength": 240}
+      },
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "required": ["text", "data"],
+      "properties": {
+        "text": {"type": ["string", "null"], "maxLength": 12000},
+        "data": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "sensitivity": {"enum": ["public", "internal", "personal", "sensitive"]},
+    "attention": {"enum": ["silent", "normal", "important", "urgent"]},
+    "coalesce_key": {"type": ["string", "null"], "maxLength": 240},
+    "reply_route_ids": {
+      "type": "array", "maxItems": 20, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 240}
+    },
+    "status": {"enum": ["pending", "delivering", "delivered", "undeliverable", "superseded"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "delivered_at": {"type": ["string", "null"], "format": "date-time"}
+  },
+  "additionalProperties": false
+}
