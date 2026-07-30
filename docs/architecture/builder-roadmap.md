@@ -51,6 +51,25 @@ acceptance turn against `dev1-dev` produced the DEV Builder reply in 3.052 s.
 This proves the local transport/runtime boundary; it does not replace the open
 live bot/backend deployment gate.
 
+The 2026-07-30 Builder self-hosting slice is `published-local`: Prototype
+`UI 058` was stabilized, implemented once by isolated Codex, recovered from
+its confirmed checkpoint without rerunning the mutating command, and promoted
+as `builder@0.2.55`. The accepted candidate
+`builder-0-2-55-a3c36bcaf45e` locks `builder_sdk_control_skill@0.1.58`,
+`builder_skill@0.3.24`, and `voice_chat_skill@0.6.17`; WorkspaceLock revision
+`11` completed reload and exact health verification. A restart audit then
+exposed an obsolete post-boot git-sync path inside release-owned Workspace;
+the same three installed releases were recovered from durable promotion
+receipts into WorkspaceLock revision `3` with unchanged Builder and dependency
+digests. The post-boot worker now consumes the materialized lock without git
+sync, skips projection rebuild when there are no runtime changes, and leaves
+the active A/B slot available until prepare succeeds. An earlier candidate was
+rejected because it resolved stale companion versions, proving that the
+dependency-lock gate fails closed. Exact `proto:` / `active:` / `public:`
+Preview selection was repeated against the isolated nested Preview. This is a
+local publication and transition to the current Workspace edition, not yet a
+clean-stand or multi-user production acceptance claim.
+
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
@@ -1084,7 +1103,8 @@ Autonomy, evidence, and acceptance:
   The manifest declares only `en` and `ru`; no Ukrainian-specific locale text
   was found. UTF-8 JSON-file/tool ingress remains mandatory for non-ASCII
   automation.
-- [x] The installed Workspace Builder remains the earlier published
+- [x] Before the accepted 2026-07-30 Publication, the installed Workspace
+  Builder remained the earlier published
   `0.2.40 / UI 053`; the new `0.2.53 / UI 058` candidate exists only in DEV.
   Workspace git differences are accounted for by the installed release package
   relative to its older `0.2.19` repository snapshot and by files intentionally
@@ -1120,9 +1140,34 @@ Autonomy, evidence, and acceptance:
   thread. The repeated UTF-8 `dev1-dev` acceptance turn returned the canonical
   Builder answer in 3.052 s with no dialog-state timeout or y_py thread-affinity
   fault.
+- [x] The `UI 058` Change completed its remaining gates on 2026-07-30. One
+  Automation task produced Builder `0.2.54`; recovery reused the confirmed
+  checkpoint after live-readiness failed and did not repeat Codex or Forge
+  mutation. The first Trial was rejected because its lock carried stale
+  companion versions. A single explicit change group then checkpointed
+  Builder `0.2.55`, control skill `0.1.58`, and interactive skill `0.3.24`;
+  candidate `builder-0-2-55-a3c36bcaf45e` passed Trial and promoted through
+  WorkspaceLock revision `11`. The restart audit recovered the identical
+  release set as revision `3` after aborting the obsolete Workspace git rebase;
+  `builder@0.2.55` and the locked control/interactive/voice dependencies retain
+  their accepted digests. Scenario/strict skill validation passed 206/206 and
+  the post-restart AdaOS Builder regression passed 183/183.
+- [x] Exact Preview selection after Publication resolves
+  `proto: builder · UI 058`, `active: builder · 0.2.54`, and
+  `public: builder · 0.2.55` as materialization-ready in `dev1-dev-dev`.
+  Automation selection accepts the user-facing current result version from
+  the process projection but normalizes it to the immutable task snapshot for
+  materialization.
+- [x] Post-publication restart recovery is fail-closed and non-destructive.
+  Post-boot runtime discovery no longer invokes legacy Workspace git sync,
+  quarantined runtimes are not retried implicitly, no-op discovery does not
+  rebuild Webspace projections, and A/B prepare no longer disables the old
+  slot first. The three runtimes affected while finding the defect were
+  explicitly recovered and are ready: `adaos_connect@0.16.4`,
+  `conversation_companions@0.1.12`, and `new_face_vision_skill@0.2.25`.
 - [ ] Human wide/compact browser comparison and one live Telegram-bot ingress
-  and reply remain acceptance gates. UI 058 is not a Workspace publication
-  merely because automated and live API checks passed.
+  and reply remain production-acceptance gates. UI 058 is now a Workspace
+  publication, but these checks still gate a broader rollout claim.
 
 ## Cross-Document Anchors
 
@@ -1302,9 +1347,14 @@ observed projection matches the latest desired generation.
   43/43, and browser A/B rendering resolves `proto: builder_reference_042`
   versus `proto: builder · UI 054`. Both revisions are checkpointed in Forge;
   Workspace remains unchanged.
-- [ ] `[must]` Complete human comparison and isolated Trial of recovery UI 054
-  before Publication. Remove the temporary reference scenario only after the
-  recovered Workspace release is accepted.
+- [x] `[must]` Complete isolated Trial and Publication of the recovered Builder
+  line. The accepted UI 058 release is `builder@0.2.55` in WorkspaceLock
+  revision `11`, with exact reload and component health evidence. The
+  post-restart recovery reconstructed the same release set and component
+  digests as the current WorkspaceLock revision `3`.
+- [ ] `[should]` Complete the remaining human comparison and remove the
+  temporary reference scenario only after it is no longer needed for visual
+  regression analysis.
 - [ ] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.
