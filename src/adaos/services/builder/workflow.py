@@ -20,6 +20,13 @@ from adaos.services.builder.governed import (
     governed_instance,
     workflow_description,
 )
+from adaos.services.builder.data_modes import (
+    BuilderDataModeError,
+    implementation_mapping_report,
+    normalize_binding_state,
+    put_profile,
+    select_profile,
+)
 from adaos.services.builder.project_aggregate import (
     BuilderProjectError,
     begin_mutation,
@@ -63,7 +70,7 @@ _PROJECT_MUTATION_FINISH_ACTIONS = {
     "return_to_prototype": (False, True),
     "return_to_prototype_failed": (False, False),
 }
-_PROJECT_ATOMIC_MUTATION_ACTIONS = {"prototype_revision_recorded"}
+_PROJECT_ATOMIC_MUTATION_ACTIONS = {"prototype_revision_recorded", "adopt_experiment"}
 
 
 class BuilderWorkflowError(ValueError):
@@ -249,12 +256,25 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
     status = str(value.get("status") or "succeeded").strip().lower()
     if status not in {"queued", "running", "succeeded", "failed", "cancelled", "superseded"}:
         raise BuilderWorkflowError("invalid Builder Run status")
+    purpose = str(value.get("purpose") or "iteration").strip().lower()
+    if purpose not in {"iteration", "experiment", "evaluation", "recovery"}:
+        raise BuilderWorkflowError("invalid Builder Run purpose")
+    adoption_status = str(
+        value.get("adoption_status")
+        or ("pending" if purpose == "experiment" else "not_applicable")
+    ).strip().lower()
+    if adoption_status not in {"not_applicable", "pending", "adopted", "discarded"}:
+        raise BuilderWorkflowError("invalid Builder Run adoption status")
+    if purpose != "experiment" and adoption_status != "not_applicable":
+        raise BuilderWorkflowError("only Experiment Runs have adoption state")
     return {
         "schema": BUILDER_RUN_SCHEMA,
         "run_id": run_id,
         "change_id": change_id,
         "activity": str(value.get("activity") or "workflow").strip() or "workflow",
         "executor": str(value.get("executor") or "builder.workflow").strip() or "builder.workflow",
+        "purpose": purpose,
+        "adoption_status": adoption_status,
         "status": status,
         "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
         "environment_ref": str(value.get("environment_ref") or "").strip() or None,
@@ -774,6 +794,10 @@ class BuilderWorkflowService:
             {**normalized, "governed": raw.get("governed")},
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
         )
+        normalized["data_binding"] = normalize_binding_state(
+            raw.get("data_binding"),
+            project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+        )
         normalized["change_portfolio"] = normalize_portfolio(
             raw.get("change_portfolio"),
             normalized,
@@ -943,6 +967,71 @@ class BuilderWorkflowService:
             self.event_sink(projection)
         return {"ok": True, "workflow": projection, "project": copy.deepcopy(project)}
 
+    def configure_binding_profile(
+        self,
+        object_type: str,
+        object_id: str,
+        profile: Mapping[str, Any],
+        *,
+        expected_binding_generation: int,
+    ) -> dict[str, Any]:
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            binding = _mapping(workflow.get("data_binding"))
+            if int(binding.get("generation") or 0) != int(expected_binding_generation):
+                raise BuilderWorkflowError("stale Builder binding generation")
+            try:
+                workflow["data_binding"] = put_profile(binding, profile)
+            except BuilderDataModeError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            workflow["generation"] = int(workflow.get("generation") or 0) + 1
+            workflow["updated_at"] = workflow["data_binding"]["updated_at"]
+            state["workflow"] = workflow
+            state["updated_at"] = workflow["updated_at"]
+            self._write_state(kind, project_id, state)
+        return {"ok": True, "workflow": self.describe(kind, project_id)}
+
+    def select_binding_profile(
+        self,
+        object_type: str,
+        object_id: str,
+        profile_id: str,
+        *,
+        expected_binding_generation: int,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Switch Preview data without changing the accepted UI Revision."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            binding = _mapping(workflow.get("data_binding"))
+            if int(binding.get("generation") or 0) != int(expected_binding_generation):
+                raise BuilderWorkflowError("stale Builder binding generation")
+            revision_before = _mapping(workflow.get("prototype")).get("head_revision")
+            try:
+                workflow["data_binding"] = select_profile(
+                    binding,
+                    str(profile_id or "").strip(),
+                    phase=str(workflow.get("active_phase") or "prototype"),
+                    confirmed=confirmed,
+                )
+            except BuilderDataModeError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            if _mapping(workflow.get("prototype")).get("head_revision") != revision_before:
+                raise BuilderWorkflowError("binding selection must not rewrite the Prototype Revision")
+            workflow["generation"] = int(workflow.get("generation") or 0) + 1
+            workflow["updated_at"] = workflow["data_binding"]["updated_at"]
+            state["workflow"] = workflow
+            state["updated_at"] = workflow["updated_at"]
+            self._write_state(kind, project_id, state)
+        return {"ok": True, "workflow": self.describe(kind, project_id)}
+
     @staticmethod
     def _process_projection(workflow: Mapping[str, Any]) -> dict[str, Any]:
         """Build one dependent lineage tree from canonical state and exact refs."""
@@ -1043,6 +1132,7 @@ class BuilderWorkflowService:
             "conversation_focus": interaction.get("conversation_focus"),
             "inspected_ref": interaction.get("inspected_ref"),
             "preview_target": interaction.get("preview_target"),
+            "data_mode": str(_mapping(workflow.get("data_binding")).get("selected_mode") or "mock"),
             "preview_options": preview_options,
             "allowed_commands": copy.deepcopy(description.get("allowed_commands") or []),
             "blockers": copy.deepcopy(description.get("blockers") or []),
@@ -1236,6 +1326,7 @@ class BuilderWorkflowService:
                 "gate": change.get("gate") if change else None,
                 "implementation": automation_status,
                 "delivery": delivery_status,
+                "data_mode": str(_mapping(projection.get("data_binding")).get("selected_mode") or "mock"),
             },
             "actions": actions,
             "views": views,
@@ -1402,6 +1493,15 @@ class BuilderWorkflowService:
                     f"stale Builder action generation: expected {expected_generation}, "
                     f"current {int(workflow.get('generation') or 0)}"
                 )
+            if action_token in {"automation_started", "handoff_to_automation"}:
+                mapping_report = implementation_mapping_report(
+                    _mapping(workflow.get("data_binding"))
+                )
+                if not bool(mapping_report.get("ready")):
+                    missing = ", ".join(mapping_report.get("missing") or [])
+                    raise BuilderWorkflowError(
+                        f"Prototype data contracts require implementation mappings: {missing}"
+                    )
             mutation_started = False
             mutation_change_id = str(
                 (_normalize_change(workflow.get("change") or workflow.get("change_set")) or {}).get(
@@ -1641,6 +1741,28 @@ class BuilderWorkflowService:
         failure = action.endswith("_failed") or action in {"candidate_rejected"}
         running = action.endswith("_started") or action in {"request_return_to_prototype"}
         status = "failed" if failure else ("running" if running else "succeeded")
+        purpose = str(metadata.get("purpose") or "").strip().lower()
+        if not purpose:
+            if action in {"review_constraints_evaluated", "candidate_prepared", "candidate_accepted", "candidate_rejected"}:
+                purpose = "evaluation"
+            elif action in {"return_to_prototype_failed"}:
+                purpose = "recovery"
+            elif action in {"prototype_experiment_recorded", "adopt_experiment", "discard_experiment"}:
+                purpose = "experiment"
+            else:
+                purpose = "iteration"
+        if purpose not in {"iteration", "experiment", "evaluation", "recovery"}:
+            raise BuilderWorkflowError("invalid Builder Run purpose")
+        adoption_status = str(metadata.get("adoption_status") or "").strip().lower()
+        if purpose == "experiment":
+            if action == "adopt_experiment":
+                adoption_status = "adopted"
+            elif action == "discard_experiment":
+                adoption_status = "discarded"
+            else:
+                adoption_status = adoption_status or "pending"
+        else:
+            adoption_status = "not_applicable"
         context_packet = workflow.get("context_packet") if isinstance(workflow.get("context_packet"), Mapping) else {}
         run = {
             "schema": BUILDER_RUN_SCHEMA,
@@ -1648,6 +1770,8 @@ class BuilderWorkflowService:
             "change_id": change_id,
             "activity": action,
             "executor": str(metadata.get("executor") or actor or "builder.workflow"),
+            "purpose": purpose,
+            "adoption_status": adoption_status,
             "status": status,
             "context_packet_digest": str(
                 metadata.get("context_packet_digest") or context_packet.get("digest") or ""
@@ -2107,6 +2231,73 @@ class BuilderWorkflowService:
             if isinstance(current, dict) and current.get("gate") == "prototype":
                 update_change_set(status="in_progress", gate="prototype")
             add_change_evidence(metadata.get("change_id"))
+            return
+        if action == "prototype_experiment_recorded":
+            self._require_active(workflow, "prototype", action)
+            revision = str(metadata.get("revision") or "").strip()
+            experiment_id = str(metadata.get("experiment_id") or "").strip()
+            if not revision or not experiment_id:
+                raise BuilderWorkflowError("Prototype experiment requires experiment_id and revision")
+            experiments = [
+                dict(item) for item in prototype.get("experiments") or [] if isinstance(item, Mapping)
+            ]
+            if any(item.get("experiment_id") == experiment_id for item in experiments):
+                raise BuilderWorkflowError(f"Prototype experiment already exists: {experiment_id}")
+            experiments.append(
+                {
+                    "experiment_id": experiment_id,
+                    "revision": revision,
+                    "status": "pending",
+                    "base_revision": str(
+                        metadata.get("base_revision") or prototype.get("head_revision") or ""
+                    )
+                    or None,
+                    "created_at": changed_at,
+                    "evidence_refs": [
+                        str(item).strip()
+                        for item in metadata.get("evidence_refs") or []
+                        if str(item).strip()
+                    ][:100],
+                }
+            )
+            prototype["experiments"] = experiments[-50:]
+            return
+        if action in {"adopt_experiment", "discard_experiment"}:
+            self._require_active(workflow, "prototype", action)
+            experiment_id = str(metadata.get("experiment_id") or "").strip()
+            experiments = [
+                dict(item) for item in prototype.get("experiments") or [] if isinstance(item, Mapping)
+            ]
+            experiment = next(
+                (item for item in experiments if item.get("experiment_id") == experiment_id), None
+            )
+            if not isinstance(experiment, dict):
+                raise BuilderWorkflowError(f"unknown Prototype experiment: {experiment_id}")
+            if str(experiment.get("status") or "") != "pending":
+                raise BuilderWorkflowError("Prototype experiment is already decided")
+            if action == "discard_experiment":
+                experiment["status"] = "discarded"
+                experiment["decided_at"] = changed_at
+                experiment["reason"] = _bounded_text(
+                    metadata.get("reason"), field="experiment discard reason", max_length=1000
+                )
+                prototype["experiments"] = experiments
+                return
+            if not bool(metadata.get("confirmed")):
+                raise BuilderWorkflowError("adopting a Prototype experiment requires confirmation")
+            prototype.update(
+                {
+                    "head_revision": experiment["revision"],
+                    "status": "working",
+                    "stable": False,
+                    "revised_at": changed_at,
+                }
+            )
+            experiment["status"] = "adopted"
+            experiment["decided_at"] = changed_at
+            prototype["experiments"] = experiments
+            invalidate_delivery("prototype_experiment_adopted")
+            update_change_set(status="in_progress", gate="prototype")
             return
         if action == "stabilize_prototype":
             self._require_active(workflow, "prototype", action)

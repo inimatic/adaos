@@ -138,6 +138,9 @@ def builder_change_definition() -> dict[str, Any]:
         _transition("plan_prototype", "ready", "prototype_editing", "plan_prototype_change", risk="local_reversible"),
         _transition("plan_automation", "ready", "automation_ready", "plan_automation_change", risk="local_reversible"),
         _transition("record_prototype_revision", "prototype_editing", "prototype_editing", "record_prototype_revision", risk="local_reversible"),
+        _transition("record_prototype_experiment", "prototype_editing", "prototype_editing", "record_prototype_experiment", risk="local_reversible"),
+        _transition("adopt_prototype_experiment", "prototype_editing", "prototype_editing", "adopt_prototype_experiment", risk="isolated_write", confirmation="rich_review"),
+        _transition("discard_prototype_experiment", "prototype_editing", "prototype_editing", "discard_prototype_experiment", risk="local_reversible"),
         _transition("request_prototype_review", "prototype_editing", "prototype_review", "request_prototype_review", risk="read", side_effect="none"),
         _transition("accept_prototype", ["prototype_editing", "prototype_review"], "automation_ready", "accept_prototype"),
         _transition("revise_prototype", ["prototype_review", "verification", "trial_review"], "prototype_editing", "revise_prototype", risk="local_reversible"),
@@ -291,6 +294,9 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
         )
     mapping = {
         "prototype_revision_recorded": "record_prototype_revision",
+        "prototype_experiment_recorded": "record_prototype_experiment",
+        "adopt_experiment": "adopt_prototype_experiment",
+        "discard_experiment": "discard_prototype_experiment",
         "stabilize_prototype": "accept_prototype",
         "handoff_to_automation": "start_automation",
         "automation_started": "start_automation",

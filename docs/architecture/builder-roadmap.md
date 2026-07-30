@@ -924,9 +924,11 @@ Canonical model and context:
   project lock. Parallel plans, scoped focus, direct conflict indexing,
   mutation leases, artifact generations, and explicit verified rebase are
   implemented and covered by Project aggregate tests.
-- [ ] `[must]` Persist Run purpose as `iteration`, `experiment`, `evaluation`,
+- [x] `[must]` Persist Run purpose as `iteration`, `experiment`, `evaluation`,
   or `recovery`; keep Experiment output off the accepted line until an explicit
-  reviewed `adopt_experiment` command.
+  reviewed `adopt_experiment` command. The experiment ledger records pending,
+  adopted, or discarded disposition and adoption advances the project artifact
+  generation exactly once.
 - [x] `[must]` Publish and persist `adaos.builder.project.v1` with exact
   source/stable/installed/DEV/candidate identities, component/dependency
   boundary, project policy, open Change portfolio, conflict/dependency index,
@@ -1022,10 +1024,12 @@ Semantic changes and Review:
 - [ ] `[should]` Extend semantic operations from move/rename/show/hide to
   bounded field/widget add/remove and mock/real binding changes after the
   first operation is proven.
-- [ ] `[must]` Add typed Preview binding profiles for `mock`, `fixture`,
+- [x] `[must]` Add typed Preview binding profiles for `mock`, `fixture`,
   `sandbox`, `live_readonly`, and `live`. Prototype defaults to mock/fixture;
   a compatible profile switch does not rewrite the UI Revision; every
-  Prototype data contract requires an explicit Automation mapping.
+  Prototype data contract requires an explicit Automation mapping. The first
+  implementation makes mode visible in Process/chat status and fails closed on
+  live Prototype writes or declared missing mappings.
 - [ ] `[must]` Implement submit/withdraw/dismiss/convert-to-Issue,
   accept-as-constraint/supersede/resolve for durable submitted Reviews. Only an
   unsent local draft may be hard-deleted; withdrawn Reviews are omitted from

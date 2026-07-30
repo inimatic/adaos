@@ -388,12 +388,18 @@ tests cover all legal and representative illegal paths.
   merging to GWR8.
 - [x] `[must]` `GWR4-13` Implement scoped Change focus and write-conflict keys;
   switching focus is view/command context and never a business transition.
-- [ ] `[must]` `GWR4-14` Distinguish `iteration`, `experiment`, `evaluation`, and
+- [x] `[must]` `GWR4-14` Distinguish `iteration`, `experiment`, `evaluation`, and
   `recovery` Runs; require explicit reviewed adoption before an Experiment can
-  advance the accepted Revision line.
-- [ ] `[must]` `GWR4-15` Define typed `mock`, `fixture`, `sandbox`,
+  advance the accepted Revision line. Run ABI and ledger now retain purpose
+  and adoption status; experimental revisions stay off the Prototype head
+  until confirmed adoption and can be discarded without changing active or
+  published lineage.
+- [x] `[must]` `GWR4-15` Define typed `mock`, `fixture`, `sandbox`,
   `live_readonly`, and `live` binding profiles, Prototype isolation policy,
-  implementation mappings, and visible Preview data mode.
+  implementation mappings, and visible Preview data mode. Profile switching
+  is generation-guarded, leaves UI Revision unchanged, requires confirmation
+  for sandbox/live-readonly, forbids live mutation in Prototype, and blocks
+  Automation handoff for declared missing mappings.
 - [ ] `[must]` `GWR4-16` Complete the Review lifecycle with submit, withdraw,
   dismiss, convert-to-Issue, accept-as-constraint, supersede, and resolve
   commands; hard deletion remains limited to unsent local drafts.

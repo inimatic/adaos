@@ -41,6 +41,7 @@
     "conversation_focus": { "type": ["string", "null"], "maxLength": 300 },
     "inspected_ref": { "type": ["string", "null"], "maxLength": 300 },
     "preview_target": { "type": ["string", "null"], "maxLength": 300 },
+    "data_mode": { "enum": ["mock", "fixture", "sandbox", "live_readonly", "live"] },
     "preview_options": {
       "type": "array",
       "maxItems": 50,
