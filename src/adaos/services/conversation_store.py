@@ -314,6 +314,8 @@ _SCHEMA = (
         topic_id TEXT,
         activity TEXT NOT NULL,
         executor TEXT NOT NULL,
+        purpose TEXT NOT NULL DEFAULT 'iteration',
+        adoption_status TEXT NOT NULL DEFAULT 'not_applicable',
         status TEXT NOT NULL DEFAULT 'queued',
         context_packet_digest TEXT,
         environment_ref TEXT,
@@ -406,6 +408,22 @@ _SCHEMA = (
     CREATE INDEX IF NOT EXISTS idx_conversation_responses_interaction
     ON conversation_interaction_responses(interaction_id, created_at);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_intent_proposals (
+        proposal_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        source_message_id TEXT NOT NULL,
+        disposition TEXT NOT NULL,
+        supersedes_proposal_id TEXT,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_intent_proposals_source
+    ON conversation_intent_proposals(conversation_id, source_message_id, created_at);
+    """,
 )
 
 
@@ -422,6 +440,10 @@ _SCHEMA_COLUMN_MIGRATIONS = {
     "conversation_messages": _MESSAGE_THREAD_COLUMNS + _RETENTION_REDACTION_COLUMNS,
     "conversation_memory_items": _RETENTION_REDACTION_COLUMNS,
     "conversation_turn_traces": _RETENTION_REDACTION_COLUMNS,
+    "conversation_development_runs": (
+        ("purpose", "TEXT NOT NULL DEFAULT 'iteration'"),
+        ("adoption_status", "TEXT NOT NULL DEFAULT 'not_applicable'"),
+    ),
 }
 _ENSURED_SQL_IDS: set[int] = set()
 _FTS_UNAVAILABLE_SQL_IDS: set[int] = set()
@@ -537,7 +559,8 @@ def ensure_schema(sql: Any | None = None) -> bool:
                         'conversation_channel_capability_profiles',
                         'conversation_interactions',
                         'conversation_interaction_presentations',
-                        'conversation_interaction_responses'
+                        'conversation_interaction_responses',
+                        'conversation_intent_proposals'
                     )
                     """
                 ).fetchall()
@@ -549,6 +572,7 @@ def ensure_schema(sql: Any | None = None) -> bool:
                 "conversation_interactions",
                 "conversation_interaction_presentations",
                 "conversation_interaction_responses",
+                "conversation_intent_proposals",
             }:
                 return True
         except sqlite3.Error:
@@ -1867,6 +1891,8 @@ def _row_to_development_run(row: sqlite3.Row) -> dict[str, Any]:
         "change_id": row["change_id"],
         "activity": row["activity"],
         "executor": row["executor"],
+        "purpose": row["purpose"],
+        "adoption_status": row["adoption_status"],
         "status": row["status"],
         "context_packet_digest": row["context_packet_digest"],
         "environment_ref": row["environment_ref"],
@@ -1886,6 +1912,8 @@ def upsert_development_run(
     conversation_id: str,
     activity: str,
     executor: str,
+    purpose: str | None = None,
+    adoption_status: str | None = None,
     status: str = "queued",
     thread_id: str | None = None,
     topic_id: str | None = None,
@@ -1913,11 +1941,17 @@ def upsert_development_run(
     conversation = str(conversation_id or "").strip()
     selected_activity = str(activity or "").strip()
     selected_executor = str(executor or "").strip()
+    requested_purpose = str(purpose or "").strip().lower() or None
+    requested_adoption = str(adoption_status or "").strip().lower() or None
     selected_status = str(status or "queued").strip().lower()
     if not rid or not cid or not conversation or not selected_activity or not selected_executor:
         raise ValueError("run_id, change_id, conversation_id, activity, and executor are required")
     if selected_status not in _DEVELOPMENT_RUN_STATES:
         raise ValueError(f"invalid Builder Run status: {selected_status}")
+    if requested_purpose and requested_purpose not in {"iteration", "experiment", "evaluation", "recovery"}:
+        raise ValueError(f"invalid Builder Run purpose: {requested_purpose}")
+    if requested_adoption and requested_adoption not in {"not_applicable", "pending", "adopted", "discarded"}:
+        raise ValueError(f"invalid Builder Run adoption status: {requested_adoption}")
     digest = str(context_packet_digest or "").strip() or None
     if digest and (
         not digest.startswith("sha256:")
@@ -1948,6 +1982,10 @@ def upsert_development_run(
             prior_status = str(existing["status"] or "queued").strip().lower()
             if prior_status in {"succeeded", "failed", "cancelled", "superseded"} and selected_status != prior_status:
                 raise ValueError("a terminal Builder Run cannot transition to a different status")
+        selected_purpose = requested_purpose or (str(existing["purpose"]) if existing is not None else "iteration")
+        selected_adoption = requested_adoption or (
+            str(existing["adoption_status"]) if existing is not None else "not_applicable"
+        )
 
         def _refs(column: str, incoming: Sequence[str] | None) -> list[str]:
             if incoming is None and existing is not None:
@@ -1962,16 +2000,18 @@ def upsert_development_run(
             """
             INSERT INTO conversation_development_runs(
                 run_id, change_id, conversation_id, thread_id, topic_id,
-                activity, executor, status, context_packet_digest,
+                activity, executor, purpose, adoption_status, status, context_packet_digest,
                 environment_ref, input_refs_json, output_refs_json,
                 evidence_refs_json, started_at, completed_at, error,
                 created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(run_id) DO UPDATE SET
                 thread_id=COALESCE(excluded.thread_id, conversation_development_runs.thread_id),
                 topic_id=COALESCE(excluded.topic_id, conversation_development_runs.topic_id),
                 activity=excluded.activity,
                 executor=excluded.executor,
+                purpose=excluded.purpose,
+                adoption_status=excluded.adoption_status,
                 status=excluded.status,
                 context_packet_digest=COALESCE(excluded.context_packet_digest, conversation_development_runs.context_packet_digest),
                 environment_ref=COALESCE(excluded.environment_ref, conversation_development_runs.environment_ref),
@@ -1991,6 +2031,8 @@ def upsert_development_run(
                 str(topic_id or "").strip() or None,
                 selected_activity,
                 selected_executor,
+                selected_purpose,
+                selected_adoption,
                 selected_status,
                 digest,
                 str(environment_ref or "").strip() or None,
@@ -2381,6 +2423,87 @@ def list_interaction_responses(interaction_id: str) -> list[dict[str, Any]]:
             "SELECT payload_json FROM conversation_interaction_responses WHERE interaction_id=? ORDER BY created_at, response_id",
             (str(interaction_id or "").strip(),),
         ).fetchall()
+    return [_json_load(row["payload_json"], {}) for row in rows]
+
+
+def save_intent_proposal(record: Mapping[str, Any], *, create_only: bool = False) -> dict[str, Any] | None:
+    value = dict(record or {})
+    proposal_id = str(value.get("proposal_id") or "").strip()
+    if not proposal_id:
+        raise ValueError("proposal_id is required")
+    if not ensure_schema():
+        return None
+    payload = _json_dump(value)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT payload_json FROM conversation_intent_proposals WHERE proposal_id=?",
+            (proposal_id,),
+        ).fetchone()
+        if existing and create_only:
+            con.rollback()
+            current = _json_load(existing["payload_json"], {})
+            if current != value:
+                raise ValueError("intent proposal idempotency conflict")
+            return current
+        con.execute(
+            """
+            INSERT INTO conversation_intent_proposals(
+                proposal_id, conversation_id, source_message_id, disposition,
+                supersedes_proposal_id, payload_json, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(proposal_id) DO UPDATE SET
+                disposition=excluded.disposition,
+                supersedes_proposal_id=excluded.supersedes_proposal_id,
+                payload_json=excluded.payload_json,
+                updated_at=excluded.updated_at
+            """,
+            (
+                proposal_id,
+                str(value.get("conversation_id") or ""),
+                str(value.get("source_message_id") or ""),
+                str(value.get("disposition") or ""),
+                value.get("supersedes_proposal_id"),
+                payload,
+                str(value.get("created_at") or ""),
+                str(value.get("updated_at") or ""),
+            ),
+        )
+        con.commit()
+    return value
+
+
+def get_intent_proposal(proposal_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT payload_json FROM conversation_intent_proposals WHERE proposal_id=?",
+            (str(proposal_id or "").strip(),),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
+def list_intent_proposals(
+    conversation_id: str,
+    *,
+    source_message_id: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    query = "SELECT payload_json FROM conversation_intent_proposals WHERE conversation_id=?"
+    params: list[Any] = [str(conversation_id or "").strip()]
+    if source_message_id:
+        query += " AND source_message_id=?"
+        params.append(str(source_message_id).strip())
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(max(1, min(1000, int(limit))))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(query, params).fetchall()
     return [_json_load(row["payload_json"], {}) for row in rows]
 
 

@@ -16,7 +16,7 @@
     "interaction_id": { "type": "string", "minLength": 1, "maxLength": 240 },
     "interaction_generation": { "type": "integer", "minimum": 0 },
     "actor_id": { "type": "string", "minLength": 1, "maxLength": 240 },
-    "source": { "enum": ["action", "text", "form", "system"] },
+    "source": { "enum": ["action", "intent", "text", "form", "system"] },
     "values": { "type": "object" },
     "original_text": { "type": ["string", "null"], "maxLength": 8000 },
     "action_token": { "type": ["string", "null"], "maxLength": 300 },

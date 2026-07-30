@@ -298,29 +298,42 @@ answers, multi-act feedback, ambiguous targets, corrections, negation, stale
 context, and unrelated requests; no model output changes state outside the
 resolver.
 
-- [ ] `[must]` `GWR3-01` Add `adaos.intent.proposal.v1` with source message,
+- [x] `[must]` `GWR3-01` Add `adaos.intent.proposal.v1` with source message,
   semantic acts, alternatives, allowed-command snapshot, model identity, and
-  disposition.
-- [ ] `[must]` `GWR3-02` Resolve a deterministic action token without NLU and
-  route free text against its explicit pending interaction first.
-- [ ] `[must]` `GWR3-03` Require clarification when more than one pending target
-  or command context fits a free-text answer.
-- [ ] `[must]` `GWR3-04` Support multi-act utterances instead of forcing every
-  message into one intent.
-- [ ] `[must]` `GWR3-05` Keep new Issue/change feedback, read-only questions,
-  context selection, and workflow commands distinct.
-- [ ] `[must]` `GWR3-06` Reject proposed commands absent from `allowed_actions`
-  or lacking required typed arguments.
-- [ ] `[must]` `GWR3-07` Define risk policy for bounded free-text confirmation
-  versus an explicit protected interaction.
-- [ ] `[must]` `GWR3-08` Persist interpretation, clarification, correction, and
-  committed result with privacy and retention controls.
-- [ ] `[should]` `GWR3-09` Build Russian and English offline evaluation from
-  real corrected cases, including UTF-8 transport coverage.
-- [ ] `[should]` `GWR3-10` Measure false-transition and clarification rates,
-  not model confidence alone.
-- [ ] `[could]` `GWR3-11` Parse common short answers and ordinal choices
-  deterministically before invoking a model.
+  disposition. The ABI and durable conversation-store record now preserve the
+  complete proposal rather than only a selected intent label.
+- [x] `[must]` `GWR3-02` Resolve a deterministic action token without NLU and
+  route free text against its explicit pending interaction first. Opaque Web
+  and Telegram tokens retain the direct InteractionResponse path; only free
+  text enters `intent_mediation`.
+- [x] `[must]` `GWR3-03` Require clarification when more than one pending target
+  or command context fits a free-text answer. Ambiguous candidates are stored
+  and no Interaction generation changes.
+- [x] `[must]` `GWR3-04` Support multi-act utterances instead of forcing every
+  message into one intent. Newline/semicolon-separated acts retain their own
+  typed classifications while at most one governed response is committable.
+- [x] `[must]` `GWR3-05` Keep new Issue/change feedback, read-only questions,
+  context selection, and workflow commands distinct. The proposal ABI carries
+  each as a separate semantic-act kind.
+- [x] `[must]` `GWR3-06` Reject proposed commands absent from `allowed_actions`
+  or lacking required typed arguments. Commit re-reads the current Interaction,
+  verifies action identity and generation, and uses the action's typed value.
+- [x] `[must]` `GWR3-07` Define risk policy for bounded free-text confirmation
+  versus an explicit protected interaction. Read/local reversible actions may
+  use deterministic text; confirmation-required, publication, external,
+  privileged, irreversible, and destructive actions require an explicit token.
+- [x] `[must]` `GWR3-08` Persist interpretation, clarification, correction, and
+  committed result with privacy and retention controls. Corrections supersede
+  rather than overwrite and UTF-8 source text is stored unchanged.
+- [x] `[should]` `GWR3-09` Build Russian and English offline evaluation from
+  real corrected cases, including UTF-8 transport coverage. A versioned local
+  fixture covers ordinal answers, Issue intake, questions, and Cyrillic text.
+- [x] `[should]` `GWR3-10` Measure false-transition and clarification rates,
+  not model confidence alone. Conversation metrics expose committed,
+  clarified, and corrected proposal counts and rates.
+- [x] `[could]` `GWR3-11` Parse common short answers and ordinal choices
+  deterministically before invoking a model. Russian/English ordinals,
+  numeric choices, and bounded yes/no forms use the deterministic mediator.
 - [ ] `[deferred]` `GWR3-12` Defer autonomous workflow induction from arbitrary
   conversations.
 

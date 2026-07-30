@@ -1,0 +1,13 @@
+{
+  "schema": "adaos.intent.evaluation.v1",
+  "cases": [
+    {"locale": "ru", "text": "первый", "expected_kind": "interaction_answer", "expected_action_id": "prototype"},
+    {"locale": "ru", "text": "второй", "expected_kind": "interaction_answer", "expected_action_id": "automation"},
+    {"locale": "ru", "text": "Добавь поиск по рецептам", "expected_kind": "new_issue", "expected_action_id": null},
+    {"locale": "ru", "text": "Почему публикация заблокирована?", "expected_kind": "question", "expected_action_id": null},
+    {"locale": "en", "text": "first", "expected_kind": "interaction_answer", "expected_action_id": "prototype"},
+    {"locale": "en", "text": "second", "expected_kind": "interaction_answer", "expected_action_id": "automation"},
+    {"locale": "en", "text": "Add recipe search", "expected_kind": "new_issue", "expected_action_id": null},
+    {"locale": "en", "text": "Why is publication blocked?", "expected_kind": "question", "expected_action_id": null}
+  ]
+}

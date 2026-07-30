@@ -530,6 +530,7 @@ def submit_response(
     values: Mapping[str, Any] | None = None,
     original_text: str | None = None,
     action_token: str | None = None,
+    proposed_action_id: str | None = None,
     intent_proposal: Mapping[str, Any] | None = None,
     supersedes_response_id: str | None = None,
     response_id: str | None = None,
@@ -549,6 +550,7 @@ def submit_response(
                 "values": dict(values or {}),
                 "original_text": original_text,
                 "action_token": action_token,
+                "proposed_action_id": proposed_action_id,
                 "intent_proposal": dict(intent_proposal) if intent_proposal is not None else None,
                 "supersedes_response_id": supersedes_response_id,
             },
@@ -622,9 +624,36 @@ def submit_response(
         elif input_kind == "confirmation":
             response_values["confirmed"] = bool(action["value"])
         source = "action"
+    elif proposed_action_id:
+        if intent_proposal is None:
+            raise ConversationInteractionError("proposed action requires an intent proposal")
+        action = next(
+            (item for item in semantic["actions"] if item["action_id"] == proposed_action_id),
+            None,
+        )
+        if action is None:
+            raise ConversationInteractionError("intent proposal action is no longer allowed")
+        resolved_action = dict(action)
+        response_values.update(
+            {
+                "action_id": action["action_id"],
+                "command": action["command"],
+                "value": copy.deepcopy(action["value"]),
+            }
+        )
+        input_kind = str(semantic["input_spec"]["kind"])
+        if input_kind == "choice":
+            response_values["choice"] = copy.deepcopy(action["value"])
+        elif input_kind == "multi_choice":
+            response_values["choices"] = copy.deepcopy(action["value"])
+        elif input_kind == "confirmation":
+            response_values["confirmed"] = bool(action["value"])
+        if original_text is not None:
+            response_values.setdefault("text", str(original_text))
+        source = "intent"
     elif original_text is not None:
         response_values.setdefault("text", str(original_text))
-        source = "text"
+        source = "intent" if intent_proposal is not None else "text"
 
     valid, missing, reason = _validate_response_values(semantic, response_values)
     response_status = "partial" if valid and missing else ("answered" if valid else "rejected")
