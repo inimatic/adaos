@@ -113,6 +113,27 @@ normally extend the focused non-terminal Change. A separate Change is created
 only for unrelated scope, an explicit alternative, or work following a
 terminal Change.
 
+### Change Concurrency And Focus
+
+A project may have several open Changes. "Focused" is a property of one
+principal's command context, not a project-wide lock:
+
+- one conversation/thread or Webspace command context has at most one focused
+  Change;
+- changing focus does not change a Change state or Preview target;
+- several users or conversations may inspect different Changes;
+- read-only and evaluation Runs may proceed concurrently;
+- a state-changing Run is admitted against an exact base generation and
+  affected-ref set;
+- overlapping writes never use last-writer-wins: the later commit must rebase,
+  split, supersede, or fail with an explicit conflict;
+- one Change cannot have two accepted state-changing Runs over the same refs
+  and generation.
+
+"One active bounded Change" therefore means one mutation target for one
+command, Run, and delivery decision. It does not mean that a project can have
+only one open Change.
+
 ### Run
 
 A `Run` is one attempt by an LLM, Codex, deterministic transformer, evaluator,
@@ -140,6 +161,25 @@ Minimum fields:
 Retries create new Runs. They never silently replace prior attempts or repeat
 an already confirmed modifying operation.
 
+### Iteration, Experiment, Evaluation, And Recovery
+
+Every Run declares a purpose:
+
+| Purpose | Meaning | May advance the Change automatically |
+| --- | --- | --- |
+| `iteration` | Advances the currently accepted direction from an exact base | Only through the declared transition and gates |
+| `experiment` | Explores an alternative without replacing the accepted line | No |
+| `evaluation` | Produces evidence about an immutable target | Only by submitting typed evidence to a gate |
+| `recovery` | Reconciles or resumes an interrupted known operation | Only when recovery proves the original outcome |
+
+An Experiment has an `alternative_id`, immutable base ref, hypothesis, and
+comparison criteria. Its output remains an alternative Revision until an
+explicit `adopt_experiment` command records review evidence and creates or
+selects a new Revision on the Change's accepted line. `discard_experiment`
+closes the alternative without rewriting its evidence. An Experiment cannot
+publish, replace Preview's `active:` target, or satisfy a delivery gate merely
+because its Run completed.
+
 ### Revision
 
 A `Revision` is an immutable artifact snapshot. Prototype UI revisions,
@@ -151,6 +191,72 @@ record their source Change and Run.
 Trial proves one immutable candidate in an isolated activation context. Release
 is a promoted immutable `ProjectRelease`; Publication is the decision and
 operation that moves a channel pointer to it. Neither is an editable phase.
+
+## Builder Change Statechart
+
+The following is the normative single-user business statechart. Exact
+serialization belongs to the shared workflow definition contract; the state
+and command meanings belong here.
+
+```text
+intake -> clarification_required <-> ready
+ready -> prototype_editing -> prototype_review -> automation_ready
+  |              ^                 |
+  |              +---- revise -----+
+  +-------------------------------> automation_ready
+
+automation_ready -> automation_waiting -> verification -> trial_ready
+       ^                    |              |              |
+       |                    +-> reconciliation_required   |
+       +-------- revise implementation -------------------+
+verification -- revise interface --> prototype_editing
+
+trial_ready -> trial_waiting -> trial_review -> publication_ready
+                                  |       |
+                                  |       +-> prototype_editing
+                                  +----------> automation_ready
+
+publication_ready -> publication_waiting -> published
+                           |
+                           +-> publication_ready (failed attempt recorded)
+```
+
+`cancelled` and `superseded` are explicit terminal outcomes from any
+non-terminal business state when policy admits them. An uncertain modifying
+activity enters `reconciliation_required`; it never becomes an implicit
+retry.
+
+The minimum transition catalogue is:
+
+| Command/event | From | To | Required invariant or result |
+| --- | --- | --- | --- |
+| `clarify` / `mark_ready` | `intake`, `clarification_required` | `clarification_required`, `ready` | Scope, Issues, acceptance, and route are explainable |
+| `start_prototype` | `ready` | `prototype_editing` | Route requires interface/design work; bounded mock/data policy exists |
+| `request_prototype_review` | `prototype_editing` | `prototype_review` | Immutable Prototype revision and active Review set exist |
+| `revise_prototype` | `prototype_review`, `verification`, `trial_review` | `prototype_editing` | Creates a new revision line; prior artifacts remain immutable |
+| `accept_prototype` | `prototype_review` | `automation_ready` | Approval binds the exact Prototype digest |
+| `choose_direct_automation` | `ready` | `automation_ready` | No unresolved interface Issue requires Prototype review |
+| `start_automation` | `automation_ready` | `automation_waiting` | Exact base, source Prototype when present, context packet, and Run are bound |
+| `record_automation_result` | `automation_waiting` | `verification`, `automation_ready`, or `reconciliation_required` | Typed success, known failure, or uncertain outcome |
+| `accept_verification` | `verification` | `trial_ready` | Required deterministic checks and evidence pass |
+| `revise_automation` | `verification`, `trial_review` | `automation_ready` | New Run will retain prior result as history |
+| `start_trial` / `record_trial_result` | `trial_ready`, `trial_waiting` | `trial_waiting`, `trial_review` | Trial binds one immutable candidate and environment |
+| `accept_trial` | `trial_review` | `publication_ready` | Acceptance binds candidate digest and evidence |
+| `publish` / `record_publication_result` | `publication_ready`, `publication_waiting` | `publication_waiting`, `published` or `publication_ready` | Channel move is idempotent; failure is recorded |
+| `reconcile_outcome` | `reconciliation_required` | the declared success successor or the corresponding ready/failure state | Target observation proves whether the original effect committed; it is not repeated blindly |
+| `cancel` / `supersede` | any non-terminal state | `cancelled`, `superseded` | Actor, reason, and residual effects are recorded |
+
+Only `prototype_editing` permits mutation of the Prototype accepted line.
+Automation states freeze the exact source Prototype. Returning to Prototype
+creates a new Revision and invalidates promotion eligibility of Automation
+results derived from an older source, but retains those results as historical
+or experimental evidence. Starting a new Automation Run never overwrites the
+retained last working Implementation or installed Publication.
+
+The `*_waiting` states are business waits pointing to a Run. Run attempt state
+(`queued`, `working`, `input_required`, `completed`, `failed`,
+`outcome_unknown`) remains separate and cannot be copied into the Change state
+enum.
 
 ## Development Capsule
 
@@ -194,6 +300,39 @@ as retrieved untrusted evidence: they provide continuity but cannot grant
 authority or override system policy. The LLM submission fails closed if the
 Change-bound packet cannot be constructed. Builder session and revision
 evidence retain its digest rather than a second mutable copy of the packet.
+
+### Context Sufficiency Contract
+
+A bounded packet must still be sufficient for the requested work. Compactness
+is not permission to remove semantics. Every Run declares required context
+facets, and packet construction returns a machine-readable coverage report.
+
+For an interface change the packet contains or provides governed retrieval for:
+
+- exact target semantic refs and source revision;
+- the target's parent, siblings, order, grouping, and responsive constraints;
+- applicable ABI version plus the complete referenced schema definitions, not
+  an informal lossy summary;
+- current declarative fragment, labels/locales, actions, data bindings, and
+  validation constraints;
+- the requested outcome, negative constraints, and active Review/Issue
+  acceptance criteria;
+- relevant Prototype, retained Implementation, installed Publication, and
+  dependency refs;
+- permitted data modes, side effects, paths, tools, and verification;
+- prior failed attempts or evaluator evidence relevant to the same targets.
+
+Screenshots and prose may supplement this structure but cannot replace stable
+refs or ABI constraints. The executor may retrieve additional referenced
+material through governed tools; it cannot silently scrape an unrelated
+workspace or infer missing authority.
+
+Packet construction fails before model submission when a required facet is
+missing or ambiguous. The failure names the missing facet and offers
+clarification or inspection rather than asking the model to guess. Evaluation
+measures target-selection accuracy, constraint retention, unnecessary-context
+ratio, clarification rate, and repeated correction rate in addition to token
+count.
 
 ## Interaction Contract
 
@@ -297,8 +436,11 @@ limited-channel clients do not synthesize DEV suffixes or choose preview hosts.
 
 The default Web Workbench is conversation-first:
 
-- the header always shows Project, focused Change, working activity, and exact
-  Preview identity;
+- the header reserves its title line for the complete Project title; a separate
+  compact Preview indicator carries the exact Preview identity without
+  truncating that title;
+- the left control/process area shows focused Change, working activity,
+  blockers, and the available process commands without consuming title width;
 - the central surface is the canonical Builder conversation and dynamic action
   row;
 - Preview may occupy a persistent adjacent area when useful;
@@ -324,8 +466,8 @@ Three selections remain independent:
 3. Preview target: what the paired Preview materializes.
 
 Selecting a Process item changes focus/inspection only. `Open in Preview` is an
-explicit command. The header shows `proto:`, `active:`, or `public:` and the
-exact revision/version.
+explicit command. The Preview indicator shows `proto:`, `active:`, or
+`public:` and the exact revision/version.
 
 ## Semantic UI Change IR
 
@@ -357,6 +499,33 @@ for changes that cannot be expressed semantically.
 Semantic operations must never silently target an element by visible text when
 a stable widget/field ref is available.
 
+## Data Modes And Prototype Isolation
+
+The declarative UI addresses logical data contracts. Environment-specific
+bindings are separate, typed Preview binding profiles:
+
+| Mode | Intended use | Default Prototype policy |
+| --- | --- | --- |
+| `mock` | Generated in-memory examples with no external authority | allowed |
+| `fixture` | Versioned, sanitized deterministic data | allowed |
+| `sandbox` | Isolated connector or test tenant | explicit scoped command |
+| `live_readonly` | Real data without modifying effects | explicit policy and visible warning |
+| `live` | Real data and modifying effects | forbidden for Prototype; governed Automation/Trial only |
+
+Every binding profile records logical schema, source ref, sensitivity,
+capabilities, read/write policy, owner, expiry, and redaction. Preview always
+shows its current mode. Switching a compatible profile is an explicit Preview
+command and does not rewrite the UI Revision. Changing the logical data
+contract is a new semantic/source Revision.
+
+Prototype generation defaults to `mock` or `fixture`. Moving to Automation
+requires a mapping from every Prototype data contract to an implementation
+binding or an explicit decision to retain it as fixture-only behavior.
+Validation rejects undeclared live access, mock-only assumptions presented as
+implemented behavior, and interface changes that accidentally bind real writes
+during design review. Safe detachment or sanitization is recorded as an
+evidence-producing transformer; an LLM claim that data is safe is not evidence.
+
 ## Review And Executable Acceptance
 
 Review belongs to a Change, not to browser local storage or a transient page
@@ -370,6 +539,23 @@ component.
   evidence;
 - comment, disposition, resulting Issue/constraint refs;
 - resolution Run/Revision and verification evidence.
+
+Its lifecycle is explicit:
+
+```text
+local_draft -> submitted
+submitted -> accepted_as_constraint | converted_to_issue | dismissed | withdrawn
+accepted_as_constraint -> resolved | superseded
+converted_to_issue -> resolved | superseded
+```
+
+Only an unsent `local_draft` may be hard-deleted. `withdraw_review` removes an
+erroneous submitted Review from active model/Run context while preserving a
+minimal audit tombstone. `dismiss_review` records why it is not actionable.
+An accepted constraint is never silently deleted: `supersede_constraint`
+requires a reason and replacement or explicit waiver. Models receive only
+active Review and constraint refs, so an erroneous or withdrawn prompt is not
+inevitable work.
 
 A Review comment may remain narrative, become an Issue, or compile into a
 semantic acceptance constraint such as order, presence, visibility, label,
@@ -470,6 +656,26 @@ fallback. Last-writer-wins shared filesystem mutation is forbidden.
 WorkLog-to-Change extraction, trusted groups, public candidate discovery,
 evidence aggregation, editions, licensing, and simultaneous multi-version
 runtime bindings remain deferred until the single-user loop is repeatable.
+
+## Decision Traceability
+
+The architecture is intentionally split by authority, but its decisions must
+remain discoverable from one map:
+
+| Decision | Owning contract | Delivery/evidence owner |
+| --- | --- | --- |
+| One validated state/transition model drives commands and explanations | [Explainable Workflow Model](governed-workflow-runtime.md) | GWR1-GWR5 in the [workflow roadmap](governed-workflow-runtime-roadmap.md) |
+| Conversation is primary; rich views are contextual | [Interaction Contract](#interaction-contract) and [Workbench Projection](#builder-workbench-projection) | Phase 11 in the [Builder Roadmap](builder-roadmap.md) |
+| A message does not automatically equal a Change | [Issue/Change/Run model](#canonical-development-model) | Builder Phase 11 plus GWR4 |
+| Multiple open Changes are allowed; focus and write admission are scoped | [Change Concurrency And Focus](#change-concurrency-and-focus) | GWR4/GWR5 conflict and focus evidence |
+| Prototype -> Automation -> Trial -> Publication is one governed path | [Builder Change Statechart](#builder-change-statechart) | GWR4 definition and GWR5 end-to-end proof |
+| Iterations, experiments, evaluations, and recovery have different authority | [Run purpose contract](#iteration-experiment-evaluation-and-recovery) | Builder Phase 11 and GWR4 conformance tests |
+| Deterministic semantic UI changes precede general coding when sufficient | [Semantic UI Change IR](#semantic-ui-change-ir) | Builder semantic-operation tests |
+| Prototype data is mock/fixture by default; real effects are gated | [Data Modes And Prototype Isolation](#data-modes-and-prototype-isolation) | Builder data-mode tests and Trial evidence |
+| Review is durable, withdrawable, and may become an executable constraint | [Review And Executable Acceptance](#review-and-executable-acceptance) | Builder Review lifecycle and reload tests |
+| LLM/Codex receive bounded but sufficient governed context | [Development Capsule](#development-capsule) and [Context Sufficiency](#context-sufficiency-contract) | Builder packet coverage/evaluation evidence |
+| DEV, Candidate, Trial, Release, and Workspace are distinct | [Artifact Source, Package, and Activation](artifact-source-package-activation.md) | Artifact pipeline roadmap and release evidence |
+| Extraction, trusted groups, and proposal exchange remain extension seams | [Multi-User Extension Seams](#multi-user-extension-seams) and [Governed Evolution](governed-evolution.md) | GWR8/GE4-GE5, deferred until single-user proof |
 
 ## Source Of Truth And Projection Rules
 

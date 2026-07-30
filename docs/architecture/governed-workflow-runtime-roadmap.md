@@ -120,6 +120,9 @@ already selected.
   workflow definitions for architecture review.
 - [x] `[deferred]` `GWR0-08` Do not harmonize all historical documentation in
   this milestone; update owning documents only as implementation reaches them.
+- [x] `[must]` `GWR0-09` Add a cross-document decision map linking shared
+  workflow semantics, the normative Builder domain model, artifact delivery,
+  multi-user seams, roadmap tasks, and acceptance evidence owners.
 
 ## GWR1. Workflow Metamodel, Compiler, and Pure Resolver
 
@@ -163,6 +166,9 @@ produce stable fresh interaction descriptors from the resulting state.
   and review without making the visualization format authoritative.
 - [ ] `[deferred]` `GWR1-13` Defer arbitrary end-user workflow authoring and
   executable expressions; definitions reference only registered code.
+- [ ] `[should]` `GWR1-14` Emit a definition-review report covering reachable
+  states, transition and cycle counts, competing guards, waiting/outcome
+  coverage, concurrency scopes, projection coverage, and generated tests.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 
@@ -253,17 +259,20 @@ required transitions.
 domain meaning, guard, effect/evidence contract, and explanation; generated
 tests cover all legal and representative illegal paths.
 
-- [ ] `[must]` `GWR4-01` Define the canonical Builder Change statechart and
-  explicitly separate it from artifact lineage and task execution state.
+- [ ] `[must]` `GWR4-01` Encode the normative Builder Change statechart and
+  transition catalogue from
+  [Builder Conversational Development](builder-conversational-development.md#builder-change-statechart),
+  explicitly separating it from artifact lineage and task execution state.
 - [ ] `[must]` `GWR4-02` Key the workflow instance by canonical `change_id` and
   retain exact project, base release, artifact, and command-context refs.
 - [ ] `[must]` `GWR4-03` Model Prototype -> Automation -> Publication as
   derivation and promotion, not three mutually independent mutable stages.
 - [ ] `[must]` `GWR4-04` Define direct Automation, prototype-first, revise,
   cancel, failure, retry-as-new-Run, Trial reject/accept, and Publication paths.
-- [ ] `[must]` `GWR4-05` Define invariants: one active bounded Change, immutable
-  accepted revisions, exact source Prototype for Automation, and exact
-  candidate digest for Publication.
+- [ ] `[must]` `GWR4-05` Define invariants: one focused Change per command
+  context but multiple open Changes per project; one admitted overlapping
+  mutation per base generation; immutable accepted revisions; exact source
+  Prototype for Automation; and exact candidate digest for Publication.
 - [ ] `[must]` `GWR4-06` Define LLM, Codex, validation, Git checkpoint, Trial,
   Publication, and notification as registered effects/activities rather than
   implicit phase code.
@@ -272,7 +281,7 @@ tests cover all legal and representative illegal paths.
   snapshot and lineage refs.
 - [ ] `[must]` `GWR4-08` Keep Lifecycle selection and Preview selection as view
   context; neither changes the workflow without an explicit command.
-- [ ] `[should]` `GWR4-09` Map current Builder JSON, sessions, Pending Actions,
+- [ ] `[must]` `GWR4-09` Map current Builder JSON, sessions, Pending Actions,
   and UI handlers to canonical concepts with retain/adapt/retire disposition.
 - [ ] `[should]` `GWR4-10` Add a compact workflow explanation to the chat so a
   user can ask what is happening, why, and what can happen next.
@@ -280,6 +289,20 @@ tests cover all legal and representative illegal paths.
   detail view, not the primary control surface.
 - [ ] `[deferred]` `GWR4-12` Defer simultaneous multi-user approval and artifact
   merging to GWR8.
+- [ ] `[must]` `GWR4-13` Implement scoped Change focus and write-conflict keys;
+  switching focus is view/command context and never a business transition.
+- [ ] `[must]` `GWR4-14` Distinguish `iteration`, `experiment`, `evaluation`, and
+  `recovery` Runs; require explicit reviewed adoption before an Experiment can
+  advance the accepted Revision line.
+- [ ] `[must]` `GWR4-15` Define typed `mock`, `fixture`, `sandbox`,
+  `live_readonly`, and `live` binding profiles, Prototype isolation policy,
+  implementation mappings, and visible Preview data mode.
+- [ ] `[must]` `GWR4-16` Complete the Review lifecycle with submit, withdraw,
+  dismiss, convert-to-Issue, accept-as-constraint, supersede, and resolve
+  commands; hard deletion remains limited to unsent local drafts.
+- [ ] `[must]` `GWR4-17` Define context-facet requirements and a packet coverage
+  report that fails before LLM/Codex submission when target structure, ABI,
+  constraints, data policy, or execution authority is missing or ambiguous.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -320,6 +343,24 @@ lineage, evidence, and final Publication agree without direct state repair.
   or projections and proves conformance tests fail.
 - [ ] `[deferred]` `GWR5-12` Do not block the semantic proof on choosing or
   integrating an external durable engine.
+- [ ] `[must]` `GWR5-13` Prove two open Changes can be inspected independently,
+  focus changes no business state, non-overlapping work is admitted, and
+  overlapping stale writes fail with an explicit rebase/split/supersede choice.
+- [ ] `[must]` `GWR5-14` Prove an Experiment can be compared and discarded
+  without changing `active:` or Publication, and only an explicit
+  `adopt_experiment` transition can promote its Revision.
+- [ ] `[must]` `GWR5-15` Prove Prototype defaults to mock/fixture, switching a
+  compatible Preview binding profile does not rewrite the UI Revision, and
+  undeclared live reads/writes fail closed.
+- [ ] `[must]` `GWR5-16` Prove a withdrawn Review disappears from active model
+  context without losing its audit tombstone, while an accepted constraint can
+  only be superseded with a reason.
+- [ ] `[must]` `GWR5-17` Prove a spatial UI request receives parent/sibling/order,
+  responsive, ABI, data-binding, and active-constraint facets or stops for
+  clarification before the model is called.
+- [ ] `[should]` `GWR5-18` Record definition complexity and context-sufficiency
+  metrics alongside cycle time, clarification, repeated-correction, and action
+  mismatch rates.
 
 ## GWR6. Durability Gap Assessment and Reference Persistence
 
@@ -421,6 +462,9 @@ use case supplies authority, privacy, conflict, and availability requirements.
   appropriate; approvals and durable transitions remain ordered commands.
 - [ ] `[deferred]` `GWR8-08` Defer marketplace automation and cross-group trust
   scoring until provenance and governance have field evidence.
+- [ ] `[deferred]` `GWR8-09` Project an approved personal Change as an optional
+  candidate-upgrade offer bound to exact release and evidence refs; registry
+  subscriptions and channels remain owned by the artifact pipeline.
 
 ## Cross-Cutting Acceptance Scenarios
 
@@ -467,6 +511,20 @@ admitted, the GWR7 adapter:
     publication produces an idempotent release/channel result.
 19. **Backup/restore:** active and waiting instances restore with correct
     generations and no repeated external effect.
+20. **Scoped focus and concurrency:** two open Changes retain separate bases,
+    focus, Reviews, Runs, and replies; changing focus mutates neither, while an
+    overlapping stale commit fails with a typed conflict.
+21. **Experiment isolation:** a completed Experiment remains an alternative
+    until an explicit adoption decision and cannot silently replace `active:`
+    or satisfy Publication.
+22. **Data-mode isolation:** Prototype uses mock/fixture by default; a compatible
+    Preview binding switch preserves the Revision; undeclared live effects are
+    rejected before execution.
+23. **Review correction:** an erroneous submitted Review can be withdrawn and
+    is excluded from subsequent context, while its audit tombstone remains.
+24. **Context sufficiency:** a request such as "put checkboxes on the left"
+    either receives the target's parent/sibling/order and ABI constraints or
+    asks for clarification before LLM/Codex execution.
 
 ## Definition of Done for This Roadmap
 
@@ -476,6 +534,9 @@ This roadmap is complete only when:
   not-admitted/adopted/postponed/rejected decision;
 - one canonical model drives Builder state, transitions, explanations,
   Lifecycle, interactions, NLU constraints, and conformance tests;
+- the normative Builder statechart, transition catalogue, concurrency scope,
+  Run purposes, data modes, Review lifecycle, and context-sufficiency rules
+  map to implementation tasks and repeatable evidence;
 - Builder and at least one second domain use the shared workflow model;
 - Web and Telegram pass the same semantic interaction cases;
 - NLU cannot bypass allowed transitions or policy;

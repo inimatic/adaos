@@ -586,6 +586,38 @@ Runtime validation repeats target-, permission-, generation-, and
 evidence-dependent checks. Static validation never substitutes for commit-time
 policy.
 
+## Definition Completeness And Complexity Control
+
+A domain is not considered modelled because it has a state enum or a diagram.
+Its authoritative definition must include:
+
+- the initial, waiting, terminal, cancellation, failure, and reconciliation
+  states;
+- every user, system, activity-result, timeout, and recovery command;
+- source and target for every transition;
+- guards, policy, required evidence, effect/activity, and explanation;
+- concurrency scope and conflict key for modifying commands;
+- artifact refs that are inputs or outputs without turning lineage into state;
+- projections and channel-neutral affordances for each reachable snapshot;
+- definition migration and in-flight instance policy.
+
+The compiler emits a review report with reachable states, transition count,
+outgoing-command count per state, cycles, competing guards, waiting states,
+unhandled activity outcomes, projection coverage, and generated test coverage.
+Thresholds initially require review rather than impose one universal numeric
+limit, because a count alone does not measure understandable behavior.
+
+Complexity is bounded through named domain workflows and explicit subworkflow
+commands, not by creating one global AdaOS graph. A subprocess has typed input,
+output, cancellation, and parent correlation. It cannot reach into its parent's
+state or add a UI-only transition. Orthogonal state regions are used only for
+independent business facts; task progress, artifact lineage, and view focus
+remain separate models to avoid a Cartesian product of states.
+
+Every domain roadmap must link a discussion/requirement decision to its owning
+definition element, implementation task, and acceptance evidence. This
+traceability map is navigation, not a duplicate source of transition truth.
+
 ## Persistence and Durable Execution Are Secondary Adapters
 
 The workflow definition, transition resolver, explanation, and conformance
@@ -753,6 +785,10 @@ request
   -> accept/revise
   -> Publication
 ```
+
+The normative Builder states, transition catalogue, concurrency/focus rules,
+Run purposes, data modes, and Review lifecycle are owned by
+[Builder Conversational Development](builder-conversational-development.md#builder-change-statechart).
 
 The workflow instance is keyed by `change_id`. Prototype, Automation, and
 Publication nodes are artifact lineage projections, not three independent

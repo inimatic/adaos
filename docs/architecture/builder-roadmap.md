@@ -123,7 +123,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, neutral Web/Telegram text routing, and one non-Builder request-to-Workspace slice. | Open: live Telegram-bot and human wide/compact acceptance, richer view registry, evaluator evidence, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, durable Review store migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated compatibility slice: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, neutral Web/Telegram text routing, and one non-Builder request-to-Workspace slice. The canonical shared statechart/resolver migration is not yet implemented. | Open: scoped multi-Change focus/conflicts, Run purposes, context-sufficiency gate, data modes, submitted Review lifecycle, live Telegram-bot and human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -870,6 +870,15 @@ Architecture:
   channels rather than a lowest-common-denominator product requirement. Rich
   search, selection, diff, artifact, and spatial Review surfaces remain Web
   capabilities with compact/deep-link fallbacks.
+- [x] `[must]` Define the normative Builder Change statechart, transition
+  catalogue, scoped Change concurrency/focus, Run purposes, data modes,
+  submitted Review lifecycle, context-sufficiency contract, and decision
+  traceability map in
+  [Builder Conversational Development Architecture](builder-conversational-development.md).
+- [x] `[must]` Link the domain definition to the shared compiler/resolver and
+  conformance proof in the
+  [Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
+  instead of treating current skill JSON and UI handlers as the target model.
 - [x] `[deferred]` Reserve, but do not implement in this refactoring slice,
   miniapp rendering, hard cross-channel feature parity, trusted groups,
   proposal exchange, WorkLog extraction, public candidate discovery, and
@@ -904,6 +913,18 @@ Canonical model and context:
 - [x] `[should]` Add a context-packet inspector that shows included refs,
   omitted categories, budgets, digest, and construction diagnostics without
   exposing secrets or copying full transcripts.
+- [ ] `[must]` Add per-Run required context facets and a machine-readable
+  coverage report. For spatial UI work include target parent/siblings/order,
+  responsive constraints, complete referenced ABI definitions, current data
+  bindings, and active acceptance constraints; fail before model submission
+  when a required facet is absent or ambiguous.
+- [ ] `[must]` Permit several open Changes per project while binding one focused
+  Change to each conversation/Webspace command context. Admit modifying Runs by
+  exact base generation and affected-ref conflict keys rather than a global
+  project lock.
+- [ ] `[must]` Persist Run purpose as `iteration`, `experiment`, `evaluation`,
+  or `recovery`; keep Experiment output off the accepted line until an explicit
+  reviewed `adopt_experiment` command.
 
 Commands, projections, and Workbench:
 
@@ -921,8 +942,9 @@ Commands, projections, and Workbench:
   Preview, and contextual Process/Overview/Specification/Artifacts/Run detail
   views while retaining the functional-parity gate.
 - [x] `[must]` Reserve the project header for the complete project title.
-  Project-level Change and Preview context belongs in the left control panel,
-  where it remains visible without consuming compact title width.
+  Change status and working activity belong in the left control panel. Exact
+  `proto:`/`active:`/`public:` identity belongs in a separate compact Preview
+  control and never shortens the project title.
 - [x] `[must]` Isolate Builder self-development from the project it previews.
   A Builder running in `dev1-dev` owns the one terminal `dev1-dev-dev`
   project preview; selecting a project must not replace Builder in its host.
@@ -977,12 +999,19 @@ Semantic changes and Review:
 - [ ] `[should]` Extend semantic operations from move/rename/show/hide to
   bounded field/widget add/remove and mock/real binding changes after the
   first operation is proven.
-- [ ] `[deferred]` Move added Review records from browser local storage into a
-  durable backend Change store, including reload/Preview-switch survival,
-  disposition, resolution, and author identity. The previously diagnosed
-  local-storage loss remains tracked. Structured annotations explicitly
-  compiled into `adaos.builder.acceptance_constraint.v1` are already durable;
-  migration of all free-form overlay drafts remains deferred.
+- [ ] `[must]` Add typed Preview binding profiles for `mock`, `fixture`,
+  `sandbox`, `live_readonly`, and `live`. Prototype defaults to mock/fixture;
+  a compatible profile switch does not rewrite the UI Revision; every
+  Prototype data contract requires an explicit Automation mapping.
+- [ ] `[must]` Implement submit/withdraw/dismiss/convert-to-Issue,
+  accept-as-constraint/supersede/resolve for durable submitted Reviews. Only an
+  unsent local draft may be hard-deleted; withdrawn Reviews are omitted from
+  future model context but retain a minimal audit tombstone.
+- [ ] `[deferred]` Migrate legacy free-form browser-overlay annotations and
+  drafts into the submitted Review workflow. The previously diagnosed
+  local-storage loss remains tracked. New typed submitted Reviews and
+  `adaos.builder.acceptance_constraint.v1` records must use the durable Change
+  store; unsent free-form drafts may remain client-local until this migration.
 
 Autonomy, evidence, and acceptance:
 
@@ -1206,6 +1235,12 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Runtime Guarding](runtime-guarding.md): guard/quarantine feedback into repair
 
 ## Builder Workbench Lifecycle Surface
+
+This section records the recovered Workbench compatibility surface and its
+historical local evidence. Phase 11 is authoritative for the target chat-first
+refactoring. Checked compatibility items below do not mean that the shared
+GWR4 statechart, resolver, data-mode, Review-lifecycle, or context-sufficiency
+contracts are implemented.
 
 The Builder Workbench prototype now uses one project-oriented surface instead
 of the legacy Prompt IDE toolbar split:
