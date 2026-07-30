@@ -1,14 +1,15 @@
-# Governed Workflow and Interaction Runtime
+# Explainable Workflow Model and Interaction Architecture
 
 Status: target architecture and system boundary.
 
 Last reviewed: 2026-07-30.
 
-This document defines the AdaOS-wide contract for explainable stateful
-workflows, conversational input, deterministic interactions, durable
-execution, and long-running human or agent work. It is not a commitment to one
-workflow product. The implementation sequence and adoption gates are owned by
-the [Governed Workflow Runtime Roadmap](governed-workflow-runtime-roadmap.md).
+This document defines the AdaOS-wide model for explainable and validatable
+states, transitions, guards, effects, interactions, and natural-language
+input. Its primary purpose is to prevent each skill, channel, and UI from
+inventing an incompatible workflow. Persistence and durable execution support
+that model but do not define it. The implementation sequence is owned by the
+[Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md).
 
 Domain documents continue to own their business vocabulary and state
 transitions. In particular:
@@ -25,38 +26,70 @@ transitions. In particular:
 - [Operational Event Model](operational-event-model.md) owns runtime event and
   projection semantics.
 
-This document owns the shared workflow kernel, interaction, intent mediation,
-durable-execution provider, activity, and recovery boundaries used by those
-domains.
+This document owns the shared workflow metamodel, definition compiler,
+transition resolver, explanation and projection rules, interaction and intent
+mediation contracts, and only then the optional execution/recovery boundary
+used by those domains.
 
 ## Decision
 
-AdaOS will use a hybrid control model:
+AdaOS will describe every governed process through one bounded workflow model:
 
 ```text
 natural conversation and deterministic controls
   -> typed interpretation or command
-  -> deterministic workflow kernel
-  -> durable execution provider
-  -> registered activities
-  -> domain records, evidence, and projections
+  -> statechart + context + invariants
+  -> guard and policy evaluation
+  -> named transition
+  -> registered effect or activity
+  -> canonical state, evidence, and derived interactions/projections
 ```
 
 The model or NLU layer may interpret, propose, summarize, plan, and produce
 artifacts. It does not commit a state transition directly. The deterministic
-kernel validates the target, current generation, policy, authority, and
-transition before a durable effect is admitted.
+kernel validates the target, current generation, workflow invariant, policy,
+authority, and transition before an effect is admitted.
 
-A durable-execution product may implement the execution provider, but it does
-not become the product model of AdaOS. `Change`, `Revision`, `Trial`, `Release`,
-project dependencies, permissions, and artifact provenance remain AdaOS
-domain concepts.
+The same definition is the source for command admission, `allowed_actions`,
+human explanation, Web/Telegram controls, tests, and workflow visualization.
+No UI or skill maintains a second handwritten table of legal transitions.
+
+A persistence layer or durable-execution product may later host long-running
+instances. It is an implementation adapter below the model. DBOS, Temporal,
+Restate, SQLite, NATS, and other infrastructure are not the architectural goal
+and are not selected by this document.
 
 The first implementation must be a bounded domain runtime, not a universal
 BPMN system, a generic user-programmable workflow DSL, or global event sourcing
 for every AdaOS service.
 
-## Motivation
+## Primary Problem
+
+The problem is semantic fragmentation, not the absence of a workflow engine.
+
+Today the meaning of a process may be spread across a scenario tree, skill
+handlers, buttons, conversation prompts, status strings, background tasks, and
+stored JSON. Each representation can be individually reasonable while their
+combined behavior is inconsistent. A button may be visible although its
+command is invalid; a chat may suggest a transition the UI cannot perform; a
+Lifecycle node may look like a state while actually being only navigation; a
+background task may be called complete while required evidence is missing.
+
+AdaOS needs one model that can answer, for any workflow instance:
+
+1. What state is it in?
+2. What facts and immutable targets make that state true?
+3. Which commands are legal now?
+4. Why is each other command unavailable?
+5. What guard, policy, effect, evidence, and resulting state belong to a legal
+   transition?
+6. What should Web, Telegram, NLU, an operator, and a test observe from that
+   same answer?
+
+If the model cannot answer those questions without reading UI code or an LLM
+transcript, it is incomplete.
+
+## Existing Reliability Symptoms
 
 AdaOS already has stateful behavior in Builder, NLU Teacher, pending actions,
 scenario workflows, package activation, core updates, conversations, and
@@ -75,30 +108,36 @@ That fragmentation creates recurring failure classes:
 - a model treats conversational context as authority;
 - an implementation reports success without durable verification evidence.
 
-The target runtime makes these boundaries explicit and reusable instead of
-repairing them independently in each skill.
+The target model removes the semantic inconsistencies first. Shared durability
+then prevents a correctly modelled process from being lost or repeated during
+execution.
 
 ## Goals
 
-The runtime must:
+The architecture must:
 
-1. make the current state, reason, target, and allowed next actions explainable;
-2. validate every transition independently from its Web, Telegram, CLI, MCP,
+1. provide one declarative and typed vocabulary for states, commands,
+   transitions, guards, invariants, effects, evidence, and projections;
+2. make the current state, reason, target, and allowed next actions explainable;
+3. validate every transition independently from its Web, Telegram, CLI, MCP,
    or model origin;
-3. accept both deterministic controls and bounded natural-language answers;
-4. preserve long-running work across process and transport restarts;
-5. prevent silent duplication of modifying effects;
-6. retain the originating principal, context, and reply route;
+4. derive Web/Telegram actions, Lifecycle and progress projections, and test
+   expectations from the same model;
+5. accept both deterministic controls and bounded natural-language answers;
+6. statically detect unreachable states, missing outcomes, invalid effects,
+   unsafe transitions, and unexplainable waiting states;
 7. separate business state, execution state, artifact lineage, and UI focus;
-8. remain local-first and useful while Root is unreachable;
-9. admit an external durable engine without making domain contracts
-   vendor-specific;
-10. provide evidence and traces suitable for debugging, evaluation, and future
+8. preserve long-running work across process and transport restarts where the
+   domain requires it;
+9. prevent silent duplication of modifying effects;
+10. retain the originating principal, context, and reply route;
+11. remain local-first and useful while Root is unreachable;
+12. provide evidence and traces suitable for debugging, evaluation, and future
     multi-user governance.
 
 ## Non-Goals
 
-The first runtime will not:
+The first model will not:
 
 - formalize every conversational utterance as a workflow transition;
 - allow arbitrary scripts inside declarative workflow definitions;
@@ -113,7 +152,46 @@ The first runtime will not:
 - implement federated or marketplace workflows before the single-user path is
   stable.
 
-## Four Models That Must Stay Separate
+## Success Criterion
+
+The first success is not an external engine integration. It is a Builder
+workflow definition that:
+
+- is small enough for a person to inspect;
+- is rejected at build/test time when internally inconsistent;
+- returns the same current state and allowed commands to Web, Telegram, NLU,
+  SDK callers, and tests;
+- explains every admitted or rejected transition;
+- keeps artifact lineage separate from process state;
+- makes adding or changing a workflow transition a change to one canonical
+  definition plus registered domain code, not several UI and handler patches.
+
+Only after this semantic proof should AdaOS decide whether the existing
+persistence is sufficient or a durable workflow product materially reduces
+execution risk.
+
+## A Bounded Graph, Not a General Graph Platform
+
+The workflow is a constrained statechart rather than an arbitrary property
+graph:
+
+```text
+node       = named business state
+edge       = named command + source + target
+guard      = pure predicate over typed context
+effect     = registered state/evidence operation
+projection = explanation and available interactions derived from snapshot
+```
+
+Loops are expected for revise/review processes. Hierarchical or parallel states
+are allowed only when they reduce state explosion. Runtime values remain typed
+context and refs; they do not dynamically create new state names or executable
+edges.
+
+This does not require a graph database. A validated definition plus a compact
+instance snapshot and transition ledger is sufficient for the initial model.
+
+## Related Models That Must Stay Separate
 
 One large graph or state enum would create state explosion. AdaOS therefore
 keeps four related models separate.
@@ -168,7 +246,112 @@ may differ and neither changes business state by selection alone.
 The command context is bound to a principal and conversation/thread, carries a
 generation, and fails closed when the target is missing or ambiguous.
 
-## Canonical Runtime Records
+## Workflow Metamodel
+
+Every domain workflow is expressed with the same concepts.
+
+### State
+
+A state is a stable business condition with a human-readable meaning. It must
+describe truth, not an action being attempted and not a screen currently open.
+For example, `prototype_review_required` is a state;
+`click_approve_button` and `lifecycle_panel_open` are not.
+
+### Command
+
+A command names an intention to change or query the workflow. It has typed
+arguments, actor/context requirements, risk, and an idempotency contract.
+Channels and NLU resolve input into the same command identity.
+
+### Transition
+
+A transition binds a command and source state to a target state. It references
+guards, effects, evidence requirements, and explanation metadata. An internal
+automatic transition is still named and observable; hidden state mutation is
+not allowed.
+
+### Guard and Invariant
+
+A guard is a pure predicate deciding whether one transition is currently
+available. An invariant must hold for every valid instance snapshot. Guards
+and invariants return typed reason codes with localized explanation keys, not
+only booleans.
+
+### Effect and Activity
+
+An effect updates domain state or records evidence through registered code. A
+long-running or external effect is an activity with timeout, cancellation,
+idempotency, and outcome rules. Definition files refer to stable identifiers;
+they do not embed arbitrary executable code.
+
+### Evidence and Gate
+
+Evidence is a typed assertion about an immutable target: a review decision,
+test result, preview digest, trial observation, permission decision, or release
+record. A gate is a guard whose decision depends on required evidence. A state
+such as `verified` must identify the evidence supporting it.
+
+### Projection and Affordance
+
+A projection converts the canonical snapshot into a channel-neutral
+explanation: current state, progress, target, blockers, evidence, and available
+commands. An affordance is a presentation of one available command as a Web
+button, Telegram option, chat suggestion, CLI command, or rich view. It never
+defines legality independently.
+
+## Definition, Instance, and Projection Flow
+
+```text
+WorkflowDefinition + domain context
+  -> validated WorkflowSnapshot
+  -> explain(snapshot)
+       -> state/reason/blockers/evidence
+       -> allowed commands
+       -> semantic interactions
+  -> invoke(command, expected_generation)
+       -> guards + policy + invariant check
+       -> transition decision
+       -> effect/activity request
+       -> next snapshot + event
+       -> explain(next snapshot)
+```
+
+`explain()` and `invoke()` use the same transition table and guards. The UI
+must not infer an action from state labels, and the command handler must not
+accept an action absent from the generated affordances unless policy marks it
+as a non-interactive system command.
+
+An illustrative definition fragment looks like this (the exact serialization
+is not frozen yet):
+
+```yaml
+workflow_type: builder_change
+initial: clarification
+states:
+  prototype_review:
+    explanation: builder.prototype_review_required
+  automation_ready:
+    explanation: builder.automation_ready
+transitions:
+  - id: accept_prototype
+    from: prototype_review
+    command: builder.accept_prototype
+    to: automation_ready
+    guards:
+      - builder.prototype_target_is_current
+      - builder.review_is_authorized
+    effects:
+      - builder.record_prototype_acceptance
+    evidence:
+      - prototype_review
+```
+
+From this one edge the compiler/resolver must derive command admission, the
+blocked reasons, a Web button or Telegram option when allowed, the chat
+explanation, transition tests, and a graph edge for inspection. Those outputs
+are projections; none may redefine the edge.
+
+## Canonical Workflow Model Records
 
 The exact schemas will be frozen during implementation. The following records
 define the target responsibilities.
@@ -196,14 +379,16 @@ prompts with authority to mutate state.
 
 - stable instance id and domain aggregate reference;
 - workflow type and exact definition version;
-- execution provider and provider instance reference;
+- persistence/execution adapter reference when one is used;
 - current state snapshot and monotonic generation;
 - authority and tenancy scope;
 - pending interaction, task, activity, and evidence references;
 - lifecycle, timestamps, and terminal reason.
 
-Exactly one provider is the execution authority for an instance. A runtime
-must not silently fall back to another provider after accepting a command.
+An adapter choice is an implementation property, not part of the domain state.
+If more than one adapter exists, exactly one is recorded as execution authority
+for an instance and the runtime must not silently switch after accepting a
+command.
 
 ### WorkflowCommand
 
@@ -299,7 +484,7 @@ Every state-changing command follows the same logical boundary:
 5. execute pure guards and policy checks;
 6. revalidate target digest, permission, approval, and eligibility at commit;
 7. atomically record the accepted transition and required outbox work where
-   the provider permits it;
+   the selected persistence boundary permits it;
 8. return a fresh state and interaction frame;
 9. execute external work as a registered activity;
 10. append the activity outcome and evidence through an idempotent command.
@@ -352,97 +537,90 @@ event are retained according to conversation privacy and retention policy.
 This supports audit and future offline evaluation without treating raw chat as
 the workflow database.
 
-## Workflow Definition Validation
+## Validation Model
 
-Before activation, a workflow definition compiler validates:
+Validation is a primary product capability, not a side effect of executing a
+workflow.
+
+### Structural Validation
+
+Before activation, the definition compiler validates:
 
 - schema and stable identifiers;
-- reachability of required states and explicit terminal states;
-- references to registered guards, activities, compensations, and policies;
+- initial state, reachability, explicit terminals, and deliberate loops;
+- references to registered guards, effects, activities, compensations, and
+  policies;
 - deterministic ordering or explicit priority for competing transitions;
-- required parameters and result schemas;
+- required command parameters and result schemas;
+- definition-version and migration policy.
+
+### Semantic Validation
+
+Domain conformance tests validate:
+
+- invariants before and after every transition;
+- legal and illegal commands for representative contexts;
+- evidence and approval gates;
 - confirmation rules for protected risk classes;
-- idempotency/retry declaration for every activity;
 - success, failure, cancellation, timeout, and unknown-outcome handling;
-- user explanation and interaction projection for every waiting state;
-- definition-version and in-flight migration policy.
+- absence of transitions that silently broaden scope or authority;
+- consistency between artifact lineage and claimed workflow state.
 
-Runtime validation repeats target-, permission-, and generation-dependent
-checks. Static validation never substitutes for commit-time policy.
+### Projection Validation
 
-## Durable Execution Provider Boundary
+Every reachable snapshot must produce:
 
-AdaOS exposes a provider-neutral port conceptually equivalent to:
+- a stable state and reason code;
+- human-readable explanation and blockers;
+- the same semantic `allowed_actions` for all channels;
+- an interaction or explicit wait reason for every human-input state;
+- a Preview/Lifecycle target only when a valid domain ref exists;
+- no affordance for a command that the resolver would reject under the same
+  snapshot and actor policy.
+
+Generated transition-coverage tests ensure every declared edge is exercised
+and every state has a valid explanation. Golden examples may verify labels and
+channel projection, but they do not become a second transition definition.
+
+Runtime validation repeats target-, permission-, generation-, and
+evidence-dependent checks. Static validation never substitutes for commit-time
+policy.
+
+## Persistence and Durable Execution Are Secondary Adapters
+
+The workflow definition, transition resolver, explanation, and conformance
+tests must run without DBOS, Temporal, Restate, or another workflow product.
+For short local processes, the existing AdaOS SQLite transaction and task
+model may be sufficient. Long waits, crash recovery, retries, cross-node work,
+or many concurrent instances may justify a durable-execution adapter.
+
+Only then does AdaOS require a provider-neutral port such as:
 
 ```text
 start(workflow_type, instance_id, input, idempotency_key)
 invoke(instance_id, command, expected_generation, idempotency_key)
 describe(instance_id)
 cancel(instance_id, reason, idempotency_key)
-list/recover(scope, cursor)
-stream_events(instance_id, after_sequence)
+recover(scope, cursor)
 ```
 
-The port requires:
+Any adapter must preserve canonical AdaOS commands, events, state generations,
+guards, explanation, and activity contracts. Provider-native handles do not
+escape into skills, NLU, Web, Telegram, or workflow definitions.
 
-- durable instance identity and status;
-- persisted waits and external signals;
-- idempotent command intake;
-- activity retry, timeout, cancellation, and heartbeat semantics;
-- definition/runtime version visibility;
-- recovery and replay diagnostics;
-- event or outbox integration;
-- bounded payloads with external artifact references for large content;
-- backup, retention, and privacy controls.
+Candidate evaluation is deliberately postponed until the Builder semantic
+model works on the reference persistence path:
 
-The port does not expose provider-native handles to skills or UI code. Skills
-use AdaOS SDK commands and receive canonical interaction/task projections.
+- SQLite is the compatibility/reference storage for local-first proof;
+- DBOS may be evaluated as a Python/SQLite/PostgreSQL implementation aid;
+- Temporal may be evaluated for Root-level distributed orchestration;
+- Restate may be evaluated as a keyed workflow/actor sidecar;
+- NATS or JetStream may carry events and outbox work but do not define workflow
+  semantics.
 
-## Provider Strategy
-
-Provider adoption is evidence-driven.
-
-### Reference SQLite Provider
-
-The first provider establishes semantics using the node's existing local-first
-SQLite deployment model. It is a correctness reference and compatibility path,
-not permission to create another set of ad-hoc per-skill state files.
-
-It must use WAL where supported, monotonic generations, an append transition
-ledger, idempotent inbox, transactional outbox, leases/heartbeats for workers,
-and explicit unknown-outcome recovery.
-
-### DBOS Candidate
-
-DBOS is the preferred first external pilot because its Python library can use
-SQLite locally and PostgreSQL for multi-process production. The pilot must
-prove compatibility with AdaOS async execution, upgrades, backup, Windows and
-Linux, and existing database ownership before adoption.
-
-### Temporal Candidate
-
-Temporal is the reference for mature distributed durable execution and is a
-strong candidate for future Root-level, multi-node, or multi-user workflows.
-It must not become a prerequisite for an offline personal node. An adapter may
-map AdaOS commands to Updates/Signals, activities to workers, and workflow
-events to AdaOS projections.
-
-### Restate Candidate
-
-Restate's workflow and keyed single-writer service model is a close conceptual
-fit for workflow instances. Its separate server and platform packaging must be
-evaluated against AdaOS native Windows/Linux deployment and supervisor cost.
-
-### NATS and JetStream
-
-Core NATS remains a transport. JetStream may later provide durable outbox,
-work-queue, or replay delivery, but a stream does not define business guards,
-human waits, compensation, workflow upgrades, or artifact authority. AdaOS
-will not build an unbounded custom Temporal clone merely because NATS is
-already deployed.
-
-For every workflow instance the selected provider is persisted. Provider
-unavailability is visible; it does not trigger silent cross-provider replay.
+The architecture has succeeded even if no external engine is adopted. An
+engine is selected only when measurements show that it removes more reliability
+and operational risk than it introduces.
 
 ## Local-First and Root Topology
 
@@ -605,8 +783,24 @@ effects remain ordered, authorized events.
 
 ## Technology Positioning
 
-This design intentionally adopts established durable-execution patterns
-without binding the product contract to one implementation:
+The architecture is a hybrid symbolic/probabilistic control plane: a typed
+statechart decides what is legal, while models help interpret language and
+produce artifacts inside those rails. Relevant precedents cover different
+layers rather than one product solving the whole problem:
+
+- [XState states](https://stately.ai/docs/states) and
+  [actors](https://stately.ai/docs/actors) demonstrate statecharts, pure
+  guards, explainable available events, nested/parallel states, and invoked
+  long-running work;
+- [MCP Elicitation](https://modelcontextprotocol.io/specification/draft/client/elicitation)
+  provides useful interoperability direction for projecting structured human
+  input without defining the business workflow;
+- [OpenAI Agents SDK human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+  and [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
+  demonstrate pause, approval, and resume patterns for agent runs;
+
+Durable execution products are optional implementation references below that
+semantic model:
 
 - [Temporal architecture](https://github.com/temporalio/temporal/blob/main/docs/architecture/README.md)
   documents append-only workflow history, deterministic workflow code, and
@@ -615,17 +809,14 @@ without binding the product contract to one implementation:
   library-based durable workflow model with SQLite and PostgreSQL providers;
 - [Restate services](https://docs.restate.dev/foundations/services) documents
   durable workflows, signals, and keyed single-writer services;
-- [MCP Elicitation](https://modelcontextprotocol.io/specification/draft/client/elicitation)
-  and [MCP Tasks](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)
-  provide useful interoperability direction for structured input and
-  `input_required`, while remaining external protocol concerns;
+- [MCP Tasks](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)
+  provides an interoperability direction for long-running requests and
+  `input_required` while remaining an external protocol concern;
 - [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) provides
-  durable delivery and replay but is not a business workflow runtime;
-- [OpenAI Agents SDK human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
-  and [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
-  demonstrate durable pause, approval, and resume patterns for agent runs.
+  durable delivery and replay but is not a business workflow model.
 
 AdaOS's product opportunity is the integration of natural conversation,
 deterministic interaction affordances, formal transition policy, artifact
 lineage, evidence, local-first trial, and cross-channel delivery. The durable
-engine is infrastructure supporting that model, not the model itself.
+engine is optional infrastructure supporting that model, not the objective of
+the architecture.

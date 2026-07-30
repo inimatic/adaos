@@ -1,12 +1,13 @@
-# Governed Workflow Runtime Roadmap
+# Explainable Workflow Model Roadmap
 
-Status: domain roadmap for the AdaOS workflow, interaction, NLU mediation, and
-durable-execution plane.
+Status: domain roadmap for the AdaOS workflow metamodel, validation,
+explanation, interaction projection, NLU mediation, and optional durable
+execution adapters.
 
 Last reviewed: 2026-07-30.
 
 This roadmap implements the
-[Governed Workflow and Interaction Runtime](governed-workflow-runtime.md).
+[Explainable Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
 It owns sequencing and acceptance inside this domain. It does not replace the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md), Builder roadmap,
 conversation architecture, NLU roadmap, or operational event roadmap. Tasks
@@ -36,8 +37,9 @@ record. A successful happy-path UI demonstration does not prove durability.
 
 ## Planning Authority
 
-1. The architecture document owns invariants, record responsibilities, and
-   provider boundaries.
+1. The architecture document owns the workflow metamodel, invariants,
+   transition/explanation semantics, record responsibilities, and adapter
+   boundaries.
 2. This roadmap owns implementation order and the workflow-runtime proof.
 3. Domain workflow definitions remain owned by their domain architecture and
    roadmap.
@@ -50,8 +52,9 @@ record. A successful happy-path UI demonstration does not prove durability.
    migrated; it is not a second permanent interaction authority.
 7. [Builder Roadmap](builder-roadmap.md) owns Builder product acceptance; this
    roadmap owns the reusable runtime proven by that acceptance.
-8. External engine adoption is a decision produced by evidence, not a
-   prerequisite assumed by this document.
+8. A consistent and validated workflow model is the delivery objective.
+   External engine adoption is an optional decision produced by later
+   reliability evidence.
 
 ## Current Baseline
 
@@ -67,43 +70,47 @@ The current repository has useful but fragmented foundations:
 | Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing | at-most-once transport path; not a workflow journal |
-| External durable engine | none | hypothesis/evaluation only |
+| Shared workflow metamodel | none | primary architecture gap |
+| External durable engine | none | optional later evaluation, not the objective |
 
 ## Milestone Sequence
 
 | Milestone | Outcome | Current maturity | Horizon |
 | --- | --- | --- | --- |
-| GWR0 | Target boundary, risks, and authority are fixed | `specified` | now |
-| GWR1 | Canonical contracts and a pure workflow kernel exist | `hypothesis` | now |
-| GWR2 | One semantic interaction works across Web, Telegram, and text fallback | `hypothesis` with compatibility fragments | now |
-| GWR3 | Node-local workflow execution survives restart without duplicate mutation | `hypothesis` | next |
-| GWR4 | Free text is constrained by pending interaction and allowed transitions | `hypothesis` | next |
-| GWR5 | Builder completes the reference workflow through the shared runtime | `hypothesis` | next |
-| GWR6 | External provider candidates are measured and one adoption decision is recorded | `hypothesis` | later |
-| GWR7 | The chosen runtime is hardened for broad single-user use | `hypothesis` | later |
+| GWR0 | The semantic problem, boundaries, and authority are fixed | `specified` | now |
+| GWR1 | A canonical metamodel, definition compiler, and pure resolver exist | `hypothesis` | now |
+| GWR2 | State explanation and semantic affordances are derived consistently for every channel | `hypothesis` with compatibility fragments | now |
+| GWR3 | Free text is constrained by pending interaction and allowed transitions | `hypothesis` | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model | `hypothesis` | next |
+| GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `hypothesis` | next |
+| GWR6 | Actual durability gaps and reference persistence requirements are measured | `hypothesis` | later |
+| GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `deferred decision` | later |
 | GWR8 | Root/multi-user and cross-provider extensions are admitted by evidence | `deferred` | long-term |
 
-Milestones are cumulative. A provider experiment may run early behind a
-feature flag, but it does not redefine the contracts or become a dependency
-before GWR5 produces the reference proof.
+Milestones are cumulative. GWR0-GWR5 solve the workflow fragmentation problem
+without depending on an external engine. A provider experiment may run behind
+a feature flag, but it cannot redefine the model or become a dependency before
+the semantic proof exposes a measured durability need.
 
 ## GWR0. Architecture and Decision Baseline
 
 **Outcome:** AdaOS has one documented boundary for workflow semantics,
-interactions, NLU mediation, durable execution, and provider evaluation.
+validation, explanation, interactions, NLU mediation, and subordinate
+persistence/execution adapters.
 
 **Exit gate:** architecture and roadmap are discoverable, distinguish current
 implementation from target state, and do not claim an external provider is
 already selected.
 
-- [x] `[must]` `GWR0-01` Define the workflow kernel, durable provider,
-  interaction, IntentProposal, activity, evidence, and ReplyRoute boundaries.
+- [x] `[must]` `GWR0-01` Define the workflow metamodel, compiler, resolver,
+  explanation, interaction, IntentProposal, effect/activity, evidence, and
+  ReplyRoute boundaries.
 - [x] `[must]` `GWR0-02` Separate workflow statechart, artifact lineage DAG,
   execution state, and view/command context.
 - [x] `[must]` `GWR0-03` Record local-first, no-silent-retry,
   commit-time-authorization, and no-dual-truth invariants.
-- [x] `[must]` `GWR0-04` Record the reference SQLite, DBOS, Temporal, Restate,
-  and NATS/JetStream positions without selecting a vendor by assertion.
+- [x] `[must]` `GWR0-04` Record persistence and external durable engines as
+  subordinate adapters evaluated only after the semantic model proof.
 - [x] `[must]` `GWR0-05` Register this roadmap in the architecture navigation
   and roadmap authority map.
 - [ ] `[should]` `GWR0-06` Inventory every current durable/ad-hoc workflow,
@@ -114,10 +121,11 @@ already selected.
 - [x] `[deferred]` `GWR0-08` Do not harmonize all historical documentation in
   this milestone; update owning documents only as implementation reaches them.
 
-## GWR1. Canonical Contracts and Pure Kernel
+## GWR1. Workflow Metamodel, Compiler, and Pure Resolver
 
-**Outcome:** workflow state and allowed transitions can be described and
-validated without a UI, NLU model, worker, or external provider.
+**Outcome:** workflow state, legal transitions, guards, effects, evidence, and
+explanation can be described and validated without a UI, NLU model, worker, or
+external execution engine.
 
 **Admission gate:** GWR0 is complete.
 
@@ -138,257 +146,254 @@ produce stable fresh interaction descriptors from the resulting state.
   retries, failure outcomes, and waiting-state explanation.
 - [ ] `[must]` `GWR1-05` Require monotonic generation and
   `expected_generation` for state-changing commands.
-- [ ] `[must]` `GWR1-06` Define the stable provider port and provider capability
-  descriptor.
-- [ ] `[must]` `GWR1-07` Define activity metadata for idempotency, side-effect
-  class, timeout, heartbeat, cancellation, compensation, and unknown outcome.
+- [ ] `[must]` `GWR1-06` Define pure guards and invariants with typed reason
+  codes instead of boolean-only results.
+- [ ] `[must]` `GWR1-07` Define effect/activity metadata for idempotency,
+  side-effect class, timeout, heartbeat, cancellation, compensation, and
+  unknown outcome.
 - [ ] `[must]` `GWR1-08` Generate `allowed_actions` and rejection explanations
   from the same guards used to admit commands.
 - [ ] `[should]` `GWR1-09` Add model-based tests proving state snapshots and
   projections can be rebuilt from canonical workflow events.
 - [ ] `[should]` `GWR1-10` Add schema compatibility tests and a definition
   version/migration fixture.
-- [ ] `[could]` `GWR1-11` Export a statechart representation for visualization
+- [ ] `[should]` `GWR1-11` Define the stable persistence/execution adapter port
+  without making it necessary for the pure resolver.
+- [ ] `[could]` `GWR1-12` Export a statechart representation for visualization
   and review without making the visualization format authoritative.
-- [ ] `[deferred]` `GWR1-12` Defer arbitrary end-user workflow authoring and
+- [ ] `[deferred]` `GWR1-13` Defer arbitrary end-user workflow authoring and
   executable expressions; definitions reference only registered code.
 
-## GWR2. Conversation Interaction and Reply Routing
+## GWR2. Explanation, Projections, and Semantic Affordances
 
-**Outcome:** a skill or system workflow emits one semantic interaction that is
-controllable through Web, Telegram, and a text fallback.
+**Outcome:** one snapshot produces one explanation and one semantic set of
+available actions, regardless of whether it is viewed in Builder Lifecycle,
+Web chat, Telegram, CLI, or a test.
 
-**Admission gate:** GWR1 contracts are stable enough to bind interaction
-targets and generations.
+**Admission gate:** GWR1 can compile and resolve a representative definition.
 
-**Exit proof:** one low-risk and one confirmation-required interaction traverse
-each channel; stale, expired, replayed, cross-user, and cross-context attempts
-are rejected; a delayed result reaches its original route after restart.
+**Exit proof:** generated conformance tests prove that every reachable state is
+explainable, every displayed action is accepted under the same context, every
+blocked action has a reason code, and channels differ only in presentation.
 
-- [ ] `[must]` `GWR2-01` Add `adaos.conversation.interaction.v1` and SDK methods
-  for messages with typed controls, forms, and channel fallbacks.
-- [ ] `[must]` `GWR2-02` Add a durable interaction registry with opaque tokens,
-  expiry, principal/context/generation binding, single-use, and idempotency.
-- [ ] `[must]` `GWR2-03` Add one canonical interaction-invocation ingress that
-  bypasses NLU for valid deterministic actions.
-- [ ] `[must]` `GWR2-04` Adapt current Web chat actions to the canonical
-  interaction without exposing raw skill/tool parameters to the browser.
-- [ ] `[must]` `GWR2-05` Project outbound Telegram inline keyboards and route
-  callback actions through the canonical ingress.
-- [ ] `[must]` `GWR2-06` Add a numbered/text fallback and capability negotiation
-  for channels without rich controls.
-- [ ] `[must]` `GWR2-07` Persist full ReplyRoute for asynchronous work and
-  distinguish materialized, queued, sent, failed, and acknowledged delivery.
-- [ ] `[must]` `GWR2-08` Ensure a callback/reply cannot escape its principal,
-  conversation, task, workflow, or target generation.
-- [ ] `[should]` `GWR2-09` Unify Pending Actions with the interaction registry or
-  implement an explicit compatibility adapter and migration owner.
-- [ ] `[should]` `GWR2-10` Add pagination, compact summaries, and deep links for
-  Telegram rather than forcing full Web parity.
-- [ ] `[could]` `GWR2-11` Add mini-app handoff for rich artifact/search views
-  after the semantic interaction contract is stable.
-- [ ] `[deferred]` `GWR2-12` Defer universal Telegram parity for complex file,
-  tree, search, and preview interfaces.
+- [ ] `[must]` `GWR2-01` Define `WorkflowSnapshot` and a pure `explain()` result
+  containing state, target, progress, blockers, evidence, and allowed commands.
+- [ ] `[must]` `GWR2-02` Derive `allowed_actions` from the same transitions and
+  guards used by `invoke()`; forbid separately maintained UI action tables.
+- [ ] `[must]` `GWR2-03` Define `adaos.conversation.interaction.v1` as a semantic
+  projection of commands, typed input, risk, and channel fallback.
+- [ ] `[must]` `GWR2-04` Generate state/transition coverage tests and reject a
+  definition with an unexplained reachable or waiting state.
+- [ ] `[must]` `GWR2-05` Define stable reason codes and localization keys for
+  admitted, blocked, stale, ambiguous, and policy-denied commands.
+- [ ] `[must]` `GWR2-06` Adapt Builder Lifecycle, process summary, and Preview
+  target to canonical projections rather than independently inferred stages.
+- [ ] `[must]` `GWR2-07` Adapt Web chat, Telegram controls, and text fallback to
+  the same semantic interaction and canonical invocation ingress.
+- [ ] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
+  immutable target, and expected generation with opaque tokens.
+- [ ] `[should]` `GWR2-09` Unify Pending Actions with the semantic interaction
+  model or document one bounded compatibility adapter and retirement path.
+- [ ] `[should]` `GWR2-10` Add a developer inspector showing why a transition is
+  available or blocked without exposing provider internals.
+- [ ] `[could]` `GWR2-11` Export a generated graph/timeline for review and docs.
+- [ ] `[deferred]` `GWR2-12` Defer universal Telegram parity for file trees,
+  search, and rich Preview; semantic command parity is sufficient.
 
-## GWR3. Reference Node-Local Durable Execution
+## GWR3. NLU Mediation and Informal Responses
 
-**Outcome:** a local AdaOS process can wait, resume, and complete a workflow
-after restart without losing or silently duplicating work.
-
-**Admission gate:** GWR1 contracts exist; GWR2 provides durable input/reply
-bindings for human waits.
-
-**Exit proof:** fault injection at every transition/activity/outbox boundary
-demonstrates recovery, deduplication, explicit unknown outcome, cancellation,
-and replayable explanation on the development machine.
-
-- [ ] `[must]` `GWR3-01` Implement the reference SQLite provider using one
-  canonical store rather than per-skill JSON state.
-- [ ] `[must]` `GWR3-02` Add append transition journal, snapshot generation,
-  idempotent command inbox, and transactional outbox.
-- [ ] `[must]` `GWR3-03` Add worker leases, heartbeats, stale lease recovery,
-  bounded concurrency, and restart reconciliation.
-- [ ] `[must]` `GWR3-04` Persist timers, waits, external signals, cancellation,
-  and task/activity attempts.
-- [ ] `[must]` `GWR3-05` Never retry an uncertain modifying activity unless its
-  target proves idempotency or reconciliation proves it did not commit.
-- [ ] `[must]` `GWR3-06` Add commit-time checks for permission, target digest,
-  approval witness, current generation, and effect binding.
-- [ ] `[must]` `GWR3-07` Emit canonical workflow events through the operational
-  envelope without treating the runtime event bus as durable truth.
-- [ ] `[must]` `GWR3-08` Add backup/restore and schema migration coverage for
-  active and waiting instances.
-- [ ] `[should]` `GWR3-09` Add an operator describe/list/recover/cancel surface
-  with redacted payloads and reasoned blocked states.
-- [ ] `[should]` `GWR3-10` Add bounded retention, compaction/snapshots, and large
-  artifact references instead of unbounded payload history.
-- [ ] `[could]` `GWR3-11` Use JetStream for an optional durable transport/outbox
-  experiment after the SQLite truth and offline recovery are proven.
-- [ ] `[deferred]` `GWR3-12` Defer distributed consensus and active-active local
-  workflow execution; one provider is authoritative for one instance.
-
-## GWR4. NLU Mediation and Informal Responses
-
-**Outcome:** natural language can safely answer pending questions, request
+**Outcome:** natural language can answer pending questions, request
 transitions, add feedback, or start unrelated work without becoming direct
 mutation authority.
 
-**Admission gate:** allowed transitions and pending interactions are
-queryable through GWR1-GWR3.
+**Admission gate:** GWR2 exposes current context, pending interactions, and
+allowed commands as a bounded interpretation grammar.
 
 **Exit proof:** a multilingual evaluation set covers explicit and informal
 answers, multi-act feedback, ambiguous targets, corrections, negation, stale
-context, and unrelated requests; no state changes outside the deterministic
+context, and unrelated requests; no model output changes state outside the
 resolver.
 
-- [ ] `[must]` `GWR4-01` Add `adaos.intent.proposal.v1` with source message,
+- [ ] `[must]` `GWR3-01` Add `adaos.intent.proposal.v1` with source message,
   semantic acts, alternatives, allowed-command snapshot, model identity, and
   disposition.
-- [ ] `[must]` `GWR4-02` Route free text against an explicit pending
-  interaction first and require clarification when more than one target fits.
-- [ ] `[must]` `GWR4-03` Support multi-act utterances instead of forcing every
+- [ ] `[must]` `GWR3-02` Resolve a deterministic action token without NLU and
+  route free text against its explicit pending interaction first.
+- [ ] `[must]` `GWR3-03` Require clarification when more than one pending target
+  or command context fits a free-text answer.
+- [ ] `[must]` `GWR3-04` Support multi-act utterances instead of forcing every
   message into one intent.
-- [ ] `[must]` `GWR4-04` Keep new Issue/change feedback, read-only questions,
+- [ ] `[must]` `GWR3-05` Keep new Issue/change feedback, read-only questions,
   context selection, and workflow commands distinct.
-- [ ] `[must]` `GWR4-05` Reject model-proposed commands not present in the
-  current `allowed_actions` set or lacking required typed arguments.
-- [ ] `[must]` `GWR4-06` Define risk policy for accepting bounded free-text
-  confirmation versus requiring an explicit protected review action.
-- [ ] `[must]` `GWR4-07` Persist interpretation, clarification, correction, and
-  committed result with privacy/retention controls.
-- [ ] `[should]` `GWR4-08` Build offline evaluation from real corrected cases,
-  including Russian and English locale/encoding coverage.
-- [ ] `[should]` `GWR4-09` Measure per-act precision, false transition rate,
-  clarification rate, and correction recovery rather than relying on model
-  confidence.
-- [ ] `[could]` `GWR4-10` Add deterministic parsers for common short answers and
-  ordinal choices before invoking a model.
-- [ ] `[deferred]` `GWR4-11` Defer autonomous workflow induction from arbitrary
-  conversations until curated definitions and policy prove insufficient.
+- [ ] `[must]` `GWR3-06` Reject proposed commands absent from `allowed_actions`
+  or lacking required typed arguments.
+- [ ] `[must]` `GWR3-07` Define risk policy for bounded free-text confirmation
+  versus an explicit protected interaction.
+- [ ] `[must]` `GWR3-08` Persist interpretation, clarification, correction, and
+  committed result with privacy and retention controls.
+- [ ] `[should]` `GWR3-09` Build Russian and English offline evaluation from
+  real corrected cases, including UTF-8 transport coverage.
+- [ ] `[should]` `GWR3-10` Measure false-transition and clarification rates,
+  not model confidence alone.
+- [ ] `[could]` `GWR3-11` Parse common short answers and ordinal choices
+  deterministically before invoking a model.
+- [ ] `[deferred]` `GWR3-12` Defer autonomous workflow induction from arbitrary
+  conversations.
 
-## GWR5. Builder Reference Vertical Slice
+## GWR4. Builder Domain Workflow Model
 
-**Outcome:** Builder uses the shared runtime for request to Issue/Change,
-Prototype or Automation, Trial, and Publication across Web and Telegram.
+**Outcome:** Builder has one inspectable model connecting request, Issues,
+Change, Prototype, Automation, Trial, and Publication instead of independent
+stage buckets and UI-specific rules.
 
-**Admission gate:** GWR1-GWR4 exit proofs exist for the required commands and
-channels.
+**Admission gate:** GWR1-GWR3 can define, explain, project, and invoke the
+required transitions.
+
+**Exit proof:** the Builder definition compiles; every state and edge has a
+domain meaning, guard, effect/evidence contract, and explanation; generated
+tests cover all legal and representative illegal paths.
+
+- [ ] `[must]` `GWR4-01` Define the canonical Builder Change statechart and
+  explicitly separate it from artifact lineage and task execution state.
+- [ ] `[must]` `GWR4-02` Key the workflow instance by canonical `change_id` and
+  retain exact project, base release, artifact, and command-context refs.
+- [ ] `[must]` `GWR4-03` Model Prototype -> Automation -> Publication as
+  derivation and promotion, not three mutually independent mutable stages.
+- [ ] `[must]` `GWR4-04` Define direct Automation, prototype-first, revise,
+  cancel, failure, retry-as-new-Run, Trial reject/accept, and Publication paths.
+- [ ] `[must]` `GWR4-05` Define invariants: one active bounded Change, immutable
+  accepted revisions, exact source Prototype for Automation, and exact
+  candidate digest for Publication.
+- [ ] `[must]` `GWR4-06` Define LLM, Codex, validation, Git checkpoint, Trial,
+  Publication, and notification as registered effects/activities rather than
+  implicit phase code.
+- [ ] `[must]` `GWR4-07` Generate Lifecycle hierarchy, process summary,
+  available controls, conversation focus, and Preview target from the same
+  snapshot and lineage refs.
+- [ ] `[must]` `GWR4-08` Keep Lifecycle selection and Preview selection as view
+  context; neither changes the workflow without an explicit command.
+- [ ] `[should]` `GWR4-09` Map current Builder JSON, sessions, Pending Actions,
+  and UI handlers to canonical concepts with retain/adapt/retire disposition.
+- [ ] `[should]` `GWR4-10` Add a compact workflow explanation to the chat so a
+  user can ask what is happening, why, and what can happen next.
+- [ ] `[could]` `GWR4-11` Add a generated graph/timeline inspector as a rich
+  detail view, not the primary control surface.
+- [ ] `[deferred]` `GWR4-12` Defer simultaneous multi-user approval and artifact
+  merging to GWR8.
+
+## GWR5. Cross-Channel and End-to-End Consistency Proof
+
+**Outcome:** the Builder model remains consistent when driven through Web,
+Telegram, free text, deterministic controls, background results, and direct SDK
+tests.
+
+**Admission gate:** the GWR4 definition is compiled and projected through GWR2
+and GWR3.
 
 **Exit proof:** one empty representative scenario completes the full flow on
-this development machine, survives injected restarts, and records artifact,
-Git, test, trial, publication, delivery, and rollback evidence without direct
-state repair.
+this development machine; every channel observes the same state and actions;
+lineage, evidence, and final Publication agree without direct state repair.
 
-- [ ] `[must]` `GWR5-01` Define and validate the canonical Builder Change
-  workflow using registered guards and activities.
-- [ ] `[must]` `GWR5-02` Key the workflow instance by canonical `change_id` and
-  retain exact project, base release, artifact, and command-context refs.
-- [ ] `[must]` `GWR5-03` Project Lifecycle from workflow state and artifact
-  lineage instead of maintaining three independent stage buckets.
-- [ ] `[must]` `GWR5-04` Route selection and Preview as view context only;
-  selection must not mutate the active workflow.
-- [ ] `[must]` `GWR5-05` Implement LLM, Codex, validation, Git checkpoint,
-  trial, publication, and notification as typed activities.
-- [ ] `[must]` `GWR5-06` Persist Automation input-required/review and completion
-  routes so Web or Telegram can resume the same task after restart.
-- [ ] `[must]` `GWR5-07` Prove no automatic repeat of an uncertain Codex,
-  filesystem, Git, activation, or publication mutation.
-- [ ] `[must]` `GWR5-08` Bind every acceptance/publication action to the exact
-  immutable candidate digest and current authority generation.
-- [ ] `[must]` `GWR5-09` Exercise revise-to-Prototype, direct Automation,
-  cancel, failure, retry-as-new-Run, Trial reject/accept, and Publication.
-- [ ] `[must]` `GWR5-10` Record repeatable local acceptance evidence and update
-  the Builder roadmap without duplicating this runtime checklist.
-- [ ] `[should]` `GWR5-11` Migrate Builder-specific pending actions, workflow
-  JSON, and polling to compatibility projections or retire them explicitly.
-- [ ] `[should]` `GWR5-12` Compare latency, token/tool overhead, storage growth,
-  and operator diagnosis time with the current Builder path.
-- [ ] `[could]` `GWR5-13` Add a graph/timeline inspector as a rich Builder view
-  after the chat-first control path is accepted.
-- [ ] `[deferred]` `GWR5-14` Defer simultaneous multi-user editing and approval
-  to GWR8.
+- [ ] `[must]` `GWR5-01` Run request -> Issues/Change -> Prototype or direct
+  Automation -> verification -> Trial -> Publication through the canonical
+  resolver.
+- [ ] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
+  and SDK commands invoke identical command identities and guards.
+- [ ] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
+  returns a typed concurrency/policy change, never an unrelated handler rule.
+- [ ] `[must]` `GWR5-04` Prove blocked commands expose the same reason code and
+  semantically equivalent explanation across channels.
+- [ ] `[must]` `GWR5-05` Bind review and Publication to exact immutable target
+  digests and reject stale Lifecycle/chat actions.
+- [ ] `[must]` `GWR5-06` Prove a background Codex/LLM result advances only the
+  originating Change and cannot inherit another Webspace's view context.
+- [ ] `[must]` `GWR5-07` Prove Lifecycle nodes, process status, conversation
+  focus, and proto:/active:/public: Preview labels remain mutually consistent.
+- [ ] `[must]` `GWR5-08` Record transition coverage, artifact lineage, tests,
+  Trial, Git, Publication, and delivery evidence for the representative run.
+- [ ] `[must]` `GWR5-09` Update the Builder roadmap with the accepted semantic
+  proof without copying this checklist.
+- [ ] `[should]` `GWR5-10` Measure time to understand current state, action
+  mismatch defects, clarification rate, and diagnosis effort versus the old
+  Builder path.
+- [ ] `[could]` `GWR5-11` Add mutation testing that deliberately removes guards
+  or projections and proves conformance tests fail.
+- [ ] `[deferred]` `GWR5-12` Do not block the semantic proof on choosing or
+  integrating an external durable engine.
 
-## GWR6. External Durable Provider Evaluation
+## GWR6. Durability Gap Assessment and Reference Persistence
 
-**Outcome:** AdaOS has measured evidence for adopting an external provider or
-retaining the reference provider for the next product horizon.
+**Outcome:** AdaOS knows which reliability requirements the semantic model
+actually creates and whether the current local persistence can satisfy them.
 
-**Admission gate:** the GWR5 workflow and failure suite are provider-neutral
-and pass on the reference provider.
+**Admission gate:** GWR5 passes semantically; failures can now be attributed to
+execution/recovery rather than an inconsistent transition model.
 
-**Exit proof:** at least one candidate executes the same conformance and fault
-suite behind a feature flag, and an ADR records adopt, postpone, or reject with
-measured reasons.
+**Exit proof:** restart and fault tests identify concrete gaps, the minimal
+reference persistence closes the required single-user gaps, and an ADR states
+whether an external engine evaluation is warranted.
+
+- [ ] `[must]` `GWR6-01` Inventory waits, timers, callbacks, long activities,
+  retries, cancellation, unknown outcomes, and reply delivery in the accepted
+  Builder definition.
+- [ ] `[must]` `GWR6-02` Define the minimum persistence contract: snapshot
+  generation, transition journal, idempotent inbox, outbox, activity attempts,
+  pending interactions, and ReplyRoute.
+- [ ] `[must]` `GWR6-03` Implement only the missing reference SQLite semantics,
+  reusing current AdaOS stores rather than creating another per-skill state
+  system.
+- [ ] `[must]` `GWR6-04` Inject crashes before and after every modifying effect
+  and distinguish safe retry from `outcome_unknown` reconciliation.
+- [ ] `[must]` `GWR6-05` Cover delayed human input, process restart,
+  cancellation, definition upgrade, backup/restore, and offline Root.
+- [ ] `[must]` `GWR6-06` Add commit-time checks for permission, target digest,
+  approval witness, current generation, and effect binding.
+- [ ] `[must]` `GWR6-07` Record resource use, recovery complexity, defect rate,
+  and operator repair cost for the reference path.
+- [ ] `[must]` `GWR6-08` Write an ADR: reference persistence sufficient, or
+  external durable adapter evaluation admitted with named unmet requirements.
+- [ ] `[should]` `GWR6-09` Add bounded retention, compaction, redacted
+  diagnostics, and operator describe/recover/cancel surfaces.
+- [ ] `[could]` `GWR6-10` Use JetStream for a transport/outbox experiment only
+  if delivery durability is one of the measured gaps.
+- [ ] `[deferred]` `GWR6-11` Defer distributed consensus and active-active local
+  workflow execution.
+
+## GWR7. Optional External Durable Adapter
+
+**Outcome:** only if GWR6 admits the work, an external product is evaluated as
+an interchangeable execution adapter without changing workflow semantics.
+
+**Admission gate:** the GWR6 ADR names reliability requirements the reference
+path cannot meet economically.
+
+**Exit proof:** a candidate runs the same Builder model and conformance/fault
+suite behind a feature flag, and an ADR records adopt, postpone, or reject.
 
 ### Evaluation Matrix
 
-Every candidate is assessed against:
+Candidates are assessed against the admitted gaps plus local-first operation,
+Python 3.11, Windows/Linux packaging, SQLite/PostgreSQL topology, signals and
+waits, upgrades, backup, privacy, observability, resource cost, license,
+maturity, and exit cost.
 
-- native AdaOS Python 3.11 integration;
-- Windows development and Linux x64/ARM deployment;
-- offline single-node operation;
-- SQLite/local and PostgreSQL/central topology;
-- restart and network-partition recovery;
-- signals, waits, queries, cancellation, and compensation;
-- activity idempotency and unknown-outcome handling;
-- workflow/worker version upgrades and pinned in-flight work;
-- multi-tenant authorization and action-context binding;
-- backup, restore, retention, privacy, and payload limits;
-- observability and operator repair;
-- CPU, memory, disk, startup, packaging, and supervisor cost;
-- license, project maturity, release cadence, and exit/migration cost.
-
-- [ ] `[must]` `GWR6-01` Freeze a provider conformance suite from the GWR3 and
-  GWR5 acceptance cases.
-- [ ] `[must]` `GWR6-02` Record baseline resource and failure measurements for
-  the reference SQLite provider.
-- [ ] `[should]` `GWR6-03` Implement a DBOS SQLite/PostgreSQL pilot behind the
-  provider port and feature flag.
-- [ ] `[should]` `GWR6-04` Test DBOS with async activities, duplicate signals,
-  process restart, schema/worker upgrade, backup, Windows, and Linux.
-- [ ] `[could]` `GWR6-05` Implement a bounded Temporal Root pilot for a
-  cross-node Builder activity and long human wait.
-- [ ] `[could]` `GWR6-06` Evaluate Restate as a supervisor-managed sidecar on
-  supported Linux hubs and document the Windows development gap.
-- [ ] `[could]` `GWR6-07` Evaluate Dapr only if a broader AdaOS sidecar/building-
-  block decision makes its operational cost shared.
-- [ ] `[must]` `GWR6-08` Write an ADR selecting adopt/postpone/reject and keep
-  provider-native APIs below the AdaOS SDK boundary.
-- [ ] `[deferred]` `GWR6-09` Do not implement several production providers in
-  parallel; only the selected path advances to GWR7.
-
-## GWR7. Single-User Hardening and Adoption
-
-**Outcome:** the admitted runtime can carry routine single-user workflows
-without manual database or state-file repair.
-
-**Admission gate:** GWR6 ADR selects the provider and defines rollback to the
-reference path or an explicit migration plan.
-
-**Exit proof:** repeatable local and independent-stand tests cover upgrades,
-backup/restore, degraded transport, delayed human input, worker replacement,
-and bounded operational repair with accepted SLOs.
-
-- [ ] `[must]` `GWR7-01` Package, supervise, update, health-check, and back up
-  the selected provider through AdaOS lifecycle rails.
-- [ ] `[must]` `GWR7-02` Add definition/worker version deployment and in-flight
-  compatibility gates.
-- [ ] `[must]` `GWR7-03` Add health and availability projections that separate
-  workflow readiness from NATS, Yjs, browser, or Root transport readiness.
-- [ ] `[must]` `GWR7-04` Add bounded operator recovery for stuck,
-  outcome-unknown, poisoned, and migration-required instances.
-- [ ] `[must]` `GWR7-05` Complete security review for tokens, tenancy,
-  authorization, secrets, history privacy, and commit-time effect binding.
-- [ ] `[should]` `GWR7-06` Add traces linking message, interpretation, command,
-  event, activity, artifact, evidence, and delivery without exposing secrets.
-- [ ] `[should]` `GWR7-07` Add retention, archival, compaction, and export for
-  completed workflows.
-- [ ] `[should]` `GWR7-08` Migrate a second AdaOS domain such as controlled core
-  update or NLU confirmation to prove the runtime is not Builder-specific.
-- [ ] `[could]` `GWR7-09` Add a reusable workflow inspector for operators and
-  developers.
-- [ ] `[deferred]` `GWR7-10` Defer unattended high-risk publication or device
-  mutation until multi-user policy and field evidence justify it.
+- [ ] `[deferred]` `GWR7-01` Implement no external adapter until GWR6 admits a
+  measured need.
+- [ ] `[should]` `GWR7-02` If admitted, freeze a provider conformance suite from
+  GWR5-GWR6 before choosing a product.
+- [ ] `[could]` `GWR7-03` Evaluate DBOS for an embedded Python/local and
+  PostgreSQL-central topology.
+- [ ] `[could]` `GWR7-04` Evaluate Temporal for Root-level distributed and
+  multi-user orchestration.
+- [ ] `[could]` `GWR7-05` Evaluate Restate for a keyed workflow/actor sidecar.
+- [ ] `[must]` `GWR7-06` If a candidate is adopted, keep provider-native APIs
+  below the AdaOS SDK and preserve canonical commands, events, and explanation.
+- [ ] `[must]` `GWR7-07` If adopted, package, supervise, update, health-check,
+  back up, and roll back the adapter through AdaOS lifecycle rails.
+- [ ] `[must]` `GWR7-08` Record an adoption/postponement/rejection ADR with
+  measured benefit, operational cost, migration, and exit plan.
+- [ ] `[deferred]` `GWR7-09` Do not maintain several production providers in
+  parallel without separate proven deployment classes.
 
 ## GWR8. Root, Multi-User, and Federation Extensions
 
@@ -396,9 +401,9 @@ and bounded operational repair with accepted SLOs.
 coordinate multiple principals, nodes, responsibility zones, and reusable
 change proposals.
 
-**Admission gate:** GWR7 is production-accepted for bounded single-user work,
-and a concrete multi-user use case supplies authority, privacy, conflict, and
-availability requirements.
+**Admission gate:** GWR6 is accepted for bounded single-user work; GWR7 is
+complete only if an external adapter was admitted; and a concrete multi-user
+use case supplies authority, privacy, conflict, and availability requirements.
 
 - [ ] `[deferred]` `GWR8-01` Add role/zone-specific approvals, delegation,
   quorum, revocation, and audit.
@@ -419,50 +424,64 @@ availability requirements.
 
 ## Cross-Cutting Acceptance Scenarios
 
-The following scenarios are mandatory evidence inputs for GWR5-GWR7:
+The following scenarios are mandatory evidence inputs for GWR1-GWR6 and, if
+admitted, the GWR7 adapter:
 
-1. **Explicit Web action:** one action changes exactly one expected workflow
+1. **Invalid model:** unreachable state, missing target, unknown effect,
+   conflicting transitions, or unexplained wait makes definition compilation
+   fail before runtime.
+2. **Complete explanation:** every reachable snapshot returns state, target,
+   reason, blockers, evidence, and allowed commands.
+3. **Affordance equivalence:** every action projected by `explain()` is admitted
+   by `invoke()` under the same actor/context, or returns only a typed
+   generation/policy change.
+4. **Blocked explanation:** representative invalid commands produce stable
+   reason codes and equivalent meaning in Web, Telegram, CLI, and tests.
+5. **Lineage separation:** selecting a Prototype/Automation/Publication node
+   changes the view but cannot change workflow state or rewrite provenance.
+6. **Dependent Builder path:** Automation identifies its exact source
+   Prototype, and Publication identifies its exact accepted candidate.
+7. **Explicit Web action:** one command changes exactly one expected workflow
    generation and returns a fresh interaction frame.
-2. **Telegram callback:** the same semantic action is authorized, deduplicated,
-   and projected through Telegram without raw tool parameters.
-3. **Informal reply:** "мне нравится" approves only the uniquely bound current
+8. **Telegram callback:** the same command is authorized and projected without
+   raw tool parameters.
+9. **Informal reply:** "мне нравится" approves only the uniquely bound current
    review and cannot approve another project or revision.
-4. **Multi-act feedback:** "хорошо, но перенеси кнопку" records review feedback
-   and revision work rather than silently accepting the candidate.
-5. **Ambiguous reply:** plain "да" with two pending interactions asks for
-   clarification and changes no state.
-6. **Stale interaction:** an old button after revision/generation change fails
-   closed and returns the current target and available actions.
-7. **Crash before effect:** restart resumes or safely reschedules a retryable
-   activity.
-8. **Crash after effect:** an idempotency witness prevents duplicate mutation;
-   otherwise the workflow enters reconciliation instead of retrying.
-9. **Delayed human input:** restart and channel reconnect preserve the pending
-   request and its ReplyRoute.
-10. **Worker upgrade:** in-flight work remains on compatible code or enters a
-    visible migration-required state.
-11. **Offline Root:** a node-local workflow remains inspectable and can continue
-    local steps while a Root-dependent activity waits explicitly.
-12. **Cancellation and rollback:** cancellation is observable, cooperative,
-    and linked to compensation or residual-effect evidence.
-13. **Publication:** acceptance is bound to one immutable candidate digest,
-    and publication produces an idempotent release/channel result.
-14. **Delivery failure:** completed work remains complete while notification
-    status reports delivery failure and supports bounded redelivery.
-15. **Backup/restore:** active, waiting, and completed instances restore with
-    their generations, tokens invalidated or preserved by policy, and no
-    repeated external effect.
+10. **Multi-act feedback:** "хорошо, но перенеси кнопку" records review feedback
+    and revision work rather than silently accepting the candidate.
+11. **Ambiguous reply:** plain "да" with two pending interactions asks for
+    clarification and changes no state.
+12. **Stale interaction:** an old control after revision/generation change fails
+    closed and returns the current target and allowed actions.
+13. **Background result isolation:** an LLM/Codex callback can advance only the
+    Change and Run captured at submission, never the current view selection.
+14. **Crash before effect:** restart resumes or safely reschedules a retryable
+    activity.
+15. **Crash after effect:** idempotency prevents duplicate mutation; otherwise
+    the workflow enters reconciliation instead of retrying.
+16. **Delayed human input:** restart and channel reconnect preserve the pending
+    request and its ReplyRoute.
+17. **Cancellation and rollback:** cancellation is observable and linked to
+    compensation or residual-effect evidence.
+18. **Publication:** acceptance is bound to one immutable candidate digest and
+    publication produces an idempotent release/channel result.
+19. **Backup/restore:** active and waiting instances restore with correct
+    generations and no repeated external effect.
 
 ## Definition of Done for This Roadmap
 
 This roadmap is complete only when:
 
-- GWR0-GWR7 exit proofs are accepted;
-- the provider decision and rollback/migration stance are documented;
-- Builder and at least one second domain use the shared runtime;
+- GWR0-GWR6 exit proofs are accepted, and GWR7 has an explicit
+  not-admitted/adopted/postponed/rejected decision;
+- one canonical model drives Builder state, transitions, explanations,
+  Lifecycle, interactions, NLU constraints, and conformance tests;
+- Builder and at least one second domain use the shared workflow model;
 - Web and Telegram pass the same semantic interaction cases;
 - NLU cannot bypass allowed transitions or policy;
 - restart, duplicate, stale authority, cancellation, unknown outcome,
   upgrade, and backup/restore cases have repeatable evidence;
+- external provider selection is not required for semantic completion and, if
+  adopted, remains below the AdaOS workflow contract;
 - remaining GWR8 items are explicitly admitted or remain deferred without
   blocking the bounded single-user architecture.
