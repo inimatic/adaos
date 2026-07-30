@@ -336,10 +336,16 @@ def select_target(
         current_automation = str(
             automation_state.get("snapshot_task_id") or automation_state.get("head_task_id") or "current"
         ).strip() or "current"
-        if target_revision and target_revision != current_automation:
+        current_automation_version = str(automation_state.get("result_version") or "").strip()
+        accepted_automation_revisions = {
+            value
+            for value in (current_automation, current_automation_version)
+            if value
+        }
+        if target_revision and target_revision not in accepted_automation_revisions:
             raise ValueError("only the current Automation result can be shown in Preview")
         target_revision = current_automation
-        display_revision = str(automation_state.get("result_version") or "current")
+        display_revision = current_automation_version or "current"
     elif stage_token == "publication":
         current_publication = str(publication.get("current_version") or "current").strip() or "current"
         if target_revision and target_revision != current_publication:
