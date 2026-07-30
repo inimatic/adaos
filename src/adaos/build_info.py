@@ -94,13 +94,16 @@ def _active_slot_manifest() -> dict | None:
 
 
 def base_version(repo_root: Path | str | None = None) -> str:
-    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
-    if explicit:
-        return explicit
     root = Path(repo_root).expanduser().resolve() if repo_root is not None else _repo_root()
     pyproject_version = _pyproject_version(root)
     if pyproject_version:
         return pyproject_version
+    # A checkout or core slot with pyproject.toml owns its build identity.
+    # ADAOS_BASE_VERSION may survive in a shared operational dotenv for years;
+    # only use it for packaged layouts that do not carry source metadata.
+    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
+    if explicit:
+        return explicit
     if repo_root is None:
         manifest = _active_slot_manifest()
         if manifest:

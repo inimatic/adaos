@@ -1180,6 +1180,11 @@ async def lifespan(app: FastAPI):
                 webspace_id=default_webspace_id(),
                 force=False,
                 run_tests=True,
+                # A completed core/release cutover has already materialized the
+                # authoritative WorkspaceLock.  Re-running the legacy git
+                # workspace sync here mistakes release-owned files for local
+                # edits and can fail before runtime migration starts.
+                sync_workspace=False,
             )
     except Exception:
         logging.getLogger("adaos.skill.runtime_migration").warning(

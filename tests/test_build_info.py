@@ -26,12 +26,18 @@ def test_base_version_reads_pyproject(monkeypatch, tmp_path: Path) -> None:
     assert build_info.base_version(tmp_path) == "2.3.4"
 
 
-def test_base_version_env_override_wins(monkeypatch, tmp_path: Path) -> None:
+def test_base_version_checkout_wins_over_inherited_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ADAOS_BASE_VERSION", "9.8.7")
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "adaos"\nversion = "2.3.4"\n',
         encoding="utf-8",
     )
+
+    assert build_info.base_version(tmp_path) == "2.3.4"
+
+
+def test_base_version_env_override_is_used_for_packaged_layout(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_VERSION", "9.8.7")
 
     assert build_info.base_version(tmp_path) == "9.8.7"
 
