@@ -983,11 +983,18 @@ class BuilderWorkflowService:
             for item in description.get("blockers") or []
             if isinstance(item, Mapping)
         ]
-        next_commands = [
+        workflow_commands = [
             str(item.get("command") or "")
             for item in description.get("allowed_commands") or []
             if isinstance(item, Mapping) and str(item.get("command") or "").strip()
         ]
+        project_commands = [
+            str(item.get("command") or "")
+            for item in _mapping(projection.get("project_summary")).get("commands") or []
+            if isinstance(item, Mapping)
+            and str(item.get("command") or "").strip() == "builder.change.plan"
+        ]
+        next_commands = list(dict.fromkeys([*workflow_commands, *project_commands]))
         progress = _mapping(description.get("progress"))
         if change is None:
             summary = "No active Change. Describe the requested change to begin."
@@ -1454,6 +1461,13 @@ class BuilderWorkflowService:
             message = str(compact_explanation["text"])
             if capabilities.get("can_update_change_set"):
                 add_action("builder.change.extend", "Add to change", "local_reversible", target_ref=change_ref)
+            if capabilities.get("can_plan_change_set"):
+                add_action(
+                    "builder.change.plan",
+                    "Plan new change",
+                    "local_reversible",
+                    target_ref=project_ref,
+                )
             if capabilities.get("can_edit_prototype") and gate == "prototype":
                 add_action(
                     "builder.prototype.edit",

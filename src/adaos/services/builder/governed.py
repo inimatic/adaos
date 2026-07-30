@@ -215,14 +215,19 @@ def compiled_builder_change_definition() -> CompiledWorkflowDefinition:
 
 def legacy_state(workflow: Mapping[str, Any]) -> str:
     change = dict(workflow.get("change") or workflow.get("change_set") or {})
-    if not change or str(change.get("status") or "") in {"published", "rejected", "superseded"}:
+    if not change:
         return "ready"
     publication = dict(workflow.get("publication") or {})
     delivery = dict(workflow.get("delivery") or {})
     automation = dict(workflow.get("automation") or {})
     prototype = dict(workflow.get("prototype") or {})
-    if str(publication.get("status") or "") == "published":
+    change_status = str(change.get("status") or "")
+    if change_status == "published" or str(publication.get("status") or "") == "published":
         return "published"
+    if change_status == "superseded":
+        return "superseded"
+    if change_status == "rejected":
+        return "cancelled"
     delivery_status = str(delivery.get("status") or "idle")
     if delivery_status == "accepted":
         return "publication_ready"

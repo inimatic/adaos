@@ -658,7 +658,7 @@ def test_change_set_rejects_transport_corrupted_new_text(
 def test_change_set_advances_through_automation_trial_and_publication(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
-    service, _root = workflow_project
+    service, root = workflow_project
     service.transition(
         "scenario",
         "recipes",
@@ -748,7 +748,22 @@ def test_change_set_advances_through_automation_trial_and_publication(
     )["workflow"]
     assert published["change_set"]["status"] == "published"
     assert published["change_set"]["gate"] == "complete"
+    assert published["governed"]["state"] == "published"
     assert published["capabilities"]["can_plan_change_set"] is True
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    persisted["workflow"].pop("governed", None)
+    (root / "prompt_state.json").write_text(
+        json.dumps(persisted, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    hydrated = service.describe("scenario", "recipes")
+    assert hydrated["governed"]["state"] == "published"
+    explanation = service.compact_explanation("scenario", "recipes")
+    assert explanation["state"] == "published"
+    assert explanation["next_commands"] == ["builder.change.plan"]
+    frame = service.interaction_frame("scenario", "recipes")
+    assert frame["message"] == explanation["text"]
+    assert any(item["command"] == "builder.change.plan" for item in frame["actions"])
 
 
 def test_active_change_set_requires_explicit_supersession(
