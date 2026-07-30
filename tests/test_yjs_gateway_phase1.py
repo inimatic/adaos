@@ -915,6 +915,9 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
             os_name="Android",
             form_factor="TV",
             user_agent="ua",
+            media_route_status_level="warning",
+            media_route_status_reason="device_changed",
+            media_route_recent_device_change="true",
         )
     )
 
@@ -931,6 +934,9 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
             "os_name": "Android",
             "form_factor": "TV",
             "user_agent": "ua",
+            "media_route_status_level": "warning",
+            "media_route_status_reason": "device_changed",
+            "media_route_recent_device_change": "true",
         }
     ]
 

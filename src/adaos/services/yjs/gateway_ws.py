@@ -237,6 +237,15 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
         "media_audio_input_supported": _browser_metadata_param(params, "media_audio_input_supported", "mediaAudioInputSupported"),
         "media_audio_output_supported": _browser_metadata_param(params, "media_audio_output_supported", "mediaAudioOutputSupported"),
         "media_audio_output_selection_supported": _browser_metadata_param(params, "media_audio_output_selection_supported", "mediaAudioOutputSelectionSupported"),
+        "media_route_status_level": _browser_metadata_param(params, "media_route_status_level", "mediaRouteStatusLevel"),
+        "media_route_status_state": _browser_metadata_param(params, "media_route_status_state", "mediaRouteStatusState"),
+        "media_route_status_reason": _browser_metadata_param(params, "media_route_status_reason", "mediaRouteStatusReason"),
+        "media_route_status_detail": _browser_metadata_param(params, "media_route_status_detail", "mediaRouteStatusDetail"),
+        "media_route_checked_at": _browser_metadata_param(params, "media_route_checked_at", "mediaRouteCheckedAt"),
+        "media_route_recent_device_change": _browser_metadata_param(params, "media_route_recent_device_change", "mediaRouteRecentDeviceChange"),
+        "media_route_bluetooth_profile_hint": _browser_metadata_param(params, "media_route_bluetooth_profile_hint", "mediaRouteBluetoothProfileHint"),
+        "media_route_output_routed": _browser_metadata_param(params, "media_route_output_routed", "mediaRouteOutputRouted"),
+        "media_route_input_applied": _browser_metadata_param(params, "media_route_input_applied", "mediaRouteInputApplied"),
     }
     clearable_media_keys = {
         "media_audio_input_device_id",
@@ -248,7 +257,7 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     for key, (value, present) in raw.items():
         cleaned = _clean_browser_metadata_value(
             value,
-            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id"} else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96)),
+            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id"} else (160 if key == "media_route_status_detail" else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96))),
         )
         if cleaned:
             out[key] = cleaned
@@ -8459,6 +8468,15 @@ async def browser_session_authorize(
     media_audio_input_supported: str | None = None,
     media_audio_output_supported: str | None = None,
     media_audio_output_selection_supported: str | None = None,
+    media_route_status_level: str | None = None,
+    media_route_status_state: str | None = None,
+    media_route_status_reason: str | None = None,
+    media_route_status_detail: str | None = None,
+    media_route_checked_at: str | None = None,
+    media_route_recent_device_change: str | None = None,
+    media_route_bluetooth_profile_hint: str | None = None,
+    media_route_output_routed: str | None = None,
+    media_route_input_applied: str | None = None,
 ):
     """
     Lightweight browser-device preflight for clients before opening /yws.
@@ -8488,6 +8506,15 @@ async def browser_session_authorize(
         "media_audio_input_supported": media_audio_input_supported,
         "media_audio_output_supported": media_audio_output_supported,
         "media_audio_output_selection_supported": media_audio_output_selection_supported,
+        "media_route_status_level": media_route_status_level,
+        "media_route_status_state": media_route_status_state,
+        "media_route_status_reason": media_route_status_reason,
+        "media_route_status_detail": media_route_status_detail,
+        "media_route_checked_at": media_route_checked_at,
+        "media_route_recent_device_change": media_route_recent_device_change,
+        "media_route_bluetooth_profile_hint": media_route_bluetooth_profile_hint,
+        "media_route_output_routed": media_route_output_routed,
+        "media_route_input_applied": media_route_input_applied,
     }.items():
         if value is not None:
             metadata_params[key] = value

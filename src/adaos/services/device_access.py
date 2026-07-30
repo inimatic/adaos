@@ -818,6 +818,7 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "volume": _clamped_unit_float(media_control.get("volume")),
             "muted": _optional_bool(media_control.get("muted")),
             "capabilities": _mapping(media_control.get("capabilities")),
+            "route_status": _mapping(media_control.get("route_status")),
             "services": {
                 "audio_input_endpoint": audio_input_endpoint,
                 "audio_output_endpoint": audio_output_endpoint,
