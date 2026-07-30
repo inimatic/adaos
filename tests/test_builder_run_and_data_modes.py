@@ -224,4 +224,3 @@ def test_live_binding_is_forbidden_in_prototype_and_missing_mapping_blocks_hando
     service.transition("scenario", "recipes", "stabilize_prototype")
     with pytest.raises(BuilderWorkflowError, match="implementation mappings"):
         service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "RUN-1"})
-

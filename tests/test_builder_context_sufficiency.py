@@ -129,4 +129,3 @@ def test_context_packet_digest_covers_purpose_facets_and_review_constraints(
     assert iteration["run"]["purpose"] == "iteration"
     assert experiment["run"]["purpose"] == "experiment"
     assert iteration["digest"] != experiment["digest"]
-
