@@ -1199,6 +1199,20 @@ Autonomy, evidence, and acceptance:
   16 passing durability/delivery cases, two recovery branches, zero automatic
   uncertain-effect retries, and postpones external engines until a measured
   distributed, availability, scale, timer, or operator-cost requirement exists.
+- [x] Commits `96b699d0` and `22510818` close two acceptance defects found by
+  live inspection. Automation start and completion now share the exact Codex
+  task as `run_id`, so a completed execution cannot leave a second synthetic
+  Run permanently `running`. A legacy published Change without a stored
+  governed snapshot hydrates as `published`, not `ready`; its compact chat
+  explanation and Interaction Frame both expose the same deterministic
+  `builder.change.plan` next action.
+- [x] Local acceptance after these fixes passes 219/219 combined Builder,
+  workflow, interaction, intent, persistence, and delivery tests. DEV artifact
+  suites pass `builder_sdk_control_skill` 45/45, Builder scenario 14/14, and
+  `builder_skill` 147/147. Strict skill/scenario validation is clean. Control
+  skill `0.1.60` is active in DEV slot B and was pushed to Forge as
+  `92b9a126e8a96983ac24e62b8fd72a80879ea6a6`; a live read returned state
+  `published`, exact Preview choices, and the aligned Plan-new-change action.
 - [x] Before the accepted 2026-07-30 Publication, the installed Workspace
   Builder remained the earlier published
   `0.2.40 / UI 053`; the new `0.2.53 / UI 058` candidate exists only in DEV.

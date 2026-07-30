@@ -493,7 +493,9 @@ lineage, evidence, and final Publication agree without direct state repair.
 - [x] `[must]` `GWR5-08` Record transition coverage, artifact lineage, tests,
   Trial, Git, Publication, and delivery evidence for the representative run.
   Canonical history and Run evidence retain review, Automation test, Git
-  checkpoint, Trial, and registry-publication refs.
+  checkpoint, Trial, and registry-publication refs. The post-fix combined
+  acceptance gate passes 219 tests; exact Automation task identity now closes
+  one Run instead of leaving a synthetic start Run active.
 - [x] `[must]` `GWR5-09` Update the Builder roadmap with the accepted semantic
   proof without copying this checklist. Phase 11 evidence points to the
   governed E2E suite and commit `7717319d`.
