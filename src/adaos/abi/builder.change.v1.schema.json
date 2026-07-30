@@ -20,6 +20,11 @@
     "source_message_ids": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
     "member_change_ids": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
     "base_ref": { "type": ["object", "null"] },
+    "base_generation": { "type": "integer", "minimum": 0 },
+    "affected_refs": {
+      "type": "array", "maxItems": 500, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
     "context_packet_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
     "supersedes_change_id": { "type": ["string", "null"], "maxLength": 160 },
     "created_at": { "type": ["string", "null"], "format": "date-time" },

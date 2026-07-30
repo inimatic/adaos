@@ -344,8 +344,11 @@ tests cover all legal and representative illegal paths.
   `builder.governed` compiles 15 states and the complete first compatibility
   transition catalogue through the shared compiler; Run and view state are
   not copied into the Change state enum.
-- [ ] `[must]` `GWR4-02` Key the workflow instance by canonical `change_id` and
+- [x] `[must]` `GWR4-02` Key the workflow instance by canonical `change_id` and
   retain exact project, base release, artifact, and command-context refs.
+  The workflow instance id, Project Change summary, context packet, and shared
+  Interaction binding retain those identities without deriving them from the
+  last selected Process node.
 - [x] `[must]` `GWR4-03` Model Prototype -> Automation -> Publication as
   derivation and promotion, not three mutually independent mutable stages.
   The compatibility buckets remain readable, but the canonical state and
@@ -353,10 +356,14 @@ tests cover all legal and representative illegal paths.
   Publication beneath that Automation lineage.
 - [x] `[must]` `GWR4-04` Define direct Automation, prototype-first, revise,
   cancel, failure, retry-as-new-Run, Trial reject/accept, and Publication paths.
-- [ ] `[must]` `GWR4-05` Define invariants: one focused Change per command
+- [x] `[must]` `GWR4-05` Define invariants: one focused Change per command
   context but multiple open Changes per project; one admitted overlapping
   mutation per base generation; immutable accepted revisions; exact source
   Prototype for Automation; and exact candidate digest for Publication.
+  Project coordination enforces scoped focus, project/artifact generations,
+  fail-safe unknown scope, active overlap exclusion, and explicit verified
+  rebase; the retained Builder lineage continues to bind source Prototype and
+  candidate digests.
 - [x] `[must]` `GWR4-06` Define LLM, Codex, validation, Git checkpoint, Trial,
   Publication, and notification as registered effects/activities rather than
   implicit phase code. The definition declares activity, retry,
@@ -379,7 +386,7 @@ tests cover all legal and representative illegal paths.
   detail view, not the primary control surface.
 - [ ] `[deferred]` `GWR4-12` Defer simultaneous multi-user approval and artifact
   merging to GWR8.
-- [ ] `[must]` `GWR4-13` Implement scoped Change focus and write-conflict keys;
+- [x] `[must]` `GWR4-13` Implement scoped Change focus and write-conflict keys;
   switching focus is view/command context and never a business transition.
 - [ ] `[must]` `GWR4-14` Distinguish `iteration`, `experiment`, `evaluation`, and
   `recovery` Runs; require explicit reviewed adoption before an Experiment can
@@ -393,10 +400,12 @@ tests cover all legal and representative illegal paths.
 - [ ] `[must]` `GWR4-17` Define context-facet requirements and a packet coverage
   report that fails before LLM/Codex submission when target structure, ABI,
   constraints, data policy, or execution authority is missing or ambiguous.
-- [ ] `[must]` `GWR4-18` Publish `adaos.builder.project.v1` as a portfolio and
+- [x] `[must]` `GWR4-18` Publish `adaos.builder.project.v1` as a portfolio and
   coordination aggregate with source/stable/installed/DEV/candidate refs,
   project policy, component boundary, open Changes, conflict/dependency index,
-  scoped focus, workflow versions, and archive state.
+  scoped focus, workflow versions, and archive state. The aggregate contains
+  reference-only Change summaries while a bounded compatibility portfolio
+  preserves old single-Change projections during migration.
 - [ ] `[must]` `GWR4-19` Derive project summary and commands from its linked
   planes; never infer one global project stage from the focused Change or most
   recent Run.

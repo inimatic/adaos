@@ -918,17 +918,21 @@ Canonical model and context:
   responsive constraints, complete referenced ABI definitions, current data
   bindings, and active acceptance constraints; fail before model submission
   when a required facet is absent or ambiguous.
-- [ ] `[must]` Permit several open Changes per project while binding one focused
+- [x] `[must]` Permit several open Changes per project while binding one focused
   Change to each conversation/Webspace command context. Admit modifying Runs by
   exact base generation and affected-ref conflict keys rather than a global
-  project lock.
+  project lock. Parallel plans, scoped focus, direct conflict indexing,
+  mutation leases, artifact generations, and explicit verified rebase are
+  implemented and covered by Project aggregate tests.
 - [ ] `[must]` Persist Run purpose as `iteration`, `experiment`, `evaluation`,
   or `recovery`; keep Experiment output off the accepted line until an explicit
   reviewed `adopt_experiment` command.
-- [ ] `[must]` Publish and persist `adaos.builder.project.v1` with exact
+- [x] `[must]` Publish and persist `adaos.builder.project.v1` with exact
   source/stable/installed/DEV/candidate identities, component/dependency
   boundary, project policy, open Change portfolio, conflict/dependency index,
-  scoped focus, workflow versions, and archive state.
+  scoped focus, workflow versions, and archive state. Known source, DEV,
+  candidate, and stable refs are projected without inventing absent installed
+  identity.
 - [ ] `[must]` Derive project summary and project-level commands without
   inventing one current stage from the focused Change, latest Run, selected
   Process node, or Preview target.

@@ -28,6 +28,8 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   risk-aware actions, and rich-view projection
 - `builder.process_projection.v1.schema.json` - dependent Change -> Prototype
   -> Automation -> Trial -> Publication lineage and exact Preview choices
+- `builder.project.v1.schema.json` - project portfolio, release/component refs,
+  scoped Change focus, conflict/dependency indexes, and coordination generations
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation
   against stable declarative UI refs
 - `builder.review_anchor.v1.schema.json` - durable target model for Review

@@ -20,6 +20,17 @@ from adaos.services.builder.governed import (
     governed_instance,
     workflow_description,
 )
+from adaos.services.builder.project_aggregate import (
+    BuilderProjectError,
+    begin_mutation,
+    capture_compatibility_record,
+    finish_mutation,
+    normalize_portfolio,
+    normalize_project,
+    rebase_change as rebase_project_change,
+    restore_compatibility_record,
+    set_focus,
+)
 from adaos.services.conversation_interactions import interaction_from_workflow_description
 from adaos.services.runtime_paths import current_state_dir
 
@@ -40,6 +51,19 @@ _MAX_ACCEPTANCE_CONSTRAINTS = 100
 _CHANGE_SET_TERMINAL_STATES = {"published", "rejected", "superseded"}
 _ISSUE_STATES = {"open", "in_progress", "resolved", "deferred"}
 _ISSUE_LANES = {"prototype", "automation"}
+_PROJECT_MUTATION_START_ACTIONS = {
+    "automation_started",
+    "handoff_to_automation",
+    "automation_iteration_started",
+    "request_return_to_prototype",
+}
+_PROJECT_MUTATION_FINISH_ACTIONS = {
+    "automation_completed": (False, True),
+    "automation_failed": (False, False),
+    "return_to_prototype": (False, True),
+    "return_to_prototype_failed": (False, False),
+}
+_PROJECT_ATOMIC_MUTATION_ACTIONS = {"prototype_revision_recorded"}
 
 
 class BuilderWorkflowError(ValueError):
@@ -141,6 +165,19 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
         "lane": lane,
         "status": status,
         "acceptance_criteria": criteria,
+        "priority": str(value.get("priority") or "").strip() or None,
+        "confidence": (
+            max(0.0, min(1.0, float(value.get("confidence"))))
+            if value.get("confidence") is not None
+            else None
+        ),
+        "semantic_refs": list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in value.get("semantic_refs") or []
+                if str(item).strip()
+            )
+        )[:100],
     }
 
 
@@ -314,6 +351,14 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         "change_set_id": change_id,
         "project_ref": str(value.get("project_ref") or "").strip() or None,
         "base_ref": copy.deepcopy(value.get("base_ref")) if isinstance(value.get("base_ref"), Mapping) else None,
+        "base_generation": max(0, int(value.get("base_generation") or 0)),
+        "affected_refs": list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in value.get("affected_refs") or []
+                if str(item).strip()
+            )
+        )[:500],
         "runs": runs[-_MAX_CHANGE_RUNS:],
         "acceptance_constraints": constraints,
         "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
@@ -336,6 +381,8 @@ def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any
     value.pop("context_packet_digest", None)
     value.pop("project_ref", None)
     value.pop("base_ref", None)
+    value.pop("base_generation", None)
+    value.pop("affected_refs", None)
     value["supersedes_change_set_id"] = str(
         value.pop("supersedes_change_id", None) or value.get("supersedes_change_set_id") or ""
     ).strip() or None
@@ -727,6 +774,17 @@ class BuilderWorkflowService:
             {**normalized, "governed": raw.get("governed")},
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
         )
+        normalized["change_portfolio"] = normalize_portfolio(
+            raw.get("change_portfolio"),
+            normalized,
+        )
+        normalized["project"] = normalize_project(
+            raw.get("project"),
+            object_type=_kind(object_type),
+            object_id=_project_id(object_id),
+            archived=bool(state.get("archived")),
+            workflow=normalized,
+        )
         return normalized
 
     @staticmethod
@@ -787,6 +845,103 @@ class BuilderWorkflowService:
         )
         projection["process"] = self._process_projection(projection)
         return projection
+
+    def focus_change(
+        self,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+        *,
+        command_context_id: str = "default",
+        expected_view_generation: int | None = None,
+    ) -> dict[str, Any]:
+        """Select a Change for one command context without advancing that Change."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        target_id = str(change_id or "").strip()
+        context_id = str(command_context_id or "default").strip() or "default"
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            project = _mapping(workflow.get("project"))
+            if expected_view_generation is not None and int(project.get("view_generation") or 0) != int(
+                expected_view_generation
+            ):
+                raise BuilderWorkflowError("stale Builder project view generation")
+            try:
+                project = set_focus(project, context_id, target_id)
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+            if context_id == "default":
+                record = portfolio.get(target_id)
+                if not isinstance(record, Mapping):
+                    raise BuilderWorkflowError(f"Builder Change state is unavailable: {target_id}")
+                restore_compatibility_record(workflow, record)
+                interaction = _mapping(workflow.get("interaction"))
+                interaction["conversation_focus"] = f"change:{target_id}"
+                workflow["interaction"] = interaction
+            workflow["change_portfolio"] = portfolio
+            workflow["project"] = project
+            state["workflow"] = workflow
+            state["updated_at"] = project["updated_at"]
+            self._write_state(kind, project_id, state)
+        projection = self.describe(kind, project_id)
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {"ok": True, "workflow": projection, "project": copy.deepcopy(project)}
+
+    def rebase_change(
+        self,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+        *,
+        expected_project_generation: int,
+        verified_unchanged_refs: list[str] | tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Explicitly rebase one scoped Change after deterministic ref verification."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        target_id = str(change_id or "").strip()
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            try:
+                project = rebase_project_change(
+                    _mapping(workflow.get("project")),
+                    target_id,
+                    expected_project_generation=expected_project_generation,
+                    verified_unchanged_refs=verified_unchanged_refs,
+                )
+            except BuilderProjectError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            current = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            summary = next(
+                (
+                    item
+                    for item in project.get("changes") or []
+                    if isinstance(item, Mapping) and item.get("change_id") == target_id
+                ),
+                None,
+            )
+            if current and current.get("change_id") == target_id and isinstance(summary, Mapping):
+                current["base_generation"] = int(summary.get("base_generation") or 0)
+                workflow["change"] = current
+                workflow["change_set"] = _change_set_compatibility(current)
+            workflow["project"] = project
+            workflow["change_portfolio"] = normalize_portfolio(
+                workflow.get("change_portfolio"), workflow
+            )
+            state["workflow"] = workflow
+            state["updated_at"] = project["updated_at"]
+            self._write_state(kind, project_id, state)
+        projection = self.describe(kind, project_id)
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {"ok": True, "workflow": projection, "project": copy.deepcopy(project)}
 
     @staticmethod
     def _process_projection(workflow: Mapping[str, Any]) -> dict[str, Any]:
@@ -1163,6 +1318,23 @@ class BuilderWorkflowService:
             if not interaction.get("conversation_focus"):
                 interaction["conversation_focus"] = f"{kind}:{project_id}"
             workflow["interaction"] = interaction
+            conversation_focus = str(interaction.get("conversation_focus") or "")
+            if conversation_focus.startswith("change:"):
+                change_id = conversation_focus.split(":", 1)[1]
+                try:
+                    workflow["project"] = set_focus(
+                        _mapping(workflow.get("project")),
+                        "default",
+                        change_id,
+                    )
+                except ValueError as exc:
+                    raise BuilderWorkflowError(str(exc)) from exc
+                portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                record = portfolio.get(change_id)
+                if not isinstance(record, Mapping):
+                    raise BuilderWorkflowError(f"Builder Change state is unavailable: {change_id}")
+                restore_compatibility_record(workflow, record)
+                workflow["change_portfolio"] = portfolio
             workflow["generation"] = current_generation + 1
             workflow["updated_at"] = _now()
             state["workflow"] = workflow
@@ -1194,11 +1366,83 @@ class BuilderWorkflowService:
             if bool(state.get("archived")):
                 raise BuilderWorkflowError("archived projects cannot change workflow")
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            parallel_plan = bool(details.get("parallel")) and action_token == "plan_change_set"
+            current_change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            if (
+                parallel_plan
+                and current_change
+                and str(current_change.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES
+            ):
+                portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                current_record = capture_compatibility_record(workflow)
+                if current_record:
+                    portfolio[current_record["change_id"]] = current_record
+                workflow["change_portfolio"] = portfolio
+                workflow["change"] = None
+                workflow["change_set"] = None
+                workflow["context_packet"] = None
+                workflow["governed"] = None
+                workflow["pending_transition"] = None
+                workflow["active_phase"] = "prototype"
+                workflow["prototype"] = {
+                    **_mapping(workflow.get("prototype")),
+                    "status": "working",
+                    "stable": False,
+                }
+                workflow["automation"] = {
+                    "status": "not_started",
+                    "iteration": 0,
+                    "source_prototype_revision": _mapping(workflow.get("prototype")).get(
+                        "head_revision"
+                    ),
+                }
+                workflow["delivery"] = {"status": "idle"}
             if expected_generation is not None and int(workflow.get("generation") or 0) != int(expected_generation):
                 raise BuilderWorkflowError(
                     f"stale Builder action generation: expected {expected_generation}, "
                     f"current {int(workflow.get('generation') or 0)}"
                 )
+            mutation_started = False
+            mutation_change_id = str(
+                (_normalize_change(workflow.get("change") or workflow.get("change_set")) or {}).get(
+                    "change_id"
+                )
+                or ""
+            )
+            if mutation_change_id and action_token in {
+                *_PROJECT_MUTATION_START_ACTIONS,
+                *_PROJECT_ATOMIC_MUTATION_ACTIONS,
+            }:
+                project = _mapping(workflow.get("project"))
+                summary = next(
+                    (
+                        item
+                        for item in project.get("changes") or []
+                        if isinstance(item, Mapping) and item.get("change_id") == mutation_change_id
+                    ),
+                    None,
+                )
+                if not isinstance(summary, Mapping):
+                    raise BuilderWorkflowError("Builder Project does not contain the focused Change")
+                try:
+                    workflow["project"] = begin_mutation(
+                        project,
+                        mutation_change_id,
+                        expected_project_generation=int(
+                            details.get("expected_project_generation")
+                            if details.get("expected_project_generation") is not None
+                            else project.get("generation") or 0
+                        ),
+                        expected_base_generation=int(
+                            details.get("expected_base_generation")
+                            if details.get("expected_base_generation") is not None
+                            else summary.get("base_generation") or 0
+                        ),
+                        now=changed_at,
+                    )
+                except BuilderProjectError as exc:
+                    raise BuilderWorkflowError(str(exc)) from exc
+                mutation_started = True
             before = {
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
@@ -1238,6 +1482,60 @@ class BuilderWorkflowService:
                 changed_at=changed_at,
                 project_ref=f"{kind}:{project_id}",
             )
+            portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+            workflow["change_portfolio"] = portfolio
+            previous_project = _mapping(workflow.get("project"))
+            project = normalize_project(
+                previous_project,
+                object_type=kind,
+                object_id=project_id,
+                archived=False,
+                workflow=workflow,
+                now=changed_at,
+            )
+            project["generation"] = int(previous_project.get("generation") or 0) + 1
+            current_after = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            if current_after:
+                focus = _mapping(project.get("focus_by_context"))
+                focus["default"] = current_after["change_id"]
+                project["focus_by_context"] = focus
+            finish_policy = _PROJECT_MUTATION_FINISH_ACTIONS.get(action_token)
+            if mutation_change_id and (finish_policy is not None or mutation_started and action_token in _PROJECT_ATOMIC_MUTATION_ACTIONS):
+                outcome_unknown, advance_base = finish_policy or (False, True)
+                try:
+                    project = finish_mutation(
+                        project,
+                        mutation_change_id,
+                        outcome_unknown=outcome_unknown,
+                        advance_base=advance_base,
+                        now=changed_at,
+                    )
+                except BuilderProjectError as exc:
+                    raise BuilderWorkflowError(str(exc)) from exc
+                current_change_value = _normalize_change(
+                    workflow.get("change") or workflow.get("change_set")
+                )
+                target_summary = next(
+                    (
+                        item
+                        for item in project.get("changes") or []
+                        if isinstance(item, Mapping) and item.get("change_id") == mutation_change_id
+                    ),
+                    None,
+                )
+                if current_change_value and isinstance(target_summary, Mapping):
+                    current_change_value["base_generation"] = int(
+                        target_summary.get("base_generation") or 0
+                    )
+                    current_change_value["affected_refs"] = list(
+                        target_summary.get("affected_refs") or []
+                    )
+                    workflow["change"] = current_change_value
+                    workflow["change_set"] = _change_set_compatibility(current_change_value)
+                    workflow["change_portfolio"] = normalize_portfolio(
+                        workflow.get("change_portfolio"), workflow
+                    )
+            workflow["project"] = project
             after = {
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
@@ -1314,6 +1612,23 @@ class BuilderWorkflowService:
             "change_id": change_id,
             "change_set_id": change_id,
             "project_ref": str((previous or {}).get("project_ref") or project_ref),
+            "base_generation": max(
+                0,
+                int(
+                    metadata.get("base_generation")
+                    if metadata.get("base_generation") is not None
+                    else (previous or {}).get("base_generation") or 0
+                ),
+            ),
+            "affected_refs": list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in metadata.get("affected_refs")
+                    or (previous or {}).get("affected_refs")
+                    or []
+                    if str(item).strip()
+                )
+            )[:500],
         }
         runs = [
             _normalize_run(item, change_id=change_id)

@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.project.v1",
+  "title": "AdaOS Builder Project Coordination Aggregate",
+  "type": "object",
+  "required": [
+    "schema", "project_id", "project_ref", "object_type", "policy",
+    "component_refs", "changes", "conflicts", "dependencies",
+    "focus_by_context", "workflow_versions", "archived", "generation",
+    "artifact_generation", "view_generation", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.project.v1" },
+    "project_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" },
+    "object_type": { "enum": ["scenario", "skill"] },
+    "source_ref": { "type": ["object", "null"] },
+    "stable_release_ref": { "type": ["object", "null"] },
+    "installed_release_ref": { "type": ["object", "null"] },
+    "dev_ref": { "type": ["object", "null"] },
+    "candidate_ref": { "type": ["object", "null"] },
+    "policy": {
+      "type": "object",
+      "required": ["parallel_changes", "unknown_conflict_scope", "prototype_data_modes"],
+      "properties": {
+        "parallel_changes": { "type": "boolean" },
+        "unknown_conflict_scope": { "enum": ["project", "reject"] },
+        "prototype_data_modes": {
+          "type": "array", "uniqueItems": true,
+          "items": { "enum": ["mock", "fixture", "sandbox", "live_readonly"] }
+        }
+      },
+      "additionalProperties": true
+    },
+    "component_refs": { "$ref": "#/$defs/refs" },
+    "changes": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "change_id", "change_ref", "status", "gate", "base_generation",
+          "affected_refs", "workflow_instance_ref", "mutation_status",
+          "updated_at"
+        ],
+        "properties": {
+          "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "change_ref": { "type": "string", "pattern": "^change:" },
+          "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "gate": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "base_generation": { "type": "integer", "minimum": 0 },
+          "affected_refs": { "$ref": "#/$defs/refs" },
+          "workflow_instance_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "workflow_state": { "type": ["string", "null"], "maxLength": 120 },
+          "mutation_status": { "enum": ["idle", "active", "outcome_unknown"] },
+          "updated_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "conflicts": {
+      "type": "array", "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["left_change_id", "right_change_id", "affected_refs", "kind"],
+        "properties": {
+          "left_change_id": { "type": "string", "minLength": 1 },
+          "right_change_id": { "type": "string", "minLength": 1 },
+          "affected_refs": { "$ref": "#/$defs/refs" },
+          "kind": { "enum": ["direct", "component_dependency"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dependencies": {
+      "type": "array", "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["from_ref", "to_ref", "kind"],
+        "properties": {
+          "from_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "to_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "kind": { "enum": ["requires", "conflicts", "derives", "promotes"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "focus_by_context": {
+      "type": "object",
+      "maxProperties": 200,
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 160 }
+    },
+    "workflow_versions": {
+      "type": "object",
+      "required": ["project", "change"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "change": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "archived": { "type": "boolean" },
+    "generation": { "type": "integer", "minimum": 0 },
+    "artifact_generation": { "type": "integer", "minimum": 0 },
+    "view_generation": { "type": "integer", "minimum": 0 },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "refs": {
+      "type": "array", "maxItems": 500, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    }
+  },
+  "additionalProperties": false
+}
