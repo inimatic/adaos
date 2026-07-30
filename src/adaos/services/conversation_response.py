@@ -88,6 +88,12 @@ def materialize_response(
                 "dialog_channel_id": channel_id,
                 "_meta": clean_meta,
             }
+            actions = envelope.get("actions") if isinstance(envelope.get("actions"), list) else []
+            if actions:
+                payload["actions"] = [dict(item) for item in actions if isinstance(item, Mapping)]
+            interaction = envelope.get("interaction") if isinstance(envelope.get("interaction"), Mapping) else None
+            if interaction:
+                payload["interaction"] = dict(interaction)
             if thread_id:
                 payload["thread_id"] = thread_id
             if actor_id:

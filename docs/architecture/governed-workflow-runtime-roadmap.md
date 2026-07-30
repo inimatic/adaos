@@ -222,45 +222,63 @@ blocked action has a reason code, channel limits produce an auditable safe
 presentation/fallback, and an unsupported requirement remains explainably
 blocked.
 
-- [ ] `[must]` `GWR2-01` Define `WorkflowSnapshot` and a pure `explain()` result
+- [x] `[must]` `GWR2-01` Define `WorkflowSnapshot` and a pure `explain()` result
   containing state, target, progress, blockers, evidence, and allowed commands.
-- [ ] `[must]` `GWR2-02` Derive `allowed_actions` from the same transitions and
+  `WorkflowResolver.describe()` now returns those facets from the canonical
+  instance and the same guard evaluation used by command admission.
+- [x] `[must]` `GWR2-02` Derive `allowed_actions` from the same transitions and
   guards used by `invoke()`; forbid separately maintained UI action tables.
-- [ ] `[must]` `GWR2-03` Define `adaos.conversation.interaction.v1` as a semantic
-  projection of commands, typed input, risk, and channel fallback.
-- [ ] `[must]` `GWR2-04` Generate state/transition coverage tests and reject a
-  definition with an unexplained reachable or waiting state.
-- [ ] `[must]` `GWR2-05` Define stable reason codes and localization keys for
+- [x] `[must]` `GWR2-03` Define `adaos.conversation.interaction.v1` as a semantic
+  projection of commands, typed input, risk, and channel fallback. The shared
+  projection adapter binds workflow commands into a durable Interaction.
+- [x] `[must]` `GWR2-04` Generate state/transition coverage tests and reject a
+  definition with an unexplained reachable or waiting state. The compiler and
+  generated conformance cases cover every state and transition edge.
+- [x] `[must]` `GWR2-05` Define stable reason codes and localization keys for
   admitted, blocked, stale, ambiguous, and policy-denied commands.
 - [ ] `[must]` `GWR2-06` Adapt Builder Lifecycle, process summary, and Preview
   target to canonical projections rather than independently inferred stages.
-- [ ] `[must]` `GWR2-07` Adapt Web chat, Telegram controls, and text fallback to
+- [x] `[must]` `GWR2-07` Adapt Web chat, Telegram controls, and text fallback to
   the same semantic interaction and canonical invocation ingress.
-- [ ] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
-  immutable target, and expected generation with opaque tokens.
+  Web actions, Telegram inline callbacks, and numbered text now originate from
+  one InteractionPresentation; callbacks enter the shared response service
+  without NLU or direct Builder invocation.
+- [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
+  immutable target, and expected generation with opaque tokens. Tokens are
+  presentation references, never authority; generation, principal scope,
+  target, risk, and confirmation remain in the semantic action.
 - [ ] `[should]` `GWR2-09` Unify Pending Actions with the semantic interaction
   model or document one bounded compatibility adapter and retirement path.
-- [ ] `[should]` `GWR2-10` Add a developer inspector showing why a transition is
-  available or blocked without exposing provider internals.
-- [ ] `[could]` `GWR2-11` Export a generated graph/timeline for review and docs.
-- [ ] `[deferred]` `GWR2-12` Defer universal Telegram parity for file trees,
+- [x] `[should]` `GWR2-10` Add a developer inspector showing why a transition is
+  available or blocked without exposing provider internals. The pure
+  description includes allowed/blocked commands, reason codes/keys, blockers,
+  evidence refs, and progress without activity-provider details.
+- [x] `[could]` `GWR2-11` Export a generated graph/timeline for review and docs.
+  The non-authoritative statechart projection is generated from compiled
+  definitions.
+- [x] `[deferred]` `GWR2-12` Defer universal Telegram parity for file trees,
   search, and rich Preview; semantic command parity is sufficient.
-- [ ] `[must]` `GWR2-13` Implement the independent ConversationInteraction
+- [x] `[must]` `GWR2-13` Implement the independent ConversationInteraction
   lifecycle from creation/projection through partial answer, validation,
-  completion, expiry, cancellation, and supersession.
-- [ ] `[must]` `GWR2-14` Add typed `InteractionResponse` records binding actor,
+  completion, expiry, cancellation, and supersession. Lifecycle transitions
+  are generation-guarded and persist in the node-local conversation store.
+- [x] `[must]` `GWR2-14` Add typed `InteractionResponse` records binding actor,
   values/source message, presentation, target, generations, validation,
-  correction, and consumed command/rejection.
-- [ ] `[must]` `GWR2-15` Add versioned effective transport + client + surface
+  correction, and consumed command/rejection. Responses are append-only,
+  payload-bound idempotent, and corrections require an explicit prior ref.
+- [x] `[must]` `GWR2-15` Add versioned effective transport + client + surface
   capability profiles with feature limits, locale/accessibility, secure input,
   progress/update, handoff, acknowledgement, and freshness metadata.
-- [ ] `[must]` `GWR2-16` Implement deterministic capability/policy negotiation
+- [x] `[must]` `GWR2-16` Implement deterministic capability/policy negotiation
   that produces an auditable InteractionPresentation, preserves every required
   command/risk/confirmation, and otherwise returns a typed fallback or
-  `unsupported` wait reason.
-- [ ] `[should]` `GWR2-17` Add presentation conformance fixtures for Web,
+  `unsupported` wait reason. Sensitive input never degrades to plain text and
+  action limits cannot silently drop commands.
+- [x] `[should]` `GWR2-17` Add presentation conformance fixtures for Web,
   Telegram, text-only, reconnect/profile change, secure handoff, and a client
-  whose capability limits cannot represent the requested interaction.
+  whose capability limits cannot represent the requested interaction. The
+  local suite covers native buttons, numbered fallback, action limits,
+  sensitive rejection, and profile-version renegotiation.
 
 ## GWR3. NLU Mediation and Informal Responses
 

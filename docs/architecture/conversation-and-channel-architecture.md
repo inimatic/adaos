@@ -1756,7 +1756,8 @@ depth across several phases.
   `InteractionResponse`, `ChannelCapabilityProfile`,
   `InteractionPresentation`, `ReplyRoute`, and `DeliveryAttempt` schemas and
   make DialogFrame/ResponseEnvelope explicit adapters rather than duplicate
-  authorities.
+  authorities. The first four schemas and node-local stores are implemented;
+  ReplyRoute/DeliveryAttempt remain part of the durability slice.
 - [ ] `[must]` Define and validate independent Interaction, response,
   presentation, envelope, and delivery lifecycles, including partial input,
   correction, expiry, cancellation, supersession, terminal result, and
@@ -2003,11 +2004,14 @@ depth across several phases.
   `data.dialog.active_agent` and the active channel projection, including
   `builder` and dynamically declared skill-owned channels.
 - [x] `[should]` Make Telegram inbound text resolve to conversations before NLU
-  or skill dispatch. The first slice supports limited text/compact-status
-  projection; rich action keyboards and delivery receipts remain open.
-- [ ] `[must]` Implement effective transport + client + surface capability
+  or skill dispatch. Text retains the neutral dialog route; negotiated inline
+  callbacks now resolve through the shared Interaction service without NLU.
+  Per-attempt delivery receipts remain open.
+- [x] `[must]` Implement effective transport + client + surface capability
   profiles and deterministic presentation negotiation with safe text/deep-link
-  handoff, limits, reason codes, and required-action preservation.
+  handoff, limits, reason codes, and required-action preservation. Web,
+  Telegram, text-only, secure-input, action-limit, and reconnect/profile-change
+  fixtures exercise the versioned negotiation contract.
 - [ ] `[should]` Make endpoint audio dialog mode resolve to conversations
   before NLU or skill dispatch.
 - [ ] `[must]` Record idempotent materialization and delivery status per

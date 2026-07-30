@@ -983,8 +983,9 @@ Commands, projections, and Workbench:
   panel/modal/drawer presentations and compact message/link fallbacks.
 - [ ] `[should]` Render typed deterministic actions as Telegram inline
   callbacks with generation/precondition checks, and persist per-attempt
-  delivery receipts. Until then Telegram is a text/compact-status control
-  channel and Web owns rich review surfaces.
+  delivery receipts. Inline callback rendering, opaque action-token ingress,
+  generation checks, and idempotent response persistence are implemented;
+  per-attempt outbound delivery receipts remain open.
 - [ ] `[should]` Add an operator-visible transport ingress/recovery inspector
   for claimed-but-not-dispatched turns. Recovery must issue a new explicit
   operation instead of replaying the original mutation.

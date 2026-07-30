@@ -34,6 +34,9 @@ def test_conversation_contract_snapshot_covers_phase0_records() -> None:
     assert "ConversationMessage" in snapshot["records"]
     assert "DialogTurn" in snapshot["records"]
     assert "ResponseEnvelope" in snapshot["records"]
+    assert "ConversationInteraction" in snapshot["records"]
+    assert "InteractionResponse" in snapshot["records"]
+    assert "ChannelCapabilityProfile" in snapshot["records"]
     assert snapshot["default_policies"]["history"]["cross_skill_use"] == "deny_by_default"
     assert snapshot["projection_rules"]["canonical_store"] == "node_conversation_store"
 

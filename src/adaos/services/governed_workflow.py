@@ -437,16 +437,29 @@ class WorkflowResolver:
                 "command": transition.command,
                 "transition_id": transition.transition_id,
                 "target": transition.target,
+                "target_ref": copy.deepcopy(current.get("context", {}).get("target_ref")),
+                "input_schema": copy.deepcopy(compiled.commands[transition.command]["input_schema"]),
+                "authority": copy.deepcopy(transition.descriptor["authority"]),
+                "concurrency": copy.deepcopy(transition.descriptor["concurrency"]),
                 "risk": copy.deepcopy(transition.descriptor["risk"]),
+                "async_reply": copy.deepcopy(transition.descriptor["async_reply"]),
                 "capability_requirements": copy.deepcopy(
                     transition.descriptor["capability_requirements"]
                 ),
                 "explanation": transition.descriptor["explanations"]["allowed" if accepted else "rejected"],
+                "explanation_key": f"workflow.{compiled.workflow_type}.{transition.transition_id}.{'allowed' if accepted else 'rejected'}",
             }
             if accepted:
                 allowed.append(projection)
             else:
-                blocked.append({**projection, "reason_code": reason})
+                blocked.append(
+                    {
+                        **projection,
+                        "reason_code": reason,
+                        "reason_key": f"workflow.reason.{str(reason or 'blocked').replace(':', '.')}",
+                    }
+                )
+        terminal = bool(compiled.states[current["state"]].get("terminal"))
         return {
             "schema": "adaos.workflow.description.v1",
             "workflow_type": compiled.workflow_type,
@@ -454,7 +467,19 @@ class WorkflowResolver:
             "instance_id": current["instance_id"],
             "state": current["state"],
             "generation": current["generation"],
-            "terminal": bool(compiled.states[current["state"]].get("terminal")),
+            "terminal": terminal,
+            "target": copy.deepcopy(current.get("context", {}).get("target_ref")),
+            "progress": {
+                "completed_transitions": len(current.get("history") or []),
+                "terminal": terminal,
+                "waiting": bool(compiled.states[current["state"]].get("waiting")),
+                "wait_explanation": compiled.states[current["state"]].get("wait_explanation"),
+            },
+            "blockers": [
+                {"command": item["command"], "reason_code": item["reason_code"], "reason_key": item["reason_key"]}
+                for item in blocked
+            ],
+            "evidence_refs": copy.deepcopy(current.get("context", {}).get("evidence_refs") or []),
             "allowed_commands": allowed,
             "blocked_commands": blocked,
         }
@@ -820,6 +845,44 @@ def export_statechart(
         ],
         "authoritative": False,
     }
+
+
+def generate_conformance_cases(
+    definition: CompiledWorkflowDefinition | Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Generate deterministic state/transition coverage cases for adapters."""
+
+    compiled = definition if isinstance(definition, CompiledWorkflowDefinition) else compile_definition(definition)
+    cases: list[dict[str, Any]] = []
+    for state_id in sorted(compiled.states):
+        state = compiled.states[state_id]
+        cases.append(
+            {
+                "case_id": f"state:{state_id}:explain",
+                "kind": "state_explanation",
+                "state": state_id,
+                "expected_terminal": bool(state.get("terminal")),
+                "expected_waiting": bool(state.get("waiting")),
+                "expected_explanation": state.get("wait_explanation") or state.get("description") or state.get("label"),
+            }
+        )
+    for transition in compiled.transitions:
+        for source in transition.sources:
+            cases.append(
+                {
+                    "case_id": f"transition:{transition.transition_id}:{source}",
+                    "kind": "transition_admission",
+                    "state": source,
+                    "command": transition.command,
+                    "target": transition.target,
+                    "transition_id": transition.transition_id,
+                    "expected_generation_guard": bool(
+                        transition.descriptor["concurrency"]["requires_generation"]
+                    ),
+                    "expected_rejection_key": f"workflow.{compiled.workflow_type}.{transition.transition_id}.rejected",
+                }
+            )
+    return cases
 
 
 def workflow_contract_snapshot() -> dict[str, Any]:

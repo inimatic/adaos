@@ -7,6 +7,7 @@ import pytest
 from adaos.domain import Event
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.chat_io import nlu_bridge
+from adaos.services import conversation_interactions
 
 
 pytestmark = pytest.mark.anyio
@@ -34,6 +35,27 @@ def _telegram_envelope(*, dedup_key: str = "tg:bot:42:100") -> dict:
             "payload": {
                 "text": "Строитель, покажи текущий проект",
                 "meta": {"msg_id": 55, "lang": "ru"},
+            },
+        },
+    }
+
+
+def _telegram_action_envelope(token: str) -> dict:
+    return {
+        "event_id": "event-action-101",
+        "kind": "io.input",
+        "dedup_key": "tg:bot:42:101",
+        "payload": {
+            "type": "action",
+            "source": "telegram",
+            "bot_id": "main-bot",
+            "hub_id": "sn-test",
+            "chat_id": "42",
+            "user_id": "7",
+            "update_id": "101",
+            "payload": {
+                "action": {"id": token},
+                "meta": {"msg_id": 56},
             },
         },
     }
@@ -167,3 +189,57 @@ async def test_raw_http_fallback_input_uses_same_dialog_contract(monkeypatch) ->
     assert dialog_events[0].payload["text"] == "Строитель, покажи текущий проект"
     assert dialog_events[0].payload["webspace_id"] == "dev1-dev"
     assert claims[0]["idempotency_key"] == "transport:telegram:main-bot:42:100"
+
+
+async def test_telegram_callback_resumes_durable_interaction_without_nlu(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        nlu_bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(subnet_id="sn-test"), bus=bus),
+    )
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.telegram.interaction",
+        owner="skill:builder",
+        prompt="Choose",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "prototype", "label": "Prototype", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "prototype",
+                "label": "Prototype",
+                "command": "builder.change.route",
+                "value": "prototype",
+                "risk": "local_reversible",
+                "confirmation_required": False,
+            }
+        ],
+        interaction_id="interaction.telegram.callback",
+    )
+    profile = conversation_interactions.standard_capability_profile("telegram")
+    presentation = conversation_interactions.negotiate_presentation(interaction, profile)
+    token = presentation["actions"][0]["token"]
+    responses: list[Event] = []
+    user_messages: list[Event] = []
+    bus.subscribe("conversation.interaction.responded", lambda event: responses.append(event))
+    bus.subscribe("dialog.user_message", lambda event: user_messages.append(event))
+    nlu_bridge.register_chat_nlu_bridge(bus)
+
+    bus.publish(
+        Event(
+            type="tg.input.sn-test",
+            source="test",
+            ts=3.0,
+            payload=_telegram_action_envelope(token),
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert user_messages == []
+    assert len(responses) == 1
+    assert responses[0].payload["response"]["source"] == "action"
+    assert responses[0].payload["response"]["values"]["choice"] == "prototype"

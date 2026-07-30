@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.interaction_response.v1",
+  "title": "AdaOS Conversation Interaction Response",
+  "type": "object",
+  "required": [
+    "schema", "response_id", "interaction_id", "interaction_generation",
+    "actor_id", "source", "values", "original_text", "action_token",
+    "intent_proposal", "status", "validation", "supersedes_response_id",
+    "presentation_id", "target_ref", "source_message_ref", "consumed_command",
+    "rejection_reason", "idempotency_key", "created_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.interaction_response.v1" },
+    "response_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_generation": { "type": "integer", "minimum": 0 },
+    "actor_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "source": { "enum": ["action", "text", "form", "system"] },
+    "values": { "type": "object" },
+    "original_text": { "type": ["string", "null"], "maxLength": 8000 },
+    "action_token": { "type": ["string", "null"], "maxLength": 300 },
+    "intent_proposal": { "type": ["object", "null"] },
+    "presentation_id": { "type": ["string", "null"], "maxLength": 240 },
+    "target_ref": { "type": ["object", "null"] },
+    "source_message_ref": { "type": ["object", "null"] },
+    "consumed_command": { "type": ["object", "null"] },
+    "rejection_reason": { "type": ["string", "null"], "maxLength": 240 },
+    "status": { "enum": ["partial", "answered", "accepted", "rejected", "superseded"] },
+    "validation": {
+      "type": "object",
+      "required": ["valid", "reason_code", "missing_fields"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "reason_code": { "type": ["string", "null"], "maxLength": 160 },
+        "missing_fields": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } }
+      },
+      "additionalProperties": false
+    },
+    "supersedes_response_id": { "type": ["string", "null"], "maxLength": 240 },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object" }
+  },
+  "additionalProperties": false
+}

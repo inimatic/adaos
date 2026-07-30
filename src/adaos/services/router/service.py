@@ -118,6 +118,15 @@ def _telegram_output_projection(
         except Exception:
             hub_id = ""
     messages = [{"type": "text", "text": item} for item in _telegram_text_chunks(text)]
+    actions = [dict(item) for item in payload.get("actions") or [] if isinstance(item, Mapping)]
+    keyboard_rows: list[list[dict[str, str]]] = []
+    for action in actions[:8]:
+        label = str(action.get("label") or "").strip()
+        token = str(action.get("token") or "").strip()
+        if label and token and len(token.encode("utf-8")) <= 64:
+            keyboard_rows.append([{"text": label[:64], "callback_data": token}])
+    if messages and keyboard_rows:
+        messages[0]["keyboard"] = {"inline_keyboard": keyboard_rows}
     options = {"reply_to": meta.get("reply_to")} if meta.get("reply_to") else None
     correlation = str(
         payload.get("id")

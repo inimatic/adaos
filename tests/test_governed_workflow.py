@@ -11,6 +11,7 @@ from adaos.services.governed_workflow import (
     compile_definition,
     definition_review_report,
     export_statechart,
+    generate_conformance_cases,
     new_instance,
     rebuild_instance,
     workflow_command,
@@ -235,6 +236,8 @@ def test_resolver_explains_authority_guard_confirmation_and_staleness() -> None:
     )
     assert description["allowed_commands"] == []
     assert description["blocked_commands"][0]["reason_code"] == "trial_not_accepted"
+    assert description["blockers"][0]["reason_key"] == "workflow.reason.trial_not_accepted"
+    assert description["progress"]["completed_transitions"] == 0
 
     automation["context"]["trial"] = "accepted"
     needs_confirmation = resolver.apply(
@@ -337,3 +340,6 @@ def test_definition_review_and_statechart_are_non_authoritative_projections() ->
     assert report["unused_commands"] == []
     assert statechart["authoritative"] is False
     assert statechart["edges"][0]["command"] == "approve"
+    cases = generate_conformance_cases(compiled)
+    assert {item["kind"] for item in cases} == {"state_explanation", "transition_admission"}
+    assert len(cases) == len(compiled.states) + len(compiled.transitions)

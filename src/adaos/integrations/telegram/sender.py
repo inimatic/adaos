@@ -27,7 +27,10 @@ class TelegramSender(ChatSender):
         if not self._limiter.allow(chat_id):
             await asyncio.sleep(0.5)
         if m.type == "text" and m.text:
-            await self._call("sendMessage", {"chat_id": chat_id, "text": m.text})
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": m.text}
+            if m.keyboard:
+                payload["reply_markup"] = m.keyboard
+            await self._call("sendMessage", payload)
             tm.record_event("outbound_total", {"type": "text"})
         elif m.type == "photo" and m.image_path:
             # simple caption within text if provided

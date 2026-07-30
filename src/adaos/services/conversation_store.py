@@ -335,6 +335,77 @@ _SCHEMA = (
     CREATE INDEX IF NOT EXISTS idx_conversation_development_runs_topic
     ON conversation_development_runs(conversation_id, topic_id, updated_at);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_channel_capability_profiles (
+        profile_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        transport TEXT NOT NULL,
+        client TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        fresh_until TEXT,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_interactions (
+        interaction_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        thread_id TEXT,
+        owner TEXT NOT NULL,
+        status TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        task_ref_json TEXT,
+        workflow_ref_json TEXT,
+        reply_route_ref_json TEXT,
+        expires_at TEXT,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_interactions_pending
+    ON conversation_interactions(conversation_id, status, updated_at);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_interaction_presentations (
+        presentation_id TEXT PRIMARY KEY,
+        interaction_id TEXT NOT NULL,
+        interaction_generation INTEGER NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_version INTEGER NOT NULL,
+        mode TEXT NOT NULL,
+        supported INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(interaction_id, interaction_generation, profile_id, profile_version)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_presentations_interaction
+    ON conversation_interaction_presentations(interaction_id, created_at);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_interaction_responses (
+        response_id TEXT PRIMARY KEY,
+        interaction_id TEXT NOT NULL,
+        interaction_generation INTEGER NOT NULL,
+        actor_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        supersedes_response_id TEXT,
+        payload_digest TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(interaction_id, idempotency_key)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_responses_interaction
+    ON conversation_interaction_responses(interaction_id, created_at);
+    """,
 )
 
 
@@ -462,7 +533,11 @@ def ensure_schema(sql: Any | None = None) -> bool:
                     WHERE type='table' AND name IN (
                         'conversation_segment_summary_jobs',
                         'conversation_transport_ingress',
-                        'conversation_development_runs'
+                        'conversation_development_runs',
+                        'conversation_channel_capability_profiles',
+                        'conversation_interactions',
+                        'conversation_interaction_presentations',
+                        'conversation_interaction_responses'
                     )
                     """
                 ).fetchall()
@@ -470,6 +545,10 @@ def ensure_schema(sql: Any | None = None) -> bool:
                 "conversation_segment_summary_jobs",
                 "conversation_transport_ingress",
                 "conversation_development_runs",
+                "conversation_channel_capability_profiles",
+                "conversation_interactions",
+                "conversation_interaction_presentations",
+                "conversation_interaction_responses",
             }:
                 return True
         except sqlite3.Error:
@@ -1975,6 +2054,334 @@ def list_development_runs(
             [*params, safe_limit],
         ).fetchall()
     return [_row_to_development_run(row) for row in rows]
+
+
+def save_channel_capability_profile(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    value = dict(record or {})
+    profile_id = str(value.get("profile_id") or "").strip()
+    if not profile_id:
+        raise ValueError("profile_id is required")
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.execute(
+            """
+            INSERT INTO conversation_channel_capability_profiles(
+                profile_id, version, transport, client, surface, payload_json,
+                fresh_until, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(profile_id) DO UPDATE SET
+                version=excluded.version,
+                transport=excluded.transport,
+                client=excluded.client,
+                surface=excluded.surface,
+                payload_json=excluded.payload_json,
+                fresh_until=excluded.fresh_until,
+                updated_at=excluded.updated_at
+            WHERE excluded.version >= conversation_channel_capability_profiles.version
+            """,
+            (
+                profile_id,
+                int(value.get("version") or 1),
+                str(value.get("transport") or ""),
+                str(value.get("client") or ""),
+                str(value.get("surface") or ""),
+                _json_dump(value),
+                value.get("fresh_until"),
+                str(value.get("updated_at") or ""),
+            ),
+        )
+        con.commit()
+    return get_channel_capability_profile(profile_id)
+
+
+def get_channel_capability_profile(profile_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT payload_json FROM conversation_channel_capability_profiles WHERE profile_id=?",
+            (str(profile_id or "").strip(),),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
+def save_interaction(
+    record: Mapping[str, Any],
+    *,
+    expected_generation: int | None = None,
+    create_only: bool = False,
+) -> dict[str, Any] | None:
+    value = dict(record or {})
+    interaction_id = str(value.get("interaction_id") or "").strip()
+    if not interaction_id:
+        raise ValueError("interaction_id is required")
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT generation, payload_json FROM conversation_interactions WHERE interaction_id=?",
+            (interaction_id,),
+        ).fetchone()
+        if existing and create_only:
+            con.rollback()
+            return _json_load(existing["payload_json"], {})
+        if expected_generation is not None:
+            actual = int(existing["generation"]) if existing else -1
+            if actual != int(expected_generation):
+                con.rollback()
+                raise ValueError(
+                    f"stale interaction generation: expected {expected_generation}, current {actual}"
+                )
+        con.execute(
+            """
+            INSERT INTO conversation_interactions(
+                interaction_id, conversation_id, thread_id, owner, status,
+                generation, task_ref_json, workflow_ref_json,
+                reply_route_ref_json, expires_at, payload_json, created_at,
+                updated_at, completed_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(interaction_id) DO UPDATE SET
+                conversation_id=excluded.conversation_id,
+                thread_id=excluded.thread_id,
+                owner=excluded.owner,
+                status=excluded.status,
+                generation=excluded.generation,
+                task_ref_json=excluded.task_ref_json,
+                workflow_ref_json=excluded.workflow_ref_json,
+                reply_route_ref_json=excluded.reply_route_ref_json,
+                expires_at=excluded.expires_at,
+                payload_json=excluded.payload_json,
+                updated_at=excluded.updated_at,
+                completed_at=excluded.completed_at
+            """,
+            (
+                interaction_id,
+                str(value.get("conversation_id") or ""),
+                value.get("thread_id"),
+                str(value.get("owner") or ""),
+                str(value.get("status") or ""),
+                int(value.get("generation") or 0),
+                _json_dump(value.get("task_ref")) if value.get("task_ref") is not None else None,
+                _json_dump(value.get("workflow_ref")) if value.get("workflow_ref") is not None else None,
+                _json_dump(value.get("reply_route_ref")) if value.get("reply_route_ref") is not None else None,
+                value.get("expires_at"),
+                _json_dump(value),
+                str(value.get("created_at") or ""),
+                str(value.get("updated_at") or ""),
+                value.get("completed_at"),
+            ),
+        )
+        con.commit()
+    return get_interaction(interaction_id)
+
+
+def get_interaction(interaction_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT payload_json FROM conversation_interactions WHERE interaction_id=?",
+            (str(interaction_id or "").strip(),),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
+def list_interactions(
+    *,
+    conversation_id: str | None = None,
+    statuses: Sequence[str] | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    clauses: list[str] = []
+    params: list[Any] = []
+    if str(conversation_id or "").strip():
+        clauses.append("conversation_id=?")
+        params.append(str(conversation_id).strip())
+    clean_statuses = [str(item).strip() for item in statuses or [] if str(item).strip()]
+    if clean_statuses:
+        clauses.append(f"status IN ({','.join('?' for _ in clean_statuses)})")
+        params.extend(clean_statuses)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(int(limit), 1000)))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"SELECT payload_json FROM conversation_interactions {where} ORDER BY updated_at DESC LIMIT ?",
+            tuple(params),
+        ).fetchall()
+    return [_json_load(row["payload_json"], {}) for row in rows]
+
+
+def append_interaction_presentation(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    value = dict(record or {})
+    presentation_id = str(value.get("presentation_id") or "").strip()
+    if not presentation_id:
+        raise ValueError("presentation_id is required")
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT payload_json FROM conversation_interaction_presentations WHERE presentation_id=?",
+            (presentation_id,),
+        ).fetchone()
+        if existing:
+            con.rollback()
+            return _json_load(existing["payload_json"], {})
+        con.execute(
+            """
+            INSERT INTO conversation_interaction_presentations(
+                presentation_id, interaction_id, interaction_generation,
+                profile_id, profile_version, mode, supported, payload_json,
+                created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                presentation_id,
+                str(value.get("interaction_id") or ""),
+                int(value.get("interaction_generation") or 0),
+                str(value.get("profile_id") or ""),
+                int(value.get("profile_version") or 1),
+                str(value.get("mode") or ""),
+                1 if value.get("supported") else 0,
+                _json_dump(value),
+                str(value.get("created_at") or ""),
+            ),
+        )
+        con.commit()
+    return dict(value)
+
+
+def latest_interaction_presentation(
+    interaction_id: str,
+    *,
+    profile_id: str | None = None,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    clause = "interaction_id=?"
+    params: list[Any] = [str(interaction_id or "").strip()]
+    if str(profile_id or "").strip():
+        clause += " AND profile_id=?"
+        params.append(str(profile_id).strip())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            f"SELECT payload_json FROM conversation_interaction_presentations WHERE {clause} ORDER BY created_at DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
+def find_interaction_presentation_by_action_token(token: str) -> dict[str, Any] | None:
+    action_token = str(token or "").strip()
+    if not action_token or not ensure_schema():
+        return None
+    # Action tokens are opaque bounded values emitted by the presentation
+    # negotiator. The JSON scan is acceptable for the bounded pending set and
+    # avoids making a transport callback token an authority-bearing database key.
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            SELECT payload_json
+            FROM conversation_interaction_presentations
+            WHERE payload_json LIKE ?
+            ORDER BY created_at DESC
+            LIMIT 20
+            """,
+            (f"%{action_token}%",),
+        ).fetchall()
+    for row in rows:
+        payload = _json_load(row["payload_json"], {})
+        if action_token in dict(payload.get("action_tokens") or {}):
+            return payload
+    return None
+
+
+def append_interaction_response(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    value = dict(record or {})
+    response_id = str(value.get("response_id") or "").strip()
+    interaction_id = str(value.get("interaction_id") or "").strip()
+    idempotency_key = str(value.get("idempotency_key") or "").strip()
+    if not response_id or not interaction_id or not idempotency_key:
+        raise ValueError("response_id, interaction_id, and idempotency_key are required")
+    if not ensure_schema():
+        return None
+    normalized = _json_dump(value)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT payload_digest, payload_json FROM conversation_interaction_responses WHERE interaction_id=? AND idempotency_key=?",
+            (interaction_id, idempotency_key),
+        ).fetchone()
+        if existing:
+            con.rollback()
+            if str(existing["payload_digest"]) != digest:
+                raise ValueError("interaction response idempotency conflict")
+            duplicate = _json_load(existing["payload_json"], {})
+            duplicate["duplicate"] = True
+            return duplicate
+        con.execute(
+            """
+            INSERT INTO conversation_interaction_responses(
+                response_id, interaction_id, interaction_generation, actor_id,
+                status, idempotency_key, supersedes_response_id,
+                payload_digest, payload_json, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                response_id,
+                interaction_id,
+                int(value.get("interaction_generation") or 0),
+                str(value.get("actor_id") or ""),
+                str(value.get("status") or ""),
+                idempotency_key,
+                value.get("supersedes_response_id"),
+                digest,
+                normalized,
+                str(value.get("created_at") or ""),
+            ),
+        )
+        con.commit()
+    return dict(value)
+
+
+def get_interaction_response_by_idempotency(
+    interaction_id: str,
+    idempotency_key: str,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT payload_json FROM conversation_interaction_responses WHERE interaction_id=? AND idempotency_key=?",
+            (str(interaction_id or "").strip(), str(idempotency_key or "").strip()),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
+def list_interaction_responses(interaction_id: str) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT payload_json FROM conversation_interaction_responses WHERE interaction_id=? ORDER BY created_at, response_id",
+            (str(interaction_id or "").strip(),),
+        ).fetchall()
+    return [_json_load(row["payload_json"], {}) for row in rows]
 
 
 def upsert_dialog_channel(
